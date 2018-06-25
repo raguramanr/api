@@ -1,0 +1,1576 @@
+
+################################################################## 
+# Procedure Name: CheckForDownload
+#   
+# Description:  
+#  CheckForDownload sets all switches and NP cards to be downloaded by default
+#  This approach is taken because rebooting the switches twice for download situations
+#  seems too painful               
+#     
+#  USED by downLdCode
+# Input args: code  (code name without extension... as passed into main.tcl
+# Output args: none
+# Typical usage: 
+#      
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: SetupTestTool
+##################################################################
+proc CheckForDownload { { image "" } { fd_res "" } } {
+    global spawn_id
+    #variable to store all the DUTs interested information
+    global DUTs_info
+    #variable to store all the DUTs Slots interested information
+    global DUT
+    global numDUT
+    global DUT1_CONNECT
+    global DUT2_CONNECT
+    global DUT3_CONNECT
+    global DUT4_CONNECT
+    global DUT5_CONNECT
+
+###########################################################################
+#  Setup for platform
+###########################################################################
+        set numDUT 1
+        while { [info exists DUT${numDUT}_CONNECT] } {
+             puts "***** numDUT=$numDUT ***** "
+             incr numDUT 1
+        }
+        incr numDUT -1
+        ###################################################################
+        # Gather information about the switches because getDUTsinfo hasn't run
+        ###################################################################
+        for {set i 1} {$i <= $numDUT} {incr i 1} {
+
+            puts "Number of slots DUT$i = $DUTs_info(DUT$i,numSlots)"
+            set numSlots $DUTs_info(DUT$i,numSlots)
+            ################################################################
+            ## Welcome to the migration download check portion of the code
+            ##
+            ##   This assumes that getDUTInfo has been run in LoadImage.tcl
+            ################################################################
+            
+            # inialize the mList to NULL
+            set DUTs_info(DUT$i,mList) "NULL"
+            # seperate the download build name and number strip the v
+            set iiList   [split $image "\."]
+            set image    [lindex $iiList 0]           ; #drop any file extensions
+            set image    [split $image -]             ; #seperate any branch info
+            set image    [lindex $image 0]            ; #seperate any branch info
+            set image    [string trimleft $image v]   ; #remove any v from the left
+            set iList    [split $image b]             ; #split on the b to get build and build number
+            set iBuild   [lindex $iList 0]             ; #set build
+            set iBNumber [lindex $iList 1]            ; #set build number
+            DBug 1 "Going to Image $iBuild Build $iBNumber"
+
+
+            ##################################################################
+            # Need to add logic to make sure Image selected = image running
+            ##################################################################
+            set imageSel $DUTs_info(DUT$i,imageSel)   ; #get image currently selected
+            set priImage $DUTs_info(DUT$i,priImage)   ; #get image name in pri
+            set secImage $DUTs_info(DUT$i,secImage)   ; #get image name in sec
+            set cImage     $DUTs_info(DUT$i,version)  ; #get the current DUT version
+            set sVVersion  $DUTs_info(DUT$i,sVVersion); #get the version running on sw
+            
+            if {$sVVersion != $cImage} {
+                if {$imageSel == $priImage} {
+                    set cImage $secImage
+                } else {
+                    set cImage $priImage
+                }
+            }
+
+            # seperate the current build name and number strip the periods and branch
+            set cImage     $DUTs_info(DUT$i,version)  ; #get the current DUT version
+            DBug 1 "cImage = $cImage"
+            set cImageList [split $cImage { }]        ; #split on white space
+            
+            set cImage     [lindex $cImageList 0]     ; #get image drop branch info
+            DBug 1 "cImage = $cImage"
+            set cImageList [split $cImage "\."]       ; #split on \. to remove them
+            
+            set cImage     "[lindex $cImageList 0][lindex $cImageList 1][lindex $cImageList 2]" ; #reassemble with no dots
+            DBug 1 "cImage = $cImage"
+            set CIList     [split $cImage b]          ; #split on b seperate name and build number  
+            
+            set cBuild     [lindex $CIList 0]          ; #use the left as the build
+            
+            set cBNumber   [lindex $CIList 1]          ; #use the right as the build number
+            DBug 1 "From Image $cBuild Build $cBNumber on DUT $i"
+            
+        }
+    DBug 1 "numDUT = $numDUT"
+
+    for {set i 1} {$i <= $numDUT} {incr i 1} {
+         #Since the MSM will certainly need code. change its flag immediately
+         set DUTs_info(DUT$i,dlReqD) 1
+    
+         
+         set numSlots $DUTs_info(DUT$i,numSlots)
+         DBug 1 "Number of Slots for DUT $i = $numSlots"
+     }
+}
+
+
+################################################################## 
+# Procedure Name: DownloadImageSlot
+#   
+# Description:  Download Image to a Slot
+#               
+#     
+#
+# Input args: TFTPServerIP filename slot {pri_or_sec ""}
+# Output args: none
+# Typical usage: 
+#        DownloadImageSlot 10.1.1.10 v700b12.oc3 slot 2 primary
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: Utility
+##################################################################
+proc DownloadImageSlot {TFTPServerIP filename slot {pri_or_sec ""} } {
+   ConfigGatewayNetwork
+   result_debug "--- Send download image $TFTPServerIP $filename slot $slot"
+   send	"download image $TFTPServerIP $filename $pri_or_sec slot $slot\n"
+   expect {
+      -nocase "(Y/N)" {
+         send "y\n"
+      }
+      timeout {
+         result_debug "Error in download config"
+         return "error"
+      }
+   }
+   SaveOutputBuffer $expect_out(buffer)
+   set timeout 300
+   set flag "ok"
+   expect {
+      timeout {
+         result_debug "Error in download config. Can't get a prompt after download"
+         return "error"
+      }
+      "Error: Access violation" {
+         set flag "error"
+      }
+      "ERROR:" {
+         set flag "error"
+      }
+      "Error:" {
+         set flag "error"
+      }
+      "failed" {
+         set flag "error"
+      }
+      "#" {
+      }
+   }
+   SaveOutputBuffer $expect_out(buffer)
+   
+   
+   if { $flag == "ok" } {
+      result_ok "Slot $slot Image download successful"
+   } elseif { $flag == "error" } {
+      result_error "Slot $slot Image download failed"
+   }
+   UnconfigGatewayNetwork
+   return $flag
+}
+
+################################################################## 
+# Procedure Name: DownloadBootromSlot
+#   
+# Description:  Download Image to a Slot
+#               
+#     
+#
+# Input args: TFTPServerIP filename slot {pri_or_sec ""}
+# Output args: none
+# Typical usage: 
+#        DownloadImageSlot 10.1.1.10 v700b12.oc3 slot 2 primary
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: Utility
+##################################################################
+proc DownloadBootromSlot {TFTPServerIP filename slot  } {
+   ConfigGatewayNetwork
+   result_debug "--- Send download bootrom $TFTPServerIP $filename slot $slot"
+   send	"download bootrom $TFTPServerIP $filename slot $slot\n"
+   expect {
+      -nocase "(Y/N)" {
+         send "y\n"
+      }
+      timeout {
+         result_debug "Error in download slot bootrom"
+         return "error"
+      }
+   }
+   SaveOutputBuffer $expect_out(buffer)
+   set timeout 300
+   set flag "ok"
+   expect {
+      timeout {
+         result_debug "Error in download slot bootrom. Can't get a prompt after download"
+         return "error"
+      }
+      "Error: Access violation" {
+         set flag "error"
+      }
+      "ERROR:" {
+         set flag "error"
+      }
+      "Error:" {
+         set flag "error"
+      }
+      "failed" {
+         set flag "error"
+      }
+      "#" {
+      }
+   }
+   SaveOutputBuffer $expect_out(buffer)
+   
+   
+   if { $flag == "ok" } {
+      result_ok "Slot $slot Bootrom download successful"
+   } elseif { $flag == "error" } {
+      result_error "Slot $slot Bootrom download failed"
+   }
+   UnconfigGatewayNetwork
+   return $flag
+}
+################################################################## 
+# Procedure Name: DownloadConfigSlot
+#   
+# Description:  Download a config to a slot
+#               
+#     
+#
+# Input args: TFTPServerIP filename slot {pri_or_sec ""}
+# Output args: none
+# Typical usage: 
+#         DownloadConfigSlot 10.1.1.10 v700b12.cfg slot 2 primary
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: Utility
+##################################################################
+proc DownloadConfigSlot {TFTPServerIP filename slot {pri_or_sec ""} } {
+   ConfigGatewayNetwork
+   result_debug "--- Send download image $TFTPServerIP $filename slot $slot"
+   send	"download configuration $TFTPServerIP $filename $pri_or_sec slot $slot\n"
+   expect {
+      -nocase "(Y/N)" {
+         send "y\n"
+      }
+      timeout {
+         result_debug "Error in download config"
+         return "error"
+      }
+   }
+   SaveOutputBuffer $expect_out(buffer)
+   set timeout 300
+   set flag "ok"
+   expect {
+      timeout {
+         result_debug "Error in download config. Can't get a prompt after download"
+         return "error"
+      }
+      "Error: Access violation" {
+         set flag "error"
+      }
+      "ERROR:" {
+         set flag "error"
+      }
+      "Error:" {
+         set flag "error"
+      }
+      "failed" {
+         set flag "error"
+      }
+      "#" {
+      }
+   }
+   SaveOutputBuffer $expect_out(buffer)
+   
+   
+   if { $flag == "ok" } {
+      result_ok "Slot $slot Config download successful"
+   } elseif { $flag == "error" } {
+      result_error "Slot $slot Config download failed"
+   }
+   UnconfigGatewayNetwork
+   return $flag
+}
+
+
+################################################################## 
+# Procedure Name: DownLdCode
+#   
+# Description:  
+#  Download Appropriate image to All slots  (MSM and NP)
+#
+#  :Download a version of code to all switches in test               
+#     
+#
+# Input args: code (code root without the .ext
+# Output args: none
+# Typical usage: 
+#      
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: Utility
+##################################################################
+# EY-03-06-2007: Added Panther TFTP file to arguments list.
+proc DownLdCode { {i386tftpFile "NULL"} {marinerTftpFile "NULL"} {aspenTftpFile "NULL"} {aspennapaTftpFile "NULL"} {cougarTftpFile "NULL"} {viperTftpFile "NULL"} {olympicTftpFile "NULL"} {jaguarTftpFile "NULL"} {pantherTftpFile "NULL"} {voyagerTftpFile "NULL"} {tigerTftpFile "NULL"} {sylvesterTftpFile "NULL"} { bootrom "NULL" } { unc "no" } { fd_res "" } } {
+
+    global spawn_id
+    global numDUT
+    global tftpServerList
+    global DUTs_info
+    global DUT
+    global defaultRouter
+    global switchPort2DefaultRouter
+    global DUT1_CONNECT
+    global DUT2_CONNECT
+    global DUT3_CONNECT
+    global DUT4_CONNECT
+    global DUT5_CONNECT
+    global DUT1_SETUP
+    global DUT2_SETUP
+    global DUT3_SETUP
+    global DUT4_SETUP
+    global DUT5_SETUP
+    
+
+    set stop 0
+    set flagRom Ok
+    set flag Ok
+    set dlStatus "NULL"
+    set dlStatusRom "NULL"
+    set dlStatusNP "NULL"
+
+
+    # use Tclx for fork
+    package require Tclx
+
+    for {set i 1} {$i <= $numDUT} {incr i} {
+	set DUT_dlStatus($i) 0 ;# 0 as the exit code means all is good
+    }
+
+    ############################################################################
+    # Check download flags to see if image should be downloaded, then download
+    #############################################################################
+    for {set i 1} {$i <= $numDUT} {incr i 1} {
+	
+	#These files (one for each dut) will be written to by the fork child processes below
+	#and will contain the DUT_dlStatus($i) value -- either 1 or 0 -- for that dut
+	set filename($i) "Tmp/deleteme_$i[pid].txt"
+	set fileid($i) [open $filename($i) w]
+	
+	set numTftp [llength $tftpServerList]
+	set tCount 0
+	# Login to the DUT
+	set DUTName [format %s%d DUT $i]
+	global ${DUTName}_CONNECT;
+	Login [set ${DUTName}_CONNECT]
+	##################################################################
+	# Download the BOOTROM
+	##################################################################
+	if { $bootrom != "NULL" } {
+	    set dlStatusRom [DownloadBootrom $i [lindex $tftpServerList $tCount] bootrom/${bootrom}.bin]
+	    while { ($dlStatusRom == "error") && ($flagRom == "Ok") } {
+		incr tCount
+		if {$tCount == $numTftp} {
+		    # if run out of TFTP Servers in the list
+		    result_debug "#####------Error Downloading BOOTROM Code file-----#######"
+		    result_debug "#####------Error Downloading BOOTROM Code file-----#######"
+		    DBug 1 "Error Downloading BOOTROM Code file"
+		    set flagRom Error
+		}
+		set dlStatusRom [DownloadBootrom $i [lindex $tftpServerList $tCount] bootrom/${bootrom}.bin ]
+	    }
+	}
+	
+	##################################################################
+	# Download the Image
+	##################################################################
+	global supportedPlatform
+	global gnssChassis
+	
+	# Will be used for parallel download, in case image is not given for a particular DUT
+	set image($i) "NULL"
+	
+	if {([regexp -nocase $gnssChassis $DUTs_info(DUT$i,platform)] || \
+        [regexp -nocase $gnssChassis $DUTs_info(DUT$i,sysType)])} {
+	    if {([string compare $marinerTftpFile "NULL"]==0) && ([string compare $olympicTftpFile "NULL"]==0)} {
+    		result_error "No DUT $i image supplied which is a gnssChassis"
+    		SendACmd "use image part primary"
+    		continue
+	    } elseif {[string compare $marinerTftpFile "NULL"]!=0 && \
+               ([regexp -nocase "mariner|10808" $DUTs_info(DUT$i,platform)] \
+               || [regexp -nocase "mariner|10808" $DUTs_info(DUT$i,sysType)])} {
+    		set image($i) $marinerTftpFile
+	    } elseif {[string compare $olympicTftpFile "NULL"]!=0 && \
+              ([regexp -nocase "890|12804|12802" $DUTs_info(DUT$i,platform)] \
+               || [regexp -nocase "890|12804|12802" $DUTs_info(DUT$i,sysType)]) } {
+    		set image($i) $olympicTftpFile
+	    }
+	    if {[CheckImagePartition]==1} {
+    		return 1
+	    }
+	}
+	global i386Platform
+	if {[regexp -nocase $i386Platform $DUTs_info(DUT$i,platform)]} {
+	    if {[string compare $i386tftpFile "NULL"]==0} {
+		result_error "No i386 image supplied for DUT $i which is an i386"
+		# SK27Aug04: Not returning error here as developers' regression
+		# need to carry on even if NULL image provided for i386.
+		# This is only for queuing system, should not affect automated regressions
+		SendACmd "use image part primary"
+		continue
+	    } else {
+		set image($i) $i386tftpFile
+	    }
+	    if {[CheckImagePartition]==1} {
+		return 1
+	    }
+	}
+	global bcmChassis stacking
+	if {([regexp -nocase $bcmChassis $DUTs_info(DUT$i,platform)]  || 
+             [regexp -nocase $bcmChassis $DUTs_info(DUT$i,sysType)]) \
+             && ![regexp -nocase $stacking $DUTs_info(DUT$i,platform)]} {
+	    if {([string compare $aspenTftpFile "NULL"]==0) && ([string compare $aspennapaTftpFile "NULL"]==0)} {
+		result_error "No aspen image supplied for DUT $i which is an aspen"
+		# CS27Jan05: Not returning error here as from now it will
+		# need to carry on even if NULL image provided for aspen.
+		# This is only for queuing system, should not affect automated regressions
+		SendACmd "use image part primary"
+		continue
+	    } else {
+		if { ([string compare $aspenTftpFile "NULL"]==0) } {
+		    set image($i) $aspennapaTftpFile
+		} else {
+		    set image($i) $aspenTftpFile
+		}
+	    }
+	    if {[CheckImagePartition]==1} {
+		return 1
+	    }
+	}
+        # EY-06-19-2007: Added support for Lynx platform.
+	global bcmStackable bcmLynx bcmx650 bcmx480 bcmNWI bcmx460 bcmx670 bcmxE4G bcmx440 bcmViper bcmx430 bcmx770;
+	if {([regexp -nocase $bcmStackable|$stacking $DUTs_info(DUT$i,platform)] || \
+                   [regexp -nocase $bcmStackable|$stacking $DUTs_info(DUT$i,sysType)])} {
+	    if {[string compare $cougarTftpFile "NULL"] == 0 && \
+		[string compare $viperTftpFile "NULL"] == 0 && \
+                [string compare $jaguarTftpFile "NULL"] == 0 && \
+                [string compare $tigerTftpFile "NULL"] == 0 && \
+                [string compare $sylvesterTftpFile "NULL"] == 0 && \
+                [string compare $pantherTftpFile "NULL"] == 0} {
+		result_error "No stackable image supplied for DUT $i which is a stackable "
+		SendACmd "use image part primary"
+		continue
+	    } elseif {([string compare $jaguarTftpFile "NULL"]!=0 \
+                       || [string compare $cougarTftpFile "NULL"]!=0 \
+		       || [string compare $viperTftpFile "NULL"]!=0 \
+                       || [string compare $tigerTftpFile "NULL"]!=0 \
+                       || [string compare $sylvesterTftpFile "NULL"]!=0 \
+                       || [string compare $pantherTftpFile "NULL"]) \
+                       && ([regexp -nocase "(SummitX450|summitx250|SummitX450a|SummitX450e|x450a|x450e|x250|$stacking|$bcmLynx|$bcmx650|$bcmx460|$bcmx480|$bcmNWI|NWI|$bcmx670|$bcmxE4G|$bcmx440|$bcmx770|$bcmViper|$bcmx430)" $DUTs_info(DUT$i,platform)] \
+                       ||  [regexp -nocase "(SummitX450|summitx250|SummitX450a|SummitX450e|x450a|x450e|x250|$stacking|$bcmLynx|$bcmx650|$bcmx460|$bcmx480|$bcmNWI|NWI|$bcmx670|$bcmxE4G|$bcmx440|$bcmx770|$bcmViper|$bcmx430)" $DUTs_info(DUT$i,sysType)])} {
+                       && ([regexp -nocase "(SummitX450|summitx250|SummitX450a|SummitX450e|x450a|x450e|x250|$stacking|$bcmLynx|$bcmx650|$bcmx460|$bcmx480|$bcmNWI|NWI|$bcmx670|$bcmxE4G|$bcmx440)|$bcmViper|$bcmx430" $DUTs_info(DUT$i,platform)] \
+                       ||  [regexp -nocase "(SummitX450|summitx250|SummitX450a|SummitX450e|x450a|x450e|x250|$stacking|$bcmLynx|$bcmx650|$bcmx460|$bcmx480|$bcmNWI|NWI|$bcmx670|$bcmxE4G|$bcmx440)|$bcmViper|$bcmx430" $DUTs_info(DUT$i,sysType)])} {
+            if {[string compare $jaguarTftpFile "NULL"]!=0} {
+                set image($i) $jaguarTftpFile
+            }
+            if {[string compare $cougarTftpFile "NULL"]!=0} {
+                set image($i) $cougarTftpFile
+            }
+            if {[string compare $viperTftpFile "NULL"]!=0} {
+                set image($i) $viperTftpFile
+            }
+            if {[string compare $pantherTftpFile "NULL"]!=0} {
+                set image($i) $pantherTftpFile
+            }
+            if {[string compare $tigerTftpFile "NULL"]!=0} {
+                set image($i) $tigerTftpFile
+            }
+            if {[string compare $sylvesterTftpFile "NULL"]!=0} {
+                set image($i) $sylvesterTftpFile
+            }
+            }
+	    if {[CheckImagePartition]==1} {
+		return 1
+	    }
+	}
+	global pioneerChassis;
+	if {([regexp -nocase $pioneerChassis $DUTs_info(DUT$i,platform)] || \
+             [regexp -nocase $pioneerChassis $DUTs_info(DUT$i,sysType)])} {
+	    if {[string compare $voyagerTftpFile "NULL"] == 0 } {
+		result_error "No voyager image supplied for DUT $i"
+		SendACmd "use image part primary"
+		continue
+	    } elseif {([string compare $voyagerTftpFile "NULL"]!=0) \
+                       && ([regexp -nocase "$pioneerChassis" $DUTs_info(DUT$i,platform)] \
+                       || [regexp -nocase $pioneerChassis $DUTs_info(DUT$i,sysType)])} {
+                if {[string compare $voyagerTftpFile "NULL"]!=0} {
+		   set image($i) $voyagerTftpFile
+                }
+            }
+	    if {[CheckImagePartition]==1} {
+		return 1
+	    }
+	}
+    }
+
+    for {set i 1} {$i <= $numDUT} {incr i 1} {
+
+	set tCount 0
+	# Login to the DUT
+	set DUTName [format %s%d DUT $i]
+	global ${DUTName}_CONNECT;
+	Login [set ${DUTName}_CONNECT]
+
+	#############################################
+	# Putting the fork here because CheckImagePartition above does an unconfig switch all;
+	# We dont want that to be part of fork
+	#############################################
+
+	lappend childPids [fork]
+	after 1000 ;# required to avoid children getting the same tmp file sometimes being too fast
+	if {[lindex $childPids [expr $i-1]]} {
+	    if {$i==$numDUT} {
+		set co 1
+		foreach childPid $childPids {
+		    result_debug "Parent now waiting for child # $co with pid $childPid"
+		    wait $childPid    ;# parent waits here for child to complete
+		    result_debug "Now child returned with pid $childPid"
+		    incr co
+		}
+	    }
+	} else {
+	    result_debug "child # $i enters with pid [pid]"
+
+	    if { $image($i) != "NULL" } {
+		result_debug "Downloading image $image($i) from [lindex $tftpServerList $tCount]"
+		set tCount 0
+		# dlStatus is either "error" or "ok"
+		set dlStatus [CheckDownloadImage $tftpServerList $image($i)]
+		# Reset the download flags to 0 if the download happened successfully
+		if {$dlStatus != "error"} {
+		    set DUTs_info(DUT$i,dlReqD) 0
+		} else {
+		    set DUT_dlStatus($i) 1
+		}
+		if {[CheckMSMsCompatibility]==1} {
+		    set DUT_dlStatus($i) 1
+		}
+	    }
+
+	    puts $fileid($i) $DUT_dlStatus($i)
+	    exit  ;# Child exits here, returns back to the waiting parent
+	    # end of fork construct
+	}
+	close $fileid($i)
+    }
+
+    exSleep 2
+
+    for {set i 1} {$i <= $numDUT} {incr i 1} {
+	if {[catch { set fileid($i) [open $filename($i) r] } result] } {
+            result_error "Could not open fork download file"
+            return 1
+        } else {
+            set DUT(dlStatus) [gets $fileid($i)]
+            close $fileid($i)
+
+            catch { [file delete $filename($i)] } result
+            if { ($result == 1) || ($DUT(dlStatus) == 1) } {
+                return 1
+            }
+        }
+	#if { $result == 1 } {
+	#    return 1
+	#}
+
+	#set DUT(dlStatus) [gets $fileid($i)]
+	#close $fileid($i)
+	
+	#catch { [file delete $filename($i)] } result
+	#if { ($result == 1) || ($DUT(dlStatus) == 1) } {
+	#    return 1
+	#}
+    }
+
+    return 0
+    
+}
+
+################################################################## 
+# Procedure Name: GetNpExtension
+#   
+# Description:  Match Hardware type with file extension
+#               The extension is used to pick the file to be
+#               download to a slot.  XXXX.ext
+#               XXXX is passed into main. "ext" decided based on hardwaretype
+# Input args: hardwaretype
+# Output args: extension
+# Typical usage: 
+#        GetNpExtension a3ci
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: Utility
+##################################################################
+proc GetNpExtension {hardwareType} {
+
+          set hardwareType [string tolower $hardwareType]
+          switch $hardwareType {
+                  "a3ci"    {set flavor atm3}
+                  "p3ci"    {set flavor oc3}
+                  "p12ci"   {set flavor oc12}
+                  "arm"     {set flavor arm}
+                  "asmgm2x" {set flavor mpls}
+                  "mpls"    {set flavor mpls}
+                  "sma"     {set flavor sma}
+          }
+          return $flavor
+}
+
+################################################################## 
+# Procedure Name: TftpImagesToSwitches
+#   
+# Description:  
+#  Download images and/or bootrom to switches of a test bed
+#
+# Input args: platform array and platform image pa
+# Output args: none
+# Typical usage: 
+#      
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: Utility
+##################################################################
+proc TftpImagesToSwitches { tftpfiles { bootrom "NULL" } { unc "no" } { fd_res "" } {partition "primary"}} {
+
+    global spawn_id
+    global tftpServerList
+    global DUTs_info MAIN
+    global DEVREG; # Queuing system global variables array
+    global whichDutNow
+    global at
+    global xmod; # A list of xmods names loaded along with the main image
+    global xmodDUT
+    global xmodPairs
+
+
+    set at download
+    set stop 0
+    set flagRom Ok
+    set flag Ok
+    set dlStatus "NULL"
+    set dlStatusRom "NULL"
+    set dlStatusNP "NULL"
+
+    array set TftpFile $tftpfiles
+
+    # use Tclx for fork
+    package require Tclx
+
+    # Get the partition to download to
+    if {[regexp -nocase "pri" $partition]} {
+        set targetPartition "secondary"
+    } elseif {[regexp -nocase "sec" $partition]} {
+        set targetPartition "primary"
+    }
+
+    for {set i 1} {$i <= $MAIN(NODECOUNT)} {incr i} {
+        global DUT${i}_CONNECT
+        global DUT${i}_Stacking_msma_slot
+        set DUT_dlStatus($i) 0 ;# 0 as the exit code means all is good
+    }
+
+    ############################################################################
+    # Check download flags to see if image should be downloaded, then download
+    #############################################################################
+    for {set i 1} {$i <= $MAIN(NODECOUNT)} {incr i 1} {
+        
+        #These files (one for each dut) will be written to by the fork child processes below
+        #and will contain the DUT_dlStatus($i) value -- either 1 or 0 -- for that dut
+        set filename($i) "Tmp/deleteme_$i[pid].txt"
+        set fileid($i) [open $filename($i) w]
+        
+        set numTftp [llength $tftpServerList]
+        set tCount 0
+        # Login to the DUT
+        Login [set DUT${i}_CONNECT]
+        SendACmd "clear log"
+        SendACmd "clear log static"
+        SendACmd "disable log display"
+        ##################################################################
+        # Download the BOOTROM
+        ##################################################################
+        if { $bootrom != "NULL" } {
+            set dlStatusRom [DownloadBootrom $i [lindex $tftpServerList $tCount] bootrom/${bootrom}.bin]
+            while { ($dlStatusRom == "error") && ($flagRom == "Ok") } {
+                incr tCount
+                if {$tCount == $numTftp} {
+                    # if run out of TFTP Servers in the list
+                    result_debug "#####------Error Downloading BOOTROM Code file-----#######"
+                    result_debug "#####------Error Downloading BOOTROM Code file-----#######"
+                    DBug 1 "Error Downloading BOOTROM Code file"
+                    set flagRom Error
+                }
+                set dlStatusRom [DownloadBootrom $i [lindex $tftpServerList $tCount] bootrom/${bootrom}.bin ]
+            }
+        }
+        
+        ##################################################################
+        # Set the image to be downloaded
+        ##################################################################
+        
+        set image($i) "NULL"
+        set dutImageFamily [GetImageFamilyFromSysType $DUTs_info(DUT$i,sysType)]
+        # ----------------------------------------------------------------
+        # 3 flavors to be downloaded as of 03/01/2018
+        #   - Stack, OnieStack, Normal platform
+        #
+        # ----------------------------------------------------------------
+        if {[info exists DUT${i}_Stacking_msma_slot] && [set DUT${i}_Stacking_msma_slot] > 0} {
+            if {[regexp -nocase "480" $DUTs_info(DUT$i,hwList)]} {
+                set dutImageFamily summitx480
+            }
+        }
+        result_debug "\n#####--------! ! ! ! ! ! ! ! ! ! ! ! ! -------#######\n\
+                          Platform for DUT$i is $DUTs_info(DUT$i,platform) -- $DUTs_info(DUT$i,sysType)"
+        result_debug "\n#####------------------------------------------#######\n\
+                          Assigning DUT$i image to $dutImageFamily :\n\
+                          $TftpFile($dutImageFamily)"
+        result_debug "#####------------------------------------------#######"
+        set image($i) $TftpFile(everest)
+        set DUTs_info(DUT$i,filetodownload) $image($i) 
+
+        if {$xmodDUT($i)} {
+            result_debug "\n\n#####------------------------------------------#######"
+            set xosFile [string trimright $image($i) ".xos"]
+            foreach xmPart $xmodPairs {
+                # if index 0 is not equal to this dut continue
+                if {[lindex $xmPart 0] != $i} {continue;}
+                set xm [lindex $xmPart 1]
+                set xmodFile ${xosFile}-${xm}.xmod
+                set DUTs_info(DUT$i,${xm}_imagename) $xmodFile
+                result_debug " XMOD $DUTs_info(DUT$i,${xm}_imagename)"
+            }
+            result_debug "#####------------------------------------------#######"
+        }
+    }
+
+    for {set i 1} {$i <= $MAIN(NODECOUNT)} {incr i 1} {
+
+        set tCount 0
+        # Login to the DUT
+        Login [set ${DUTName}_CONNECT]
+
+        #############################################
+        # Putting the fork here because CheckImagePartition above does an unconfig switch all;
+        # We dont want that to be part of fork
+        #############################################
+
+        lappend childPids [fork]
+        after 1000 ;# required to avoid children getting the same tmp file sometimes being too fast
+        if {[lindex $childPids [expr $i-1]]} {
+            if {$i==$numDUT} {
+                set co 1
+                foreach childPid $childPids {
+                    result_debug "Parent now waiting for child # $co with pid $childPid"
+                    wait $childPid    ;# parent waits here for child to complete
+                    result_debug "Now child returned with pid $childPid"
+                    incr co
+                }
+            }
+        } else {
+            result_debug "\n--\nchild # $i enters with pid [pid]\n--"
+
+            if { $image($i) != "NULL" } {
+                result_debug "\n--\nDownloading image $image($i) from [lindex $tftpServerList $tCount]\n--"
+                set tCount 0
+                # dlStatus is either "error" or "ok"
+                set dlStatus [CheckDownloadImage $tftpServerList $image($i)]
+                # Reset the download flags to 0 if the download happened successfully
+                if {$dlStatus != "error"} {
+                    set DUTs_info(DUT$i,dlReqD) 0
+                } else {
+                    set DUT_dlStatus($i) 1
+                }
+                if {[CheckMSMsCompatibility]==1} {
+                    set DUT_dlStatus($i) 1
+                }
+                # If there are xmods to download... do it
+                if {$xmodDUT($i)} {
+                    global whichDutNow
+                    foreach xmPart $xmodPairs {
+                        # if index 0 is not equal to this dut break
+                        if {[lindex $xmPart 0] != $i} {continue;}
+                        set xm [lindex $xmPart 1]
+                        set xmodFile $DUTs_info(DUT$i,${xm}_imagename)
+                        result_debug "\n--\nDownloading xmod $xmodFile from [lindex $tftpServerList $tCount]\n--"
+                        set dlXStatus [CheckDownloadImage $tftpServerList $xmodFile $targetPartition]
+                        if {$dlXStatus == "error"} {
+                            result_debug "Error downloading $DUTs_info(DUT$i,${xm}_imagename)"
+                        }
+                    }
+                }
+            } else {
+                result_debug "\n--\nImage $image($i) - Use primary image because set to NULL \
+                      - plat $DUTs_info(DUT$i,platform)\n--";
+                SendACmd "use image primary";
+            }
+            puts "WRITING TO FILEID $fileid($i) STATUS $DUT_dlStatus($i)"
+            puts $fileid($i) $DUT_dlStatus($i)
+            puts "SENDING EXIT TO DOWNLOAD CODE"
+            exit  ;# Child exits here, returns back to the waiting parent
+            # end of fork construct
+        }
+        close $fileid($i)
+    }
+
+    exSleep 2
+    puts "MADE IT PAST FORK"
+    for {set i 1} {$i <= $numDUT} {incr i 1} {
+        puts "DOING DOWNLOAD CLEANUP"
+	catch { set fileid($i) [open $filename($i) r] } result
+	if { $result == 1 } {
+	    return 1
+	}
+
+	set DUT(dlStatus) [gets $fileid($i)]
+	close $fileid($i)
+	
+	catch { [file delete $filename($i)] } result
+	if { ($result == 1) || ($DUT(dlStatus) == 1) } {
+	    return 1
+	}
+    }
+    puts "RETURNING FROM DOWNLOAD PROC"
+    return 0
+    
+}
+##################################################################
+# Procedure _qloadSingleDut
+#
+#   - This procedure is meant to be run from within multiTask
+#
+#
+#
+#
+##################################################################
+proc _qloadSingleDut {args} {
+    global tftpServerList
+    global DUTs_info MAIN
+    global DEVREG; # Queuing system global variables array
+    global whichDutNow
+    global xmod; # A list of xmods names loaded along with the main image
+    global xmodDUT
+    global xmodPairs
+    set tCount 0
+
+    parse_args _qloadSingleDut $args {
+        dut    "1"
+    }
+
+    global DUT${dut}_CONNECT
+    Login [set DUT${dut}_CONNECT] -masterCheck 0 -CheckOperational 0
+
+    if {$DUTs_info(DUT${dut},filetodownload)  != "NULL" } {
+        result_debug "\n--\nDownloading image $DUTs_info(DUT${dut},filetodownload) from [lindex $tftpServerList $tCount]\n--"
+        # dlStatus is either "error" or "ok"
+        set dlStatus [CheckDownloadImage $tftpServerList $DUTs_info(DUT${dut},filetodownload)]
+        # Reset the download flags to 0 if the download happened successfully
+        if {$dlStatus != "error"} {
+            _setMultiTaskVar DUTs_info(DUT$dut,dlReqD) 0
+            _setMultiTaskVar DUTs_info(DUT$dut,qloadStatus) 1
+            set DUTs_info(DUT$dut,dlReqD) 0
+        } else {
+            _setMultiTaskVar DUT_dlStatus($dut) 1
+            _setMultiTaskVar DUTs_info(DUT$dut,qloadStatus) 0
+            set DUT_dlStatus($dut) 1
+        }
+        # If there are xmods to download... do it
+        if {$xmodDUT($dut)} {
+            foreach xmPart $xmodPairs {
+                # if index 0 is not equal to this dut break
+                if {[lindex $xmPart 0] != $dut} {continue;}
+                set xm [lindex $xmPart 1]
+                set xmodFile $DUTs_info(DUT$dut,${xm}_imagename)
+                result_debug "\n--\nDownloading xmod $xmodFile from [lindex $tftpServerList $tCount]\n--"
+                set dlXStatus [CheckDownloadImage $tftpServerList $xmodFile $MAIN(targetPart)]
+                if {$dlXStatus == "error"} {
+                    result_debug "Error downloading $DUTs_info(DUT$dut,${xm}_imagename)"
+                }
+            }
+        } else {
+            result_debug "Not an xmodDUT - set to $xmodDUT($dut)"
+        }
+        return 1
+    } else {
+        result_debug "\n--\nImage $DUTs_info(DUT${dut},filetodownload) - Use primary image because set to NULL \
+              - plat $DUTs_info(DUT$dut,platform)\n--";
+        SendACmd "use image $MAIN(bootPart)";
+        return 1
+    }
+}
+################################################################## 
+# Procedure Name: CheckDownloadImage
+#   
+# Description: proc that checks the downloaded image success from the lift of tftp servers provided in
+#              tftpServerList
+#
+# Input args: tftpServerList, filename
+# Output args: none
+# Typical usage:
+#         set status [CheckDownloadImage $TFTPServerIP $filename]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc CheckDownloadImage {downloadsource filename {partition ""} {slotId ""} {install "y"} {confgateway "1"}} {
+
+    global ImageForInstall
+    if {$slotId != ""} {set slotId "msm $slotId"}
+
+    set downloadsource [GetRandomTFTPList $downloadsource]
+
+    foreach downloadfrom $downloadsource {
+        result_debug "Start downloading image $filename from $downloadfrom"
+
+        global stacking
+        global DUTs_info
+        if {[regexp -nocase $stacking [GetPlatform]] && ![regexp -nocase "xmod" $filename]} {
+            #set partition $DUTs_info(DUT1,imageBooted)
+            lappend showSwitchOutput "{Image Booted:} 1"
+            set partition [GetKeyValue "show switch" $showSwitchOutput]
+            unset showSwitchOutput
+            if {$partition == "primary"} {
+                set alt "secondary"
+            } else {
+                set alt "primary"
+            }
+            set status [DownloadImage $downloadfrom $filename $alt $slotId $install $confgateway]
+        } else {
+
+            set status [DownloadImage $downloadfrom $filename $partition $slotId $install $confgateway]
+        }
+        if {$status == "ok"} {break }
+        flush stdout
+
+    }
+
+    report_start_test "Downloading image $filename from $downloadsource"
+    if {$status == "error"} {
+        global whichDutNow
+        result_error "Failed to download image from $downloadsource DUT $whichDutNow"
+        EnableDebugMode
+        result_debug "enabling debug ems show trace devmgr all logto file"
+        SendACmd "debug ems show trace devmgr all logto file"
+        SendACmd "debug ems show trace nodemgr all logto file"
+        SendACmd "debug ems show trace epm all logto file"
+        DisableDebugMode
+        SendACmd ""
+        report_end_test
+        return $status
+    } else {
+        result_ok "Image successfully downloaded from $downloadsource"
+        report_end_test
+        return $status
+    }
+}
+################################################################## 
+# Procedure Name: DownloadBootrom
+#   
+# Description: proc that downloads the bootrom supplied in filename from the tftp server TFTPServerIP
+#              reboots after bootrom successfully downloaded
+#
+# Input args: connect, TFTPServerIP, filename
+# Output args: none
+# Typical usage:
+#             set status [DownloadImage $TFTPServerIP $filename ]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc DownloadBootrom {{dut ""} TFTPServerIP filename} {
+
+   global switchPort2DefaultRouter
+   if {$dut!=""} {
+       set DUTName [format %s%d DUT $dut]
+       global ${DUTName}_CONNECT;
+       Login [set ${DUTName}_CONNECT];
+   }
+
+   if { [llength $TFTPServerIP] > 0 } {
+       set TFTPServerIP [lindex [GetRandomTFTPList $TFTPServerIP] 0]
+   }
+
+   ConfigGatewayNetwork
+   if {[regexp -nocase $switchPort2DefaultRouter mgmt]} {
+      set uplink "Mgmt"
+   } else {
+      set uplink "Default"
+   }
+
+   set flag "ok"
+   result_debug "--- Send download bootrom $TFTPServerIP $filename"
+   set rtValue [CheckCmdLegal "download bootrom $TFTPServerIP $filename vr vr-$uplink"]
+   UnconfigGatewayNetwork
+   if { $rtValue == "illegal" } {
+       result_error "bootrom download failed"
+       set flag "error"
+   } else {
+       result_ok "bootrom download pass rebooting switch"
+       CheckReboot $dut
+    }
+   #   puts "flag: $flag"
+   return $flag
+}
+################################################################## 
+# Procedure Name: DownloadImage
+#   
+# Description: Internal proc that downloads the image provided in filename to the current DUT from tftp server 
+#              provided in TFTPServerIP.
+#
+# Input args: TFTPServerIP, filename
+# Output args: none
+# Typical usage:
+#             set status [DownloadImage $TFTPServerIP $filename ]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc DownloadImage {downloadsource filename {partition ""} {slotId ""} {install "y"} {confgateway "1"}} {
+
+    if { !($confgateway!=1 || $downloadsource=="memorycard") } {ConfigGatewayNetwork}
+
+    after 5000 ;# Required as it might be a timing issue to reach network
+    global whichDutNow
+    global DUTs_info
+    global env
+
+    result_debug "--- Send download image $downloadsource $filename $partition $slotId"
+    set rtValue "legal"
+    set buf ""
+    if { [isExosPlatform DUT$whichDutNow ] == 1 } {
+        global switchPort2DefaultRouter
+        global connectionTimeout
+        set origConnectionTimeout $connectionTimeout
+        set connectionTimeout 1000
+        set pid [pid]
+        set fd_in [open "Tmp/temp_$pid" "w"]
+
+        set downloadAttempt 1
+
+        while { ($downloadAttempt <= 3) } {
+            if { $downloadsource == "memorycard" } {
+                set buf [SendACmd "download image memorycard $filename $partition $slotId" "NULL" $fd_in true 3 $install]
+            } elseif {[regexp -nocase "mgmt" $switchPort2DefaultRouter]} {
+                after 800
+                set buf [SendACmd "download image $downloadsource $filename $partition $slotId" "NULL" $fd_in true 3 $install]
+            } else {
+                set virtualRouter [GetVrString $whichDutNow]
+                set buf [SendACmd "download image $downloadsource $filename vr $virtualRouter $partition $slotId" "NULL" $fd_in true 3 $install]
+            }
+            # "tftp.*timeout"
+            # "Network is unreachable"
+            if { [regexp -nocase "tftp.*timeout" $buf] } {
+                result_debug "--- DUT $whichDutNow Image download failed attempt # $downloadAttempt because of TFTP timeout. Retrying..."
+                close $fd_in
+                _saveOutputIfMultiTasked "Tmp/temp_$pid"
+                file delete "Tmp/temp_$pid"
+                set fd_in [open "Tmp/temp_$pid" "w"]
+                incr downloadAttempt
+            } else {
+                break
+            }
+        }
+
+        set connectionTimeout $origConnectionTimeout
+        close $fd_in
+        set fd_in [open "Tmp/temp_$pid" "r"]
+
+        global validstring
+        set validstring(1) "only"
+        set validstring(20) "recommended"
+        set validstring(21) "capable"
+        set validstring(2) "Please"
+        set validstring(22) "Signature"
+        set validstring(23) "digitally"
+        set rtValue [check_illegality $fd_in]
+
+        if { $downloadAttempt > 3 } {
+            result_error "DUT$whichDutNow Image download failed 3 attempts because of TFTP timeout. Will not retry..."
+            set rtValue "illegal"
+        }
+
+
+        close $fd_in
+        # If this happens to be multitasked, save the output for print
+        _saveOutputIfMultiTasked "Tmp/temp_$pid"
+
+        file delete "Tmp/temp_$pid"
+        result_debug "the rtValue $rtValue"
+        if {$rtValue=="legal"} {
+            set buf "ok"
+        } else {
+            set buf "error"
+        }
+    }
+    if { !($confgateway!=1 || $downloadsource=="memorycard") } {UnconfigGatewayNetwork}
+    return $buf
+}
+################################################################## 
+# Procedure Name: GetRandomTFTPList
+#   
+# Description: proc that randomizes the order of the elements in tftpServerList
+#
+# Input args: tftpServerList
+# Output args: new list with different order
+# Typical usage:
+#         set downloadsource [GetRandomTFTPList $downloadsource]
+#
+# Category Types (Utility)
+# Category: Utility
+##################################################################
+proc GetRandomTFTPList { oldtftplist } {
+
+    # More random based on clock ticks and pid, since that is different for each forked task...
+    set seed [expr rand()*[clock clicks]/[pid]]
+    set afterdec ".[lindex [split $seed "."] 1]"
+    set tftpserverIdx [expr int($afterdec*[llength $oldtftplist])]
+    result_debug "tftpserverIdx is $tftpserverIdx"
+
+    if {$tftpserverIdx > [expr [llength $oldtftplist] - 1]} {
+      set tftpserverIdx 0
+    }
+
+    set tftpserver [lindex $oldtftplist $tftpserverIdx]
+    lappend newList $tftpserver
+
+    if { [llength $oldtftplist] > 1 } {
+    set otherservers [ldelete $oldtftplist $tftpserver]
+    lappend newList $otherservers
+    }
+
+    return [split [join $newList]]
+}
+
+##################################################################          
+proc FindNumSlots {Ip} {
+    global DUT
+    set numSlots 0
+    
+    Login $Ip
+
+    set fd_in [open "Tmp/tmp_slots" "w"]
+    SendACmd "sh ver" NULL $fd_in
+    close $fd_in
+
+    set fd_in [open "Tmp/tmp_slots" "r"]
+    while {[gets $fd_in line] != -1} {
+       set cookedLine [cookString $line]
+       set aList [split $cookedLine]
+
+       ###########################################################
+       #  Logic to find the number of slots
+       ###########################################################
+       if { ([string tolower [lindex $aList 0]] == "slot") } {
+         set numSlots [lindex $aList 1]
+       }
+    }
+   catch {file delete "Tmp/tmp_slots"}
+       if {$numSlots==3} {set numSlots 0}  ;# S7i wrongly shows slot1,2,3
+              return $numSlots
+}
+##################################################################          
+proc FindChassisType {Ip} {
+
+    set chassis 0
+    
+
+    Login $Ip
+
+    set fd_in [open "Tmp/tmp_chassis" "w"]
+    SendACmd "sh ver" $fd_res $fd_in
+    close $fd_in
+
+    set fd_in [open "Tmp/tmp_chassis" "r"]
+    while {[gets $fd_in line] != -1} {
+       set cookedLine [cookString $line]
+       set aList [split $cookedLine]
+
+       if { ([string tolower [lindex $aList 0]] == "msm") } {
+         set fabric msm
+       }
+       if { ([string tolower [lindex $aList 0]] == "baseboard:") } {
+         set fabric alpine
+       }
+    }
+    set numSlots [FindNumSlots $Ip]
+    if {($numSlots == 16) && ($fabric == msm)} {
+        set chassis GD
+    }
+    elseif {($numSlots == 8) && ($fabric == msm)} {
+        set chassis BD
+    }
+    elseif {($numSlots == 4) && ($fabric == msm)} {
+        set chassis BT
+    }
+    elseif {($numSlots == 8) && ($fabric == alpine)} {
+        set chassis Alpine3808
+    }
+    elseif {($numSlots == 4) && ($fabric == alpine)} {
+        set chassis Alpine3804
+    }
+    elseif {($numSlots == 2) && ($fabric == alpine)} {
+        set chassis Alpine3802
+    }
+    else {
+        set chassis Summit
+    }
+    catch {file delete "Tmp/tmp_chassis"}
+    return $chassis
+}
+
+proc CheckMSMsCompatibility {} {
+
+            lappend getKeyList "{Image Selected:} 1"
+            lappend getKeyList "{Image Selected:} 2"
+            lappend getKeyList "{Primary ver:} 1"
+            lappend getKeyList "{Primary ver:} 2"
+            lappend getKeyList "{Secondary ver:} 1"
+            lappend getKeyList "{Secondary ver:} 2"
+            set origPart [GetKeyValue "show switch" $getKeyList]
+            result_debug "the MSMs state: $origPart"
+            set bankUsed [lindex $origPart 0]
+            set primaryBuilds [lindex $origPart 1]
+            set secondaryBuilds [lindex $origPart 2]
+            if {[string compare -nocase [lindex $bankUsed 0] "primary"]==0} {
+               SendACmd	"use image partition secondary"
+#               CheckReboot
+#               set origPart [GetKeyValue "show switch" $getKeyList]
+#               result_debug "the MSMs state: $origPart"
+#               set bankUsed [lindex $origPart 0]
+#               set primaryBuilds [lindex $origPart 1]
+#               set secondaryBuilds [lindex $origPart 2]
+            }
+            report_start_test "Verifying Master/Backup compatibility..."
+            if {[lindex $bankUsed 1]!=""} {   ;# if MSM-B present
+               if {[lindex $bankUsed 0]==[lindex $bankUsed 1]} {
+                 result_ok "Master:[lindex $bankUsed 0] and Backup:[lindex $bankUsed 1] are on same banks"
+                 if {[string compare -nocase [lindex $bankUsed 0] "primary"]==0} {
+                    if {[lindex $primaryBuilds 0]==[lindex $primaryBuilds 1]} {
+                       result_ok "Master:[lindex $primaryBuilds 0] and Backup:[lindex $primaryBuilds 1] use same primary image"
+                    } else {
+                       result_error "Master:[lindex $primaryBuilds 0] and Backup:[lindex $primaryBuilds 1] do not use same primary image"
+                       return 1
+                    }
+                 } elseif {[string compare -nocase [lindex $bankUsed 1] "secondary"]==0} {
+                    if {[lindex $secondaryBuilds 0]==[lindex $secondaryBuilds 1]} {
+                       result_ok "Master:[lindex $secondaryBuilds 0] and Backup:[lindex $secondaryBuilds 1] use same secondary image"
+                    } else {
+                       result_error "Master:[lindex $secondaryBuilds 0] and Backup:[lindex $secondaryBuilds 1] do not use same secondary image"
+                       return 1
+                    }
+                 }
+               } else {
+                  result_error "Master:[lindex $bankUsed 0] and Backup:[lindex $bankUsed 1] are not on same banks"
+                  return 1
+               }
+            }
+            
+            report_end_test
+            set timeout 300
+#            if {[string compare -nocase [lindex $bankUsed 0] "primary"]==0} {
+#               SendACmd	"use image partition secondary"
+#               CheckReboot
+#               if {[CheckMSMsCompatibility]==1} {
+#                  return 1
+#               }
+#            }
+            unset getKeyList
+            return 0
+}
+
+proc CheckImagePartition {{partition "primary"}} {
+
+   global whichDutNow
+   global DUTs_info
+   global i386Platform
+   if {[regexp -nocase "$i386Platform" $DUTs_info(DUT$whichDutNow,platform)] && ([GetVersion DUT$whichDutNow 4] < "11.1.0" \
+       || ([GetVersion DUT$whichDutNow 4] == "11.1.0" && [GetVersion DUT$whichDutNow 3] <= 6))} {
+      EnableDebugMode
+      result_debug "Remove hal_syslog*.nvram to avoid licensing incompatibility"
+      SendACmd "!rm /root/config/hal_syslog*.nvram"
+   }
+   global DUTs_info
+   if {![regexp -nocase "$partition" $DUTs_info(DUT$whichDutNow,imageBooted)]} {
+   set buf [SendACmd "use image partition $partition"]
+   set backupStr "Error: This command can only be executed on Master"
+   global DUT1_CONNECTB
+   global DUT2_CONNECTB
+   global DUT3_CONNECTB
+   global DUT4_CONNECTB
+   global DUT5_CONNECTB
+   if {[regexp -nocase $backupStr $buf]} {
+      result_debug "Backup MSM encountered"
+      set xos_version [GetVersion DUT$whichDutNow 4]
+      if {$xos_version < "11.2.0"} {
+         EnableDebugMode  ;# needed as 11.1.1.3 requires debug-mode
+         if { $xos_version >= "10.2.0" } {
+            set virtualRouter VR-Control
+         } else {
+            set virtualRouter VR-1
+         }
+         global bcmChassis
+         if {[regexp -nocase $bcmChassis $buf]} {
+            SendACmd "telnet vr $virtualRouter 10.0.12.2"
+         } else {
+            SendACmd "telnet vr $virtualRouter 10.0.10.2"
+         }
+      } else {
+         if {[info exists DUT${whichDutNow}_CONNECTB]} {
+            #SendACmd "telnet msm b"
+            Login [set DUT${whichDutNow}_CONNECTB] -CheckOperational 0
+         }
+      }
+      SendACmd "use image part $partition"
+      logout
+      Login $DUTs_info(DUT$whichDutNow,connect) -CheckOperational 0
+   }
+   UnconfigSwAll -at "download"
+   global supportedPlatform
+   if {([regexp -nocase "$supportedPlatform" $DUTs_info(DUT$whichDutNow,platform)]  || \
+            [regexp -nocase "$supportedPlatform" [GetSysType DUT${whichDutNow}]]) && \
+       [info exists DUT${whichDutNow}_CONNECTB]} {
+#puts "the whichDutNow $whichDutNow and [parray DUTs_info] and $DUT1_CONNECTB"
+      set showSwitchOutput ""
+      global pioneerPlatform
+      global everestChassis
+      if {[regexp -nocase $pioneerPlatform $DUTs_info(DUT$whichDutNow,platform)] || \
+          [regexp -nocase $everestChassis $DUTs_info(DUT$whichDutNow,platform)]} {
+          lappend showSwitchOutput "{MM-A *\\*} exist"
+      } else {
+          lappend showSwitchOutput "{MSM-A *\\*} exist"
+      }
+      lappend showSwitchOutput "{Current State:} {MASTER *BACKUP .*In *Sync} inLine exists"
+      if {[CheckKeyValue "show switch" $showSwitchOutput -time {s: 1 i: 5 d: 150 f: 150 r} -comment "check both MSMs up in sh switch output"]=="error"} {
+         return 1
+      }
+   }
+   }
+   SendACmd "use ima part secondary"
+   return 0
+}
+################################################################## 
+# Procedure Name: Load_THT_CFG
+#   
+# Description:  Load THT base configs
+#
+#  
+# Input args: none
+# Output args: none
+# Typical usage: 
+#      
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: SetupSwitch
+##################################################################
+proc Load_THT_CFG {} {
+    global DUTs_info
+    global MaxLoopCount
+    global cfg
+
+
+
+    #First check the cfg. If cfg has tht then run otherwise return
+
+    if {![regexp -nocase "tht" $cfg]} {
+        result_debug "No need to run. Not a tht test bed. This is $cfg"
+        return -code return testSkipped
+       
+    }
+    # ---------------------------------------------------
+    #   Set up a global variable to turn on log checking
+    #      It would have been better to have a single
+    #      check log procedure, but oh well.
+    # ---------------------------------------------------
+    if {[info exists DUTs_info(DUT1,BaseConfigLoaded)] && $DUTs_info(DUT1,BaseConfigLoaded)} {
+        result_debug "THT Base is already loaded continue"
+        return;
+    }
+    
+    set MaxLoopCount 40000
+    # download to all 5 dut files tht_dut$dut.xsf
+    #   sleep 600 secs after kicking of load script
+    set myDutList {1 2 3 4 5}
+    set fullDutList {}
+    set noFullDutList {}
+    set haveBaseDutList {}
+    set nadaDutList {}
+    set thtXsfList ""
+    set o2XsfList ""
+    set o5XsfList ""
+    
+    foreach theDut $myDutList {
+        # Check to see if the full module configuration is available on the 
+        Login $DUTs_info(DUT$theDut,connect)
+        set parameter ""
+        lappend parameter "{[file tail [pwd]]_DUT${theDut}_THT.cfg} exist"
+        set haveFull [CheckKeyValue "ls" $parameter -comment "Check to see if the full module config is present" -reportResults 0 ]
+        if {$haveFull != "ok"} {
+            result_debug "Not Found: [file tail [pwd]]_DUT${theDut}_THT.cfg"
+            lappend noFullDutList $theDut
+        } else {
+            result_debug "FOUND: [file tail [pwd]]_DUT${theDut}_THT.cfg"
+            lappend fullDutList $theDut
+            SendACmd "cp [file tail [pwd]]_DUT${theDut}_THT.cfg tht_base.cfg"
+            SendACmd "use config tht_base"
+        }
+        unset parameter
+    }
+    if {[llength $noFullDutList] > 0} {
+        foreach theDut $noFullDutList {
+            # Check to see if the module BASE configuration is available on the 
+            Login $DUTs_info(DUT$theDut,connect)
+            set parameter ""
+            lappend parameter "{THT_DUT${theDut}_Base.cfg} exist"
+            set haveBase [CheckKeyValue "ls" $parameter -comment "Check to see if the THT Base config is present" -reportResults 0 ]
+            if {$haveBase != "ok"} {
+                result_debug "NOT Found: THT_DUT${theDut}_Base.cfg"
+                lappend nadaDutList $theDut
+            } else {
+                result_debug "Found: THT_DUT${theDut}_Base.cfg"
+                lappend haveBaseDutList $theDut
+                SendACmd "cp THT_DUT${theDut}_Base.cfg tht_base.cfg"
+                SendACmd "use config tht_base"
+            }
+            unset parameter
+        }
+    }
+    if {[llength $nadaDutList] > 0} {
+        # This is a list of duts with no base or full config.  Build a list of xsf filenames.
+        foreach theDut $nadaDutList {
+            result_debug "DUT $theDut found no configs.  PULL clean .xsf"
+            lappend thtXsfList tht_dut${theDut}
+            lappend o2XsfList  tht_o2_dut${theDut}
+            lappend o5XsfList  tht_o5_dut${theDut}
+        }
+    }
+    
+    # -------------------------------------------------------------
+    #  All of the lists are present. Do the first action.
+    #    - do you think you can multitask within a multitask??
+    #    - We will find out.
+    # -------------------------------------------------------------
+    set procList ""
+    if {[llength $fullDutList] > 0 || [llength $haveBaseDutList] > 0} {
+        # Create the , delimited string
+        if {[llength $fullDutList] > 0} {
+            set commaDutA [join $fullDutList ,]
+            set commaDut ${commaDutA}
+        }
+        if {[llength $haveBaseDutList] > 0} {
+            set commaDutB [join $haveBaseDutList ,]
+            set commaDut $commaDutB
+        }
+        if {[llength $haveBaseDutList] > 0 && [llength $fullDutList] > 0} {
+            set commaDut ${commaDutA},$commaDutB
+        }
+        result_debug "CheckReboot $commaDut -save no -waitforloadcfg yes"
+        lappend procList "CheckReboot $commaDut -save no -waitforloadcfg yes"
+    }
+    if {[llength $nadaDutList] > 0} {
+        if {$cfg == "p4_voy_ipr_tht.cfg"} {
+            result_debug "lappend procList checkDownloadConfigParallel [list $nadaDutList] [list $thtXsfList] -wait 90 .... "
+            lappend procList "checkDownloadConfigParallel [list $nadaDutList] [list $thtXsfList] -wait 90 \
+                -timeout 3000 -incremental 0"
+        } elseif {$cfg == "p2_oly_ipr.cfg"} {
+            result_debug "lappend procList checkDownloadConfigParallel [list $nadaDutList] [list $o2XsfList] -wait 90 .... "
+            lappend procList "checkDownloadConfigParallel [list $nadaDutList] [list $o2XsfList]  -wait 90 \
+                -timeout 800 -incremental 0"
+        } elseif {$cfg == "p5_oly_ipr.cfg"} {
+            result_debug "lappend procList checkDownloadConfigParallel [list $nadaDutList] [list $o5XsfList] -wait 90 .... "
+            lappend procList "checkDownloadConfigParallel [list $nadaDutList] [list $o5XsfList]  -wait 90 \
+                -timeout 800 -incremental 0"
+        } 
+    }
+    # The first list of tasks is created.
+    result_debug "\n------------------------------------------------------------"
+    result_debug "MultiTask is getting ready to run with these procs:"
+    foreach aProc $procList {
+        result_debug "  - $aProc"
+    }
+    result_debug "------------------------------------------------------------"
+    MultiTask $procList
+    set DUTs_info(DUT1,BaseConfigLoaded) 1
+    if {0} {
+    result_debug "\n-------------------------------------\nFirst Load/Reboot is Done\n-------------------------------------"
+    if {[llength $fullDutList] > 0} {
+        foreach fDut $fullDutList {
+            result_debug "DUT $fDut had the full config.  Not more work needed."
+        }
+    }
+    set thtXsfList ""
+    set o2XsfList ""
+    set o5XsfList ""
+    set incrDutList ""
+    if {[llength $haveBaseDutList] > 0} {
+        foreach bDut $haveBaseDutList {
+            result_debug "DUT $bDut only had the base config.  Try to download rest."
+            lappend incrDutList $bDut
+            lappend thtXsfList "[file tail [pwd]]_tht_dut${theDut}"
+            lappend o2XsfList  "[file tail [pwd]]_tht_o2_dut${theDut}"
+            lappend o5XsfList  "[file tail [pwd]]_tht_o5_dut${theDut}"
+        }
+    }
+    if {[llength $nadaDutList] > 0} {
+        foreach nDut $nadaDutList {
+            result_debug "DUT $nDut just downloaded xsf base.  Try to download rest."
+            lappend incrDutList $nDut
+            lappend thtXsfList "[file tail [pwd]]_tht_dut${theDut}"
+            lappend o2XsfList  "[file tail [pwd]]_tht_o2_dut${theDut}"
+            lappend o5XsfList  "[file tail [pwd]]_tht_o5_dut${theDut}"
+        }    
+    }
+    if {[llength $incrDutList] > 0} {
+        $q=0;
+        if {$cfg == "p4_voy_ipr_tht.cfg"} {
+            foreach iDut $incrDutList {
+                result_debug "DUT $nDut is a base. Incr load DUT: $iDut XSFFile: [lindex $thtXsfList $q]."
+                incr q
+            }
+            #checkDownloadConfigParallel $incrDutList $thtXsfList -wait 90 -timeout 600 -incremental 1
+        } elseif {$cfg == "p2_oly_ipr.cfg"} {
+            foreach iDut $incrDutList {
+                result_debug "DUT $nDut is a base. Incr load DUT: $iDut XSFFile: [lindex $o2XsfList $q]."
+                incr q
+            }
+            #checkDownloadConfigParallel $incrDutList $o2XsfList  -wait 90 -timeout 600 -incremental 1
+        } elseif {$cfg == "p5_oly_ipr.cfg"} {
+            foreach iDut $incrDutList {
+                result_debug "DUT $nDut is a base. Incr load DUT: $iDut XSFFile: [lindex $o5XsfList $q]."
+                incr q
+            }
+            #checkDownloadConfigParallel $incrDutList $o5XsfList  -wait 90 -timeout 600 -incremental 1
+        }
+    }
+    }
+}

@@ -1,0 +1,2631 @@
+#!/usr/bin/tclsh
+
+source ../Lib/mainLib.tcl;
+source ../Lib/queueLib.tcl;
+
+set modulesToBeSummarizedPath "../Autoweb/cgi-bin/cgiScripts/modulesToBeSummarized.cfg";
+set execSummaryFilename "execSummary.txt";
+
+;# Used in regexp to look for summit matches
+# EY-06-16-2006: Added new Jaguar-2 platform names: X450a-24x, X450a-24xdc, and X450e-48p.
+set summitList "SummitX450|Summit-PC|SummitX406|SummitX450e-24p|SummitX450a-48t|X450a-24t|X450e-24p|X450e-24t|X450a-48t|X450a-24tdc|X450a-24x|X450a-24xdc|X450e-48p|X450e-48t";
+set alpineList "Aspen";
+#set bladeList  "10G|10G4X|G60T|G60X|G48T|G48P|G24X|pcsimc2|G20XT|G20XTR|10G2X|10G2XR";
+
+set bladeList  "10G|10G4X|G60T|G60X|G48T|G48P|G24X|pcsimc2|GM-20XT|GM-20XTR|10G2X|10G2XR|G48Te|G48Pe|G48Ta|G48Xa";
+
+################################################################
+#  [print_usage]
+# 
+#  Prints the usage of utility in case any of the args are incorrect or insufficient
+#   
+#  Input Variables:
+#                none
+#  Output Variables:
+#                none
+#
+#  Return Value:
+#      - none
+#      
+#Usage:
+#     print_usage
+#
+################################################################
+proc print_usage {} {
+    puts "\r"
+    puts {USAGE: automate.tcl -regType <regType> -regSubType <regSubType> \
+	    -build <imageName> [-platform <platform>] [-blade <bladeType>] \
+	    [-modules <moduleList] \
+	    [-noconfig] [-cliFlag <cliFlag>] [-help]}
+    puts {      -regType: Type of Regression to be run (functional|cli|performance)}
+    puts {      -regSubType: Test Subtype (standard|ipRoute1|ipRoute2|ipRoute3|uploadanddownload|upgradedowngrade)}
+    puts {      -build:    Name of image e.g. 10.2.0.16/11.0.0.27/11.1.0.2}
+    puts {      -platform: Name of the platform.  BD-10808/Aspen/SummitX450/Summit-PC/\
+	    BD-PC}
+    puts {      -blade:    Type of the blade.  G60T/G60X/G48T/10G4X}
+    puts {      -modules: Specific list of modules to run against. }
+    puts {      -noconfig: DO NOT create the short config and batch re-run file}
+    puts {      -cliFlag>: cliFlag (NO_REBOOT|NO_REBOOT_NO_DOWNLOAD, optional with regPath clitest)}
+    puts {      -help:     Prints usage}
+    puts "\r"
+    puts { * Summit platforms DO NOT require blade type.} 
+    puts { * ipRoute regSubTypes DO NOT require platform/blade} 
+    puts "\r"
+}
+
+
+###################################################################
+# Get the performance data from previuos build.
+# Currently not used..
+###################################################################
+proc getPerfDataFromPrevBuild {module plat blade build testNumber subtest}  {
+   global webServerDirName
+   global newPlatforms
+      
+   set flag 0;
+   set curDir [pwd]
+   cd "$webServerDirName"
+
+   # newPlatform summit24e3
+   if {[regexp -nocase $newPlatforms $plat]} {
+      set relName $plat
+   } else {
+      set relName [string range $build 0 3]
+   }
+
+   set number 0
+   set ver 0
+   set b b
+   set flg [regexp -nocase {^([0-9]+.[0-9a-z]+.[0-9]+).(.*)} $build match ver number]
+
+   set i 1
+   set dataListToReturn ""
+   while {$i<4} {
+      set prevBuild $ver$b[expr $number-$i]
+      set thisDir [getDirName $plat $blade $module $prevBuild "Performance" ""]
+      set fname "$thisDir/$module"
+      append fname "_perfData.txt";
+
+      if {[catch {open $fname r} fd_in]} {
+       # File does not already exists, check the next prev build.
+         incr i
+      } else {
+         break
+      }
+   }
+
+   if {$i >= 4} {    ;# No earlier build found for this module
+      cd $curDir
+      return $dataListToReturn
+   }
+   set data ""
+   while {[gets $fd_in line] != -1} {
+      if {[regexp $testNumber $line]} {
+         if {[regexp -nocase $subtest $line]} {
+            if {([regexp -nocase {\[ *[0-9.]+ *\]} $line match ]==1) \
+               || ([regexp -nocase {\[ *[0-9.]+% *\]} $line match ]==1)} {
+               set data $match
+               break
+            } 
+         } else {
+            while {[gets $fd_in line] != -1} {
+               if {[regexp {[0-9].[0-9]|Using file .*} $line] == 1} {
+                  if {[regexp -nocase $subtest $line]} {
+                     if {([regexp -nocase {\[ *[0-9.]+ *\]} $line match ]==1) \
+                        || ([regexp -nocase {\[ *[0-9.]+% *\]} $line match ]==1)} {
+                        set data $match
+                        break
+                     } 
+                  } else {
+                     continue
+                  }
+               } else {
+                  if {[regexp -nocase $subtest $line]} {
+                     if {([regexp -nocase {\[ *[0-9.]+ *\]} $line match ]==1) \
+                        || ([regexp -nocase {\[ *[0-9.]+% *\]} $line match ]==1)} {
+                        set data $match
+                     }
+                  }
+               }
+            }
+         }
+      }
+   }
+   close $fd_in
+   if {$data == ""} {
+      set retData ""
+   } else {
+      set retData $prevBuild
+   }
+   append retData " $data"
+   return $retData
+}
+
+
+
+
+proc putPerfTestResult {module webFileName perfFileName platform bladeType buildName} {
+
+    global webServerDirName
+    
+    set curDir [pwd]
+    cd $curDir
+
+    set moduleDirName [file dirname $webFileName]
+    set relName [string range $buildName 0 3]
+    
+    set destFile $module
+    append destFile "_perfData.txt"
+    set perfdata ./$perfFileName 
+
+    puts "DEBUG: Opening $perfdata"
+    if {[catch {open $perfdata r} fd_in]} {
+	cd $curDir
+	puts " !!!!  NO performance data found : $fd_in  !!!!"
+	return 1;
+    }
+    
+    if {[file exists $webServerDirName/$moduleDirName/$destFile]} {
+	puts "Deleting $webServerDirName/$moduleDirName/$destFile"
+	if [catch {file delete $webServerDirName/$moduleDirName/$destFile} fd_out] {
+	    return 1
+	}
+	
+    }
+    
+    if {[catch {open "$webServerDirName/$moduleDirName/$destFile" w 0777} fd_out]} {
+	cd $curDir
+	puts " !!!! ERROR : $fd_out    !!!!"
+	return 1;
+    }
+    
+    puts "$webServerDirName/$moduleDirName/$destFile opened"
+
+    while {[gets $fd_in line] != -1} {
+	if {[regexp {[0-9].[0-9]|Using file .*} $line] == 1} {
+	    set flg [regexp -nocase {([0-9]+[.][0-9a-z_.-]*) .*$} $line match testNumber];
+	    set flg [regexp -nocase {Using file .*/(.*.cli)} $line match testNumber];
+	}
+
+	if {([regexp -indices {\[ *[0-9.]+ *\]} $line match ]==1) \
+		|| ([regexp -indices {\[ *[0-9.]+% *\]} $line match ]==1)} {
+	    scan $match {%[0-9]} endIndex
+	    set subtestStr  [string range  $line 0 [incr endIndex -1]]
+	    # We are not going to get the previous build date for now
+	    #            set prevData [getPerfDataFromPrevBuild $module $platform $bladeType $buildName $testNumber $subtestStr] 
+	    #            append line $prevData
+	}
+
+	puts "WRITING: $line to $fd_out"
+	puts $fd_out $line
+    }
+    
+    puts "Closing $fd_in and $fd_out"
+    close $fd_in
+    close $fd_out
+    
+    return 0
+}
+
+
+
+
+################################################################
+#  [SummarizeAllFailures]
+# 
+#  Procedure to summarize all the Failures from report.txt files to a common summary file.
+#   
+#  Input Variables:
+#                buildName
+#                platform
+#                bladeType
+#                regType
+#                regSubType
+#                fd - file descriptor of the output file to write to
+#                perfFileName
+#  Output Variables:
+#                none
+#
+#  Return Value:
+#      - returns 0 on failure or 1 on success
+#      
+#Usage:
+# SummarizeAllFailures $build $platform $blade $regType $regSubType $fd
+#
+################################################################
+proc SummarizeAllFailures {buildName platform bladeType regType regSubType \
+	regressionModules fd {perfFileName ""}} {
+
+    global runflag;
+    global moduleNeedToRerun;
+    global regPath
+
+    global performanceRegressionModules
+    
+    set key "FAILED"
+    set origBladeType $bladeType
+    
+    # modulesToBeSummarized.cfg defines modules for each test, 
+    # namely standard, cli, iprouting
+    foreach testModule $regressionModules {
+	puts "\n"
+	set testCaseListFailed "";
+	set testCaseListPassed "";
+	set testCaseListAll "";
+	set testCaseListPerf "";
+	set testCaseListNotFound "";      
+        set testsFromCfgFile "";
+        set pdList ""
+        set runOrRerun 1
+	
+	# Get the first report dir from a list of many dirs for bladeType and buildName
+	puts $fd "###############################################"
+	puts $fd "           Module:$testModule                  "
+	puts $fd "###############################################"
+
+	puts "###############################################"
+	puts "           Module:$testModule                  "
+	puts "###############################################"
+
+	# Get the directory listing under module/Report for all directories 
+	# matching this platform_blade_build.  For summit just use 
+	# platform_build.  These are the directories that we search for 
+	# the "report.txt" file to get the regression test result summary.
+	if {[regexp -nocase "summit" $platform] && \
+		[regexp -nocase "standard" $regSubType]} {
+
+	    # Since bladeType is "" in summit, check the right dir based on 
+	    # the platform itself.
+	    set summitPlatform [string range $platform 0 end]
+#	    set temp [string tolower [string range $summitPlatform 1 end]]
+#	    set thisPlatform [string index "$platform" 0]
+	    set thisPlatform $summitPlatform
+#	    append thisPlatform $temp
+	    puts "DEBUG: Looking for $regPath/$testModule/Report/\
+		    *$thisPlatform*$buildName *"
+	    set dirList [glob -nocomplain -- \
+		    "$regPath/$testModule/Report/*$thisPlatform*$buildName *"]
+	    if {[regexp -nocase $platform "summit48i"]} {
+		set tempDirList ""
+		foreach dirName $dirList {
+		    if {[regexp -nocase "summit48si" $dirName]!=1} {
+			lappend tempDirList $dirName
+		    }
+		}
+		set dirList $tempDirList
+	    }
+
+	} elseif {[regexp -nocase "ipr" $regSubType]} {
+	    puts "DEBUG: Routing   $regType  $regSubType"
+#	    puts "DEBUG: looking for $regPath/$testModule/Report/*$buildName *"
+	    puts "DEBUG: looking for $regPath/$testModule/Report/*$platform*$bladeType*$buildName *"	;# my
+#	    set dirList [glob -nocomplain -- \
+#		    "$regPath/$testModule/Report/*$buildName *"]
+	    set dirList [glob -nocomplain -- \
+		    "$regPath/$testModule/Report/*$platform*$bladeType*$buildName *"]
+	    
+	} elseif {[regexp -nocase "performance" $regType]} {
+	    puts "DEBUG: Perf   $regType  $regSubType"
+	    puts "DEBUG: looking for *regPath/$testModule/Report/*$buildName *"
+	    set dirList [glob -nocomplain -- \
+		    "$regPath/$testModule/Report/*$buildName *"]
+
+	} elseif {[regexp -nocase "cli" $regType]} {
+	    puts "DEBUG: CLI   $regType  $regSubType"
+	    set testModule [string tolower $testModule]
+	    puts "DEBUG: looking for $regPath/$testModule/Report/*$platform*$bladeType*$buildName*"
+	    set dirList [glob -nocomplain -- \
+		    "$regPath/$testModule/Report/*$platform*$bladeType*$buildName*"]
+	    
+      } else {
+	  puts "DEBUG: DEFAULT"
+	  puts "DEBUG: looking for $regPath/$testModule/Report/\
+		  *$platform*$bladeType*$buildName *"
+	  set dirList [glob -nocomplain -- \
+		  "$regPath/$testModule/Report/*$platform*$bladeType*$buildName *"]
+      }
+
+      # dirList contains all Report/xxx directories for all runs 
+      # of platform_blade_build
+      #set dirList [lsort -decreasing $dirList];
+      #set rightDirList [lrange $dirList 0 0]    ;# 1 dir for everything else
+
+      # Dany - sort based on the index of the directory and not lsort command
+      set rightDirList ""
+      foreach tdir $dirList {
+        #get directory index
+        set splitDir [split $tdir " "]
+        # get the last element
+        set indx [lindex $splitDir end]
+        if {$rightDirList == ""} {
+          set rightDirList $tdir
+          set highestIndx $indx
+        } else {
+          if {$indx > $highestIndx} {
+            set highestIndx $indx
+            set rightDirList $tdir
+          }
+        }
+      }
+
+      if {$rightDirList != ""} {
+        set rightDirList [list $rightDirList]
+      }
+
+      puts "DEBUG: dirList       $dirList"
+      puts "DEBUG: rightDirList  $rightDirList"
+
+
+      # Check if platform_blade_build directory even exists.  Won't exist 
+      # if this module was not tested with this build on this platform_blade.
+
+      if {[regexp -nocase "cli" $regType]} {
+	  if {$rightDirList==""} {
+	      puts "!!! Error: NO report.txt file for $testModule !!!\n"
+	      puts $fd "!!! Error: NO report.txt for module:$testModule for \
+		      $bladeType and $buildName !!!"
+	      puts $fd "###############################################\n"
+	      # --- need to create the config file here
+	      continue
+	  } else {
+	      puts $fd "           Report Dir: "
+	      puts "Found report.txt for $testModule in Dir:"
+	      foreach rd $rightDirList {
+		  puts $fd "               $rd."
+		  puts "$rd."
+	      }
+	  }
+      } else {
+	  if {$rightDirList==""} {
+	      puts "!!! Error: NO report.txt for module:$testModule for \
+		      $bladeType and $buildName !!!"
+	      puts $fd "!!! Error: NO report.txt for module:$testModule for \
+		      $bladeType and $buildName !!!"
+	      puts $fd "###############################################\n"
+	      
+	      # --- need to create the config file here
+	      continue
+	  } else {
+	      puts $fd "           Report Dir: "
+	      puts "Found report.txt for $testModule in Dir:"
+	      foreach rd $rightDirList {
+		  puts $fd "               $rd."
+		  puts "$rd."
+	      }
+	  }
+      }
+           
+      # There should only be 1 rightDirList...and it should be the 
+      # from the latest run
+      puts "DEBUG: Looping through rightDirList $rightDirList"
+      
+      set moduleAborted "No"
+      foreach rightDir $rightDirList {
+
+	  set count 0
+	  # unset the paragraph for earlier module if exists
+	  if {[info exists paragraph]} {
+	      unset paragraph
+	  }
+	  
+	  set fsize [file size $rightDir/report.txt]
+	  if {$fsize > 200000} {
+	      puts "Big file ($fsize) - Please wait ...";
+	  }
+
+	  ;# Open execSummary.txt and return time to execute ALL for this module
+	  ;#----- Execution Time Summary For ../Functionaltest/Dot1X -----
+	  ;#    SETUP: 316   (0 hours, 5 minutes, 16 seconds)
+	  ;# CHK_CONN: 63    (0 hours, 1 minutes, 3 seconds)
+	  ;#    QUICK: 360   (0 hours, 6 minutes, 0 seconds)
+	  ;#     PASS: 722   (0 hours, 12 minutes, 2 seconds)
+	  ;#      ALL: 993   (0 hours, 16 minutes, 33 seconds)
+	  ;#
+	  ;# TOTAL CURRENT RUN:  1372  (0 hours, 22 minutes, 19 seconds)
+	  global execSummaryFilename
+	  set execSummaryPath "$rightDir/$execSummaryFilename"
+	  set execAllTime ""
+	  
+	  if [file exists $execSummaryPath] {
+	      set execAllTime [exec cat $execSummaryPath]
+	  } else {
+	      puts "**************************************************"
+	      puts "\nWARNING: Execution Time File:$execSummaryFilename \
+		      does NOT exist\n"
+	      puts "**************************************************"
+	  }
+
+	  # Parse report.txt and put each line in array paragraph(x)
+	  if {[catch {open "$rightDir/report.txt" r} fd_in]} {
+	      puts "ERROR: Unable to open $rightDir/report.txt for reading"
+	      return "";
+	  }
+	  while {[gets $fd_in line] != -1} {
+               if {[regexp -nocase "MODULE_ABORTED" $line]} {
+                   set moduleAborted "Yes"
+	           set testCaseListFailed "";
+		   lappend testCaseListFailed "ALL";
+                   set testsFromCfgFile "";
+                   set pdList ""
+	           close $fd_in
+                   break;
+               }
+	  }
+          if { $moduleAborted == "Yes" } {
+             continue;
+          } else {
+             seek $fd_in 0 start
+          }
+ 
+	  while {[gets $fd_in line] != -1} {
+	      set paragraph($count) $line
+	      incr count
+	  }
+	  close $fd_in
+
+	  puts "DEBUG paragraph count: $count"
+	  
+	  set thisPara ""
+	  set prevFailed 0
+	  set relFlag 0
+	  
+	  # Proc to create thisPara and pass it to VerifyResult.  Essentially 
+	  # group each line into thisPara until we hit a blank line.  Sections 
+	  # separated by a blank line constitute paragraphs.
+	  
+	  for {set i 0} {$i<=[array size paragraph]} {incr i} {
+	      
+	      if {$i != [array size paragraph]} {
+		  set line $paragraph($i)                      
+	      } 
+	      
+	      # tn: MAJOR Test Number. i.e. 2.1.1 or 3.4 etc. This gets set
+	      #     in verifyResult call.
+	      # fl: Failure.. verifyResult returns -1 for passing test case
+	      #
+	      # We continue to append to $thisPara until we get a blank line.
+	      # As soon as we get a blank line, we pass that paragraph to verifyResult
+	      if { ($line=="") || ($i == [array size paragraph]) } {
+		  
+		  # We hit a blank line or the end of the report.txt file
+		  set tn "none"
+
+		  if {[regexp -nocase "perf" $regType]} {
+		      set fl [verifyPerfResult $thisPara $fd tn]
+		  } else {
+		      set fl [verifyResult $thisPara $fd tn]	 
+		  }
+		  
+		  
+		  if {[regexp -nocase "System setup" $tn]&&$relFlag==0} {
+		      puts "DEBUG: writeReleaseMasterFile  $buildName   $platform"
+		      writeReleaseMasterFile $buildName $platform
+		      set tn "none"
+		      set relFlag 1
+		  }
+		  
+		  if {[regexp -nocase "perf" $regType]} {
+		      # Performance
+
+		      if {$tn!="none"&&$fl!=-1} {
+			  lappend testCaseListPerf $tn;
+		      } 
+		  } else {
+		      # Standard/Routing/CLI
+
+		      if {$tn != "none" && $fl != -1} {
+			  lappend testCaseListFailed $tn;
+		      } elseif {$tn != "none" && $fl == -1} {
+			  lappend testCaseListPassed $tn
+		      }
+		  }
+		  
+		  if {$fl!="-1"} {
+		      set prevFailed 1
+		  }
+		  set thisPara ""
+		  continue
+		  
+	      } else {
+
+		  # Append each line to $thisPara until we hit a blank line.
+		  lappend thisPara $line
+		  ;# Get config file name from report.txt
+		  set flag [regexp -nocase {^Using config file: (.*)} $line match cfgFile]
+		  set flag [regexp -nocase {^Using lst: (.*)} $line match lstName]
+	      }
+	      
+	  } ;# for {set i 0} {$i<=[array size paragraph]} {incr i} 
+
+	  if {($fl==-1)&&($prevFailed==0)} {
+	      if [regexp -nocase "perf" $regType] {
+		  puts "No performance data for $testModule in dir $rightDir )))"
+		  puts $fd "No performance data for $testModule in dir $rightDir )))"
+	      } else {
+		  puts "OK: No Test case failed for $testModule in dir $rightDir )))"
+		  puts $fd "OK: No Test case failed for $testModule in dir $rightDir )))"
+	      }
+	  }
+	  
+	  if {$testModule == "cli"} {
+	      if {($runflag == "config") && ($prevFailed == 1)} {
+		  lappend moduleNeedToRerun $testModule;
+	      }   
+	  }
+	  
+	  puts $fd "\n"
+
+	  ;# Config read from report.txt earlier
+	  puts "Config file name : $cfgFile"
+	  puts $fd "Config file name : $cfgFile"
+
+          # ADD CODE
+          # If test_to_run in config file don't do anything
+          # pass in like before
+          # If not process the list file from the config file
+          # and append it to the end of the cfg file and pass in new
+          # config file to the TestsFromCfgFile proc below
+
+          if {[set tmpCfgFile [preProcessCfgFile $testModule $cfgFile $regPath $lstName $platform]]==0} {
+             return $tmpCfgFile
+          }
+          puts "tmpCfgFile =  $tmpCfgFile" 
+          set saveCfgFile $cfgFile
+          set cfgFile $tmpCfgFile
+
+          # --- compare and get the left out test cases
+          set testsFromCfgFile [TestsFromCfgFile $testModule $cfgFile $buildName $fd $regPath];
+	  puts "DEBUG: testsFromCfgFile: $testsFromCfgFile"
+	  puts "DEBUG: module:           $testModule        cfgFile: $cfgFile"    
+	  puts "DEBUG: buildName:        $buildName         fd:      $fd"
+	  
+	  
+	  if [regexp -nocase "perf" $regType] {
+	      set runOrRerun 1
+	      puts "Test cases with performance data      : $testCaseListPerf";
+	  } else {
+	      # set the runOrRerun flag to 2 if cfg is pt a file, 1 otherwise
+	      if {[regexp -nocase "short/pt.*$buildName" $saveCfgFile]} {
+		  puts "DEBUG: This was a re-run based on CONFIG FILE: $cfgFile";
+		  set runOrRerun 2
+	      } else {
+		  puts "DEBUG: This was an initial run based on CONFIG FILE: $cfgFile";
+		  set runOrRerun 1
+	      }
+	 
+	     puts "Test cases failed      : $testCaseListFailed";
+	     puts "Test cases passed      : $testCaseListPassed";
+	     puts $fd "Test cases failed      : $testCaseListFailed";
+	     puts $fd "Test cases passed      : $testCaseListPassed";
+	     
+	     # Compare passed/failed tests with testFromCfgFile and compute testCaseListFailed
+	     foreach testFromCfgFile $testsFromCfgFile {
+		 if {[regexp -nocase $testFromCfgFile $testCaseListFailed] != 1 && \
+			 [regexp -nocase $testFromCfgFile $testCaseListPassed] != 1 && \
+			 $testFromCfgFile != 0} {
+		     lappend testCaseListFailed $testFromCfgFile
+		 }
+	     }
+	 
+	     # Check OLD PDs for non-performance runs
+	     # check for the PD of the failed tests from prev build
+	     set buildHead ""
+	     if [regexp -nocase {([0-9].[0-9].[0-9]b[0-9]+)_[a-z]+} \
+		     $buildName match buildHead] {
+
+	     } else {
+
+		 set buildHead $buildName
+
+	     }
+	     
+	     puts "DEBUG: Get PD lists from previous build"
+             if {$regSubType == "upgradedowngrade"} {
+                 set pdList ""
+             } else {
+	         set pdList [getPDListFromPrevBuild testCaseListFailed \
+                         $testModule $platform $bladeType $buildHead \
+                         $regType $regSubType]
+             }
+	     puts "DEBUG: pdList: $pdList"
+	     
+	     # if -noconfig option is NOT supplied, append moduleNeedToRerun 
+	     # list with module
+	     if { ($testCaseListFailed != "") && ($runflag=="config") } {
+		 
+puts "Now going to $testCaseListFailed and $runflag"
+		 if {$testModule!="cli"} {
+		     lappend moduleNeedToRerun $testModule;
+		 }
+		 ; # Create a consistent pt file across runs! (APL)
+		 set rval [createShortConfig $cfgFile $testModule \
+			 $testCaseListFailed "$platform$bladeType" \
+			 $buildName $regPath];
+
+		 if {$rval == 0} {
+		     puts "WARNING: WE HAVE PROBLEM CREATING THE SHORT CONFIG FILE !!!"
+		     puts $fd "WARNING: WE HAVE PROBLEM CREATING THE SHORT CONFIG FILE !!!"    
+		 }
+	     } 
+	 }
+         catch {file delete $cfgFile}
+     }
+     
+   
+     # --------------- WEB POSTING ---------------
+     
+     # Han: we want to update the web server with the performance data......
+     # Put the test case number : performance data as log file
+     if {[regexp -nocase "perf" $regType]} {
+	 
+	 # Update webserver database files on autoweb
+	 set webFileName [updatePerfWebDataFile $regType $buildName $platform \
+		 $bladeType $testModule $testCaseListPerf $testsFromCfgFile]      
+	 
+	 set err [putPerfTestResult $testModule $webFileName $perfFileName \
+		 $platform $bladeType $buildName]
+	 if {$err != 0} {
+	     puts " Failed to update performance data"
+	 }
+
+     } else {
+
+     
+	 # Update webserver database files on autoweb
+	 # NOTE: If runOrRerun=1, testsFromCfgFile indicates the tests that 
+	 #       are not run from cfg file.
+	 set webFileName [updateWebDataFile $regType $regSubType $buildName \
+		 $platform $bladeType $testModule $testCaseListFailed $pdList \
+		 $testsFromCfgFile $runOrRerun $execAllTime]
+	 #run=1,rerun=2
+	 
+	 # if rerun, put failed test log on webserver
+	 puts "DEBUG: runOrRerun = $runOrRerun webFileName:$webFileName"
+	 if {$runOrRerun==2} {
+
+	     puts "DEBUG: Saw Failed Test"
+
+	     set curDir [pwd]
+	     global webServerDirName
+	     cd "$webServerDirName"
+
+	     puts "DEBUG: Opening $webFileName to write failed case log"
+
+	     if {[catch {open $webFileName r} fd_in]} {
+		 cd $curDir
+		 puts "** ERROR: Unable to open $webFileName."
+		 continue
+	     } else {
+		 set count 0
+		 while {[gets $fd_in line] != -1} {
+		     set para($count) $line
+		     incr count
+		 }
+		 close $fd_in
+		 set logList ""
+		 for {set ind 0} {$ind<[array size para]} {incr ind} {
+		     set status ""
+		     set test ""
+		     regexp {([0-9]+[.][0-9a-z_.-]*)([a-zA-Z]+)} $para($ind) match test status
+		     # check if status is RF, D or FW
+		     global rfTag
+		     if {$status==$rfTag||$status=="D"||$status=="FW"} {
+			 lappend logList $test
+		     }
+		 }
+	     }
+	     puts "DEBUG: logList $logList"
+	     cd $curDir
+	     foreach log $logList {
+		 set log [string trimright $log -]
+		 set moduleDirName [file dirname $webFileName]
+		 set destFile $testModule$log.txt
+		 set rightDi [lindex $rightDirList 0]
+		 append rightDi "/$log.txt"
+		 puts "DEBUG: $webServerDirName/$moduleDirName/$destFile ";
+		 
+		 if {[file exists $webServerDirName/$moduleDirName/$destFile]} {
+		     if [catch {file delete $webServerDirName/$moduleDirName/$destFile} reason] {
+			 puts "ERROR: $reason"
+			 continue
+		     }
+		 }
+		 catch {file copy $rightDi $webServerDirName/$moduleDirName/$destFile} reason
+	     }
+	     if [info exists para] {
+		 unset para
+	     }
+	 }
+     } 
+
+     puts $fd "###############################################\n"
+
+ } ;# END foreach testModule $regressionModules
+
+ return 1
+}
+
+################################################################
+#  [getPDListFromPrevBuild]
+# 
+#  Procedure to capture PDlist from 3 consecutive builds based on the testsList, module, plat, blade and regType.
+#   
+#  Input Variables:
+#                testsList
+#                module
+#                plat
+#                blade
+#                build
+#                regType
+#  Output Variables:
+#                none
+#
+#  Return Value:
+#      - returns list of PDs for above criteria
+#      
+#Usage:
+#       set pdList [getPDListFromPrevBuild testCaseListFailed $module $platform $bladeType $buildHead $regType]
+#
+################################################################
+proc getPDListFromPrevBuild {testsList module plat blade build \
+	regType regSubType} {
+
+    global webServerDirName
+    global newPlatforms
+    global rerunTag
+    global rfTag
+    global rpTag
+      
+    set flag 0;
+    set curDir [pwd]
+    upvar $testsList testCaseList
+    if {![file isdir $webServerDirName]} {
+       file mkdir $webServerDirName
+    }
+    cd "$webServerDirName"
+    if {[regexp -nocase $newPlatforms $plat]} {
+	set relName $plat
+    } else {
+	set relName [string range $build 0 3]
+    }
+    
+    set number 0
+    set ver 0
+    set b .
+    set flg [regexp -nocase {^([0-9]+.[0-9a-z]+.[0-9]+).([0-9]+).*} $build match ver number]
+    
+    set i 1
+    set pdListToReturn ""
+    
+    # check upto 3 build
+    while {$i<4} {
+	set prevBuild $ver$b[expr $number-$i]
+	if {[regexp -nocase "^cli" $module]} {
+	    set bl [split $blade]
+	    switch -- $plat {
+		"BD" {
+		    set pl "BD"
+		} "Alpine" {
+		    set pl $plat
+		} "BT" {
+		    set pl "BT"
+		} "GODZILLA" {
+		    set pl "GZ"
+		} "Summit24e3" {
+		    set pl "S24e3"
+		} default {
+		    set pl $plat
+		}
+	    }
+	    set prevDir "$relName/$prevBuild/$module$pl[lindex $bl 0]"
+	    set fname "$prevDir/[lindex $bl 1].txt"
+	} else {
+	    switch -- $plat \
+		    "BD" {
+		set pl "BD"
+	    } "Alpine" {
+		set pl $plat
+	    } "BT" {
+		set pl "BT"
+	    } "GODZILLA" {
+		set pl "GZ"
+	    } "Summit24e3" {
+		set pl "S24e3"
+	    } default {
+		set pl $plat
+	    }
+	    
+	    if [regexp -nocase "ipr" $regSubType] {
+		global Iproute
+#		set prevDir "$relName/$prevBuild/[lindex $Iproute 0]"	;# my
+		set prevDir "$relName/$prevBuild/RoutingRegressionSummary/$pl$blade"	;# my
+	    } else {
+		set prevDir "$relName/$prevBuild/$pl$blade"
+	    }
+	    set fname "$prevDir/$module.txt";
+	}
+	
+	puts "prevBuildDir-----> $fname"
+	
+	if {[catch {open $fname r} fd_in]} {
+	    # File does not already exists, check the next prev build.
+	    incr i
+	} else {
+	    incr i 10
+	    break
+	}
+    }
+
+    ;# No earlier build found for this module
+    if {$i<10} {    
+	cd $curDir
+	return $pdListToReturn
+    }
+    set count 0
+    while {[gets $fd_in line] != -1} {
+	set paragraph($count) $line
+	incr count
+    }
+    close $fd_in
+    set tList $testCaseList
+    set testCaseList ""
+    set status ""
+    foreach t $tList {
+	for {set i 0} {$i<[array size paragraph]} {incr i} {
+	    set status ""
+	    set test ""
+	    if {[regexp -nocase "$t-" $paragraph($i)]} {
+		regexp {([0-9]+[.][0-9a-z_.-]*)([a-zA-Z]+)} $paragraph($i) match test status
+
+		if {[regexp -nocase "^PD" $status] && $test=="$t-"} {    
+		    ;# check if the test has a PD
+		    lappend pdListToReturn $paragraph($i)
+		    break
+		} else {   ;# test does not have a PD
+		    if {[lsearch $testCaseList $t]==-1} {
+			lappend testCaseList $t
+		    }
+		    break
+		}
+	    }
+	}
+	if {$status==""} {
+	    if {[lsearch $testCaseList $t]==-1} {
+		lappend testCaseList $t
+	    }
+	}
+    }
+    cd $curDir
+
+    return $pdListToReturn
+}
+
+
+################################################################
+#  [verifyResult]
+# 
+#  Procedure to check the para for testcase and supplies the caller return value in out variable testN
+#   
+#  Input Variables:
+#                para
+#                fd
+#  Output Variables:
+#                testN
+#
+#  Return Value:
+#      - returns -1 on error or the failed test line on sucess
+#      
+#Usage:
+#            set fl [verifyResult $thisPara $fd tn]
+#
+################################################################
+proc verifyResult {para fd testN} {
+
+    upvar $testN testNumber
+    set match ""
+
+    # Separately put the time consumption inside the heading
+    set timeValueKay "Total test time|hours.*minutes.*seconds"
+
+    for {set i 0} {$i<[llength $para]} {incr i} {
+	if { [regexp $timeValueKay [lindex $para $i]] == 1 } {
+	    puts $fd [lindex $para $i]
+	}
+    }
+
+    set key "FAILED"
+    set flag -1
+
+    # Search for FAILED keyword in the paragraph, and mark paragraph number
+    for {set i 0} {$i<[llength $para]} {incr i} {
+
+	if {[regexp $key [lindex $para $i]]==1} {
+	    set flag $i
+
+	}
+    }
+
+    if {$flag != "-1"} {
+	# Found keyword FAILED
+	for {set j 0} {$j<=$flag} {incr j} {
+
+	    if {(([regexp "OK" [lindex $para $j]]!=1)&& \
+		    ([regexp {[0-9].[0-9]|Using file .*} \
+		    [lindex $para $j]]==1)) ||  ([regexp -nocase \
+		    "System Setup|Total test time|hours.*minutes.*seconds" \
+		    [lindex $para $j]]) || ([regexp $key [lindex $para $j]])} {
+		
+		puts $fd [lindex $para $j]
+
+		if {$j==0} {
+		    set flg [regexp -nocase {([0-9]+[.][0-9a-z_.-]*) .*$} \
+			    [lindex $para $j] match testNumber];
+		    set flg [regexp -nocase {Using file .*/(.*.cli)} \
+			    [lindex $para $j] match testNumber];
+		} else {
+		    if {[regexp -nocase "Show Release_Master .*FAILED" \
+			    [lindex $para $j]]} {
+			set testNumber "System Setup"
+		    }
+		}
+	    }
+	}
+    } else {
+	set flg [regexp -nocase {([0-9]+[.][0-9a-z_.-]*) .*$} [lindex $para 0] \
+		match testNumber];
+	set flg [regexp -nocase {Using file .*/(.*.cli)} [lindex $para 0] \
+		match testNumber];
+
+    }
+    return $flag
+}
+
+# Specifically used for performance
+proc verifyPerfResult {para fd testN} {
+    upvar $testN testNumber
+    set flag -1
+    set perfdata1 ""
+    set perfdata2 ""
+
+    for {set i 0} {$i<[llength $para]} {incr i} {
+	if {([regexp -indices {\[ *[0-9.]+ *\]} [lindex $para $i] \
+		match perfdata1]==1) \
+		|| ([regexp -indices {\[ *[0-9.]+% *\]} [lindex $para $i] \
+		match perfdata2]==1)} {
+
+	    set flag $i
+	}
+   }
+
+   if {$flag!="-1"} {
+      for {set j 0} {$j<= $flag} {incr j} {
+         set strBuf [lindex $para $j]
+         if {($j==0) && ([regexp {[0-9].[0-9]|Using file .*} $strBuf] == 1)} {
+            set flg [regexp -nocase {([0-9]+[.][0-9a-z_.-]*) .*$} \
+		    $strBuf match testNumber];
+            set flg [regexp -nocase {Using file .*/(.*.cli)} \
+		    $strBuf match testNumber];
+         } 
+         if {([regexp {[0-9].[0-9]|Using file .*} $strBuf] == 1) \
+            || ([regexp -nocase \
+	    "System Setup|Total test time|hours.*minutes.*seconds" $strBuf]) \
+            || ([regexp {\[ *[0-9.]+ *\]} $strBuf]==1) \
+            || ([regexp {\[ *[0-9.]+% *\]} $strBuf]==1)} {
+	
+            if {([regexp -indices {\[ *[0-9.]+ *\]} $strBuf match ]==1) \
+               || ([regexp -indices {\[ *[0-9.]+% *\]} $strBuf match ]==1)} {
+               scan $match {%[0-9]} endIndex
+               set subtestStr  [string range  $strBuf 0 [incr endIndex -1]]
+            }
+            if {$j==0} {
+               set flg [regexp -nocase {([0-9]+[.][0-9a-z_.-]*) .*$} \
+		       $strBuf match testNumber];
+               set flg [regexp -nocase {Using file .*/(.*.cli)} \
+		       $strBuf match testNumber];
+            } else {
+               if {[regexp -nocase "Show Release_Master .*FAILED" $strBuf]} {
+                  set testNumber "System Setup"
+               }
+            }
+            puts $fd $strBuf
+         } 
+      } 
+   } else {
+      set flg [regexp -nocase {([0-9]+[.][0-9a-z_.-]*) .*$} [lindex $para 0] \
+	      match testNumber];
+      set flg [regexp -nocase {Using file .*/(.*.cli)} [lindex $para 0] \
+	      match testNumber];
+   }
+   return $flag
+}
+
+################################################################
+#  [writeReleaseMasterFile]
+# 
+#  Procedure that writes to autoweb about the release master check flag. The file is
+#  empty if check passes, or contains FAILED if check fails
+#   
+#  Input Variables:
+#                build
+#                plat
+#  Output Variables:
+#                none
+#
+#  Return Value:
+#      - returns 0 in case of error of not able to create a dir
+#      
+#Usage:
+#      writeReleaseMasterFile $buildName $platform
+#
+################################################################
+proc writeReleaseMasterFile {build plat} {
+
+    global webServerDirName
+    global newPlatforms
+
+   set curDir [pwd]
+
+   if {[regexp -nocase $newPlatforms $plat]} {
+      set relName $plat
+   } else {
+      set relName [string range $build 0 3]
+   }
+   cd "$webServerDirName"
+   set thisDir "$relName/$build"
+   set fname "$thisDir/relMasterCheck"
+   if {[catch {open $fname r} fd_in]} {
+      if {![file isdirectory $thisDir]} {
+	  file mkdir $thisDir
+      }
+      if {[catch {open $fname w 0777} fd_out]} {
+         cd $curDir
+         return 0;
+      } else {
+         puts $fd_out "FAILED"
+      }
+      close $fd_out
+   }
+   cd $curDir
+}
+
+
+
+
+#
+# QAD to support performance reports.  Integrate better with 
+# proc updatePerfWebDataFile later. (APL)
+#
+proc updatePerfWebDataFile {{regType ""} build platform blade module tList testsRan} {
+
+    global webServerDirName
+    global newPlatforms
+    global rfTag
+    global rpTag
+    
+    set flag 0;
+    set curDir [pwd]
+    cd "$webServerDirName"
+
+    puts "DEBUG: updatePerfWebDataFile{} platform: $platform: blade:$blade \
+	    module:$module build:$build regType:$regType"
+
+    set thisDir [getDirName $platform $blade $module $build $regType $regSubType]
+    set fname "$thisDir/$module.txt";
+
+
+    # To show there is report for this module
+    # If file exists, delete it, since we are generating a report
+    set reportFile "$thisDir/../$module.txt"
+    if {[file exists $reportFile]} {
+	puts " We are deleting the report file $reportFile"
+	if [catch {file delete $reportFile} result] {
+	    puts "ERROR: $result"
+	    return 0
+	}
+    }
+
+    if {[file exists $fname]} {
+	if [catch {file delete $fname} result] {
+	    puts "ERROR: $result"
+	    return 0
+	}
+    }
+
+    set testsInBugList ""
+    
+    if {![file isdirectory $thisDir]} {
+	file mkdir $thisDir
+    }
+    
+    if {[catch {open $reportFile w 0777} fd_out]} {
+	puts "** ERROR: Cannot open $reportFile for writing"
+	cd $curDir
+	return 0;
+    } else {
+	puts $fd_out "PERFORMANCE DATA"
+    }
+
+    if {[catch {open $fname w 0777} fd_out]} {
+	puts "** ERROR: Cannot open $fname for writing"
+	cd $curDir
+	return 0;
+    } else {
+	foreach t $tList {
+	    puts $fd_out "$t"
+	}
+    }
+
+    close $fd_out
+    cd $curDir
+    return $fname
+}
+
+
+################################################################
+#  [updateWebDataFile]
+# 
+#  This is most crucial proc that writes result data to autoweb data files.
+#  controls multiple runs of automate.tcl by not updating appropriate flags, 
+#  maintaining up to date information. It supports this mechanism for any 
+#  number of runs of regression
+#   
+#  Input Variables:
+#                regType
+#                build
+#                platform
+#                blade
+#                module
+#                tList - tests list that failed
+#                bugList - bugs that were carried over from previous builds
+#                testsRan - tests that were run in a given file
+#                runOrRerun - flag that indicates if the regression was first 
+#                             run or rerun
+#                execAllTime - Time to execute all tests.  If "all" not run
+#                              this value is set to 0 
+#
+#  Output Variables:
+#                none
+#
+#  Return Value:
+#      - returns 0 on error or 
+#                  webFileName to which the data was written in success
+#      
+#Usage:
+#     set webFileName [updateWebDataFile $regType $buildName $platform $bladeType \
+#                       $module $testCaseListFailed $pdList $testsFromCfgFile \
+#                       $runOrRerun]   ;#run=1,rerun=2
+#
+################################################################
+proc updateWebDataFile {{regType ""} regSubType build platform blade module \
+	tList bugList testsRan runOrRerun {execAllTime 0}} {
+    
+    ;# tList are the failed test cases
+    ;# bugList is the list of PDs from previous builds.
+    ;# NOTE: A failed test case can be in either tList or bugList, but not both.
+
+    global webServerDirName
+    global newPlatforms
+    global rerunTag
+    global rfTag
+    global rpTag
+    global abortTag
+      
+    if {[regexp -nocase "perf" $regType]} {
+	updatePerfWebDataFile $regType $build $platform $blade \
+		$module $tList $testsRan
+	return
+    }
+
+
+    puts "DEBUG: updateWebDataFile{} platform:$platform: blade:$blade \
+	    module:$module build:$build regType:$regType $regSubType"
+
+  set webSuffix ""
+    if {[string compare "root" [id user]]==0} {  ;# check env AUTOMATE_GID in case of root 
+       global env
+       if {[info exists env(AUTOMATE_GID)]} {
+          set gid "software"   ;# dont want to assign the env itself which may
+                               # potentially write other builds than _dev suffixes
+       } else {
+          set gid "sqa"
+       }
+    } else {  ;# else get effective gid
+       set gid [id effective group]
+    }
+   if {$gid == "software"} {
+      append build "_dev"  
+      set webSuffix "_dev"
+   }
+
+    set flag 0;
+    puts "***** [pwd]   **** $webServerDirName"   
+    set curDir [pwd]
+   
+    cd "$webServerDirName"
+
+if { 0 } {
+    if {[regexp -nocase $newPlatforms $platform]} {
+	set relName $platform
+    } else {
+	set relName [string range $build 0 3]
+    }
+}
+
+    set relName [string range $build 0 3]
+
+    switch -- $platform \
+    "BD-10808" {
+	set pl $platform
+    } "BD-8904" {
+	set pl $platform
+    } "BD-12804" {
+	set pl $platform
+    } "BD-16808" {
+	set pl $platform
+    } "BD-PC" {
+	set pl $platform
+    } "Summit-PC" {
+	set pl $platform
+    } "BD" {
+	set pl "BD"
+    } "Aspen" {
+	set pl $platform
+    } "SummitX450" {
+	set pl $platform
+    } "SummitX406" {
+	set pl $platform
+    } "GODZILLA" {
+	set pl "GZ"
+    } "Summit24e3" {
+	set pl "S24e3"
+    } default {
+	set pl $platform
+    }
+    
+    if [regexp -nocase "ipr" $regSubType] {
+	global Iproute
+	set thisDir "$relName/$build/RoutingRegressionSummary/$pl$blade"
+	
+    } elseif {[regexp -nocase "cli" $regType]} {
+        if {[regexp -nocase "upload" $regSubType]} {
+	    set thisDir "$relName/$build/cli$pl$blade"
+        } else {
+            set buildList [split $build :]
+	    set build1 [lindex $buildList 0]$webSuffix
+	    set build2 [lindex $buildList 1]
+	    regsub -all "$webSuffix" $build2 {} build2x
+	    set thisDir "$relName/$build1/upgradedowngrade/$build2x/cli$pl$blade"
+        }
+	
+    } else {
+	set thisDir "$relName/$build/$pl$blade"
+    }
+    
+    set fname "$thisDir/$module.txt";
+    set fnameTime "$thisDir/$module.time.txt";
+
+   puts "Update Web Data File ----->  $fname"
+   
+   # Web results should be written in /autoweb/Http/cgi-bin/cgi.tcl/data/$fname
+   # Samples...
+   # $fname for standard...6.2/6.2.2b131/BDF96Ti/jumbo.txt
+   # $fname for CLI...6.2/6.2.2b131/cliBDF96Ti/jumbo.txt
+   # $fname for routing...6.2/6.2.2b131/RoutingRegressionSummary/aspen/jumbo.txt
+   # $fname for performance...6.2/6.2.2b131/PerformanceSummary/BDF96Ti/EAPS_PerfData.txt
+ 
+   set testsInBugList ""
+   foreach b $bugList {
+
+       set test ""
+       regexp {([0-9]+[.][0-9a-z_.]*)-([a-zA-Z]+)} $b match test status
+       lappend testsInBugList $test
+   }
+
+   if {$runOrRerun==1} {
+       puts "UpdateWebDataFile ---> FIRST RUN"
+       if {[catch {open $fname r} fd_in]} {
+
+	   ;# If we can't read it, then create it.
+	   if {![file isdirectory $thisDir]} {
+	       file mkdir $thisDir
+	   }
+
+	   if {[catch {open $fname w 0777} fd_out]} {
+	       puts "** ERROR: Can't open $fname for writing"
+	       cd $curDir
+               puts "RETURNING 0 (1)"
+	       return 0;
+	   } else {
+	       # Write all PDs to txt file
+	       foreach bug $bugList {
+		   puts "DEBUG:     bug:$bug"
+		   puts $fd_out $bug
+	       }
+	       foreach t $tList {
+                   if { ( $t == "ALL" ) && ( [file size $fname]==0 ) } { #Module aborted
+		       puts "DEBUG: All test cases failed as module got aborted"
+		       puts $fd_out "$abortTag"
+                       break
+                   }
+		   puts "DEBUG:     TAG:$t-$rerunTag"
+		   puts $fd_out "$t-$rerunTag"
+	       }
+	   }
+
+	   close $fd_out
+
+	   if {[regexp -nocase "^cli" $module]!=1} {
+	       if {[file size $fname]==0&&($testsRan!="")} {
+		   catch {open $fname w 0777} fd_out
+		   puts $fd_out "PASSED"
+		   close $fd_out
+	       }
+	       if {[file size $fname]==0&&($testsRan=="")} {
+		   catch {open $fname w 0777} fd_out
+		   puts $fd_out "N/A"
+		   close $fd_out
+	       }
+	   } else {
+	       if {[file size $fname]==0} {
+		   catch {open $fname w 0777} fd_out
+		   puts $fd_out "PASSED"
+		   close $fd_out
+	       }
+	   }
+
+       } else {
+
+	   # File already exists, read it and update it with R 
+	   # or same as what is read
+	   if {[catch {open temp[pid] w 0777} fd_out]} {
+	       cd $curDir
+	       puts "RETURNING 0 (2)"
+	       return 0
+	   } else {
+	       set count 0
+	       while {[gets $fd_in line] != -1} {
+		   set paragraph($count) $line
+		   incr count
+	       }
+	       close $fd_in
+	       
+	       # Write all PDs to txt file
+	       foreach bug $bugList {
+		   puts $fd_out $bug
+	       }
+	       foreach t $tList {
+                   if { $t == "ALL" } { #Module aborted
+		       puts $fd_out "$abortTag"
+                       break
+                   }
+		   for {set i 0} {$i<[array size paragraph]} {incr i} {
+		       
+		       set flag "notDone"
+		       if {[regexp -nocase "^$t" $paragraph($i)]} {
+			   set status ""
+			   set test ""
+			   set flag "done"
+			   if {[regexp -nocase "^cli" $module]!=1} {
+			       regexp {([0-9]+[.][0-9a-z_.-]*)([a-zA-Z]+)} \
+				       $paragraph($i) match test status
+			   } else {
+			       regexp {([0-9a-zA-Z_.]*)-([a-zA-Z]+)} \
+				       $paragraph($i) match test status
+			       set test [format %s%s $test -]
+			   }
+
+			   # check if status is rerun, if yes keep it 
+			   # rerun else do not change
+			   if {$status==$rerunTag && $test=="$t-"} {    
+			       # test is in R state
+			       puts $fd_out "$t-$rerunTag"
+			       break
+		           }  else {   
+			       ;# test is in other state
+			       puts $fd_out $paragraph($i)
+			       break
+			   }
+		       }
+		   }
+		   if {$flag!="done"} {
+		       puts $fd_out "$t-$rerunTag"
+		   }
+	       }
+	       
+	       close $fd_out
+	       if {[regexp -nocase "^cli" $module]!=1} {
+		   if {[file size temp[pid]]==0&&($testsRan!="")} {
+		       catch {open temp[pid] w 0777} fd_out
+		       puts $fd_out "PASSED"
+		       close $fd_out
+		   }
+		   if {[file size temp[pid]]==0&&($testsRan=="")} {
+		       catch {open temp[pid] w 0777} fd_out
+		       puts $fd_out "N/A"
+		       close $fd_out
+		   }
+	       } else {
+		   if {[file size temp[pid]]==0} {
+		       catch {open temp[pid] w 0777} fd_out
+		       puts $fd_out "PASSED"
+		       close $fd_out
+		   }
+	       }
+	   }
+	   catch {file delete $fname} result
+	   catch {file rename temp[pid] $fname} result
+       }
+       ;# Create execution time summary for first pass
+       if {[catch {open "$fnameTime" w 0777} fd_out_time]} {
+	   puts "WARNING: Unable to open $fnameTime for writing.  $fd_out_time"
+       } else {
+	   puts $fd_out_time "$execAllTime"
+	   close $fd_out_time
+       }
+   }
+
+   if {$runOrRerun==2} {
+       puts "UpdateWebDataFile ---> RE-RUN"
+       if {[catch {open $fname r} fd_in]} {
+	   puts "DEBUG: Creating new file"
+	   # File does not already exists, prudently put the RP,or RF 
+	   # and do not touch any other flag
+	   if {![file isdirectory $thisDir]} {
+	       file mkdir $thisDir
+	   }
+	   if {[catch {open $fname w  0777} fd_out]} {
+	       cd $curDir
+	       puts "RETURNING 0 (3)"
+	       return 0;
+	   } else {
+
+	       # Write all PDs to txt file
+	       foreach bug $bugList {
+		   puts "DEBUG: Writing out bug $bug"
+		   puts $fd_out $bug
+	       }
+	       
+	       foreach testRan $testsRan {
+		   puts "DEBUG: testRan: $testRan"
+		   if {$testRan!=0} {   
+		       ;# in case short cfg file not read
+		       if {[regexp -nocase $testRan $tList]} {   
+			   ;# Test failed
+			   puts "DEBUG: testFailed: $testRan"
+			   puts $fd_out "$testRan-$rfTag"
+		       } elseif {[lsearch $testsInBugList $testRan]==-1} {
+			   puts "DEBUG: testPass: $testRan"
+			   puts $fd_out "$testRan-$rpTag"         
+			   ;# Test passed
+		       }
+		   } else {
+		       close $fd_out
+		       catch {file delete $fname} result
+		       cd $curDir
+	               puts "RETURNING 0 (4)"
+		       return 0
+		   }
+	       }
+	   }
+	   close $fd_out
+       } else {
+
+	   puts "DEBUG: Opened existing file $fname"
+	   # File already exists, read it and update it with RF, RP flags
+	   if {[catch {open temp[pid] w 0777} fd_out]} {
+	       cd $curDir
+	               puts "RETURNING 0 (5)"
+	       return 0
+	   } else {
+	       set count 0
+	       while {[gets $fd_in line] != -1} {
+		   set paragraph($count) $line
+		   incr count
+	       }
+	       close $fd_in
+	       
+	       # Write all PDs to txt file
+#	       foreach bug $bugList {
+#		   puts "DEBUG: Writing PD $bug to file"
+#		   puts $fd_out $bug
+#	       }
+	       
+	       ;# Look at current Web File and search for instances of the failed test 
+	       ;# cases ($tList) from this run.  Mark them as RF.  If, for some reason,
+	       ;# a failed test case was not found on the Web File, mark it RF as well.
+	       foreach t $tList {
+		   puts "DEBUG: Looking at $t"
+		   set status ""
+		   set test ""
+		   for {set i 0} {$i<[array size paragraph]} {incr i} {
+
+		       if {[regexp -nocase "^$t-" $paragraph($i)]} {
+
+			   puts "DEBUG: ******* FOUND $t  ***********"
+			   regexp {([0-9]+[.][0-9a-z_.-]*)([a-zA-Z]+)} $paragraph($i) match test status
+			   if [info exist match] {
+			       puts "DEBUG match:$match test:$test status:$status"
+			       # set test [format %s%s $test -]
+			       # check if status is rerun, if yes change it to 
+			       # fail else do not change
+			       puts "DEBUG: status:$status==rerunTag:$rerunTag    test:$test==t:$t"
+			       
+			       if {$status==$rerunTag && $test=="$t-"} {
+				   ;# test is in R state
+				   puts $fd_out "$t-$rfTag"
+				   # CLI  set outp [format %s%s%s $t - $rfTag]
+				   # CLI  puts $fd_out $outp
+				   # CLI  set paragraph($i) $outp
+				   break
+				   
+			       } elseif {[lsearch $testsInBugList $t]==-1} {
+				   # test is in other state
+				   puts $fd_out $paragraph($i)
+				   break
+			       }
+			   } else {
+			       puts "DEBUG: No existing match for $t in Autoweb.\
+				       Add as new $t-$rfTag"
+			       puts $fd_out "$t-$rfTag"
+			   }
+		       } else {
+			   continue
+		       }
+		   }
+
+		   if {$test == ""} {
+		       puts "DEBUG: TEST $t not found:"
+		       ;# Test wasn't found in web file.
+		       ;# Since we know this is a re-run, and this case failed, 
+		       ;# mark RF
+		       puts $fd_out "$t-$rfTag"
+		   }
+	       }
+	       
+	       ;# Now go through Web File and examine ALL test cases again.  
+	       ;# Any testcases found that PASSED this second run should be 
+	       ;# marked RP.  We look at each testcase found and check if it's 
+	       ;# on the failed list.  If it's not on the failed list we can 
+	       ;# mark it RP.
+	       for {set i 0} {$i<[array size paragraph]} {incr i} {
+		   set test ""
+		   set status ""
+		   if {[regexp -nocase "^cli" $module]!=1} {
+		       puts "DEBUG: Module was $module"
+		       regexp {([0-9]+[.][0-9a-z_.-]*)([a-zA-Z]+)} \
+			       $paragraph($i) match test status
+		   } else {
+		       regexp {([0-9a-zA-Z_.]*)-([a-zA-Z]+)} $paragraph($i) \
+			       match test status
+		       set test [format %s%s $test -]
+		   }
+
+		   if [info exist match] {
+
+		       puts "DEBUG match:$match test:$test status:$status"
+		       set test [string trimright $test "-"]
+		       
+		       ;# Look to see if this test was in the bug list
+		       puts "DEBUG: testsInBugList: $testsInBugList"
+		       if {[lsearch $testsInBugList $test]==-1} {
+			   puts "DEBUG: status:$status "
+			   ;# If the previous state was R/RP/RF and it's not on the
+			   ;# failed list (tList), mark it RP
+			   if {$status=="$rerunTag" || $status=="$rpTag" || \
+				   $status=="$rfTag"} {
+			       
+			       if {[lsearch -exact $tList $test]==-1} {
+				   puts $fd_out "$test-$rpTag"
+			       }
+			   } elseif {$status == "PD"} {
+			       puts "DEBUG: PD status...do nothing"
+			       if {[lsearch -exact $tList $test]==-1} {
+				   puts $fd_out $paragraph($i)
+			       }
+			       ;# DO NOTHING
+			   } else {
+			       if {[lsearch -exact $tList $test]==-1} {
+				   puts $fd_out $paragraph($i)
+			       }
+			   }
+		       }
+		   } else {
+		       puts "WARNING: Bad format for entry $paragraph($i)"
+		   }
+	       }
+	       close $fd_out
+	   }
+	   catch {file delete $fname} result
+	   catch {file rename temp[pid] $fname} result
+       }
+   }
+   cd $curDir
+   puts "returning **************** $fname *************"
+   return $fname
+}
+
+
+proc getDirName  {platform blade module build regType regSubType} {
+
+    global newPlatforms
+
+    set fname "Wrong file Name"
+    
+    puts "In getDirName the regType: $regType  regSubType: $regSubType"
+    
+    if {[regexp -nocase $newPlatforms $platform]} {
+	set relName $platform
+    } else {
+	set relName [string range $build 0 2]
+    }
+    if {[regexp -nocase "^cli" $module]} {
+	switch -- $platform {
+	    "BD" {
+		set pl "BD"
+	    } "Alpine" {
+		set pl $platform
+	    } "BT" {
+		set pl "BT"
+	    } "GODZILLA" {
+		set pl "GZ"
+	    } "Summit24e3" {
+		set pl "S24e3"
+	    } default {
+		set pl $platform
+	    }
+	}
+	set thisDir "$relName/$build/$module$pl[lindex $bl 0]"
+    } else {
+	switch -- $platform \
+		"BD" {
+            set pl "BD"
+	} "Alpine" {
+            set pl $platform
+	} "BT" {
+            set pl "BT"
+	} "GODZILLA" {
+            set pl "GZ"
+	} "Summit24e3" {
+            set pl "S24e3"
+	} default {
+            set pl $platform
+	}
+	if {[regexp -nocase "ipr" $regSubType]} {
+	    global Iproute
+#	    set thisDir "$relName/$build/[lindex $Iproute 0]"	;# exos
+  	    set thisDir "$relName/$build/RoutingRegressionSummary/$pl$blade"	;# my
+	} else {
+	    if {[regexp -nocase "perf" $regType]} {
+		global Performance 
+
+		set thisDir "$relName/$build/PerformanceSummary/$platform$blade"
+	    } else {
+		set thisDir "$relName/$build/$pl$blade"
+	    }
+	}
+    }
+    return $thisDir
+}
+
+
+################################################################
+#  [getTestCaseNumber]
+# 
+#  This proc reads a para and returns a testcase number from its line.
+#  a test number may start with a digit followed by any char.
+#   
+#  Input Variables:
+#                para
+#
+#  Output Variables:
+#                none
+#
+#  Return Value:
+#      - returns test number from the para or
+#                none in case of no test found
+#      
+#Usage:
+#            set tn [getTestCaseNumber $thisPara];
+#
+################################################################
+proc getTestCaseNumber {para} {
+
+   set count 0;
+   set match "";
+   set testn "none";
+   #puts "para => $para";
+   foreach line $para {
+      set flg [regexp -nocase {([0-9]+[.][0-9a-z_.-]*) .*$} $line match testn];
+      if {$flg == 1} {
+        puts " =++++=> $testn <=========";
+      }
+   }
+   return $testn;
+}
+
+################################################################
+#  [TestsFromCfgFile]
+# 
+#  This proc reads a complete config file and returns the list of
+#  tests from tests_to_run variable. This variable may be read
+# directly from the config file or via a sourced file
+#   
+#  Input Variables:
+#                mdule
+#                fname
+#                build
+#                fd
+#
+#  Output Variables:
+#                none
+#
+#  Return Value:
+#      - returns tests list found in tests_to_run variable 
+#                0 in case of error
+#      
+#Usage:
+#      set testsFromCfgFile [TestsFromCfgFile $module $cfgFile $buildName $fd];
+#
+################################################################
+proc TestsFromCfgFile {mdule fname build fd regPath} {
+   
+    # --- Get the test number from the running config file
+    set flag 0;
+    set tList "";
+    set rootDir ""
+
+    set rootDir "$regPath"
+
+    # Not needed in new format.  
+    # set fname "$rootDir/$fname"
+
+#    set buildRel [string range $build 0 3]
+
+    if {[catch {open $fname r} fd_in ]} {
+	puts "ERROR: proc TestsFromCfgFile{1} Cannot open $fname for r"
+	return 0;
+    }
+   
+    set source ""
+    while {[gets $fd_in line] != -1} {
+	if {[regexp -nocase "source .*" $line]} {
+	    if {$tList==""} {
+		set source $line
+	    } else {
+		set source "_$line"
+	    }
+	}
+	
+	if {[regexp -nocase "tests_to_run" $line] && $flag == 1} {
+	    set flag 0
+	}
+	set testStr ""
+	set bld 0
+	set flg 0
+	if {[regexp {.* tests_to_run\((.*)\)} $line match bld]} {
+	    if {[regexp -nocase {[a-z]+} $bld]} {
+		set bld 0
+	    }
+	    if {[CompareRelease $build $bld] >= 0} {
+		set flg 1
+	    } else {
+		set flg 0
+	    }
+#	    if {$bld<$buildRel||$bld==$buildRel} {
+#		set flg 1
+#	    } else {
+#		set flg 0
+#	    }
+	}
+
+	if {[regexp {.* tests_to_run\(all\)} $line] || \
+		[regexp ".* tests_to_run " $line]||$flg}  {
+	    regexp -nocase {.* tests_to_run([0-9a-z(.)]*)} $line match testStr
+	    if {[regexp -nocase "6.2e" $testStr]} {
+		continue
+	    }
+	    set flg 0
+	    set flag 1;
+	    continue;
+	} elseif {[regexp {cleanup*} $line]} {
+	    continue;
+	}
+
+	if {$flag == 1} {
+	    set testn "";
+	    set x "";
+	    if {[regexp -nocase "^cli" $mdule]} {
+		set fg ![regexp -nocase {(cliCheck)} $line match testn];
+	    } else {
+		if {[regexp -nocase "tests_to_run" $line]!=1} {
+		    set fg [regexp -nocase \
+			    {^([^0-9^#]*)([0-9]+[.][0-9a-qs-z_.-]+)} $line match x testn];
+		}
+	    }
+	    if {$fg == 1} {
+		if {(![regexp -nocase {^.+init} $testn]) && \
+			(![regexp -nocase {^.+end} $testn])} {
+		    lappend tList $testn;
+		}
+	    }
+	}
+
+    }
+
+    close $fd_in;
+
+    if {[regexp -nocase "^_" $source]||($source!=""&&$tList=="")} {
+	set fg [regexp -nocase "source *(.*)" $source match filename]
+	set fileName [string trimright $filename]
+        if {[regexp -nocase "env\(.*\)" $fileName]} {
+           global env
+           puts "fileNamei:$fileName"
+           set fileName [expr $fileName]
+        }
+	set fileName "$rootDir/$mdule/$fileName"
+	if {[catch {open $fileName r} fd_in ]} {
+	    puts "ERROR: proc TestsFromCfgFile{2} Cannot open $fileName for r"
+	    return 0;
+	}
+	
+	while {[gets $fd_in line] != -1} {
+	    if {[regexp -nocase "tests_to_run" $line]&&$flag==1} {
+		set flag 0
+	    }
+	    set testStr ""
+	    set bld 0
+	    set flg 0
+
+	    if {[regexp {.* tests_to_run\((.*)\)} $line match bld]} {
+
+		if {[regexp -nocase {[a-z]+} $bld]} {
+		    set bld 0
+		}
+
+		if {[CompareRelease $build $bld] >= 0} {
+		    set flg 1
+		} else {
+		    set flg 0
+		}
+#		if {$bld<$buildRel||$bld==$buildRel} {
+#		    set flg 1
+#		} else {
+#		    set flg 0
+#		}
+
+	    }
+
+	    if {[regexp {.* tests_to_run\(all\)} $line] || \
+		    [regexp ".* tests_to_run " $line]||$flg}  {
+		
+		regexp -nocase {.* tests_to_run([0-9a-z(.)]*)} $line match testStr
+		
+		if {[regexp -nocase "6.2e" $testStr]} {
+		    continue
+		}
+
+		set flg 0
+		set flag 1;
+		continue;
+	    } elseif {[regexp {cleanup*} $line]} {
+		continue;
+	    }
+	    
+	    if {$flag == 1} {
+		set testn "";
+		set x "";
+		if {[regexp -nocase "^cli" $mdule]} {
+		    set fg ![regexp -nocase {(cliCheck)} $line match testn];
+		} else {
+		    if {[regexp -nocase "tests_to_run" $line]!=1} {
+			set fg [regexp -nocase \
+				{^([^0-9^#]*)([0-9]+[.][0-9a-qs-z_.-]+)} $line match x testn];
+		    }
+		}
+		##puts "====> $line ($fg) == $testn "        
+		if {$fg == 1} {
+		    if {(![regexp -nocase {^.+init} $testn]) && \
+			    (![regexp -nocase {^.+end} $testn])} {
+			lappend tList $testn;
+		    }
+		}
+	    }
+	}
+	close $fd_in;
+    }
+    
+    puts "Test cases in cfg file : $tList";      
+    puts $fd "Test cases in cfg file : $tList";   
+    
+    return $tList;
+}
+
+################################################################
+#  [createShortConfig]
+# 
+#  This proc as name implies creates the pt file on the fly
+#   
+#  Input Variables:
+#                fname
+#                mdule
+#                testCaseList
+#                btype - bladeType
+#                build
+#
+#  Output Variables:
+#                none
+#
+#  Return Value:
+#      - returns 1 if pt short file is already created or is now created
+#                0 in case of error
+#      
+#Usage:
+#            set rval [createShortConfig $cfgFile $module $testCaseListFailed 
+#                       $bladeType $buildName];
+#
+################################################################
+proc createShortConfig {fname mdule testCaseList btype build regPath} {
+
+    # Find Test Subdirectory
+    set rootSubDir "$regPath"
+
+    global env
+    if {[info exists env(WEBSERVERDIR)]} {
+       set WebserverDir $env(WEBSERVERDIR)
+       # Extract the qId from above dir
+#       set qId [string range [file tail $WebserverDir] 0 12]
+       set tmpLst [split [file tail $WebserverDir] "_"]
+       set qId ""
+       for {set count 0} {$count < [llength $tmpLst]} {incr count} {
+          append qId "_[lindex $tmpLst $count]"
+       }
+       set name $btype$qId$build;
+    } else {
+       set name $btype$build;
+    }
+    append name ".cfg";
+
+    if {[regexp -nocase "^pt.*$build" [file tail $fname]]} {
+	return 1
+    }
+    
+    ;# Create short directory if it doesn't exist
+    if {![file isdirectory "$rootSubDir/$mdule/short"]} {
+	file mkdir  "$rootSubDir/$mdule/short"
+    }
+    
+    ;# Open the cfg file to write to 
+    puts "DEBUG: createShortConfig{} Opening $rootSubDir/$mdule/short/pt$name to write short file"
+    if {[catch {open "$rootSubDir/$mdule/short/pt$name" w  0777} fd_out]} {
+	close $fd_out;
+	return 0;
+    }
+    
+    set flag 0;
+    set sourceFile ""
+    set fname "$fname"
+    
+    puts "DEBUG: createShortConfig{}  Open fd_in fname:$fname for reading"
+    
+    if [catch {open "$fname" "r"} fd_in] {
+	if [catch {open "cfg/$fname" "r"} fd_in] {
+	    puts "ERROR: createShortConfig{} Unable to open $fname"
+	    return 0
+	}
+    }
+    
+    while {[gets $fd_in line] != -1} {
+	if {$flag == 1} {
+	    set testn "";
+	    set x "";
+	    if {[regexp {.* tests_to_run} $line]} {
+		puts $fd_out $line;
+		continue;
+	    }
+	    set fg [regexp -nocase {^([0-9]+[.][0-9a-z_.-]*)} \
+		    [string trimleft $line] match testn];
+#	    puts "DEBUG: createShortConfig{}  fg: $fg"
+	    if {$fg == 1} {
+		if {(![regexp -nocase {^.+init} $testn]) && \
+			(![regexp -nocase {^.+end} $testn])} {
+		    
+		    foreach tc $testCaseList {
+#			puts "DEBUG: createShortConfig{}  tc: $tc"
+			if {$testn == $tc} {
+			    puts $fd_out $line;
+			    break;
+			}
+		    }
+		} else {
+		    puts $fd_out $line;
+		}
+	    } else {
+		puts $fd_out $line;
+	    }
+	} else {
+	    if {[regexp {.* tests_to_run} $line]} {
+		set flag 1;
+	    }
+	    if {[regexp {source *(.*)} $line]} {
+		regexp -nocase "source *(.*)" $line match sourceFile
+		set sourceFile [string trimright $sourceFile]
+		set sourceFile [string trimleft $sourceFile]
+                if {[regexp -nocase "env\(.*\)" $sourceFile]} {
+                   global env
+                   set sourceFile [expr $sourceFile]
+                }
+	    } else {
+		puts $fd_out $line;             
+	    }
+	}
+    }
+    
+    close $fd_in;       
+    
+    if {$sourceFile!=""} {
+	puts "DEBUG: createShortConfig{}  sourceFile: \
+		$rootSubDir/$mdule/$sourceFile"
+	set sourceFile "$rootSubDir/$mdule/$sourceFile"
+
+	if {[catch {open "$sourceFile" r} fd_in]} {
+	    return "";
+	}
+
+	while {[gets $fd_in line] != -1} {
+	    set testn "";
+	    set x "";
+	    if {[regexp {.* tests_to_run} $line]} {
+		puts $fd_out $line;
+		continue;
+	    }
+	    
+	    set fg [regexp -nocase {^([0-9]+[.][0-9a-z_.-]*)} \
+		    [string trimleft $line] match testn];
+	    if {$fg == 1} {
+		if {(![regexp -nocase {^.+init} $testn]) && \
+			(![regexp -nocase {^.+end} $testn])} {
+		    foreach tc $testCaseList {
+			puts "DEBUG: createShortConfig{}  tc2: $tc  testn: \
+				$testn"
+			if {[string compare $testn $tc] == 0} {
+			    puts "DEBUG: createShortConfig{}  writing $line to \
+				    $fd_out"
+			    puts $fd_out $line;
+			    break;
+			}
+		    }
+		} else {
+		    puts $fd_out $line;
+		}
+	    } else {
+		puts $fd_out $line;
+	    }
+	}
+	close $fd_in
+    }
+    close $fd_out;
+    
+    return 1;
+    
+}
+
+
+;# Generates the automate.tcl line for the rerun BAT file.      
+proc genAutomateLine {regType regSubType build platform blade cliFlag} {
+    
+    set automateLine "./automate.tcl"
+
+    append automateLine " -regType $regType -regSubType $regSubType -build $build"
+
+    if {$platform != ""} {
+	append automateLine " -platform $platform"
+    }
+    if {$blade != ""} {
+	append automateLine " -blade $blade"
+    }
+
+    if {$regType == "cli" && $cliFlag != ""} {
+	append automateLine " -cliFlag $cliFlag"
+    }
+
+    append automateLine " -noconfig"
+
+    puts "DEBUG: genAutomateLine: $automateLine"
+
+    return $automateLine
+}
+
+
+
+proc createRerunScript {moduleNeedToRerun regType regSubType build platform blade cliFlag} {
+
+    # --- create the bat file or shell script whichever applicable
+    global tcl_platform
+    global regPath
+
+    puts "\n";
+    puts "ModuleNeedToRerun == $moduleNeedToRerun";
+    set rerunBatFile ""
+
+    ;# Generate the name for BAT file
+    set rerunBatFile [genRerunBatFileName $regType $regSubType $platform $blade]
+
+    if {$moduleNeedToRerun == ""} {
+	if {[catch {open $rerunBatFile w 0777} fd_out]} {
+	    close $fd_out;
+	    return "";
+	}
+
+	puts $fd_out "#!/bin/bash"
+	puts $fd_out "echo NO MODULES TO RERUN"
+	return $rerunBatFile
+    }
+
+    set rootFilePath         $regPath
+    set rerunBatFileFullPath ""
+
+    puts " ****************************"
+    puts "   Creating RERUN BAT FILE   "
+    puts " ****************************"
+
+
+    if [regexp -nocase "cli" $regType] {
+
+	set rerunBatFileFullPath "$rerunBatFile"
+	if {[catch {open $rerunBatFileFullPath w 0777} fd_out]} {
+	    close $fd_out;
+	    return "";
+	}
+
+	set oldModule ""
+	if {$tcl_platform(platform) != "windows"} {
+	    puts $fd_out "#!/bin/bash"
+	}
+
+	;# Write failed modules to bat file
+	foreach module $moduleNeedToRerun {
+	    if {$oldModule!=$module} {
+		set i 0
+	    }
+	    puts "DEBUG: $rootFilePath/$module/short/pt*$platform$blade*$build.cfg"
+	    catch {glob -- "$rootFilePath/$module/short/pt*$platform$blade*$build.cfg"} dirs
+	    puts "DEBUG: $dirs"
+	    set fileName [lindex $dirs $i]
+	    puts "DEBUG: fileName: $fileName"
+	    set fileN [file tail $fileName]
+	    puts "DEBUG: 1 fileN: $fileN"
+	    set fileN [format %s/%s short $fileN]
+	    puts "DEBUG: 2 fileN: $fileN"
+	    incr i
+	    set oldModule $module
+	    if {$regSubType == "upgradedowngrade"} {
+	        set builds [split $build ":"]
+	        set build1 [lindex $builds 0]
+	        set build2 [lindex $builds 1]
+    	        puts "DEBUG: writing: ./main.tcl -mode auto -regPath $regPath \
+		    -module $module -cfg \"$fileN\" -build $build1 -obuild $build2"
+	        puts $fd_out "./main.tcl -mode auto -regPath $regPath -module \
+		    $module -cfg \"$fileN\" -build $build1 -obuild $build2"
+
+            } else {
+	        if { $cliFlag == "" } {
+	    	    puts "DEBUG: writing: ./main.tcl -mode auto -regPath $regPath \
+		        -module $module -cfg \"$fileN\" "
+	    	    puts $fd_out "./main.tcl -mode auto -regPath $regPath -module \
+		        $module -cfg \"$fileN\" "
+	        } else {
+	    	    puts "DEBUG: writing: ./main.tcl -mode auto -regPath $regPath \
+		        -module $module -cfg \"$fileN\" -cliFlag \"$cliFlag\" "
+	    	    puts $fd_out "./main.tcl -mode auto -regPath $regPath -module \
+		        $module -cfg \"$fileN\" -cliFlag \"$cliFlag\" "
+	        }
+            }
+	    puts $fd_out "sleep 10"
+        } 
+	if {$tcl_platform(platform) != "windows"} {
+	    set ret [exec -- chmod +x "$rerunBatFile"]
+	}
+	
+    }  elseif [regexp -nocase "func" $regType] {
+
+	;# Standard and Routing are the same
+	set rerunBatFileFullPath "$rerunBatFile"
+	if {[catch {open $rerunBatFileFullPath w 0777} fd_out]} {
+	    close $fd_out;
+	    return "";
+	}
+
+	set oldModule ""
+	if {$tcl_platform(platform) != "windows"} {
+	    puts $fd_out "#!/bin/bash"
+	}
+	
+	;# Write failed modules to bat file
+	foreach module $moduleNeedToRerun {
+	    if {$oldModule != $module} {
+		set i 0
+	    }
+	    catch {glob -- "$rootFilePath/$module/short/pt*$platform$blade*$build.cfg"} dirs
+	    if [regexp -nocase "no files matched" $dirs] {
+		puts "ERROR: $dirs"
+		puts $fd_out "## Unable to generate partial cfg## \
+			./main.tcl -mode auto -regPath $regPath \
+			-module \"$module\" -cfg ERROR"
+		continue
+	    }
+            puts "DEBUG: dirs $dirs"
+	    set fileName [lindex $dirs $i]
+	    set fileN [file tail $fileName]
+	    set fileN [format %s/%s short $fileN]
+	    incr i
+	    set oldModule $module
+	    puts $fd_out "./main.tcl -mode auto -regPath $regPath \
+		    -module \"$module\" -cfg \"$fileN\""
+	    puts $fd_out "sleep 4"
+	}
+	
+	
+    }  elseif [regexp -nocase "perf" $regType] {
+	puts "*************** PERFORMANCE NOT SUPPORTED YET ****************"	    
+	set rerunBatFile ""
+    }
+    
+    puts $fd_out "cd ../main"
+    puts $fd_out [genAutomateLine $regType $regSubType $build $platform $blade $cliFlag]
+
+    close $fd_out
+
+    if {$tcl_platform(platform) != "windows"} {
+	set ret [exec -- chmod +x "$rerunBatFile"]
+    }
+
+    return $rerunBatFileFullPath
+}
+
+
+
+proc validateArgsAutomate {argv p_regType p_regSubType p_build p_platform p_blade \
+	p_modules p_noconfig p_cliFlag} {
+    
+    upvar $p_build       build
+    upvar $p_platform    platform
+    upvar $p_regType     regType
+    upvar $p_regSubType  regSubType
+    upvar $p_regSubType  regSubType
+    upvar $p_blade	 blade
+    upvar $p_cliFlag     cliFlag
+
+    global runflag
+
+    if {[lsearch $argv "-help"]  > -1} {
+	return 0
+    }
+
+    if {$regType == ""} {
+	set regType "functional"
+	set regSubType "standard"
+	puts "-regType not specified. Defaulting to regType:$regType regSubType:$regSubType)"
+    }
+
+    if {$build==""} {
+	puts "ERROR: Required Parameters: -build $build invalid or missing"
+	return 0
+    }
+
+    if {[lsearch $argv "-noconfig"]  > -1} {
+	set runflag "noconfig"
+    } else {
+	set runflag "config"
+    }
+
+    # Check the build name
+    # these conditions simplifies the version name
+    # the direct argument could not be used as report files differ from 
+    # that of the image name
+
+    set build [ getBuildNumber $build ]
+    
+    global summitList
+    global alpineList
+    global bladeList
+
+    # Check the platform name
+    if {[regexp -nocase "BD-10808" $platform]} {
+	set platform "BD-10808"
+    } elseif {[regexp -nocase "BD-8904|BD-12804" $platform]} {
+	set platform $platform
+    } elseif {[regexp -nocase "BD-16808" $platform]} {
+	set platform "BD-16808" 
+    } elseif {[regexp -nocase "BD-8810" $platform]} {
+	set platform "BD-8810"
+    } elseif {[regexp -nocase "BD-PC" $platform]} {
+	set platform "BD-PC"
+    } elseif {[regexp -nocase "Summit-PC" $platform]} {
+	set platform "Summit-PC"
+    } elseif {[regexp -nocase "BD" $platform]} {
+	set platform "BD"
+    } elseif {[regexp -nocase "Aspen" $platform]} {
+	set platform "Aspen"
+    } elseif {[regexp -nocase "SummitX450" $platform]} {
+	set platform $platform
+    } elseif {[regexp -nocase "SummitX406" $platform]} {
+	set platform "SummitX406"
+    } elseif {[regexp -nocase "Godzilla" $platform]} {
+	set platform "GODZILLA"
+    } elseif {[regexp -nocase "$summitList|Jaguar|x480|NWI" $platform]} {
+        # EY-06-16-2006: Added "Jaguar" to regular expression.
+	# since glob is case sensitive, make the right string here 
+	# for glob to work later on
+	set fir [string toupper [string index $platform 0]]
+	set temp [string tolower [string range $platform 1 5]]
+	set last [string tolower [string range $platform 6 end]]
+	set platform [format %s%s%s $fir $temp $last]
+	puts "DEBUG: validate:  fir:$fir temp:$temp last:$last platform:$platform"
+    } elseif { [regexp -nocase "null" $platform] || ($platform == "")} {
+	;# This is okay as not all regressions require this.
+    } else {
+	puts "ERROR: Invalid Platform: $platform"
+	return 0
+    }
+ 
+    
+    # check the blade name
+    if {[regexp -nocase $bladeList $blade]} {
+	set bl [string toupper $blade]
+	regsub -all "I$" $bl "i" blade
+	regsub -all "E$" $bl "e" blade
+	regsub -all "A$" $bl "a" blade
+	if {[regexp -nocase "10gig" $blade]} {
+	    regsub -all "GIG" $blade "Gig" blade
+	}
+    } elseif {[regexp -nocase $summitList $platform]} {
+	set blade ""
+    } elseif {[regexp -nocase $alpineList $blade]} {
+	set fir [string toupper [string index $blade 0]]
+	set temp [string tolower [string range $blade 1 end]]
+	set blade [format %s%s $fir $temp]
+    } elseif {[regexp -nocase "BD" $blade]} {
+	set fir [string toupper [string index $blade 0 2]]
+	set temp [string tolower [string range $blade 3 end]]
+	set blade [format %s%s $fir $temp]
+    } elseif {[regexp -nocase "null" $blade] || ($blade == "")} {
+	;# This is okay as not all regressions require this.
+    } else {
+	puts "ERROR: Invalid blade name :$blade"
+	return 0
+    }    
+
+    if {$cliFlag == "" || $cliFlag == "NO_DOWNLOAD" 
+	|| $cliFlag == "NO_REBOOT" || $cliFlag == "NO_DOWNLOAD_NO_REBOOT" \
+	|| $cliFlag == "NO_REBOOT_NO_DOWNLOAD" } {
+     
+        return 1
+    } else {
+	puts "ERROR: Invalid cliFlag :$cliFlag"
+	return 0
+    }
+}
+
+
+
+
+# ==============================================================================
+# =================================== MAIN =====================================
+# ==============================================================================
+puts "######################################################################"
+puts "                        AUTOMATE.TCL STARTED "
+puts "######################################################################"
+
+set build             ""
+set regType           ""
+set regSubType           ""
+set platform          ""
+set blade             ""
+set build             "INVALID"
+set cfgfile           "template.cfg"
+set noconfig          ""
+set runflag           ""
+set moduleNeedToRerun ""
+
+set LIB_PATH "../Lib"
+lappend auto_path $LIB_PATH
+
+source ../Lib/parse_args.tcl
+package require Tclx
+
+set sourceFile ""
+# backtracked path needed for other utilties outside main to work
+if [catch {source "../main/cfg/common.cfg"} rea] {
+   puts "*** WARNING: Unable to source common.cfg:$rea............... ***"
+   puts "*** WARNING: Application level variables may not be defined. ***"
+   exit -1
+}
+
+catch { parse_args automate.tcl $argv {
+    regType ""
+    regSubType ""
+    build ""
+    platform ""
+    blade ""
+    modules ""
+    noconfig ""
+    cliFlag ""
+   }   
+} result
+
+puts "regType:  $regType   build: $build    platform: $platform  blade: $blade"
+puts "noconfig: $noconfig"
+puts "----------------------------------------------------------------------"
+
+if { $result != "" } {
+    puts "ERROR: $result"
+    print_usage
+    exit
+}
+
+
+if {[validateArgsAutomate $argv regType regSubType build \
+	platform blade modules noconfig cliFlag] == 0 } {
+    print_usage
+    exit
+}
+
+gen_index ./
+gen_index ../Lib
+
+
+# This is necessary to get an absolute path for logging
+set REG_PATH [pwd]
+
+if {$tcl_platform(platform) == "windows"} {
+    load "expect52.dll"
+} else {
+    load [lindex [glob "/usr/lib/libexpect*so*"] 0]
+}
+
+if {$tcl_platform(platform) == "windows"} {
+	lappend auto_path "C:/Program Files/Ixia/TclScripts/Lib/ixTcl1.0"
+} else {
+  lappend auto_path [file join $env(HOME) "ixia/lib/ixTcl1.0"]
+  lappend auto_path [file join $env(HOME) "ixia/lib/dp4.0"]
+}
+
+log_user 0
+
+set auto_path [linsert $auto_path 0 . ]
+
+set resultDir "NULL"
+set tStartDate [clock format [clock seconds] -format "%m-%d-%Y"];
+
+#append filename $tStartDate "v" $build-$blade-summary;
+if {$blade == "" } {
+    append filename $tStartDate "v" $build-$platform-summary;
+} else {
+    append filename $tStartDate "v" $build-$platform-$blade-summary;
+}
+set bladeName $blade
+
+set orgname $filename;
+
+;# Create Temporary directories
+;# TODO: Fix performance to use Summary directory (APL)
+if [regexp -nocase "perf" $regType] {
+    if {![file isdirectory Performance]} {
+	file mkdir Performance
+    }
+    set summaryFilePath "Performance/"
+} else {
+    if {![file isdirectory Summary]} {
+	file mkdir Summary
+    }
+    set summaryFilePath "Summary/"
+}
+
+;# Generate unique summary file name
+set summaryFile $orgname
+set i 0
+while {[file exists "$summaryFilePath$summaryFile"]} {
+    set summaryFile $orgname
+    append summaryFile $i ".txt";
+    incr i;
+}
+
+# Get all the modules to be summarized
+# as this this called from Util as well
+set sourceFile $modulesToBeSummarizedPath
+if {[file exists $sourceFile] == 0} {
+   puts "ERROR: Cannot find config file: $sourceFile, please contact admin\n"
+   puts $fd "SETUP ERROR: Cannot find the config file $sourceFile, \
+	   please contact the admin."
+   return -1
+}
+source $sourceFile
+
+puts "REGTYPE:  $regType   REGSUBTYPE: $regSubType   BUILD: $build"
+puts "PLATFORM: $platform  BLADE: $blade          GENERATE: $runflag"
+puts ""
+puts "SUMMARY FILE: $summaryFilePath$summaryFile"
+
+global webServerDirName
+
+#Change the webserver directory name if the SNMP testing is carried out
+global env
+if {![info exists env(WEBSERVERDIR)]} {
+if {$regType == "snmp"} {   
+   set webServerDirName $webServerDirName/snmpData
+} elseif {$regType == "scal"} {
+   set webServerDirName $webServerDirName/scalData
+} elseif {[regexp -nocase "functional" $regType]} {
+   set webServerDirName $webServerDirName/functionalData
+} elseif {[regexp -nocase "cli" $regType]} {
+   set webServerDirName $webServerDirName/functionalData
+} elseif {[regexp -nocase "performance" $regType]} {
+   set webServerDirName $webServerDirName/perfData
+} else {
+   set webServerDirName $webServerDirName/data
+}
+}
+
+set fd [open "$summaryFilePath$summaryFile" w 0777]
+
+set regressionModules ""
+# The regressionModules are defined in modulesToBeSummarized.cfg.  The list
+# is accessed as $regType($regSubType)
+set regressionModules [getRegressionModuleList $regType $regSubType]
+if {$regressionModules == "" } {
+    return "Module List was empty!"
+}
+
+
+;# First element of $regType($regSubType) should be a path to location
+;# of modules.  Even though a user specifies a list of modules to run
+;# against, we still need to retrieve the regPath based on the regType
+;# and regSubType
+set relativePath ".."
+set regPath "$relativePath/[lindex $regressionModules 0]"
+puts "regPath: $regPath"
+
+if {$modules == ""} {
+    ;# Remove regPath param from $regressionModules
+    set regressionModules [lrange $regressionModules 1 [expr [llength \
+	    $regressionModules] - 1] ]
+} else {
+    puts "Using regression module list passed from command line"
+    set regressionModules $modules
+}
+
+puts "regressionModules to post: $regressionModules"
+
+SummarizeAllFailures $build $platform $blade $regType $regSubType \
+	$regressionModules $fd "$summaryFilePath$summaryFile"
+
+close $fd
+if [catch {file delete "$summaryFilePath$summaryFile"} result] {
+    puts "ERROR: $result"
+    return "Unable to delete $summaryFilePath$summaryFile"
+}
+
+
+if {$runflag == "config"} {
+
+    ;# Create batch file for rerun
+    if [regexp -nocase "func|cli" $regType] {
+	
+	set rerunBatchFile [createRerunScript $moduleNeedToRerun $regType \
+		$regSubType $build $platform $blade $cliFlag]
+    }
+    
+    if {$rerunBatchFile != ""} {
+	puts "CONFIG_FILE CREATED: $rerunBatchFile"
+	# Make sure it's executable
+	catch {exec chmod 777 $rerunBatchFile}
+	# Dump out the contents
+	catch {exec cat "$rerunBatchFile"} result
+	puts $result
+    }
+} 
+puts "Regression Modules Processed: (as defined in modulesToBeConfigured.cfg)"
+puts "  $regressionModules"
+puts "######################################################################"
+puts "                      AUTOMATE.TCL FINISHED!"
+puts "######################################################################"

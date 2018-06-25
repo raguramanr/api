@@ -1,0 +1,1708 @@
+
+##################################################################
+# Procedure Name: MulDutVpwsSetup
+#
+# Description:
+# This procedure creates  a variable number of pseudo wire/service
+#      pairs on a multi-node  test bed.  Each pseudo wire will have a service
+#      A variable number of services can be configured.  OSPF and LDP
+#      are setup by default
+#
+#      NOTE: The starting VPWS ID is always 50 + $j (j incr number of vpws's)
+#
+# Input args: args
+#      numTrunks "1" 
+#      numServiceVlan "1"
+#      nonDefaultArg "none"
+#      vlanVman "vlan"
+#      noEcmp "0"
+#      numDuts "2"
+#      config  "line"
+#      numVpws "1"
+#      mtu "1500" 
+#      tagPattern "tagged"
+#      portPattern "continuous"
+#      vlanTagNums "static"
+#      routing "ospf"
+#      addVPWS "1"
+#      
+#
+# Input args: args
+#   -numTrunks "1"          <= number of trunks connected between DUts
+#   -numServiceVlan "1"     <= number of service Vlan/Vman used 
+#   -nonDefaultArg "none"   <= the ability to set non-default vpws values
+#   -vlanVman "vlan"        <= vpws can be configured in conjunction with vmans
+#   -numDuts  "2"	          <= number of Duts used for vpws setup 
+#   -config  "line"         <= connection of Duts in the setup, 
+#           for ex if numDuts=3 and config=line, then
+#           the script will configure trunk connection as below
+#           DUT1<===>DUT2<===>DUT3
+#           if config=loop then the configuation would be 
+#           DUT1<===>DUT2<===>DUT3
+#             ^                 ^
+#             |		           |	
+#				  -----------------		
+#   -numVpws  "10"          <= number of vpws sessions to be used for testcase
+#   -noEcmp "1"             <= the value set to 1 indicates  ospf route costs
+#                              between DUTs are different, otherwise 0,
+#                              default is 0 indicates ECMP
+#   -mtu  "1500"            <= value of size of mtu to be given if 
+#                           nonDefaultArg is provided as varMtu
+#                           value ranges between 1492 to 9216
+#  Note : Make sure that number of vpws and number of service vlans are equal
+#         This will have a one tone mapping with service vlan to vpws
+#         For vman not more than two vpws sessions could be created using this proc
+#         Only 1 vman is allowed port port, therefore vmans are limited by the number
+#         of ports on each switch
+#
+#   -tagPattern  "tagged" <= many cases will require a mix of tagged and
+#                                        untagged ports on a service vlan
+#           "untagged" <=> all vlans untagged
+#           "tagged" <=> all vlans tagged 
+#           "untag-tag" <=> 1st vlan untag rest tagged 
+#
+#   -portPattern "continuous" <= many cases require different port patterns
+#           "continuousOne" <=> port index 1 on each vlan on each DUT
+#           "continuousTwo" <=> port index 1 and 2 on each vlan on each DUT
+#           "alternate" <=> alternate portA on odd vlans portB on even vlans
+#
+#   -vlanTagNums "static"  <= vlan tag to create on each DUT
+#           "static" <=> same vlan tags on each dut
+#           "incr" <=> increment the vlan tags on each dut
+#                   tags incr by 100, starting at 600 on dut1
+#
+#   -routing "ospf" <= choose the routing infrastructure
+#           "ospf" <=> use ospf routing to bring up the infrastructure
+#           "static" <=> use static routes to create reachability
+#
+#   -addVPWS "1" <= Other modules may want to use this library with only the
+#                   basic MPLS setup.  This option allows the skipping of VPWS
+#                   Setup
+#   -prot "ldp"  <==== provide to the protocol with which the PW is constructed
+#                      other protocol option  "rsvp"
+#   -srcDut "1"  <==== Specify tht estarting dut number of the rsvp-tunnel 
+#   -destDut "3" <===== Specify the destination Dut of the rsvp-tunnel
+#   -testNo      "none"  <=== Added verify code so test can be aborted if config fails ex. $testNo
+#   -time1       "none"  <=== ex $time1 from parent proc
+#   -verify      "no" <=== switch to turn on verification
+#   -exitOnVFail "no" <=== choice to exit the parent test case if any of the config fails
+#   -startTime   "30" <=== time to delay before starting to verify the network
+#   -failTime    "75" <=== time to continue checking before failing case.
+#    Note :provide addVPWS  0 for rsvp protocol 
+#
+# Output args: none
+# Typical usage:
+#	 MulDutVpwsSetup  -numTrunks "1" \
+#               -numServiceVlan "1" \
+#               -numDuts  "2" \
+#               -config  "line" \
+#               -nonDefaultArg "none" \
+#               -vlanVman "vlan" \
+#	             -numVpws  "10" \	
+#               -noEcmp "1" \
+#               -tagPattern "tagged" \
+#               -portPattern "continuous" \
+#               -mtu "1500" \
+#               -vlanTagNums "static" \
+#               -routing "ospf" \
+#               -addVPWS "1" \
+#               -prot "ldp" \
+#               -srcDut "1" \
+#               -destDut "3"
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: SetupSwitch
+##################################################################
+proc MulDutVpwsSetup {args} {
+   parse_args MulDutVpwsSetup $args {
+      numTrunks "1"
+      numServiceVlan "1"
+      nonDefaultArg "none"
+      vlanVman    "vlan"
+      noEcmp      "0"
+      numDuts     "2"
+      config      "line"
+      numVpws     "1"
+      mtu         "1492"
+      tagPattern  "tagged"
+      portPattern "continuousOne"
+      vlanTagNums "static"
+      routing     "static"
+      addVPWS     "1"
+      prot        "ldp"
+      srcDut      "1"
+      destDut     "3"
+      testNo      "none"
+      time1       "none"
+      verify      "no"
+      exitOnVFail "no"
+      startTime   "30"
+      failTime    "75"
+      conType     ""
+   }
+result_ok "entering the mpls dut porc "
+global DUTs_info
+set servPortsList1 "[MapDUTPortId 1 1] [MapDUTPortId 2 1]"
+set servPortsList2 "[MapDUTPortId 3 2] [MapDUTPortId 4 2]"
+set servPortsList3 "[MapDUTPortId 5 3] [MapDUTPortId 6 3]"
+set servPortsList4 "[MapDUTPortId 7 4] [MapDUTPortId 8 4]"
+set servPortsList5 "[MapDUTPortId 10 5] [MapDUTPortId 11 5]"
+
+for {set i 1} {$i <= $numDuts} {incr i} {
+# initialize the even-odd variable for altering ports
+set evenOdd 0;
+# initialize the tag pattern and count
+set tagOption "tagged";
+set tagCount 0;
+set ipList$i ""
+#Login $DUTs_info(DUT$i,connect)
+# Enable login with telnet to speed up these tests.  If the number
+#  of VPWS and ServiceVlans are small.  No need for telnet
+if {($numVpws < 100) && ($numServiceVlan < 100)} {
+   LoginFast $i -noTelnet "1"
+} else {
+   LoginFast $i
+}
+
+   if {$vlanVman == "vman"} {
+      # Multiple VMANs can not be added to a port tagged
+      set topRange 2
+   } else {
+      set topRange $numServiceVlan
+   }
+   # Create VPWS Service VLANs if they are required
+   #
+   if {$conType =="end-end"} {
+      if {(($i==$srcDut) || ($i==$destDut))} {
+         set createservVlan 1
+      } else {
+         set createservVlan 0
+     }
+   } else {
+      set createservVlan 1
+   }
+   if $createservVlan {
+   for {set j 0} {$j<$topRange} {incr j} {
+      # logic to choose tagging options and port assignment options
+      switch $portPattern {
+          "continuousOne" { set portVal [lindex [set servPortsList$i] 0];
+                               set alt 0;
+         }
+          "continuousTwo" { set portVal "[lindex [set servPortsList$i] 0],[lindex ${servPortsList$i} 1]";
+                               set alt 0;
+         }
+          "alternate" {
+                           set alt 1;
+         }
+      }
+      switch $tagPattern {
+          "untagged" {
+                           set tagOption "untagged";
+         }
+          "tagged" {
+                           set tagOption "tagged";
+         }
+          "untag-tag" {
+                           if {$tagCount == 0} {
+                              set tagOption "untagged"
+                           } else {
+                              set tagOption "tagged"
+                           }
+                           puts "TAG UNTAG";
+         }
+      }
+      #--- Decide tag numbering
+      if {$vlanTagNums == "incr"} {
+         set tagValue [expr 500 + $j + ($i * 100)]
+      } else {
+         set tagValue [expr 600 + $j]
+      }
+      SendACmd "configure default delete port all"
+      SendACmd "disable ospf"
+      SendACmd "create ${vlanVman} ${vlanVman}$j"
+      SendACmd "configure ${vlanVman} ${vlanVman}$j tag $tagValue"
+      if {!$alt} {
+         SendACmd "configure ${vlanVman} ${vlanVman}$j add port \
+                    $portVal $tagOption"
+      } else {
+         SendACmd "configure ${vlanVman} ${vlanVman}$j add port \
+                    [lindex [set servPortsList$i] $evenOdd] $tagOption"
+         # switch DUT port index back and forth between 0 and 1
+         if {$evenOdd} {
+            set evenOdd 0;
+         } else {
+            set evenOdd 1;
+         }
+      }
+      incr tagCount;
+   }
+   }
+   SendACmd "create vlan loop"
+   SendACmd "configure vlan loop ipaddress 100.100.$i.1/32"
+   SendACmd "enable loopback-mode loop"
+   # Add each trunk vlan
+   #--- Create a list of vlan names
+   set trunkVlans "";
+   if {$config == "line"} {
+      for {set j 1} {$j<=$numTrunks} {incr j} {
+       #---Line configuration meant duts are connected in sequence
+         if {$i != $numDuts} {
+            set k [expr $i + 1]
+            set wanID ${i}$k;
+            set wanVlan trunk${wanID}_$j;
+         #---- if not last dut create the right facing wan vlan/port/ip
+            SendACmd "create vlan $wanVlan"
+            SendACmd "configure vlan $wanVlan tag ${wanID}$j"
+            SendACmd "configure vlan $wanVlan add port \
+                      [GetATrunkPort $i $k $j] tag"
+            SendACmd "configure vlan $wanVlan ipa 1${j}.0.${wanID}.1/30"
+            lappend ipList1 "1${j}.0.${wanID}.2"
+            lappend DUTs_info(DUT${i},ldpPeerList) "100.100.${i}.1 100.100.${k}.1"
+            #--- Add static routing option
+            if {$routing != "ospf"} {
+               for {set q $i} {$q<$numDuts} {incr q} {
+                  if {$noEcmp!=0} {
+                     SendACmd "configure ipr add 100.100.[expr $q + 1].1/32 \
+                               1${j}.0.${wanID}.2"
+                  } else {
+                     SendACmd "configure ipr add 100.100.[expr $q + 1].1/32 \
+                               1${j}.0.${wanID}.2 [expr 10 + $j]"
+                  }
+               }
+            }
+            lappend trunkVlans $wanVlan;
+         }
+         if {$i !=1 } {
+            set m [expr $i -1]
+            set wanID ${m}$i;
+            set wanVlan trunk${wanID}_$j;
+         #---- if not first dut create the left facing wan vlan/port/ip
+            SendACmd "create vlan $wanVlan"
+            SendACmd "configure vlan $wanVlan tag ${wanID}$j"
+
+            SendACmd "configure vlan $wanVlan add port \
+                      [GetATrunkPort $i $m $j] tag"
+            SendACmd "configure vlan $wanVlan ipa 1${j}.0.${wanID}.2/30"
+            lappend DUTs_info(DUT${i},ldpPeerList) "100.100.${i}.1 100.100.${m}.1"
+            #--- Add static routing option
+            if {$routing != "ospf"} {
+               for {set q 1} {$q<$i} {incr q} {
+                  if {$noEcmp!=0} {
+                     SendACmd "configure ipr add 100.100.${q}.1/32 \
+                               1${j}.0.${wanID}.1"
+                  } else {
+                     SendACmd "configure ipr add 100.100.${q}.1/32 \
+                               1${j}.0.${wanID}.1 [expr 10 + $j]"
+                  }
+               }
+            }
+            lappend trunkVlans $wanVlan;
+         }
+
+      }
+   }  elseif {$config == "loop"} {
+      for {set j 1} {$j<=$numTrunks} {incr j} {
+       #---Loop configuration means duts are connected in a ring
+         if {$i <= $numDuts} {
+         #---- create the right facing wan vlan/port/ip
+            set k [expr $i + 1]
+            set wanID ${i}$k;
+            set wanVlan trunk${wanID}_$j;
+            #---- if dut is last, create a vlan to connect to dut 1
+            if {$i == $numDuts} {
+               set k 1
+               set wanID 1${i};
+               set wanVlan trunk${wanID}_$j;
+            }
+            SendACmd "create vlan $wanVlan"
+            SendACmd "configure vlan $wanVlan tag ${wanID}$j"
+            SendACmd "configure vlan $wanVlan add port \
+                      [GetATrunkPort $i $k $j] tag"
+            SendACmd "configure vlan $wanVlan ipa 1${j}.0.${wanID}.1/30"
+            lappend DUTs_info(DUT${i},ldpPeerList) "100.100.${i}.1 100.100.${k}.1"
+            #--- Add static routing option
+            if {$routing != "ospf"} {
+               for {set q [expr $i + 1]} {$q<=$numDuts} {incr q} {
+                  if {$noEcmp!=0} {
+                     SendACmd "configure ipr add 100.100.${q}.1/32 \
+                               1${j}.0.${wanID}.2"
+                  } else {
+                     SendACmd "configure ipr add 100.100.${q}.1/32 \
+                               1${j}.0.${wanID}.2 [expr 10 + $j]"
+                  }
+               }
+            }
+            lappend trunkVlans $wanVlan;
+         }
+         if {$i >= 1 } {
+         #---- if not first dut create the left facing wan vlan/port/ip
+            set m [expr $i -1]
+            set wanID ${m}$i;
+            set wanVlan trunk${wanID}_$j;
+            #---- if dut is first, create a vlan to connect to last dut
+            if {$i == 1} {
+               set m $numDuts
+               set wanID ${i}$numDuts;
+               set wanVlan trunk${wanID}_$j;
+            }
+            SendACmd "create vlan $wanVlan"
+            SendACmd "configure vlan $wanVlan tag ${wanID}$j"
+            SendACmd "configure vlan $wanVlan add port \
+                      [GetATrunkPort $i $m $j] tag"
+            SendACmd "configure vlan $wanVlan ipa 1${j}.0.${wanID}.2/30"
+            lappend DUTs_info(DUT${i},ldpPeerList) "100.100.${i}.1 100.100.${m}.1"
+            #--- Add static routing option
+            if {$routing != "ospf"} {
+
+               for {set q 1} {$q<$i} {incr q} {
+                  if {$noEcmp!=0} {
+                     SendACmd "configure ipr add 100.100.${q}.1/32 \
+                               1${j}.0.${wanID}.1"
+                  } else {
+                     SendACmd "configure ipr add 100.100.${q}.1/32 \
+                               1${j}.0.${wanID}.1 [expr 10 + $j]"
+                  }
+               }
+            }
+            lappend trunkVlans $wanVlan;
+         }
+      }
+   }  else {
+   #---Mesh configuration, DUT's are connected between each other
+      #--- Multiple trunks is not supported
+      set numTrunks 1;
+      set ipList 1
+      for {set x 1} {$x <= $numDuts} {incr x} {
+         if {[expr $i - $x]} {
+            #--- Decide how to name the trunk and set 4th octet numbers
+             #DUT1 12.1  13.1 14.1
+             #DUT2 12.2            23.1 24.1
+             #DUT3       13.2      23.2      34.1
+             #DUT4            14.2      24.2 34.2
+            if {$i<$x} {
+               set wanID "${i}$x";
+               set lastOctet 1
+               set nextHop 2
+            } else {
+               set wanID "${x}$i";
+               set lastOctet 2
+               set nextHop 1
+            }
+            set wanVlan trunk${wanID}_1;
+            SendACmd "create vlan $wanVlan"
+            SendACmd "configure vlan $wanVlan tag ${wanID}1"
+            SendACmd "configure vlan $wanVlan add port \
+                      [GetATrunkPort $i $x 1] tag"
+            SendACmd "configure vlan $wanVlan ipa 11.0.${wanID}.${lastOctet}/30"
+            lappend DUTs_info(DUT${i},ldpPeerList) "100.100.${i}.1 100.100.${x}.1"
+            if {$i<$x} {
+            lappend ipList1 "11.0.${wanID}.2"
+            } else {
+            lappend ipList1 "11.0.${wanID}.1"
+            }
+            #--- Add static routing option
+            if {$routing != "ospf"} {
+               if {$noEcmp!=0} {
+                  SendACmd "configure ipr add 100.100.$x.1/32 11.0.${wanID}.${nextHop}"
+               } else {
+                  SendACmd "configure ipr add 100.100.$x.1/32 11.0.${wanID}.${nextHop} [expr 10 + $x]"
+               }
+            }
+            lappend trunkVlans $wanVlan;
+         }
+      }
+   }
+
+   SendACmd "enable ipforwarding"
+   SendACmd "configure ospf routerid 100.100.$i.1"
+   SendACmd "configure ospf add loop area 0.0.0.0"
+
+   # Configure ospf on trunk ports
+   set q 1;
+   if {$numTrunks > 1} {
+      foreach wanLink $trunkVlans {
+         SendACmd "configure ospf add $wanLink area 0.0.0.0"
+         if {$noEcmp!=0} {
+            SendACmd "configure ospf vlan $wanLink cost [expr $q *10]"
+         }
+         incr q;
+      }
+   } else {
+      foreach wanLink $trunkVlans {
+         SendACmd "configure ospf add $wanLink area 0.0.0.0"
+         if {$noEcmp!=0} {
+            SendACmd "configure ospf vlan $wanLink cost [expr $i *10]"
+         }
+         incr q;
+      }
+  }
+
+   ############ Start Basic MPLS Setup #################
+   SendACmd "enable ipr mpls-next-hop"
+   SendACmd "configure mpls lsr-id 100.100.$i.1"
+   SendACmd "configure mpls add loop"
+
+   # Add each trunk to mpls
+   foreach wanLink $trunkVlans {
+      SendACmd "configure mpls add $wanLink"
+   }
+   SendACmd "enable mpls vlan all"
+   if {$prot == "ldp" } {
+   # Enable mpls and ldp
+   SendACmd "enable mpls protocol ldp"
+   SendACmd "enable mpls ldp vlan all"
+   SendACmd "configure mpls ldp advertise direct all"
+   } elseif {$prot == "rsvp"} {
+      if {$i == $srcDut } {
+         if {$config == "line"} {
+            for {set x 0} {$x<$numTrunks} {incr x} {
+               SendACmd " create mpls rsvp-te path path_dut$destDut$x"
+               SendACmd "create mpls rsvp-te lsp lsp_dut$destDut$x destination 100.100.$destDut.1"
+               SendACmd "config mpls rsvp-te path path_dut$destDut$x add ero [lindex $ipList1 $x]/32 strict"
+               SendACmd "config mpls rsvp-te lsp lsp_dut$destDut$x add path path_dut$destDut$x"
+            }
+        #------ else part only for mesh network
+        } else {
+           set indVal 0
+           for {set k 1} {$k <= $numDuts} {incr k} {
+              if {[expr $i - $k]} {
+                  SendACmd " create mpls rsvp-te path path_dut$destDut$k"
+                  SendACmd "create mpls rsvp-te lsp lsp_dut$destDut$k destination 100.100.$destDut.1"
+                  SendACmd "config mpls rsvp-te path path_dut$destDut$k add ero [lindex $ipList1 $indVal]/32 strict"
+                  SendACmd "config mpls rsvp-te lsp lsp_dut$destDut$k add path path_dut$destDut$k"
+                  incr indVal
+               }
+            }
+
+        }
+        #---- only one service vlan is addded incase of rsvp, assigning ipaddress
+        #---- directly
+         SendACmd "configure vlan0 ipaddress 20.0.$i.1/24"
+        # SendACmd "enable ipforwarding vlan0"
+         SendACmd "configure ospf add vlan vlan0 area 0.0.0.0"
+         foreach wanLink $trunkVlans {
+            SendACmd "enable mpls rsvp-te vlan $wanLink"
+         }
+         SendACmd " enable mpls rsvp-te lsp all"
+     } else {
+         SendACmd "configure vlan0 ipaddress 20.0.$i.1/24"
+        # SendACmd "enable ipforwarding vlan0"
+         SendACmd "configure ospf add vlan vlan0 area 0.0.0.0"
+         foreach wanLink $trunkVlans {
+            SendACmd "enable mpls rsvp-te vlan $wanLink"
+         }
+     }
+   SendACmd "enable mpls protocol rsvp-te"
+   SendACmd "enable ospf mpls-next-hop"
+}
+
+     #################### VPWS ###########################
+   if {$addVPWS} {
+   if $createservVlan {
+      # Add pseudo wires with a service for each
+      # Adding vpws and service 
+      for {set j 1} {$j<= $numVpws} {incr j} {
+         SendACmd "create l2vpn vpws vpws$j fec-id-type pseudo-wire [expr 50 + $j]"
+         if {$config == "line"} {
+            if {$conType == ""} {
+            if {$i != $numDuts} {
+            #---- loop to prevent adding peer to DUT5 
+               set k [expr $i + 1]
+               SendACmd "configure l2vpn vpws vpws$j add peer 100.100.$k.1"          }
+            if {$i !=1 } {
+            #---- loop to prevent adding peer to DUT1
+               set m [expr $i -1]
+               SendACmd "configure l2vpn vpws vpws$j add peer 100.100.$m.1"
+            }
+            } elseif {$conType =="end-end"} {
+            if {$i == $srcDut} {
+              SendACmd "configure l2vpn vpws vpws$j add peer 100.100.$destDut.1"
+            } elseif {$i == $destDut} {
+              SendACmd "configure l2vpn vpws vpws$j add peer 100.100.$srcDut.1"
+            }
+
+           }
+         } elseif {$config == "loop"} {
+            if {$conType == ""} {
+            if {$i <= $numDuts} {
+            #---- loop to prevent adding peer to DUT5 
+               set k [expr $i + 1]
+               if {$i == $numDuts} {
+                  set k 1
+               }
+               if {$i == 1} {
+                  set m $numDuts
+               } else {
+                  set m [expr $i -1]
+               }
+               SendACmd "configure l2vpn vpws vpws$j add peer 100.100.$k.1"          }
+               SendACmd "configure l2vpn vpws vpws$j add peer 100.100.$m.1"
+            } elseif {$conType =="end-end"} {
+            if {$i == $srcDut} {
+              SendACmd "configure l2vpn vpws vpws$j add peer 100.100.$destDut.1"
+            } elseif {$i == $destDut} {
+              SendACmd "configure l2vpn vpws vpws$j add peer 100.100.$srcDut.1"
+            }
+
+           }
+         } else {
+          #---Mesh configuration, DUT's are inter-connected 
+         for {set k 1} {$k <= $numDuts} {incr k} {
+            if {[expr $i - $k]} {
+               #--- this loop will be executed if both DUT numbers are not equal
+                  SendACmd "configure l2vpn vpws vpws$j add peer 100.100.$k.1"
+               }
+            }
+         }
+         #---- add the service vlan's/Vman to the VPWS
+         if {$j <= $topRange} {
+            SendACmd "disable igmp snooping vlan ${vlanVman}[expr $j -1]"
+            SendACmd "configure l2vpn vpws vpws$j add service ${vlanVman} ${vlanVman}[expr $j -1]"
+         }
+        
+            
+             if {$nonDefaultArg != "none"} {
+               switch $nonDefaultArg {
+                  "dot1qExclude" {
+                     SendACmd "configure l2vpn vpws  vpws$j dot1q tag exclude"
+                   }
+                  "dot1qExcludeMtu" {
+                     SendACmd "configure l2vpn vpws vpws$j dot1q tag exclude mtu 2000"
+                   }
+                  "dot1qOverwrite" {
+                     SendACmd "configure l2vpn vpws vpws$j dot1q ethertype 0x350$i"
+                   }
+                  "dot1qInclude" {
+                     SendACmd "configure l2vpn vpws vpws$j dot1q tag include"
+                   }
+                  "varMtu" {
+                     SendACmd "configure l2vpn vpws vpws$j mtu $mtu"
+                   }
+                 default {
+                     result_debug "default vpws settings would be applied"
+                   }
+               }
+            }
+         SendACmd "enable l2vpn vpws vpws$j"
+      }
+    }
+   }
+   #--- Add static routing option 
+   if {$routing == "ospf"} {
+      SendACmd "enable ospf"
+   }
+   SendACmd "enable mpls"
+}   
+for {set i 1} {$i <= $numDuts} {incr i} {
+   LogoutFast $i
+}
+# -------------------------------------------------------------------------------
+#                      Add option to verify that the network is up
+#                      before continuing.  If the network does not come up
+#                      the option to exit the test exists.
+if {$verify == "yes"} {
+    if {$exitOnVFail == "yes" && ($testNo == "none" || $time1 == "none")} {
+        result_error "testNo and time1   M U S T  be passed in to exit on failure"
+        exit;
+    }
+
+    result_debug "\nWait for peers to come up."
+    exSleep $startTime
+    set failTime [expr $failTime - $startTime] 
+    for {set i 1} {$i <= $numDuts} {incr i} {
+        Login $DUTs_info(DUT$i,connect)
+        if {$prot == "ldp"} {
+            for {set c 0} {$c < [llength $DUTs_info(DUT${i},ldpPeerList)]} {incr c} {
+                set peer [lindex $DUTs_info(DUT${i},ldpPeerList) $c] 
+                result_debug "peer $c : $peer"
+                set localAdd [lindex $peer 0] 
+                set remoteAdd "[lindex $peer 1]:0" 
+                lappend parameterList "{$localAdd * $remoteAdd * Operational} exist"
+            }
+            set ldpStat [CheckKeyValue "show mpls ldp peer" $parameterList \
+                 -testNo $testNo -comment "- chk ldp peer on DUT$i" \
+                 -dut $i -time [list "s:" "0" "i:" "5" "d:" "$failTime" "f:" "$failTime" "r"]]
+            unset parameterList
+            if {$ldpStat == "error" && $exitOnVFail == "yes"} {
+                result_error "Failed check mpls ldp peer on DUT${i}: Abandon $testNo "
+                for {set y 1} {$y <= $numDuts} {incr y} {
+                   LogoutFast $y
+                }
+                MulDutVpwsCleanup  -numTrunks "$numTrunks" \
+                    -numServiceVlan "$numServiceVlan" \
+                    -numDuts  "$numDuts" \
+                    -vlanVman "$vlanVman" \
+                    -numVpws  "$numVpws" \
+                    -config   "$config" \
+                    -routing  "$routing" \
+                    -addVPWS  "$addVPWS"
+                set time2 [clock seconds]
+                result_p "Time for $testNo = [expr $time2-$time1] secs\n\n"
+                close_result_file
+                report_end_test
+                return -code return
+            }
+        }
+        #  RSVP is currently not enabled.
+        if {$prot == "rsvp" && $i == $srcDut && 0} {
+            lappend parameterList "{100.100.${i}.1 * 100.100.${destDut}.1 * Operational} exist"
+            set rsvpStat [CheckKeyValue "show mpls rsvp neighbor" $parameterList \
+                 -testNo $testNo -comment "- chk rsvp neighbor on DUT$i" \
+                 -dut $i -time [list "s:" "0" "i:" "5" "d:" "$failTime" "f:" "$failTime" "r"]]
+            unset parameterList
+            if {$rsvpStat == "error" && $exitOnVFail == "yes"} {
+                result_error "Failed check mpls rsvp neighbor on DUT${i}: Abandon $testNo "
+                for {set y 1} {$y <= $numDuts} {incr y} {
+                   LogoutFast $y
+                }
+                MulDutVpwsCleanup  -numTrunks "$numTrunks" \
+                    -numServiceVlan "$numServiceVlan" \
+                    -numDuts  "$numDuts" \
+                    -vlanVman "$vlanVman" \
+                    -numVpws  "$numVpws" \
+                    -config   "$config" \
+                    -routing  "$routing" \
+                    -addVPWS  "$addVPWS"
+                set time2 [clock seconds]
+                result_p "Time for $testNo = [expr $time2-$time1] secs\n\n"
+                close_result_file
+                report_end_test
+                return -code return
+            }
+        }
+        if {$numVpws > 0 && $addVPWS} {
+            lappend parameterList "{Total.*conf.*VPWS.*$numVpws|Total.*conf.*L2VPN.*$numVpws} exist"
+           if {$numVpws ==1} {
+               lappend parameterList "{Total.*active.*VPWS.*1|Total.*active.*L2VPN.*1} exist"
+            } else {
+               lappend parameterList "{Total.*active.*VPWS.*$topRange|Total.*active.*L2VPN.*$topRange} exist"
+            }
+            set vpwsStat [CheckKeyValue "show l2vpn vpws summary" $parameterList \
+                 -testNo $testNo -comment "- chk vpws on DUT$i" \
+                 -dut $i -time [list "s:" "0" "i:" "5" "d:" "$failTime" "f:" "$failTime" "r"]]
+            unset parameterList
+            if {$vpwsStat == "error" && $exitOnVFail == "yes"} {
+                result_error "Failed vpws coming active on DUT${i}: Abandon $testNo "
+                for {set y 1} {$y <= $numDuts} {incr y} {
+                   LogoutFast $y
+                }
+                MulDutVpwsCleanup  -numTrunks "$numTrunks" \
+                    -numServiceVlan "$numServiceVlan" \
+                    -numDuts  "$numDuts" \
+                    -vlanVman "$vlanVman" \
+                    -numVpws  "$numVpws" \
+                    -config   "$config" \
+                    -routing  "$routing" \
+                    -addVPWS  "$addVPWS"
+                set time2 [clock seconds]
+                result_p "Time for $testNo = [expr $time2-$time1] secs\n\n"
+                close_result_file
+                report_end_test
+
+                # Make sure all config is cleaned off
+                for {set y 1} {$y <= $numDuts} {incr y} {
+                   allCleanup $y
+                }
+                return -code return
+            }
+        }
+    }
+}
+
+}
+
+###################################################################################################
+# Procedure Name: MulDutVpwsCleanup
+#
+# Description:
+# This procedure deletes   a variable number of pseudo wire/service
+#      pairs on a multi-node  test bed.  
+#
+#
+# Input args: args
+#   -numTrunks "1"          <= number of trunks connected between DUts
+#   -numServiceVlan "1"     <= number of service Vlan/Vman used
+#   -nonDefaultArg "none"   <= the ability to set non-default vpws values
+#   -vlanVman "vlan"        <= vpws can be configured in conjunction with vmans
+#   -numDuts  "2"           <= number of Duts used for vpws setup
+#   -config  "line"         <= connection of Duts in the setup,
+#                               for ex if numDuts=3 and config=line, then
+#                               the script will configure trunk connection as below
+#                               DUT1<===>DUT2<===>DUT3
+#                               if config=loop then the configuation would be
+#                               DUT1<===>DUT2<===>DUT3
+#                                ^                 ^
+#                                |                 |
+#                                 -----------------
+#   -numVpws  "10"          <= number of vpws sessions to be used for testcase
+#   -noEcmp "1"             <= the value set to 1 indicates  ospf route costs
+#                              between DUTs are different, otherwise 0,
+#                              default is 0 indicates ECMP
+#   -routing "ospf"         <= ospf or static routing used to bring up ldp
+#
+#   -addVPWS "1"            <= Other modules may want to use this library with only the
+#                              basic MPLS setup. If setup skipped VPWS no need to clean  
+#
+# Output args: none
+# Typical usage:
+#        MulDutVpwsCleanup  -numTrunks "1" \
+#          -numServiceVlan "1" \
+#          -numDuts  "2" \
+#          -vlanVman "vlan" \
+#          -numVpws  "10" \
+#          -config   "line \
+#          -routing  "ospf" \
+#          -addVPWS  "1"
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: SetupSwitch
+##################################################################
+
+proc MulDutVpwsCleanup {args} {
+   parse_args MulDutVpwsCleanup $args {
+      numTrunks "1"
+      numServiceVlan "1"
+      vlanVman "vlan"
+      numDuts "2"
+      numVpws "1"
+      config "line"
+      routing "static"
+      addVPWS "1"
+      srcDut  "1"
+      destDut "3"
+      conType ""
+   }
+   global DUTs_info
+for {set i 1} {$i <= $numDuts} {incr i} {
+   Login $DUTs_info(DUT$i,connect)
+
+   # Clear global variables
+   set DUTs_info(DUT${i},ldpPeerList) ""
+
+   SendACmd "disable mpls"
+#exSleep 2
+   SendACmd "unconfigure mpls"
+#exSleep 2
+   if {$conType =="end-end"} {
+      if {(($i==$srcDut) || ($i==$destDut))} {
+         set delservVlan 1
+      } else {
+         set delservVlan 0
+     }
+   } else {
+      set delservVlan 1
+   }
+ 
+   if $delservVlan {
+   for {set j 1} {$j<= $numVpws} {incr j} {
+      if {$addVPWS} {
+         SendACmd "disable l2vpn vpws vpws$j"
+         SendACmd "delete l2vpn vpws vpws$j"
+      }
+   }
+   if {$vlanVman == "vman"} {
+      # Multiple VMANs can not be added to a port tagged
+      set topRange 2
+   } else {
+      set topRange $numServiceVlan
+   }
+
+exSleep 2
+   # delete VPWS Service VLANs 
+   #
+   for {set j 0} {$j<$topRange} {incr j} {
+      SendACmd "delete ${vlanVman} ${vlanVman}$j"
+   }
+   }
+   SendACmd "delete vlan loop"
+   #
+   # Delete trunk vlans
+   #
+   set trunkVlans "";
+   if {$config == "line"} {
+      for {set j 1} {$j<=$numTrunks} {incr j} {
+       #---Line configuration meant duts are connected in sequence
+         if {$i != $numDuts} {
+            set k [expr $i + 1]
+            set wanID ${i}$k;
+            set wanVlan trunk${wanID}_$j;
+         #---- if not last dut delete the right facing vlan
+            SendACmd "delete vlan $wanVlan"
+            #--- Delete Static Routes
+            if {$routing != "ospf"} {
+               for {set q $i} {$q<$numDuts} {incr q} {
+                  SendACmd "configure ipr del 100.100.[expr $q + 1].1/32 \
+                            1${j}.0.${wanID}.2"
+               }
+            }
+         } 
+         if {$i !=1 } {
+         #---- if not first dut delete the left facing vlan
+            set m [expr $i -1]
+            set wanID ${m}$i;
+            set wanVlan trunk${wanID}_$j;
+            SendACmd "delete vlan $wanVlan"
+            #--- Delete Static Routes
+            if {$routing != "ospf"} {
+               for {set q 1} {$q<$i} {incr q} {
+                  SendACmd "configure ipr del 100.100.${q}.1/32 \
+                            1${j}.0.${wanID}.1"
+               }
+            }
+         }
+      }
+   }  elseif {$config == "loop"} {
+      for {set j 1} {$j<=$numTrunks} {incr j} {
+       #---Loop configuration means duts are connected in a ring
+         if {$i <= $numDuts} {
+         #---- delete the right facing vlans
+            set k [expr $i + 1]
+            set wanID ${i}$k;
+            set wanVlan trunk${wanID}_$j;         
+            #---- if dut is last, delete vlan connected to dut 1
+            if {$i == $numDuts} {
+               set k 1
+               set wanID 1${numDuts};
+               set wanVlan trunk${wanID}_$j;
+            }         
+            SendACmd "delete vlan $wanVlan"
+            #--- Delete Static Routes
+            if {$routing != "ospf"} {
+               for {set q [expr $i + 1]} {$q<=$numDuts} {incr q} {
+                  SendACmd "configure ipr del 100.100.${q}.1/32 \
+                            1${j}.0.${wanID}.2"
+               }
+            }
+         } 
+         if {$i >= 1 } {
+         #---- if not first dut delete the left facing vlan
+            set m [expr $i -1]
+            set wanID ${m}$i;
+            set wanVlan trunk${wanID}_$j;
+            #---- if dut is first, delete a vlan connected to last dut
+            if {$i == 1} {
+               set m $numDuts
+               set wanID ${i}$numDuts;
+               set wanVlan trunk${wanID}_$j;
+            }
+            SendACmd "delete vlan $wanVlan"
+            #--- Delete Static Routes
+            if {$routing != "ospf"} {
+               for {set q 1} {$q<$i} {incr q} {
+                  SendACmd "configure ipr del 100.100.${q}.1/32 \
+                            1${j}.0.${wanID}.1"
+               }
+            }
+         }
+      }
+   }  else {
+   #---Mesh configuration, DUT's are connected between each other
+      #--- Multiple trunks is not supported
+      set numTrunks 1;
+      for {set x 1} {$x <= $numDuts} {incr x} {
+         if {[expr $i - $x]} {
+            #--- Decide how to name the trunk and set 4th octet numbers
+            if {$i<$x} {
+               set wanID "${i}$x";
+               set lastOctet 1
+               set nextHop 2
+            } else {
+               set wanID "${x}$i";
+               set lastOctet 2
+               set nextHop 1
+            }            
+            set wanVlan trunk${wanID}_1;
+            SendACmd "delete vlan $wanVlan"
+            #--- Delete Static Routes
+            if {$routing != "ospf"} {
+               SendACmd "configure ipr del 100.100.$x.1/32 11.0.${wanID}.$nextHop"
+            }
+         }
+      }
+   }
+   if {$routing == "ospf"} {
+      SendACmd "disable ospf"
+   }
+   SendACmd "configure ospf routerid 0.0.0.0"
+}
+}
+
+
+
+proc SetupMPLSLine2.3 {} {
+
+global DUT1_CONNECT
+global DUT2_CONNECT
+global DUT3_CONNECT
+global DUT4_CONNECT
+
+Login $DUT1_CONNECT
+SendACmd "configure default delete port all"
+set DUT1vlan2IP 1.0.0.1
+set portList [GetATrunkPort 1 2]
+SendACmd "config ospf routerid 100.100.100.1"
+SetupSingleOSPFVlanWithPrefix "100.100.100.1/32" "0.0.0.0" "None" 1 "loop" "false"
+SetupSingleOSPFVlan $DUT1vlan2IP 0.0.0.0 $portList 1 "vlan12"
+SendACmd "enable ipr mpls-next-hop"
+SendACmd "configure mpls lsr-id 100.100.100.1"
+SendACmd "configure mpls add loop"
+SendACmd "configure mpls add vlan12"
+SendACmd "enable mpls protocol ldp"
+SendACmd "enable mpls vlan all"
+SendACmd "enable mpls ldp vlan all"
+SendACmd "configure mpls ldp advertise direct all"
+SendACmd "enable ospf"
+SendACmd "enable mpls"
+
+Login $DUT2_CONNECT
+SendACmd "configure default delete port all"
+set DUT2vlan1IP 1.0.0.2
+set portList [GetATrunkPort 2 1]
+SendACmd "config ospf routerid 100.100.100.2"
+SetupSingleOSPFVlanWithPrefix "100.100.100.2/32" "0.0.0.0" "None" 2 "loop" "false"
+SetupSingleOSPFVlan $DUT2vlan1IP 0.0.0.0 $portList 2 "vlan12"
+set DUT2vlan3IP 2.0.0.2
+set portList [GetATrunkPort 2 3]
+SetupSingleOSPFVlan $DUT2vlan3IP 0.0.0.0 $portList 2 "vlan23"
+SendACmd "enable ipr mpls-next-hop"
+SendACmd "configure mpls lsr-id 100.100.100.2"
+SendACmd "configure mpls add loop"
+SendACmd "configure mpls add vlan12"
+SendACmd "configure mpls add vlan23"
+SendACmd "enable mpls protocol ldp"
+SendACmd "enable mpls vlan all"
+SendACmd "enable mpls ldp vlan all"
+SendACmd "configure mpls ldp advertise direct all"
+SendACmd "enable ospf"
+SendACmd "enable mpls"
+
+Login $DUT3_CONNECT
+SendACmd "configure default delete port all"
+set DUT3vlan2IP 2.0.0.3
+set portList [GetATrunkPort 3 2]
+SendACmd "config ospf routerid 100.100.100.3"
+SetupSingleOSPFVlanWithPrefix "100.100.100.3/32" "0.0.0.0" "None" 3 "loop" "false"
+SetupSingleOSPFVlan $DUT3vlan2IP 0.0.0.0 $portList 3 "vlan23"
+set DUT3vlan4IP 3.0.0.3 ;
+set portList [GetATrunkPort 3 4]
+SetupSingleOSPFVlan $DUT3vlan4IP 0.0.0.4 $portList 3 "vlan34"
+SendACmd "enable ipr mpls-next-hop"
+SendACmd "configure mpls lsr-id 100.100.100.3"
+SendACmd "configure mpls add loop"
+SendACmd "configure mpls add vlan23"
+SendACmd "configure mpls add vlan34"
+SendACmd "enable mpls protocol ldp"
+SendACmd "enable mpls vlan all"
+SendACmd "enable mpls ldp vlan all"
+SendACmd "configure mpls ldp advertise direct all"
+SendACmd "enable ospf"
+SendACmd "enable mpls"
+
+
+
+Login $DUT4_CONNECT
+SendACmd "configure default delete port all"
+set DUT4vlan3IP 3.0.0.4
+set portList [GetATrunkPort 4 3]
+SendACmd "config ospf routerid 100.100.100.4"
+SetupSingleOSPFVlanWithPrefix "100.100.100.4/32" "0.0.0.4" "None" 4 "loop" "false"
+SetupSingleOSPFVlan $DUT4vlan3IP 0.0.0.4 $portList 4 "vlan34"
+SendACmd "enable ipr mpls-next-hop"
+SendACmd "configure mpls lsr-id 100.100.100.4"
+SendACmd "configure mpls add loop"
+SendACmd "configure mpls add vlan34"
+SendACmd "enable mpls protocol ldp"
+SendACmd "enable mpls vlan all"
+SendACmd "enable mpls ldp vlan all"
+SendACmd "configure mpls ldp advertise direct all"
+SendACmd "enable ospf"
+SendACmd "enable mpls"
+
+
+
+Login $DUT4_CONNECT
+SendACmd "disable ospf"
+SendACmd        "config ospf area 0.0.0.4 nssa summary stub-default-cost 10"
+SendACmd "enable ospf"
+Login $DUT3_CONNECT
+SendACmd "disable ospf"
+exSleep 5 ;#Added sleep ...
+SendACmd        "config ospf area 0.0.0.4 nssa summary stub-default-cost 10"
+SendACmd "enable ospf"
+}
+
+
+##################################################################
+# Procedure Name: SetupSingleOSPFVlanWithPrefix
+#
+# Description: ospf topology specific proc that is used to setup a single ospf vlan
+#              for a given area with prefix
+#
+#
+# Input args:  vlan1IP, vlanArea, portList, dutID, vlanName, enableOSPF, tag
+# Output args: None.
+# Return vlaue: none
+# Typical usage:
+#         SetupSingleOSPFVlanWithPrefix 100.101.10.1/24  $area [MapDUTPortId 1] 1 "vlan1"
+#
+# Category: Setup
+##################################################################
+proc SetupSingleOSPFVlanWithPrefix { vlan1IP vlanArea portList dutID {vlanName "vlan1"} {enableOSPF "true"} {tag ""} {AreaType ""} } {
+
+SendACmd "disable ospf"
+sleep 2         ;# exos
+SendACmd "enable ipforwarding"
+SendACmd "create vlan $vlanName"
+SendACmd "config $vlanName ipaddress $vlan1IP"
+SendACmd "show $vlanName"
+if { $portList != "None" } {
+if {[string length $tag]} {
+   SendACmd "config $vlanName tag $tag"
+   SendACmd "config $vlanName add port $portList tagged"
+} else {
+   SendACmd "config $vlanName add port $portList"
+}
+}
+SendACmd "enable ipforwarding vlan $vlanName"
+
+#just create the area eventhough the area might exist
+if {$vlanArea != "0.0.0.0" } { SendACmd "create ospf area $vlanArea" }
+SendACmd  "config ospf add vlan $vlanName area $vlanArea"
+
+if { $vlanName == "loop" } { SendACmd "enable loopback-mode loop" }
+if { $AreaType == "stub" } { SendACmd "configure ospf area 0.0.0.2 stub summary stub-default-cost 10" }
+if { $AreaType == "nssa" } { SendACmd "configure ospf area 0.0.0.2 nssa summary stub-default-cost 10" }
+if { $enableOSPF == "true" } { SendACmd "enable ospf" }
+
+}
+
+##################################################################
+# Procedure Name: CleanupSingleOSPFVlanWithMPLS
+#
+# Description: ospf topology specific proc that is used to cleanup single ospf vlan cinfiguration
+#              for a given area.
+#
+#
+# Input args:  vlanArea, vlanName true/false
+# Output args: None.
+# Return vlaue: none
+# Typical usage:
+#         CleanupSingleOSPFVlanWithMPLS $area vlan1
+#
+# Category: Setup
+##################################################################
+proc CleanupSingleOSPFVlanWithMPLS { vlanArea {vlanName "vlan1"} {OspfMplsCleanup "true"}} {
+    if { $OspfMplsCleanup == "true" } {
+    SendACmd        "disable ospf"
+    sleep 2         ;# exos
+    SendACmd        "disable mpls"
+    SendACmd        "unconfigure mpls"
+    sleep 2         ;# exos
+    SendACmd        "configure ospf routerid 0.0.0.0"
+    SendACmd        "clear fdb"
+    }
+    SendACmd        "delete vlan $vlanName"
+    if {$vlanArea != "0.0.0.0" } { SendACmd "delete ospf area $vlanArea"}
+}
+##################################################################
+# Procedure Name: GetMplsStaticLabel
+# Description:  Configure matching ingress and egress tags between
+#               Pionner and Genesis platforms which support different
+#               Tag ranges
+#
+# Input args: args
+# Output args: none
+# Return value: newLabel
+# Typical usage:
+#       SendACmd "configure mpls static lsp to-chennai-static egress \
+#       [GetMplsStaticLabel -nextHopDUT 2 -baseLabel 32 -direction egress] \
+#       egress-vlan chennai-link next-hop 150.151.1.1 ingress \
+#       [GetMplsStaticLabel -baseLabel 29 -direction ingress] \
+#       ingress-vlan core-mumbai"
+#
+# Category: DUTConfig
+##################################################################
+proc GetMplsStaticLabel {args} {
+   parse_args GetMplsStaticLabel $args {
+     nextHopDUT  "1"
+     baseLabel "11"
+     direction "ingress"
+     egressLSP "0"
+     outputPacket "0"
+   }
+
+   global whichDutNow
+   global gnssPlatform
+   global bcmPlatform
+   global pioneerPlatform
+
+   if {($baseLabel < 12) && [regexp -nocase "$pioneerPlatform" [GetPlatform DUT${whichDutNow}]]} {
+       result_error "Illegal baselabel value: invalid range on pioneer"
+   }
+   if {[string length $baseLabel] > 2} {
+       result_error "Illegal baselabel value - should only be 2 chars or 1 char"
+   }
+   # break up the 2 nibble baseLabel
+   set label1 [string index $baseLabel 0]
+   set label2 [string index $baseLabel 1]
+   if {[regexp -nocase "$gnssPlatform|$bcmPlatform" [GetPlatform DUT${whichDutNow}]] && \
+       $direction == "ingress"} {
+           if {$egressLSP} {
+               if {$outputPacket} {
+                   set outLabel "80 0$label1 $label2"
+               } else {
+                   set outLabel 0x800$baseLabel
+               }
+           } else {
+               if {$outputPacket} {
+                   set outLabel "7F C$label1 $label2"
+               } else {
+                   set outLabel 0x7FC$baseLabel
+               }
+           }
+           #result_debug "Ingress Genesis 0x7FC$baseLabel"
+           return $outLabel
+   }
+   if {[regexp -nocase "$pioneerPlatform" [GetPlatform DUT${whichDutNow}]] && \
+       $direction == "ingress"} {
+           if {$outputPacket} {
+               set outLabel "00 0$label1 $label2"
+           } else {
+               set outLabel 0x$baseLabel
+           }
+           #result_debug "Ingress Pioneer 0x$baseLabel"
+           return $outLabel
+   }
+   if {[regexp -nocase "$gnssPlatform|$bcmPlatform" [GetPlatform DUT${nextHopDUT}]] && \
+       $direction == "egress"} {
+           if {$egressLSP} {
+               if {$outputPacket} {
+                   set outLabel "80 0$label1 $label2"
+               } else {
+                   set outLabel 0x800$baseLabel
+               }
+           } else {
+               if {$outputPacket} {
+                   set outLabel "7F C$label1 $label2"
+               } else {
+                   set outLabel 0x7FC$baseLabel
+               }
+           }
+           #result_debug "Egress to Genesis 0x7FC$baseLabel"
+           return $outLabel
+   }
+   if {[regexp -nocase "$pioneerPlatform" [GetPlatform DUT${nextHopDUT}]] && \
+       $direction == "egress"} {
+           if {$outputPacket} {
+               set outLabel "00 0$label1 $label2" 
+           } else {
+               set outLabel 0x$baseLabel
+           }
+           #result_debug "Egress to Pioneer 0x$baseLabel"
+           return $outLabel
+   }
+   # If no matches have hit
+}
+# --------------------------------------------------------------------------
+# in vpws certain tests use a mesh of predefined streams
+#   at the beginning of these tests make sure the mess is configured
+#
+# --------------------------------------------------------------------------
+proc CheckStreamMatrix {} {
+   global DUTs_info
+
+   if {!$DUTs_info(DUT1,TrafficPrimed)} {
+       PrimeVPWSTraffic
+   }
+}
+# -------------------------------------------------------------------------
+# If any stream is sent the matrix is wiped from the ixia config
+#    so it is necessary to unset the TrafficPrimed to 0
+#    if the ixia is used.  PrimeVPWSTraffic will have to 
+#    be run to re-init the matrix
+# ------------------------------------------------------------------------
+proc ClearStreamMatrix {} {
+   global DUTs_info
+   set DUTs_info(DUT1,TrafficPrimed) 0
+}
+# -------------------------------------------------------------------------
+# Set up the matrix of streams for the 1.3.x vpws tests
+#
+# -------------------------------------------------------------------------
+proc PrimeVPWSTraffic {} {
+   global DUTs_info
+   global DUT1_CONNECT
+   global DUT2_CONNECT
+   global DUT3_CONNECT
+   global DUT4_CONNECT
+   global DUT5_CONNECT
+
+   IxiaPortsInit
+
+   #S1)  PORT W > SA=W, DA=(Broadcast), Ethertype=0800 (untagged broadcast)
+   createStreams -portn 1 -startId 1 -endId 1 -name S1 -type "ipv4_udp"
+   setStreamOptions -portn 1 -startId 1 -endId 1 -type "stream" \
+         -optionVal {{sa "00 A1 F1 00 00 01"} {da "FF FF FF FF FF FF"} \
+         {frameType "08 00"} {enable true} {dma advance} {numFrames 10}}
+   setStreamOptions -portn 1 -startId 1 -endId 1 -type "ip" \
+         -optionVal {{sourceIpAddr "1.1.1.2"} {destIpAddr "255.255.255.255"}}
+
+   #S2)  PORT X > SA=X, DA=(Broadcast), Ethertype=8100 VID=10
+   #                    (tagged broadcast on tagged port)
+   createStreams -portn 2 -startId 1 -endId 1 -name S2 -type "ipv4_udp"
+   setStreamOptions -portn 2 -startId 1 -endId 1 -type "protocol" \
+         -optionVal {{enable802dot1qTag true}}
+   setStreamOptions -portn 2 -startId 1 -endId 1 -type "vlan" \
+         -optionVal {{vlanID 0601} {protocolTagId 33024}}
+   setStreamOptions -portn 2 -startId 1 -endId 1 -type "stream" \
+         -optionVal {{sa "00 A1 F2 00 00 01"} {da "FF FF FF FF FF FF"} \
+         {frameType "81 00"} {enable true} {dma advance} {numFrames 10}}
+   setStreamOptions -portn 2 -startId 1 -endId 1 -type "ip" \
+         -optionVal {{sourceIpAddr "2.2.2.2"} {destIpAddr "255.255.255.255"}}
+
+   #vlan setDefault
+   #vlan vlanID 1234
+   #vlan userPriority 0
+   #vlan cfi resetCFI
+   #vlan mode vIdle
+   #vlan repeat 10
+   #vlan step 1
+   #vlan maskval "0000XXXXXXXXXXXX"
+   #protocol enable802dot1qTag true
+
+   #stream enable true
+   #stream frameType "FF FF"
+   #stream numFrames 1
+   #stream percentPacketRate 1.0
+   #stream fpsRate 1488.0952381
+   #stream rateMode usePercentRate
+   #stream sa "00 00 00 00 00 00"
+   #stream saRepeatCounter idle
+   #stream saStep 1
+   #stream da "00 00 00 00 00 00"
+   #stream daRepeatCounter idle
+   #stream daStep 1
+   #stream framesize 128
+   #stream pattern "00 01 02 03"
+   #stream dma  "advance|gotoFirst|firstLoopCount|contPacket|stopStream"
+   #stream loopCount 1
+   #stream returnToId 1
+
+   #ip sourceIpAddr "0.0.0.0"
+   #ip sourceIpAddrMode ipIdle
+   #ip sourceIpAddrRepeatCount 10
+   #ip destIpAddr "0.0.0.0"
+   #ip destIpAddrMode ipIdle
+   #ip destIpAddrRepeatCount 10
+   #ip destMacAddr "00 DE BB 00 00 02"
+
+   #S3)  PORT W > SA=W, DA=(Broadcast), Ethertype=8100 VID=10
+   #                    (tagged broadcast on untagged port, local tag)
+   createStreams -portn 1 -startId 2 -endId 2 -name S3 -type "ipv4_udp"
+   setStreamOptions -portn 1 -startId 2 -endId 2 -type "protocol" \
+         -optionVal {{enable802dot1qTag true}}
+   setStreamOptions -portn 1 -startId 2 -endId 2 -type "vlan" \
+         -optionVal {{vlanID 0601}}
+   setStreamOptions -portn 1 -startId 2 -endId 2 -type "stream" \
+         -optionVal {{sa "00 A1 F1 00 00 01"} {da "FF FF FF FF FF FF"} \
+         {frameType "81 00"} {enable true} {dma advance} {numFrames 10}}
+   setStreamOptions -portn 1 -startId 2 -endId 2 -type "ip" \
+         -optionVal {{sourceIpAddr "1.1.1.2"} {destIpAddr "255.255.255.255"}}
+
+   #S4)  PORT W > SA=W, DA=(Broadcast), Ethertype=8100 VID=50
+   #                    (tagged broadcast on untagged port, remote tag)
+   createStreams -portn 1 -startId 3 -endId 3 -name S4 -type "ipv4_udp"
+   setStreamOptions -portn 1 -startId 3 -endId 3 -type "protocol" \
+         -optionVal {{enable802dot1qTag true}}
+   setStreamOptions -portn 1 -startId 3 -endId 3 -type "vlan" \
+         -optionVal {{vlanID 0701}}
+   setStreamOptions -portn 1 -startId 3 -endId 3 -type "stream" \
+         -optionVal {{sa "00 A1 F1 00 00 01"} {da "FF FF FF FF FF FF"} \
+         {frameType "81 00"} {enable true} {dma advance} {numFrames 10}}
+   setStreamOptions -portn 1 -startId 3 -endId 3 -type "ip" \
+         -optionVal {{sourceIpAddr "1.1.1.2"} {destIpAddr "255.255.255.255"}}
+
+   #S5)  PORT W > SA=W, DA=(Broadcast), Ethertype=8100 VID=99
+   #                    (tagged broadcast on untagged port, new tag)
+   createStreams -portn 1 -startId 4 -endId 4 -name S5 -type "ipv4_udp"
+   setStreamOptions -portn 1 -startId 4 -endId 4 -type "protocol" \
+         -optionVal {{enable802dot1qTag true}}
+   setStreamOptions -portn 1 -startId 4 -endId 4 -type "vlan" \
+         -optionVal {{vlanID 0099}}
+   setStreamOptions -portn 1 -startId 4 -endId 4 -type "stream" \
+         -optionVal {{sa "00 A1 F1 00 00 01"} {da "FF FF FF FF FF FF"} \
+         {frameType "81 00"} {enable true} {dma advance} {numFrames 10}}
+   setStreamOptions -portn 1 -startId 4 -endId 4 -type "ip" \
+         -optionVal {{sourceIpAddr "1.1.1.2"} {destIpAddr "255.255.255.255"}}
+
+   #S6)  PORT W > SA=W, DA=Y, Ethertype=0800
+   #                    (unknown unicast on untagged port)
+   createStreams -portn 1 -startId 5 -endId 5 -name S6 -type "ipv4_udp"
+   set optionsList ""
+   lappend optionsList "sa \"00 A1 F1 00 00 01\""
+   lappend optionsList "frameType \"08 00\""
+   lappend optionsList "enable true"
+   lappend optionsList "da \"[cookMacForIxia $DUTs_info(DUT1,sysMAC)]\""
+   lappend optionsList "dma advance"
+   lappend optionsList "numFrames 10"
+   setStreamOptions -portn 1 -startId 5 -endId 5 -type "stream" \
+         -optionVal $optionsList
+   setStreamOptions -portn 1 -startId 5 -endId 5 -type "ip" \
+         -optionVal {{sourceIpAddr "1.1.1.2"} {destIpAddr "3.3.3.2"}}
+
+   #S7)  PORT X > SA=X, DA=Y, Ethertype=8100  VID=10
+   #                    (unknown unicast on tagged port)
+   createStreams -portn 2 -startId 2 -endId 2 -name S7 -type "ipv4_udp"
+   setStreamOptions -portn 2 -startId 2 -endId 2 -type "protocol" \
+         -optionVal {{enable802dot1qTag true}}
+   setStreamOptions -portn 2 -startId 2 -endId 2 -type "vlan" \
+         -optionVal {{vlanID 0601} {protocolTagId 33024}}
+   set optionsList ""
+   lappend optionsList "sa \"00 A1 F2 00 00 01\""
+   lappend optionsList "frameType \"81 00\""
+   lappend optionsList "enable true"
+   lappend optionsList "da \"[cookMacForIxia $DUTs_info(DUT1,sysMAC)]\""
+   lappend optionsList "dma advance"
+   lappend optionsList "numFrames 10"
+   setStreamOptions -portn 2 -startId 2 -endId 2 -type "stream" \
+         -optionVal $optionsList
+   setStreamOptions -portn 2 -startId 2 -endId 2 -type "ip" \
+         -optionVal {{sourceIpAddr "1.1.1.2"} {destIpAddr "3.3.3.2"}}
+
+   #
+   # PORT  3 4 SETUP
+   #
+
+   #S8)  PORT Y > SA=Y, DA=W, Ethertype=0800
+   #                    (known unicast, untagged over PW)
+   createStreams -portn 3 -startId 1 -endId 1 -name S8 -type "ipv4_udp"
+   set optionsList ""
+   lappend optionsList "sa \"00 A3 F1 00 00 01\""
+   lappend optionsList "frameType \"08 00\""
+   lappend optionsList "enable true"
+   lappend optionsList "da \"00 A1 F1 00 00 01\""
+   lappend optionsList "dma advance"
+   lappend optionsList "numFrames 10"
+   setStreamOptions -portn 3 -startId 1 -endId 1 -type "stream" \
+         -optionVal $optionsList
+   setStreamOptions -portn 3 -startId 1 -endId 1 -type "ip" \
+         -optionVal {{sourceIpAddr "3.3.3.2"} {destIpAddr "1.1.1.2"}}
+
+   #S9)  PORT Y > SA=Y, DA=X, Ethertype=0800
+   #                    (known unicast, untagged over PW)
+   createStreams -portn 3 -startId 2 -endId 2 -name S9 -type "ipv4_udp"
+   set optionsList ""
+   lappend optionsList "sa \"00 A3 F1 00 00 01\""
+   lappend optionsList "da \"00 A1 F2 00 00 01\""
+   lappend optionsList "frameType \"08 00\""
+   lappend optionsList "enable true"
+   lappend optionsList "dma firstLoopCount "
+   lappend optionsList "loopCount 1"
+   lappend optionsList "numFrames 10"
+   setStreamOptions -portn 3 -startId 2 -endId 2 -type "stream" \
+         -optionVal $optionsList
+   setStreamOptions -portn 3 -startId 2 -endId 2 -type "ip" \
+         -optionVal {{sourceIpAddr "3.3.3.2"} {destIpAddr "2.2.2.2"}}
+
+   #S10) PORT Z > SA=Z, DA=W, Ethertype=8100  VID=50
+   #                    (known unicast, tagged over PW)
+   createStreams -portn 4 -startId 1 -endId 1 -name S10 -type "ipv4_udp"
+   setStreamOptions -portn 4 -startId 1 -endId 1 -type "protocol" \
+         -optionVal {{enable802dot1qTag true}}
+   setStreamOptions -portn 4 -startId 1 -endId 1 -type "vlan" \
+         -optionVal {{vlanID 0701} {protocolTagId 33024}}
+   set optionsList ""
+   lappend optionsList "sa \"00 A3 F2 00 00 01\""
+   lappend optionsList "da \"00 A1 F1 00 00 01\""
+   lappend optionsList "frameType \"81 00\""
+   lappend optionsList "enable true"
+   lappend optionsList "dma advance"
+   lappend optionsList "numFrames 10"
+   setStreamOptions -portn 4 -startId 1 -endId 1 -type "stream" \
+         -optionVal $optionsList
+   setStreamOptions -portn 4 -startId 1 -endId 1 -type "ip" \
+         -optionVal {{sourceIpAddr "4.4.4.2"} {destIpAddr "1.1.1.2"}}
+
+   #S11) PORT Z > SA=Z, DA=X, Ethertype=0800  VID=50
+   #                    (known unicast, tagged over PW)
+   createStreams -portn 4 -startId 2 -endId 2 -name S11 -type "ipv4_udp"
+   set optionsList ""
+   lappend optionsList "sa \"00 A3 F2 00 00 01\""
+   lappend optionsList "da \"00 A1 F2 00 00 01\""
+   lappend optionsList "frameType \"08 00\""
+   lappend optionsList "enable true"
+   lappend optionsList "dma advance"
+   lappend optionsList "numFrames 10"
+   setStreamOptions -portn 4 -startId 2 -endId 2 -type "stream" \
+         -optionVal $optionsList
+   setStreamOptions -portn 4 -startId 2 -endId 2 -type "ip" \
+         -optionVal {{sourceIpAddr "3.3.3.2"} {destIpAddr "2.2.2.2"}}
+
+   createStreams -portn 4 -startId 3 -endId 3 -name S113 -type "ipv4_udp"
+   setStreamOptions -portn 4 -startId 3 -endId 3 -type "protocol" \
+         -optionVal {{enable802dot1qTag true}}
+   setStreamOptions -portn 4 -startId 3 -endId 3 -type "vlan" \
+         -optionVal {{vlanID 0701} {protocolTagId 34984}}
+   set optionsList ""
+   lappend optionsList "sa \"00 A3 F2 00 00 01\""
+   lappend optionsList "da \"00 A1 F1 00 00 01\""
+   lappend optionsList "frameType \"88 a8\""
+   lappend optionsList "enable true"
+   lappend optionsList "dma advance"
+   lappend optionsList "numFrames 10"
+   setStreamOptions -portn 4 -startId 3 -endId 3 -type "stream" \
+         -optionVal $optionsList
+   setStreamOptions -portn 4 -startId 3 -endId 3 -type "ip" \
+         -optionVal {{sourceIpAddr "4.4.4.2"} {destIpAddr "1.1.1.2"}}
+
+   #S12) PORT W > SA=W, DA=X, Ethertype=0800
+   #                    (known unicast, untagged to local port)
+   createStreams -portn 1 -startId 6 -endId 6 -name S12 -type "ipv4_udp"
+   set optionsList ""
+   lappend optionsList "sa \"00 A1 F1 00 00 01\""
+   lappend optionsList "da \"00 A1 F2 00 00 01\""
+   lappend optionsList "frameType \"08 00\""
+   lappend optionsList "enable true"
+   lappend optionsList "dma firstLoopCount "
+   lappend optionsList "loopCount 1"
+   lappend optionsList "numFrames 10"
+   setStreamOptions -portn 1 -startId 6 -endId 6 -type "stream" \
+         -optionVal $optionsList
+   setStreamOptions -portn 1 -startId 6 -endId 6 -type "ip" \
+         -optionVal {{sourceIpAddr "1.1.1.2"} {destIpAddr "2.2.2.2"}}
+
+   #S13) PORT X > SA=X, DA=W, Ethertype=8100  VID=10
+   #                    (known unicast, tagged to local port)
+   createStreams -portn 2 -startId 3 -endId 3 -name S13 -type "ipv4_udp"
+   setStreamOptions -portn 2 -startId 3 -endId 3 -type "protocol" \
+         -optionVal {{enable802dot1qTag true}}
+   setStreamOptions -portn 2 -startId 3 -endId 3 -type "vlan" \
+         -optionVal {{vlanID 0601} {protocolTagId 33024}}
+   set optionsList ""
+   lappend optionsList "sa \"00 A1 F2 00 00 01\""
+   lappend optionsList "da \"00 A1 F1 00 00 01\""
+   lappend optionsList "frameType \"81 00\""
+   lappend optionsList "enable true"
+   lappend optionsList "dma advance "
+   lappend optionsList "numFrames 10"
+   setStreamOptions -portn 2 -startId 3 -endId 3 -type "stream" \
+         -optionVal $optionsList
+   setStreamOptions -portn 2 -startId 3 -endId 3 -type "ip" \
+         -optionVal {{sourceIpAddr "2.2.2.2"} {destIpAddr "1.1.1.2"}}
+
+
+   #S13.5)  PORT X > SA=X, DA=(Broadcast), protocolTagId=88a8(34984) VID=601
+   #                    (tagged broadcast on tagged port)
+   createStreams -portn 2 -startId 4 -endId 4 -name S135 -type "ipv4_udp"
+   setStreamOptions -portn 2 -startId 4 -endId 4 -type "protocol" \
+         -optionVal {{enable802dot1qTag true} }
+   setStreamOptions -portn 2 -startId 4 -endId 4 -type "vlan" \
+         -optionVal {{vlanID 0601} {protocolTagId 34984}}
+   setStreamOptions -portn 2 -startId 4 -endId 4 -type "stream" \
+         -optionVal {{sa "00 A1 F2 00 00 01"} {da "FF FF FF FF FF FF"} \
+         {frameType "88 a8"} {enable true} {dma firstLoopCount} {loopCount 1} {numFrames 10}}
+   setStreamOptions -portn 2 -startId 4 -endId 4 -type "ip" \
+         -optionVal {{sourceIpAddr "2.2.2.2"} {destIpAddr "255.255.255.255"}}
+
+   #
+   # PORT  5 6 SETUP
+   #
+   if {[info exists DUT3_CONNECT]} {
+        #S8)  PORT Y > SA=Y, DA=W, Ethertype=0800
+        #                    (known unicast, untagged over PW)
+        createStreams -portn 5 -startId 1 -endId 1 -name S8 -type "ipv4_udp"
+        set optionsList ""
+        lappend optionsList "sa \"00 A3 F1 00 00 01\""
+        lappend optionsList "frameType \"08 00\""
+        lappend optionsList "enable true"
+        lappend optionsList "da \"00 A1 F1 00 00 01\""
+        lappend optionsList "dma advance"
+        lappend optionsList "numFrames 10"
+        setStreamOptions -portn 5 -startId 1 -endId 1 -type "stream" \
+         -optionVal $optionsList
+        setStreamOptions -portn 5 -startId 1 -endId 1 -type "ip" \
+         -optionVal {{sourceIpAddr "3.3.3.2"} {destIpAddr "1.1.1.2"}}
+        
+        #S9)  PORT Y > SA=Y, DA=X, Ethertype=0800
+        #                    (known unicast, untagged over PW)
+        createStreams -portn 5 -startId 2 -endId 2 -name S9 -type "ipv4_udp"
+        set optionsList ""
+        lappend optionsList "sa \"00 A3 F1 00 00 01\""
+        lappend optionsList "da \"00 A1 F2 00 00 01\""
+        lappend optionsList "frameType \"08 00\""
+        lappend optionsList "enable true"
+        lappend optionsList "dma firstLoopCount "
+        lappend optionsList "loopCount 1"
+        lappend optionsList "numFrames 10"
+        setStreamOptions -portn 5 -startId 2 -endId 2 -type "stream" \
+         -optionVal $optionsList
+        setStreamOptions -portn 5 -startId 2 -endId 2 -type "ip" \
+         -optionVal {{sourceIpAddr "3.3.3.2"} {destIpAddr "2.2.2.2"}}
+        
+        #S10) PORT Z > SA=Z, DA=W, Ethertype=8100  VID=50
+        #                    (known unicast, tagged over PW)
+        createStreams -portn 6 -startId 1 -endId 1 -name S10 -type "ipv4_udp"
+        setStreamOptions -portn 6 -startId 1 -endId 1 -type "protocol" \
+         -optionVal {{enable802dot1qTag true}}
+        setStreamOptions -portn 6 -startId 1 -endId 1 -type "vlan" \
+         -optionVal {{vlanID 0801}}
+        set optionsList ""
+        lappend optionsList "sa \"00 A3 F2 00 00 01\""
+        lappend optionsList "da \"00 A1 F1 00 00 01\""
+        lappend optionsList "frameType \"81 00\""
+        lappend optionsList "enable true"
+        lappend optionsList "dma advance"
+        lappend optionsList "numFrames 10"
+        setStreamOptions -portn 6 -startId 1 -endId 1 -type "stream" \
+         -optionVal $optionsList
+        setStreamOptions -portn 6 -startId 1 -endId 1 -type "ip" \
+         -optionVal {{sourceIpAddr "4.4.4.2"} {destIpAddr "1.1.1.2"}}
+        
+        #S11) PORT Z > SA=Z, DA=X, Ethertype=0800  VID=50
+        #                    (known unicast, tagged over PW)
+        createStreams -portn 6 -startId 2 -endId 2 -name S11 -type "ipv4_udp"
+        set optionsList ""
+        lappend optionsList "sa \"00 A3 F2 00 00 01\""
+        lappend optionsList "da \"00 A1 F2 00 00 01\""
+        lappend optionsList "frameType \"08 00\""
+        lappend optionsList "enable true"
+        lappend optionsList "dma firstLoopCount"
+        lappend optionsList "loopCount 1"
+        lappend optionsList "numFrames 10"
+        setStreamOptions -portn 6 -startId 2 -endId 2 -type "stream" \
+         -optionVal $optionsList
+        setStreamOptions -portn 6 -startId 2 -endId 2 -type "ip" \
+         -optionVal {{sourceIpAddr "3.3.3.2"} {destIpAddr "2.2.2.2"}}
+   }
+
+   #
+   # PORT  7 8 SETUP
+   #
+   if {[info exists DUT4_CONNECT]} {
+        #S8)  PORT Y > SA=Y, DA=W, Ethertype=0800
+        #                    (known unicast, untagged over PW)
+        createStreams -portn 7 -startId 1 -endId 1 -name S8 -type "ipv4_udp"
+        set optionsList ""
+        lappend optionsList "sa \"00 A3 F1 00 00 01\""
+        lappend optionsList "frameType \"08 00\""
+        lappend optionsList "enable true"
+        lappend optionsList "da \"00 A1 F1 00 00 01\""
+        lappend optionsList "dma advance"
+        lappend optionsList "numFrames 10"
+        setStreamOptions -portn 7 -startId 1 -endId 1 -type "stream" \
+         -optionVal $optionsList
+        setStreamOptions -portn 7 -startId 1 -endId 1 -type "ip" \
+         -optionVal {{sourceIpAddr "3.3.3.2"} {destIpAddr "1.1.1.2"}}
+        
+        #S9)  PORT Y > SA=Y, DA=X, Ethertype=0800
+        #                    (known unicast, untagged over PW)
+        createStreams -portn 7 -startId 2 -endId 2 -name S9 -type "ipv4_udp"
+        set optionsList ""
+        lappend optionsList "sa \"00 A3 F1 00 00 01\""
+        lappend optionsList "da \"00 A1 F2 00 00 01\""
+        lappend optionsList "frameType \"08 00\""
+        lappend optionsList "enable true"
+        lappend optionsList "dma firstLoopCount "
+        lappend optionsList "loopCount 1"
+        lappend optionsList "numFrames 10"
+        setStreamOptions -portn 7 -startId 2 -endId 2 -type "stream" \
+         -optionVal $optionsList
+        setStreamOptions -portn 7 -startId 2 -endId 2 -type "ip" \
+         -optionVal {{sourceIpAddr "3.3.3.2"} {destIpAddr "2.2.2.2"}}
+        
+        #S10) PORT Z > SA=Z, DA=W, Ethertype=8100  VID=50
+        #                    (known unicast, tagged over PW)
+        createStreams -portn 8 -startId 1 -endId 1 -name S10 -type "ipv4_udp"
+        setStreamOptions -portn 8 -startId 1 -endId 1 -type "protocol" \
+         -optionVal {{enable802dot1qTag true}}
+        setStreamOptions -portn 8 -startId 1 -endId 1 -type "vlan" \
+         -optionVal {{vlanID 0901}}
+        set optionsList ""
+        lappend optionsList "sa \"00 A3 F2 00 00 01\""
+        lappend optionsList "da \"00 A1 F1 00 00 01\""
+        lappend optionsList "frameType \"81 00\""
+        lappend optionsList "enable true"
+        lappend optionsList "dma advance"
+        lappend optionsList "numFrames 10"
+        setStreamOptions -portn 8 -startId 1 -endId 1 -type "stream" \
+         -optionVal $optionsList
+        setStreamOptions -portn 8 -startId 1 -endId 1 -type "ip" \
+         -optionVal {{sourceIpAddr "4.4.4.2"} {destIpAddr "1.1.1.2"}}
+        
+        #S11) PORT Z > SA=Z, DA=X, Ethertype=0800  VID=50
+        #                    (known unicast, tagged over PW)
+        createStreams -portn 8 -startId 2 -endId 2 -name S11 -type "ipv4_udp"
+        set optionsList ""
+        lappend optionsList "sa \"00 A3 F2 00 00 01\""
+        lappend optionsList "da \"00 A1 F2 00 00 01\""
+        lappend optionsList "frameType \"08 00\""
+        lappend optionsList "enable true"
+        lappend optionsList "dma firstLoopCount"
+        lappend optionsList "loopCount 1"
+        lappend optionsList "numFrames 10"
+        setStreamOptions -portn 8 -startId 2 -endId 2 -type "stream" \
+         -optionVal $optionsList
+        setStreamOptions -portn 8 -startId 2 -endId 2 -type "ip" \
+         -optionVal {{sourceIpAddr "3.3.3.2"} {destIpAddr "2.2.2.2"}}
+   }
+    global OspfMplsCleanup
+    if { [info exists OspfMplsCleanup] && $OspfMplsCleanup == "true" } {
+    SendACmd        "disable ospf"
+    sleep 2         ;# exos
+    SendACmd        "disable mpls"
+    SendACmd        "unconfigure mpls"
+    sleep 2         ;# exos
+    SendACmd        "configure ospf routerid 0.0.0.0"
+    SendACmd        "clear fdb"
+    }
+    #SendACmd        "delete vlan $vlanName"
+    #if {$vlanArea != "0.0.0.0" } { SendACmd "delete ospf area $vlanArea"}
+}
+
+################################################################## 
+# Procedure Name: DecodeMPLSFrameLabel
+#   
+# Description:
+#          -get label |  type
+#
+# Input args:  args
+# Output args: 
+# Return value: 
+# Typical usage:
+# set Mpls_Type_2 [DecodeMPLSFrameLabel -get type -frame "$frame"]
+# set Mpls_Ingress_Label [DecodeMPLSFrameLabel -get label -frame "$frame"]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: CaptureTraffic
+##################################################################
+proc DecodeMPLSFrameLabel { args } {
+
+   parse_args DecodeMPLSFrameLabel $args {
+     frame    ""
+     get      "type"
+   }
+
+   set type [string range $frame 36 40]
+   switch -- $type \
+      "81 00" {
+          if {$get == "type"} {
+              return [string range $frame 48 52]
+          }
+          if {$get == "label"} {
+              return [string range $frame 54 60]
+          }
+          return -1   
+   } default {
+      if {$get == "type"} {
+          return [string range $frame 36 40]
+      }
+      if {$get == "label"} {
+          return [string range $frame 42 48]
+      }
+      return -1
+   }
+}
+

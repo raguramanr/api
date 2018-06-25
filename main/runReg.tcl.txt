@@ -1,0 +1,66 @@
+#!/usr/bin/expect --
+
+source ../Lib/parse_args.tcl
+source ./runRegAllLocal.tcl
+
+
+proc print_usage {} {
+
+    global regpc
+
+    puts "usage:"
+    puts "runReg.tcl -targetpc <Regression PC> \[-cfg <user config>\]\
+	    \[-image <DUT image>\]"
+    puts "\r"
+    puts "     -targetpc: Name of regression PC as defined in given config file"
+    puts "                Values: [array names regpc]"
+    puts "     -cfg:      User defined cfg file to use in place of default"
+    puts "                runReg.cfg.  See runReg.cfg for format."
+    puts "     -image:    DUT image to download. i.e. 710b34, 601b31, etc."
+}
+
+
+
+parse_args runRegAll.tcl $argv {
+    targetpc ""
+    cfg ""
+    display ""
+    image ""
+}
+
+# Default Config file
+set cfgFile "./runReg.cfg"
+
+if { $cfg != "" } {
+    set cfgFile $cfg
+}
+
+if [file exists $cfgFile] {
+    source $cfgFile
+} else {
+    puts "!!! Cfg file $$cfgFile NOT FOUND !!!"
+    print_usage
+    exit
+}
+
+
+if {$image == ""} {
+    set image 0
+}
+
+if { [lsearch [array names regpc] "$targetpc"] == -1} {
+    puts "!!! Invalid targetpc !!!"
+    puts "Choose from [array names regpc]"
+    puts "As defined in $cfgFile."
+    print_usage
+    exit
+} 
+
+# We assume targetpc valid from last check
+set display [lindex $regpc($targetpc) 2]
+
+cd $autoScriptPath
+
+puts "DEBUG: targetpc:$targetpc display:$display image:$image"
+
+runRegAllLocal $targetpc $display $image

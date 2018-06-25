@@ -1,0 +1,846 @@
+#############################################################################
+# proc GetConfigureBpeSlots
+#
+#
+#
+#
+#
+#
+# set vpexSlotNums [GetConfiguredBpeSlots]
+#
+#
+#############################################################################
+proc GetConfiguredBpeSlots {} {
+    global DUTs_info CFG_PLATFORM whichDutNow
+
+    global DUT${whichDutNow}_CONNECT
+    Login [set DUT${whichDutNow}_CONNECT] -masterCheck 0 -CheckOperational 0
+
+    set listElem ""
+    set slotNumLength 3
+    set startCol 9
+    set endCol [expr $startCol+$slotNumLength]
+    lappend listElem "$startCol $endCol"
+    set slotNumString [GetColumnValues "show vpex" $listElem "=====" "^$|#|>"]
+    result_debug "The available slot numbers are $slotNumString"
+    set uniqueSlotList ""
+    foreach slot [lindex $slotNumString 0] {
+        puts "slot $slot"
+        if {[lsearch $uniqueSlotList $slot] < 0} {
+            lappend uniqueSlotList $slot
+        }
+    }
+    set sList [lsort -integer -increasing $uniqueSlotList]
+    if {[llength $sList] == 0} {
+        return "INVALID"
+    } else {
+        puts "slot list $sList"
+        return $sList
+    }
+}
+#############################################################################
+#
+#
+#    Verification assumes cfg follows rules.. 
+#       - First index is the root of the share group 
+#
+#
+#############################################################################
+proc VerifyActiveVpexCfg {args} {
+    global MAIN whichDutNow cascadePortList DUTs_info
+
+    parse_args VerifyActiveVpexCfg $args {
+        mode  "report"
+    }
+
+    set platform [GetPlatform DUT$whichDutNow]
+    if {![regexp -nocase "vpex" $platform]} {
+        puts "$platform is not a VPEX"
+        return 1
+    }
+    set aSlots [GetConfiguredBpeSlots];# Returns a list of BPE slots
+    set slotsConfigured 1
+    foreach pMap $cascadePortList {
+        if {[lindex $pMap 0] == $whichDutNow} {
+            if {[lsearch $aSlots [lindex $pMap 2]] < 0} {
+                # A slot set to be cfg'd in the cfg file is not in active cfg list
+                set slotsConfigured 0
+            }
+            if {![info exists cascadeTrunkListPorts([lindex $pMap 2])]} {
+                set cascadeTrunkListPorts([lindex $pMap 2]) [lindex $pMap 1];# casc port#1 for a slot
+                # Create list of config CLI from the cfg file.. only used if slotsConfigured 0
+                lappend cascadeClis "[lindex $pMap 1] slot [lindex $pMap 2]"
+            } else {
+                # increment the number of links from the controller to the BPE
+                lappend cascadeTrunkListPorts([lindex $pMap 2]) [lindex $pMap 1];# additional casc ports for a slot
+            }
+        }
+    }
+    if {!$slotsConfigured && $mode == "fix"} {
+        foreach pMap $cascadePortList {
+            if {[lindex $pMap 0] == $whichDutNow} {
+                if {[llength $cascadeTrunkListPorts([lindex $pMap 2])] > 1} {
+                    SendACmd "enable sharing [lindex $cascadeTrunkListPorts([lindex $pMap 2]) 0] group $cascadeTrunkListPorts([lindex $pMap 2]) lacp"
+                }
+            }
+        }
+        foreach cli $cascadeClis {
+            SendACmd "configure vpex ports $cli"
+        }
+        set aSlots [GetConfiguredBpeSlots]
+        set slotsConfigured 1
+        foreach pMap $cascadePortList {
+            if {[lindex $pMap 0] == $whichDutNow} {
+                if {[lsearch $aSlots [lindex $pMap 2]] < 0} {
+                    set slotsConfigured 0
+                }
+            }
+        }
+        if {$slotsConfigured} {
+            return 1
+        } else {
+            return 0
+        }
+    } elseif {!$slotsConfigured} {
+        return 0
+    } else {
+        return 1
+    }
+}
+# ###########################################################################
+# proc VerifyBpeSlotsOperational
+#
+#
+#
+#
+# ###########################################################################
+proc VerifyBpeSlotsOperational {args} {
+    global MAIN whichDutNow
+
+    parse_args VerifyBpeSlotsOperational $args {
+        maxTime    "200"
+    }
+
+    if {![VerifyActiveVpexCfg -mode "fix"]} {
+        return 0
+    }
+
+    set slotList [GetUniqueCfgCascadeSlots]
+
+    if {[llength $slotList] == 0} {
+        return 1
+    }
+
+    foreach slot $slotList {
+        lappend scheck "{Slot-$slot .*Operational} exist"
+    }
+    set val [CheckKeyValue "show slot" $scheck -time {s: 1 i: 10 d: 200 f: 200 r}]
+
+    if {$val != "ok"} {
+        return 0
+    } else {
+        return 1
+    }
+}
+
+# ###########################################################################
+# proc GetACascadePort
+#
+#
+#
+#
+# ###########################################################################
+proc GetACascadePort {dut {index 1}} {
+    global cascadePortList
+
+    foreach portMap $cascadePortList {
+        if {[lindex $portMap 0] == $dut} {
+            lappend portList $portMap
+        }
+    }
+    set port [lindex [lindex $portList [expr $index - 1]] 1]
+
+    return $port
+}
+
+# ###########################################################################
+# proc GetACascadeExtSlot
+#
+#
+#
+#
+# ###########################################################################
+proc GetACascadeExtSlot {dut {index 1}} {
+    global cascadePortList
+
+    foreach portMap $cascadePortList {
+        if {[lindex $portMap 0] == $dut} {
+            lappend portList $portMap
+        }
+    }
+    set slot [lindex [lindex $portList [expr $index - 1]] 2]
+
+    return $slot
+}
+############################################################################
+# proc GetAltCascadePort
+#
+#
+#
+#
+############################################################################
+proc GetAltCascadePort {dut {index 1}} {
+    global altCascadePortList
+
+    foreach portMap $altCascadePortList {
+        if {[lindex $portMap 0] == $dut} {
+            lappend portList $portMap
+        }
+    }
+    set port [lindex [lindex $portList [expr $index - 1]] 1]
+
+    return $port
+}
+############################################################################
+# proc GetAltCascadeExtSlot
+#
+#
+#
+#
+############################################################################
+proc GetAltCascadeExtSlot {dut {index 1}} {
+    global altCascadePortList
+
+    foreach portMap $altCascadePortList {
+        if {[lindex $portMap 0] == $dut} {
+            lappend portList $portMap
+        }
+    }
+    set slot [lindex [lindex $portList [expr $index - 1]] 2]
+
+    return $slot
+}
+#############################################################################
+# Procedure: GetCascadePortNumber
+#
+# Get a specific cascade port that connects to the slot of a passed in
+# portId or dut portNumber
+#
+# Use logical portId for ixia connected ports or dut/port for a trunk port
+#
+# Using the "native" option will return the topmost cascade port in the path (on
+# the Controlling Bridge) instead only the direct upstream cascade port.  This 
+# is useful for things like checking ACL resources in a casacaded BPE topology.
+#
+# Defined in the cfg file cascadePortList { "1 1:72 33" "1 1:23 34"};
+#
+#
+#
+# Examples:
+# dev> GetCascadePortNumber -portId 2
+# Get cascade port for DUT 1 port 45:2
+# 1:45
+# dev> GetCascadePortNumber -portId 3
+# Get cascade port for DUT 1 port 45:3
+# 1:45
+# dev> GetCascadePortNumber -portId 4
+# Get cascade port for DUT 1 port 45:4
+# 1:45
+# dev> GetCascadePortNumber -portId 11
+# Not a VPEX/BPE port
+# dev> GetCascadePortNumber -dut 1 -port 1:3
+# Not a VPEX/BPE port
+# dev> GetCascadePortNumber -dut 1 -port 45:7
+# 1:45
+#
+# Usage:  Disable/Enable the slot connect to portId 2
+#
+#         set cascadePort [GetCascadePortNumber -portId 2]
+#         SendACmd "disable port [GetCascadePortNumber -portId 2]"
+#         SendACmd "enable port [GetCascadePortNumber -portId 2]"
+#         VerifyBpeOperational
+#
+#############################################################################
+proc GetCascadePortNumber {args} {
+    global cascadePortList portMappingList
+    parse_args GetCascadePortNumber $args {
+        dut "null"
+        port "null"
+        portId "null"
+        native "null"
+    }
+
+    if {$dut=="null" && $port != "null"} {
+        puts "You must specify both the dut and the port in the GetCascadePortNumber proc"
+    }
+    if {$dut!="null" && $port != "null"} {
+        if {![CheckForBpePorts -dut $dut -dutPortString $port -match "all"]} {
+            puts "Not a VPEX/BPE port"
+            return
+        } else {
+            if {$native == 1} {
+                puts "Get native cascade port for DUT $dut port $port"
+                set slot [lindex [split $port ":"] 0]
+                # Repeatedly walk cascadePortList finding parent slot each time
+                for {set i 0} {$i < [llength $cascadePortList]} {incr i} {
+                    foreach portMap $cascadePortList {
+                        if {[lindex $portMap 0] == $dut && [lindex $portMap 2] == $slot} {
+                            set slot [lindex [split [lindex $portMap 1] ":"] 0]
+                        }
+                        if {$slot == "1"} {
+                            return [lindex $portMap 1]
+                        }
+                    }
+                }
+            } else {
+                puts "Get cascade port for DUT $dut port $port"
+                set sList [split $port ":"]
+                set s [lindex $sList 0]
+                foreach portMap $cascadePortList {
+                    if {[lindex $portMap 0] == $dut && [lindex $portMap 2] == $s} {
+                        return [lindex $portMap 1]
+                    }
+                }
+            }
+        }
+    }
+    if {$portId != "null"} {
+        if {![CheckForBpePorts -portIdList $portId -match "all"]} {
+            puts "Not a VPEX/BPE port"
+            return
+        } else {
+            foreach pm $portMappingList {
+                if {[lindex $pm 0] == $portId} {
+                    set dut [lindex $pm 2]
+                    set port [lindex $pm 1]
+                    break
+                }
+            }
+            if {$native == 1} {
+                puts "Get native cascade port for DUT $dut port $port"
+                set slot [lindex [split $port ":"] 0]
+                # Repeatedly walk cascadePortList finding parent slot each time
+                for {set i 0} {$i < [llength $cascadePortList]} {incr i} {
+                    foreach portMap $cascadePortList {
+                        if {[lindex $portMap 0] == $dut && [lindex $portMap 2] == $slot} {
+                            set slot [lindex [split [lindex $portMap 1] ":"] 0]
+                        }
+                        if {$slot == "1"} {
+                            return [lindex $portMap 1]
+                        }
+                    }
+                }
+            } else {
+                puts "Get cascade port for DUT $dut port $port"
+                set sList [split $port ":"]
+                set s [lindex $sList 0]
+                foreach portMap $cascadePortList {
+                    if {[lindex $portMap 0] == $dut && [lindex $portMap 2] == $s} {
+                        return [lindex $portMap 1]
+                    }
+                }
+            }
+        }
+    }
+}
+# ###########################################################################
+# proc GetUniqueCfgCascadeSlots 
+#
+#
+#
+#
+# ###########################################################################
+proc GetUniqueCfgCascadeSlots {} {
+    global cascadePortList whichDutNow
+
+    set dut $whichDutNow
+
+    if {![info exists cascadePortList]} {
+        return ""
+    }
+
+    foreach portMap $cascadePortList {
+        if {[lindex $portMap 0] == $dut} {
+            lappend slotList [lindex $portMap 2]
+        }
+    }
+    if {![info exists slotList]} {
+        return ""
+    }
+
+    set uniqueSlotList ""
+    foreach slot $slotList {
+        if {[lsearch $uniqueSlotList $slot] < 0} {
+            lappend uniqueSlotList $slot
+        }
+    }
+    set sList [lsort -integer -increasing $uniqueSlotList]
+    if {[llength $sList] == 0} {
+        return "INVALID"
+    } else {
+        return $sList
+    }
+    return $sList
+}
+##########################################################################
+# Procedure: CheckForBpePorts
+#
+# -dut = dut
+# -dutPortString = actual dut port number 1:33 35:2 7 etc.
+# -portIdList = logical port id
+# -match = any | all | none
+#
+# Examples:
+# CheckForBpePorts -dut 1 -dutPortString  "[MapDUTPortId 1,2,3,4],[GetATrunkPort 1 2]"
+# returns -> 1
+#
+# CheckForBpePorts -dut 1 -match "all"
+#    -dutPortString  "[MapDUTPortId 1,2,3,4],[GetATrunkPort 1 2]"
+# returns -> 0  if one of the ports is not a bpe
+#
+# CheckForBpePorts -portIdList "1 3"   returns -> 1  if any are bpe
+# CheckForBpePorts -portIdList "1 3" -match "all" returns -> 1 if all are bpe
+#
+##########################################################################
+proc CheckForBpePorts {args} {
+    global bpeSlot
+    parse_args CheckForBpePorts $args {
+        dut "null"
+        dutPortString "null"
+        portIdList "1"
+        match "all"
+    }
+    # note lower proc handles input arg error checking
+    set bpeC 0
+    set notC 0
+    set slotTypes [GetPortSysTypes -dut $dut -dutPortString $dutPortString \
+           -portIdList $portIdList]
+    foreach s $slotTypes {
+        if {[regexp -nocase $s $bpeSlot]} {
+            incr bpeC
+        } else {
+            incr notC
+        }
+    }
+    if {$match == "any" && $bpeC > 0} {
+        return 1;
+    } elseif {$match == "none" && $bpeC == 0 && $notC > 0} {
+        return 1;
+    } elseif {$match == "all" && $bpeC > 0 && $notC == 0} {
+        return 1;
+    } else {
+        return 0;
+    }
+}
+##########################################################################
+# Procedure: VerifyBpeOperational
+#
+# Possible temp procedure to make sure bpes are operational and ports are
+#    but.  Bug is keeping ports from coming up periodically.
+#
+#
+##########################################################################
+proc VerifyBpeOperational {} {
+    global whichDutNow
+
+    set platform [GetPlatform DUT${whichDutNow}]
+    if [regexp -nocase "vpex" $platform] {
+        CheckOperational
+        _verifyPortMappingPortsActive
+    }
+}
+##########################################################################
+# Procedure: CheckVpexFeatureSkip
+#
+# Intended to go in an init file for cases in which the completetests.lst
+#      Module Skip option is not detailed enough.
+#
+# There are EASY skip args, and more complex if you are looking to verify
+#      something like trunk 1 and 2 can't be bpe
+#
+#      Easy args:
+#        skipIfVpex - true to skip
+#        requireVpex - true to skip
+#
+# Since support for slot 1 controller vs ext slots varies a feature may
+#      need to be skipped if certain ports are on ext slots when they need
+#      to be on the controller, or visa versa..
+# 
+# You can use EITHER port numbers with $dut and PortsLists, OR logical
+#      PortIdList.  Won't let you mix.
+#        dut            "null"
+#        bpePortIdList  - must be bpe connected portIds
+#        bpePortsStr    - must be bpe switch ports
+#        ctlrPortIdList - must be slot 1 connected portIds
+#        ctlrPortsStr   - must be slot 1 switch ports
+#   Examples:
+#
+#   CheckVpexFeatureSkip -dut "1 2" -skipIfVpex "true" -testNo $testNo -time1 $time1
+#   CheckVpexFeatureSkip -dut "1" -requireVpex "true" -testNo $testNo -time1 $time1
+#   CheckVpexFeatureSkip -dut "1" -bpePortsStr "[MapDUTPortId 1,2,3,4]" -ctlrPortsStr "[GetATrunkPort 1 2]" -testNo $testNo -time1 $time1
+#   CheckVpexFeatureSkip -bpePortIdList "1 3 4" -ctlrPortIdList "2" -testNo $testNo -time1 $time1 -> all bpe except portid2 on slot1
+#   CheckVpexFeatureSkip -ctlrPortIdList "1 2" -testNo $testNo -time1 $time1 -> portid 1,2 must be on slot1
+#
+##########################################################################
+proc CheckVpexFeatureSkip {args} {
+    parse_args CheckVpexFeatureSkip $args {
+        dut            "null"
+        skipIfVpex     "false"
+        requireVpex    "false"
+        bpePortIdList  "null"
+        bpePortsStr    "null"
+        ctlrPortIdList  "null"
+        ctlrPortsStr    "null"
+        testNo         "null"
+        time1          "null"
+    }
+
+    global DUTs_info
+
+    #
+    # Enforce the rules for this proc
+    #
+    if {($testNo == "null" || $time1 == "null")} {
+        puts "\n\nThe -testNo and -time1 arguments are required to close the feature files.\n"
+        exit;
+    }    
+    if {$dut == "null" && ($requireVpex != "false" || $skipIfVpex != "false")} {
+        puts "\n\nThe dut must be specified to use the easy skip options"
+        puts "It can be a list -dut \"1 2 3\" if necessary"
+        exit;
+    }
+    if {$requireVpex == "true" && $skipIfVpex == "true"} {
+        puts "\n\nYou can't have it both ways... skip it or run it?? :) \n"
+        exit;
+    }
+    if {($bpePortIdList != "null" || $ctlrPortIdList != "null") && \
+        ($bpePortsStr != "null" || $ctlrPortsStr != "null")} {
+        puts "\n\nEither use LOGICAL portIds  OR  switch port numbers.  Not both!!!\n"
+        exit;
+    }
+    if {($bpePortsStr != "null" || $ctlrPortsStr != "null")} {
+        if {$dut == "null"} {
+            puts "\n\nYou must enter a single DUT number that the ports are on: -dut 1   !!!\n"
+            exit;
+        }
+        if {[llength $dut] > 1} {
+            puts "\n\nYou must enter a single DUT number that the ports are on: -dut 1   !!!\n"
+            exit;
+        }
+    }
+    if {($bpePortIdList != "null" || $ctlrPortIdList != "null")} {
+        foreach ep $ctlrPortIdList {
+            if {[lsearch $bpePortIdList $ep] >= 0} {
+                puts "\n\nThere is an overlap in your include and exlude portId list  !!!\n"
+                exit;
+            }
+        }
+    }
+
+    set exitTests 0;
+    # Easy skip options
+    if {($requireVpex != "false" || $skipIfVpex != "false")} {
+        foreach d $dut {
+            set platform [GetPlatform DUT$d]
+            if {$requireVpex == "true" && ![regexp -nocase "vpex" $platform]} {
+                incr exitTests
+                set mess "is NOT a VPEX platform"
+            }
+            if {$skipIfVpex == "true" && [regexp -nocase "vpex" $platform]} {
+                incr exitTests
+                set mess "IS a VPEX platform"
+            }
+        }
+    }
+    if {($bpePortIdList != "null" || $ctlrPortIdList != "null")} {
+        if {$bpePortIdList != "null" && ![CheckForBpePorts -portIdList $bpePortIdList -match "all"]} {
+            incr exitTests
+            set mess "one of the required portIds is NOT a BPE port"
+        }
+        if {$ctlrPortIdList != "null" && ![CheckForBpePorts -portIdList $ctlrPortIdList -match "none"]} {
+            incr exitTests
+            set mess "one or more required Controller portIds is a BPE port"
+        }
+    }
+    if {($bpePortsStr != "null" || $ctlrPortsStr != "null")} {
+        if {$bpePortsStr != "null" && ![CheckForBpePorts -dut $dut -dutPortString "$bpePortsStr" -match "all"]} {
+            incr exitTests
+            set mess "one of the BPE required ports is NOT a BPE port"
+        }
+        if {$ctlrPortsStr != "null" && ![CheckForBpePorts -dut $dut -dutPortString "$ctlrPortsStr" -match "none"]} {
+            incr exitTests
+            set mess "one or more required Controller ports is a BPE port"
+        }
+    }
+
+    if {$exitTests > 0} {
+        result_debug "Skipped Test: $dut $mess"
+        report_start_test "Skipped Test: DUT $dut $mess"
+        result_skip "Skipped Test: DUT $dut $mess"
+        report_end_test
+        set time2 [clock seconds]
+        result_p "Time for $testNo = [expr $time2-$time1] secs\n\n"
+        close_result_file
+        report_end_test
+        return -code return testSkipped
+    } else {
+        result_debug "VPEX/BPE requirements met.  Continue with Test"
+        return 1;
+    }
+}
+##########################################################################
+# Procedure: CheckVpexTestCaseSkip
+#
+# Intended to go at the top of a test case that has port requirements
+# related to vpex.
+#
+# There are EASY skip args, and more complex if you are looking to verify
+#      something like trunk 1 and 2 can't be bpe
+#
+#      Easy args:
+#        skipIfVpex - true to skip
+#        requireVpex - true to skip
+#
+# Since support for slot 1 controller vs ext slots varies a test case may
+#      need to be skipped if certain ports are on ext slots when they need
+#      to be on the controller, or visa versa..
+#
+# You can use EITHER port numbers with $dut and PortsLists, OR logical
+#      PortIdList.  Won't let you mix.
+#        dut            "null"
+#        bpePortIdList  - must be bpe connected portIds
+#        bpePortsStr    - must be bpe switch ports
+#        ctlrPortIdList - must be slot 1 connected portIds
+#        ctlrPortsStr   - must be slot 1 switch ports
+#
+#   Examples:
+#
+#   CheckVpexTestCaseSkip -dut "1 2" -skipIfVpex "true" -testNo $testNo -time1 $time1
+#   CheckVpexTestCaseSkip -dut "1" -requireVpex "true" -testNo $testNo -time1 $time1
+#   CheckVpexTestCaseSkip -dut "1" -bpePortsStr "[MapDUTPortId 1,2,3,4]" -ctlrPortsStr "[GetATrunkPort 1 2]" -testNo $testNo -time1 $time1
+#   CheckVpexTestCaseSkip -ctlrPortIdList "1 2"  -testNo $testNo -time1 $time1 -> skip if portid 1,2 are not on slot1
+#   CheckVpexTestCaseSkip -bpePortIdList "1 2 3 4" -testNo $testNo -time1 $time1
+#
+##########################################################################
+proc CheckVpexTestCaseSkip {args} {
+    parse_args CheckVpexTestCaseSkip $args {
+        dut            "null"
+        skipIfVpex     "false"
+        requireVpex    "false"
+        bpePortIdList  "null"
+        bpePortsStr    "null"
+        ctlrPortIdList  "null"
+        ctlrPortsStr    "null"
+        note           ""
+        testNo         "null"
+        time1          "null"
+    }
+
+    global DUTs_info
+
+    #
+    # Enforce the rules for this proc
+    #
+    if {($testNo == "null" || $time1 == "null")} {
+        puts "\n\nThe -testNo and -time1 arguments are required to close the feature files.\n"
+        exit;
+    }   
+    if {$dut == "null" && ($requireVpex != "false" || $skipIfVpex != "false")} {
+        puts "\n\nThe dut must be specified to use the easy skip options"
+        puts "It can be a list -dut \"1 2 3\" if necessary"
+        exit;
+    }
+    if {$requireVpex == "true" && $skipIfVpex == "true"} {
+        puts "\n\nYou can't have it both ways... skip it or run it?? :) \n"
+        exit;
+    }
+    if {($bpePortIdList != "null" || $ctlrPortIdList != "null") && \
+        ($bpePortsStr != "null" || $ctlrPortsStr != "null")} {
+        puts "\n\nBe careful using LOGICAL portIds AND switch port numbers !!!\n"
+    }
+    if {($bpePortsStr != "null" || $ctlrPortsStr != "null")} {
+        if {$dut == "null"} {
+            puts "\n\nYou must enter a single DUT number that the ports are on: -dut 1   !!!\n"
+            exit;
+        }
+        if {[llength $dut] > 1} {
+            puts "\n\nYou must enter a single DUT number that the ports are on: -dut 1   !!!\n"
+            exit;
+        }
+    }
+    if {($bpePortIdList != "null" || $ctlrPortIdList != "null")} {
+        foreach ep $ctlrPortIdList {
+            if {[lsearch $bpePortIdList $ep] >= 0} {
+                puts "\n\nThere is an overlap in your include and exlude portId list  !!!\n"
+                exit;
+            }
+        }
+    }
+
+    set exitTests 0;
+    # Easy skip options
+    if {($requireVpex != "false" || $skipIfVpex != "false")} {
+        foreach d $dut {
+            set platform [GetPlatform DUT$d]
+            if {$requireVpex == "true" && ![regexp -nocase "vpex" $platform]} {
+                incr exitTests
+                set mess "is NOT a VPEX platform"
+            }
+            if {$skipIfVpex == "true" && [regexp -nocase "vpex" $platform]} {
+                incr exitTests
+                set mess "IS a VPEX platform"
+            }
+        }
+    }
+    if {($bpePortIdList != "null" || $ctlrPortIdList != "null")} {
+        if {$bpePortIdList != "null" && ![CheckForBpePorts -portIdList $bpePortIdList -match "all"]} {
+            incr exitTests
+            set mess "one of the required portIds is NOT a BPE port"
+        }
+        if {$ctlrPortIdList != "null" && ![CheckForBpePorts -portIdList $ctlrPortIdList -match "none"]} {
+            incr exitTests
+            set mess "one or more required Controller portIds is a BPE port"
+        }
+    }
+    if {($bpePortsStr != "null" || $ctlrPortsStr != "null")} {
+        if {$bpePortsStr != "null" && ![CheckForBpePorts -dut $dut -dutPortString "$bpePortsStr" -match "all"]} {
+            incr exitTests
+            set mess "one of the BPE required ports is NOT a BPE port"
+        }
+        if {$ctlrPortsStr != "null" && ![CheckForBpePorts -dut $dut -dutPortString "$ctlrPortsStr" -match "none"]} {
+            incr exitTests
+            set mess "one or more required Controller ports is a BPE port"
+        }
+    }
+
+    if {$exitTests > 0} {
+        set tree [ProcEvalTree]
+        set tLen [llength $tree]
+        if {[regexp -nocase "execute" [lindex $tree 0]]} {
+            if {$tLen > 3} {
+                set lev [expr $tLen - 2]
+            } else {
+                set lev 1
+            }
+        } else {
+            set lev [expr [info level] - 1]
+        }
+        if {$lev > 1 && $testNo == "dummy"} {
+            set time1 [clock seconds]
+            set testNo "skipProc"
+            CleanTestBedCfgs;
+            result_debug "I am returning info level $lev"
+            result_debug "Skipped Test from library proc. $mess"
+            report_start_test "Skipped Test from library proc: $mess"
+            result_skip "Skipped Test: $mess"
+            report_end_test
+            set time2 [clock seconds]
+            result_p "Time for $testNo = [expr $time2-$time1] secs\n\n"
+            close_result_file
+            report_end_test
+            return -code return -level $lev
+        } else {
+            result_debug "Skipped Test: $note $mess"
+            report_start_test "Skipped Test: $note $mess"
+            result_skip "Skipped Test: DUT $note $mess"
+            report_end_test
+            set time2 [clock seconds]
+            result_p "Time for $testNo = [expr $time2-$time1] secs\n\n"
+            close_result_file
+            report_end_test
+            return -code return
+        }
+    } else {
+        result_debug "Skip requirements okay.  Continue with Test"
+        return 1;
+    }
+}
+########################################################################################
+# Procedure: CascadeSharePort
+#
+# In cases where sharing is being disabled return a 1 if inPort is first index else 0
+#
+# We made need to just add a cascade share variable to the config file if more complex
+#   share scenarios than first cascade port in the cascade list are used
+#
+########################################################################################
+proc CascadeSharePort {dut inPort} {
+    global cascadePortList
+
+    if {![info exists cascadePortList]} {
+        return 0;
+    }
+
+    foreach portMap $cascadePortList {
+        if {[lindex $portMap 0] == $dut} {
+            if {[lindex $portMap 1] == $inPort} {
+                puts "Possible vpex Share $inPort";
+                return 1
+            } else {
+                return 0
+            }
+        }
+    }
+}
+# ###########################################################################
+# Procedure: GetCascadePortMapChain
+#
+# Returns a list describing the daisy chain of cascaded BPE slot for a given
+# DUT and cascade port.  List is sorted with root parent node at index 0.
+#
+# Returned list is in cascadePortList form:  {1 1:47 147} {1 147:51 151}
+#
+# ###########################################################################
+proc GetCascadePortMapChain {dut port} {
+    global cascadePortList
+
+    # create sub-list of cascade port on $dut
+    set subCascadePortList ""
+    foreach portMap $cascadePortList {
+        if {[lindex $portMap 0] == $dut} {
+            lappend subCascadePortList $portMap
+        }
+    }
+
+    # remove potential LAG ports from list (multiple cascade ports to same slot)
+    set uniquePortMapList ""
+    foreach portMap $subCascadePortList {
+        set slot [lindex $portMap 2]
+        if {[lsearch -regexp $subCascadePortList " $slot"] >= 0} {
+            lappend uniquePortMapList $portMap
+        }
+    }
+
+    # Initialize chainList with $port
+    foreach portMap $uniquePortMapList {
+        if {[lindex $portMap 1] == $port} {
+            lappend chainList $portMap
+            break
+        }
+    }
+    if {[llength $chainList] == 0} {
+        return "INVALID"
+    }
+
+    # Insert upstream cascade ports to chain
+    set curSlot [lindex [split [lindex [lindex $chainList 0] 1] :] 0]
+    while {$curSlot != 1} {
+        set value [lsearch -regexp $uniquePortMapList " $curSlot"]
+        if {$value > -1} {
+            set chainList [linsert $chainList 0 [lindex $uniquePortMapList $value]]
+        }
+        set curSlot [lindex [split [lindex [lindex $chainList 0] 1] :] 0]
+    }
+
+    # Insert downstream cascade ports to chain
+    set curSlot [lindex [lindex $chainList [expr [llength $chainList] - 1]] 2]
+    set value [lsearch -regexp $uniquePortMapList " $curSlot:"]
+    while {$value > -1} {
+        lappend chainList [lindex $uniquePortMapList $value]
+        set curSlot [lindex [lindex $chainList [expr [llength $chainList] - 1]] 2]
+        set value [lsearch -regexp $uniquePortMapList " $curSlot:"]
+    }
+
+    return $chainList
+}
+

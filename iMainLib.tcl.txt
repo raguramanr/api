@@ -1,0 +1,206 @@
+####################################################################
+# proc myhist
+#
+# args: -srch - a string to regexp search on
+#       -limit - limit the number of lines printed
+#
+#
+# usage:  myhist source    - dumps all previous history commands
+#                            that contained source
+#
+####################################################################
+proc myhist {args} {
+    global env MAIN
+
+    parse_args myhist $args {
+        srch   "none" 
+        s      "null"
+        limit  "20"
+        l      "null"
+    }
+
+    if {$l != "null"} {set limit $l;}
+    if {$s != "null"} {set srch $s;}
+
+    
+    if {[file exists /tmp/imain/$env(USER)_imain_history.txt]} {
+        set lTtoB ""
+        set hifile [open "/tmp/imain/$env(USER)_imain_history.txt" "r"]
+        set hdata [read $hifile]
+        close $hifile
+        set lines [split $hdata "\n"]
+        if {$srch != "none"} {
+            set tmplines ""
+            foreach sli $lines {
+                if {[regexp -nocase "$srch" $sli]} {
+                    lappend tmplines $sli
+                }
+            }
+            set lines $tmplines
+        }
+        set lc [llength $lines]
+        set top [expr $lc - 1]
+        set s [expr $lc - $limit]
+        if {$s<0} {set s 0};# Just in case limit is longer than history file
+        set pit 0
+        for {set x $top} {$x >= 0} {incr x -1} {
+            if {[string trim [lindex $lines $x]] != ""} {
+                puts "[lindex $lines $x]"
+                incr pit
+                if {$pit >= $limit} {
+                    return;
+                }
+            }
+        }
+        return;
+    } else {
+        catch {exec touch /tmp/imain/$env(USER)_imain_history.txt} rea
+        return;
+    }
+}
+####################################################################
+# proc _writeToIHist
+#
+#   Write the command to the iHist file
+####################################################################
+proc _writeToIHist {txt} {
+    global env
+
+    set illegalChars "\{|\}|\[|\]"
+
+    set hfile [open "/tmp/imain/$env(USER)_imain_history.txt" "a+"]
+    if {[string trim $txt] != ""} {
+        if {![regexp -nocase "$illegalChars" $txt]} {
+            puts $hfile "$txt"
+        }
+    }
+    close $hfile
+
+}   
+####################################################################
+# proc ihelp
+#
+#
+####################################################################
+proc ihelp {} {
+
+    puts "myhist searchterm 10 - use myhist to show previous commands for easy cut and paste"
+    puts "imenu - gives a menu of predefined things to do.  Ask for more..."
+
+
+}
+####################################################################
+# proc imain_prompt
+#
+#   Goes to the imain prompt loop.  Allowing execution
+#
+####################################################################
+proc imain_prompt {args} {
+    global MAIN env
+
+    _globalAll
+
+    parse_args imain_prompt $args {
+        id   "none"
+    }
+    if {![file exists /tmp/imain/$env(USER)_imain_history.txt]} {
+        catch {exec touch /tmp/imain/$env(USER)_imain_history.txt} rea
+    }
+    set myInfoLevel   [info level]
+    set fromInfoLevel [expr [info level] - 1]
+
+    fconfigure stdin -blocking 1
+
+    puts "\n@@@@\nEntering imain prompt debug\nType \"END\" to continue with the test\nType EXIT to linux\n@@@@"
+
+    puts "\n$id"
+
+    while {1} {
+        puts -nonewline "dev> "
+        flush stdout;
+        set intC [gets stdin]
+        if {$intC == "END"} {
+            if {$myInfoLevel == [info level]} {
+                return;
+            } else {
+                return -code return -level $fromInfoLevel
+            }
+        }
+        if {$intC == "EXIT"} {
+            exit;
+        }
+        _writeToIHist "$intC"
+        set stat [catch {eval $intC} cout]
+        if {$stat} {
+            puts "There was a tcl error $cout"
+            _imainErrorHelp $cout
+        } else {
+            puts "\n$cout"
+        }
+    }
+}
+#####################################################################
+# proc: _init_All_DUT_info
+#
+#
+#
+#####################################################################
+proc _init_All_DUTs_info {} {
+    global whichDutNow
+
+    set initDut $whichDutNow
+    for {set nDUT 1; global DUT${nDUT}_CONNECT} { [info exists DUT${nDUT}_CONNECT] } \
+                                             {incr nDUT ; global DUT${nDUT}_CONNECT} {
+
+            lappend getInfoList  "_get_HW_DUTs_info -dut $nDUT -checkOperational 0"
+    }
+    _setShowOutput -screen off -log off -res_fmt off
+    MultiTask $getInfoList
+    Login [set DUT${initDut}_CONNECT] -masterCheck 0 -CheckOperational 0
+    _setShowOutput -screen on -log on -res_fmt on
+}
+#####################################################################
+# Procedure: iexit
+#
+# When running in i_main this cleans up the results to Report
+#
+#####################################################################
+proc iexit {} {
+    global MAIN
+
+    save_incrementally_run_data
+    create_report_directory $MAIN(sourceFile) no $MAIN(optionalPath) "" $MAIN(subversion) $MAIN(qId)
+    # Cleanup all of the main.tcl harness files..move to report dir
+    set returnFlag [_cleanAndStoreResults -returnFlag testSkipped]
+    
+    # -----------------------------------------------------------------------------
+    # Print to stderr so any tracking wrapper can make decisions
+    # -----------------------------------------------------------------------------
+    puts stderr $returnFlag
+    flush stderr
+    return -code return exit
+}
+######################################################################
+# Procedure: _imainErrorHelp $cout
+#
+#
+#
+######################################################################
+proc _imainErrorHelp {out} {
+
+    if {[regexp -nocase "card" $out]} {
+        puts "Usually \"card\" error means ixia is not itialized. Type imenu . Select \"Init Ixia\""
+    }
+}
+######################################################################
+# Procedure: _globalAll
+#
+#     Pulls all globals into the interactive main scope
+#
+######################################################################
+proc _globalAll {} {
+    set varnames [info globals *]
+    if {[llength $varnames] != 0} {
+        uplevel 1 global $varnames
+    }
+}

@@ -1,0 +1,125 @@
+
+
+################################################################## 
+# Procedure Name: do_text_fail
+#   
+# Description:
+# Reads in report and prints it in human-readable form to out.
+#     
+#     
+#
+# Input args: fd, test, data, res, cTest, sum
+# Output args: l
+# return value: none
+# Typical usage:
+#     do_text_fail $fd $t $d $r $cTest level $sum
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc do_text_fail {fd test data res cTest l sum} {
+	upvar $l level
+        global tcl_platform
+        global failList
+        global tCount
+    
+#puts "@@@@@ test=$test"
+#puts "@@@@@ res=$res"
+#puts "@@@@@ count=$tCount"
+#puts "@@@@@ level=$level,  l=$l\n"
+#puts "@@@@@ data=$data"
+
+ if {($res == "0")} {
+   if {$tCount == 0} {
+       lappend failList $cTest
+       #puts " #@#@#@#@#@@##@##@#@#@ added base test to fail list"
+       incr tCount 1
+       #puts " new count = $tCount"
+   }
+   if { $tCount == 1 } {
+          puts $fd "Failed on Test $cTest"
+          puts $sum "Failed on Test $cTest"
+         # puts "@#@#@#@#@#@#@#@#@#@# just printed test failed"
+          incr tCount 1
+         # puts "new count = $tCount"
+             }
+
+
+    if {[llength $data] > 0} {
+		set dores 0
+	} else {
+		set dores 1
+	}
+
+	for {set i 0} {$i < $level} {incr i} {
+		puts -nonewline $fd "  "
+                puts -nonewline $sum "  "
+	}
+	set pos [expr {$level * 2}]
+#split the line out to make it more readable
+   set splitFlag "false"
+   if {$dores} {
+      while {[expr [string length $test] + $pos] > 70 } {
+      	for {set len 65} {$len > 10} {incr len -1 } {         
+            set char [string range $test $len $len]
+            if {$char == " "} { break }
+         }
+         if {$len < 15} {set len 65}
+         puts $fd [string range $test 0 $len]
+         puts $sum [string range $test 0 $len]
+         set test [string range $test [expr $len + 1] end]
+         for {set i 0} {$i < $level} {incr i} {
+      		puts -nonewline $fd "  "
+                puts -nonewline $sum "  "
+   	   }
+      	puts -nonewline $fd "    "
+        puts -nonewline $sum "    "
+   	   set splitFlag "true"
+      }
+   if {$splitFlag == "true"} {incr pos 4}
+   }
+   
+	puts -nonewline $fd $test
+        puts -nonewline $sum $test
+	incr pos [string length $test]
+	
+	set i [expr {78 - $pos - 8}]
+	while {$i > 0} {
+		puts -nonewline $fd " "
+                puts -nonewline $sum " "
+		incr i -1
+	}
+
+	if {$dores} {
+		if { ($fd == "stdout") && ($tcl_platform(platform) == "unix") } {
+			if {$res} {
+				puts $fd "\[\033\[1;32m  OK  \033\[0m\]"
+			} else {
+				puts $fd "\[\033\[1;31mFAILED\033\[0m\]"
+			}
+		} else {
+			if {$res} {
+				puts $fd "\[  OK  \]"
+                                puts $sum "\[  OK  \]"
+			} else {
+				puts $fd "\[FAILED\]"
+                                puts $sum "\[FAILED\]"
+			}
+		}
+	} else {
+		puts $fd ""
+                puts $sum ""
+
+	}
+ }
+        
+
+	incr level 1
+	foreach {t d r} $data {
+                do_text_fail $fd $t $d $r $cTest level $sum
+	}
+	incr level -1
+}
+###################################################################################
+

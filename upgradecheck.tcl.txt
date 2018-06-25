@@ -1,0 +1,1081 @@
+
+proc UpgradeCheck {fileList index nbuild obuild} {
+
+   ################################################################
+   set testNo "UpgradeCheck";
+   set title "CLI Upgrade and Downgrade Check";
+   ################################################################
+
+   # ----- Test variables setup
+   set fd_res [open_result_file "$testNo"];
+   set time1 [clock seconds];
+
+   result_h1 "$title";
+   report_start_test "$title";
+
+   global DUT1_CONNECT;
+   global DUT1_SETUP;
+   global DUTs_info;
+   global moduleRegression;
+   global optionalFlag;
+   global tftpServerList;
+   global switchPort2DefaultRouter
+
+   set platform [GetPlatform DUT1]
+
+   Login $DUT1_CONNECT;
+   set time2 [clock seconds];
+   result_p "*** Time for $testNo = [expr $time2-$time1] secs\n\n";
+   close_result_file;
+   report_end_test;
+
+   set path "../../cli-ew/$moduleRegression";
+   puts "DEBUG: fileList: $fileList"
+   set fileList [split $fileList "\n"];
+   puts "DEBUG: fileList: $fileList";
+   set tmpPath "Tmp";
+   set firstFile	true
+
+   foreach line $fileList {
+#      set filename1 [string trimleft $filename " "];
+#      set filename [string trimleft $filename1 "\t"];
+      regsub -all "\t" $line " " line
+      regsub -all ";" $line " " line
+      regsub -all " +" $line " " line
+      set line [string trimleft $line " "];
+      set filename [lindex [split $line " "] 0];
+      puts "DEBUG: filename: $filename";
+      if {$filename == "" || [string index $filename 0] == "#"} {
+          continue;
+      }
+if { 1 } {
+      set fn "$path/$filename.cli";
+   
+      #puts "filename: <$fn>";
+      #puts "index $index";
+      puts "***************** PWD: [pwd]  fn: $fn *****************"
+      set CLIList [LoadCLIFile $fn];
+      set listLength [llength $CLIList];
+      if {$listLength == 0} { continue; }
+      set firstLine [lindex $CLIList 0];
+      if {[CheckSkipVersion $firstLine $nbuild] || [CheckSkipVersion $firstLine $obuild]} {
+          puts "DEBUG: $filename.cli skipped - $nbuild and $obuild in $firstLine";
+          continue;
+      }
+
+      set fd_res1 [open_result_file "$filename"];      
+      set time1 [clock seconds];
+
+      regexp -nocase {([0-9.]+)(.*)} $nbuild dummy nbuildVer patch;
+      regexp -nocase {([0-9]+).([0-9]+).([0-9]+).([0-9]+)} $nbuildVer dummy p1 p2 p3 p4;
+      set nVersion "v${p1}${p2}${p3}b${p4}${patch}";
+
+      regexp -nocase {([0-9.]+)(.*)} $obuild dummy obuildVer patch;
+      regexp -nocase {([0-9]+).([0-9]+).([0-9]+).([0-9]+)} $obuildVer dummy p1 p2 p3 p4;
+      set oVersion "v${p1}${p2}${p3}b${p4}${patch}";
+
+      set testcaseNo "$filename";
+      ################################################
+      set subTest "$moduleRegression $filename";
+      ################################################
+      result_h2 "$subTest";
+      report_start_test "$subTest";
+      
+#      RunSetupScript $DUT0_CONNECT $DUT1_SETUP;
+#      if { $firstFile == "false" } { 
+#         SendACmd "use image primary"
+#         UnconfigSwAll
+#      }
+      set getKeyList "{{Image Booted:} 1}"
+      set buildBooted [GetKeyValue "show switch" $getKeyList]
+      if {$buildBooted != "primary"} {
+         SendACmd "use image primary"
+         UnconfigSwAll
+      }
+
+      for {set i 1} {$i <= 5} {incr i} {
+         SendACmd "config default delete port all"
+         SendACmd "disable clipaging"
+         if { [isMgmtPortUp] == "ok" } { 
+            result_debug "The Mgmt Port is Up"
+	    break
+	 }
+         SendACmd "use image primary"
+         UnconfigSwAll
+      }
+ 
+      # --- image might have changed
+      setupDUTs_info;
+
+      set firstFile     false
+
+      result_debug "pwd: [pwd]"
+
+      # ----- decide the image file names
+      if { $nbuild == ""  || $obuild == ""} {
+         result_error "Upgrade/DownGrade Test must have two builds: <$nbuild> <$obuild>"
+         set time2 [clock seconds]
+         result_p "*** Time for $testNo = [expr $time2-$time1] secs\n\n"
+         close_result_file
+         report_end_test
+         return
+      }
+      set nbuildFile ""
+      set obuildFile ""
+      set config2File "cli-[set obuild]"
+      if {[regexp -nocase "BD-10808" $platform]} {
+         set nbuildFile "bd10K-[set nbuild].xos"
+         set obuildFile "bd10K-[set obuild].xos"
+      } elseif {[regexp -nocase "Olympic|bd12k" $platform]} {
+	 set nbuildFile "bd12K-[set nbuild].xos"
+         set obuildFile "bd12K-[set obuild].xos"
+      } elseif {[regexp -nocase "Aspen|bd-88|Everest|bd-x8" $platform]} {
+	 if {[regexp -nocase "bd-88" $platform]} {
+	 set nbuildFile "bd8800-[set nbuild].xos"
+         set obuildFile "bd8800-[set obuild].xos"
+	 } else {
+         set nbuildFile "bdX-[set nbuild].xos"
+         set obuildFile "bdX-[set obuild].xos"  	    
+	 }
+      } elseif {[regexp -nocase "pc" $platform]} {
+         set nbuildFile "bd10Ki386-[set nbuild].xos"
+         set obuildFile "bd10Ki386-[set obuild].xos"
+      } else {
+	  # Both Cougar and Jaguar
+         set nbuildFile "summitX450-[set nbuild].xos"
+         set obuildFile "summitX450-[set obuild].xos"
+      }
+      result_debug "nbuild file: $nbuildFile, obuild file: $obuildFile"
+      regsub -all {\.} $config2File {_} config2File
+      result_debug "config2 file: $config2File"
+
+      # get the start_session here   
+      # parse CLIList
+      set s 0;
+      set lngth 0;
+if { 1 } {
+      while {1} {
+         set retparameters [Start_Session_Parser $CLIList $lngth];          
+         #result_debug "---> [lindex $retparameters 0]";
+         #result_debug "---> [lindex $retparameters 1]";      
+         set lngth [lindex $retparameters 1];
+         set CLISession [lindex $retparameters 0];         
+         if {$lngth == "NO_DATA"} {
+             break;
+         }
+
+#######################
+# Set Up Baseline
+#######################          
+
+         # ----- check the currect configuration and determine
+         # ----- the download sequence for setting up the baseline
+	 set getKeyList "{{Primary Ver:} 1}"
+	 set priVer [GetKeyValue "show switch" $getKeyList]
+	 set getKeyList "{{Secondary Ver:} 1}"
+	 set secVer [GetKeyValue "show switch" $getKeyList]
+	 set getKeyList "{{Image Booted:} 1}"
+#	 set buildBooted [GetKeyValue "show switch" $getKeyList]
+         set downloadPri "no"
+         # --- accept whatever in secondary partition
+         set version [cliGetVersion0 "DUT1"]
+         if {$version != $oVersion} {
+            result_debug "version: $version, obuild: $obuild"
+            set downloadPri "yes"
+	 }
+	 result_debug "downloadPri: $downloadPri"
+
+         incr s;
+         set upgradeNo "$testcaseNo.$s";
+         ################################################
+         set subTest "$upgradeNo primary has $version, secondary has $secVer";
+         ################################################
+         result_h2 "$subTest";
+         report_start_test "$subTest";
+         report_end_test
+
+         if { $downloadPri == "yes"} {
+            # ----- this is on the active partition
+            set active "yes"
+
+            incr s;
+            set upgradeNo "$testcaseNo.$s";
+            ################################################
+            set subTest "$upgradeNo Download $obuild to Primary Partition";
+            ################################################
+            result_h2 "$subTest";
+            report_start_test "$subTest";
+                  
+            set status [cliCheckDownloadImage $tftpServerList $obuildFile $active "primary"]
+            if { $status != "ok" } {
+               result_error "!!!!! Failed download <$obuildFile> to primary partition; test aborted !!!!!"
+               SendACmd "show switch"
+               set time2 [clock seconds]
+               result_p "*** Time for $testNo = [expr $time2-$time1] secs\n\n"
+               close_result_file
+               report_end_test
+               return
+            }
+            report_end_test
+         }
+
+         incr s;
+         set upgradeNo "$testcaseNo.$s";
+         ################################################
+         set subTest "$upgradeNo Unconfig Switch All and Check Switch";
+         ################################################
+         result_h2 "$subTest";
+         report_start_test "$subTest";
+         SendACmd "use image primary"
+         for {set i 1} {$i <= 5} {incr i} {
+	    UnconfigSwAll
+            SendACmd "config default delete port all"
+            SendACmd "disable clipaging"
+            if { [isMgmtPortUp] == "ok" } { 
+	       result_debug "The Mgmt Port is Up"
+	       break 
+	    }
+         }
+         if { $i > 3 } {
+            result_error "!!!!! Failed to bring up Mgmt port; test aborted!!!!!"
+            SendACmd "show switch"
+            set time2 [clock seconds]
+            result_p "*** Time for $testNo = [expr $time2-$time1] secs\n\n"
+            close_result_file
+            report_end_test
+            return
+         } 
+         # --- image might have changed
+         setupDUTs_info;
+
+         cliCheckSwitch "$obuildVer" "" primary primary NONE "factory Default"
+         cliCheckVersion "$oVersion"
+         report_end_test
+
+         incr s;
+         set upgradeNo "$testcaseNo.$s";
+         ################################################
+         set subTest "$upgradeNo Run CLI First Pass to Generate Old Version of Configuration";
+         ################################################
+         result_h2 "$subTest";
+         report_start_test "$subTest";
+                  
+         RunCommandAndCheck $CLISession $upgradeNo "first";
+         report_end_test;
+
+         incr s;
+         set upgradeNo "$testcaseNo.$s";
+         ################################################
+         set subTest "$upgradeNo Save Configuration and Check Switch";
+         ################################################
+         result_h2 "$subTest";
+         report_start_test "$subTest";
+         SendACmd "save configuration" 		;# to default primary.cfg    
+         cliCheckSwitch "$obuildVer" "" primary primary "primary.cfg" "factory Default"
+         cliCheckVersion "$oVersion"
+         report_end_test;
+
+         incr s;
+         set upgradeNo "$testcaseNo.$s";
+         ################################################
+         set subTest "$upgradeNo Save Configuration to cli-[set obuild] and Check Switch";
+         ################################################
+         result_h2 "$subTest";
+         report_start_test "$subTest";
+         SendACmd "save configuration $config2File"
+         cliCheckSwitch "$obuildVer" "" primary primary "$config2File.cfg" "factory Default"
+         cliCheckVersion "$oVersion"
+         report_end_test;
+
+         incr s;
+         set upgradeNo "$testcaseNo.$s";
+         ################################################
+         set subTest "$upgradeNo Use Image Secondary and Check Switch";
+         ################################################
+         result_h2 "$subTest";
+         report_start_test "$subTest";
+         SendACmd "use configuration primary"
+         SendACmd "use image secondary"
+         cliCheckSwitch "$obuildVer" "" secondary primary "primary.cfg" "factory Default"
+         cliCheckVersion "$oVersion"
+         report_end_test;
+
+####################################
+# Upgrading to Non-Active Partition
+####################################
+
+         incr s;
+         set upgradeNo "$testcaseNo.$s";
+         ################################################
+         set subTest "$upgradeNo Upgrade to Non-Active Secondary Partition";
+         ################################################
+         result_h2 "$subTest";
+         report_start_test "$subTest";
+                  
+         set status [cliCheckDownloadImage $tftpServerList $nbuildFile "secondary"]
+         if { $status != "ok" } {
+            result_error "!!!!! Failed to download <$nbuildFile> to secondary partition; test aborted !!!!!"
+            SendACmd "show switch"
+            set time2 [clock seconds]
+            result_p "*** Time for $testNo = [expr $time2-$time1] secs\n\n"
+            close_result_file
+            report_end_test
+            return
+         }  
+         report_end_test
+
+         incr s;
+         set upgradeNo "$testcaseNo.$s";
+         ################################################
+         set subTest "$upgradeNo Check log";
+         ################################################
+         result_h2 "$subTest";
+         report_start_test "$subTest";
+	 # ----- not sure what to look for in show log
+if { 0 } {
+ 	 SendACmd "show log match error"
+	 sleep  10
+}
+         report_end_test;
+
+         incr s;
+         set upgradeNo "$testcaseNo.$s";
+         ################################################
+         set subTest "$upgradeNo Check Switch for Secondary Version";
+         ################################################
+         result_h2 "$subTest";
+         report_start_test "$subTest";
+         cliCheckSwitch "$obuildVer" "$nbuildVer" secondary primary "primary.cfg" "factory Default"
+         cliCheckVersion "$oVersion"
+         report_end_test;
+
+         incr s;
+         set upgradeNo "$testcaseNo.$s";
+         ################################################
+         set subTest "$upgradeNo Reboot with NO Save to bring up the new image";
+         ################################################
+         result_h2 "$subTest";
+         report_start_test "$subTest";
+         SendACmd "clear log static"
+         for {set i 1} {$i <= 5} {incr i} {
+            CheckReboot 1 -save no
+#            CheckReboot 1 
+	    sleep 20
+            if { [isMgmtPortUp] == "ok" } { break }
+         }
+         if { $i > 3 } {
+            result_error "!!!!! Failed to bring up Mgmt port; test aborted!!!!!"
+            SendACmd "show switch"
+            set time2 [clock seconds]
+            result_p "*** Time for $testNo = [expr $time2-$time1] secs\n\n"
+            close_result_file
+            report_end_test
+            return
+         }
+         report_end_test;
+
+         # --- image might have changed
+         setupDUTs_info;
+
+         incr s;
+         set upgradeNo "$testcaseNo.$s";
+         ################################################
+         set subTest "$upgradeNo Check Switch for Image and Config Booted";
+         ################################################
+         result_h2 "$subTest";
+         report_start_test "$subTest";
+         cliCheckSwitch "$obuildVer" "$nbuildVer" secondary secondary "primary.cfg" "primary.cfg"
+         cliCheckVersion "$nVersion"
+         report_end_test;
+
+         incr s;
+         set upgradeNo "$testcaseNo.$s";
+         ################################################
+         set subTest "$upgradeNo Check log";
+         ################################################
+         result_h2 "$subTest";
+         report_start_test "$subTest";
+	 # ----- not sure what to look for in show log
+if { 0 } {
+ 	 SendACmd "show log match error"
+	 sleep 5
+}
+         report_end_test;
+
+         incr s;
+         set upgradeNo "$testcaseNo.$s";
+         ################################################
+         set subTest "$upgradeNo Run CLI 2nd Pass after Upgrade";
+         ################################################
+         result_h2 "$subTest";
+         report_start_test "$subTest";
+         RunCommandAndCheck $CLISession $upgradeNo "second";
+         report_end_test;
+
+         incr s;
+         set upgradeNo "$testcaseNo.$s";
+         ################################################
+         set subTest "$upgradeNo Save Configuration and Check Switch";
+         ################################################
+         result_h2 "$subTest";
+         report_start_test "$subTest";
+         SendACmd "save configuration" 		;# to default primary.cfg again
+         cliCheckSwitch "$obuildVer" "$nbuildVer" secondary secondary "primary.cfg" "primary.cfg"
+         cliCheckVersion "$nVersion"
+         report_end_test;
+
+         incr s;
+         set upgradeNo "$testcaseNo.$s";
+         ################################################
+         set subTest "$upgradeNo Reboot with NO Save to reload the new config";
+         ################################################
+         result_h2 "$subTest";
+         report_start_test "$subTest";
+         SendACmd "clear log static"
+         for {set i 1} {$i <= 5} {incr i} {
+            CheckReboot 1 -save no
+#            CheckReboot 1 
+	    sleep 20
+            if { [isMgmtPortUp] == "ok" } { break }
+         }
+         if { $i > 3 } {
+            result_error "!!!!! Failed to bring up Mgmt port; test aborted!!!!!"
+            SendACmd "show switch"
+            set time2 [clock seconds]
+            result_p "*** Time for $testNo = [expr $time2-$time1] secs\n\n"
+            close_result_file
+            report_end_test
+            return
+         }
+         report_end_test;
+
+         incr s;
+         set upgradeNo "$testcaseNo.$s";
+         ################################################
+         set subTest "$upgradeNo Check Switch for All Intact";
+         ################################################
+         result_h2 "$subTest";
+         report_start_test "$subTest";
+         cliCheckSwitch "$obuildVer" "$nbuildVer" secondary secondary "primary.cfg" "primary.cfg"
+         cliCheckVersion "$nVersion"
+         report_end_test;
+
+         incr s;
+         set upgradeNo "$testcaseNo.$s";
+         ################################################
+         set subTest "$upgradeNo Check log";
+         ################################################
+         result_h2 "$subTest";
+         report_start_test "$subTest";
+	 # ----- not sure what to look for in show log
+if { 0 } {
+ 	 SendACmd "show log match error"
+	 sleep 5
+}
+         report_end_test;
+
+         incr s;
+         set upgradeNo "$testcaseNo.$s";
+         ################################################
+         set subTest "$upgradeNo Run CLI 2nd Pass after reload primary.cfg";
+         ################################################
+         result_h2 "$subTest";
+         report_start_test "$subTest";
+         RunCommandAndCheck $CLISession $upgradeNo "second";
+         report_end_test;
+
+####################################
+# Downgrading to Non-Active Partition
+####################################
+
+         incr s;
+         set upgradeNo "$testcaseNo.$s";
+         ################################################
+         set subTest "$upgradeNo Use image primary and Check Switch";
+         ################################################
+         result_h2 "$subTest";
+         report_start_test "$subTest";
+         SendACmd "use image primary"
+         cliCheckSwitch "$obuildVer" "$nbuildVer" primary secondary "primary.cfg" "primary.cfg"
+         cliCheckVersion "$nVersion"
+         report_end_test;
+
+         incr s;
+         set upgradeNo "$testcaseNo.$s";
+         ################################################
+         set subTest "$upgradeNo Use cli-[set obuild] and Check Switch";
+         ################################################
+         result_h2 "$subTest";
+         report_start_test "$subTest";
+         SendACmd "use configuration $config2File"
+         cliCheckSwitch "$obuildVer" "$nbuildVer" primary secondary "$config2File.cfg" "primary.cfg"
+         cliCheckVersion "$nVersion"
+         report_end_test;
+
+         incr s;
+         set upgradeNo "$testcaseNo.$s";
+         ################################################
+         set subTest "$upgradeNo Reboot with NO Save - to reload the old config";
+         ################################################
+         result_h2 "$subTest";
+         report_start_test "$subTest";
+         SendACmd "clear log static"
+         for {set i 1} {$i <= 5} {incr i} {
+            CheckReboot 1 -save no
+#            CheckReboot 1 
+	    sleep 20
+            if { [isMgmtPortUp] == "ok" } { break }
+         }
+         if { $i > 3 } {
+            result_error "!!!!! Failed to bring up Mgmt port; test aborted!!!!!"
+            SendACmd "show switch"
+            set time2 [clock seconds]
+            result_p "*** Time for $testNo = [expr $time2-$time1] secs\n\n"
+            close_result_file
+            report_end_test
+            return
+         }
+         report_end_test;
+
+         # --- image might have changed
+         setupDUTs_info;
+
+         incr s;
+         set upgradeNo "$testcaseNo.$s";
+         ################################################
+         set subTest "$upgradeNo Downgraded and Check Switch";
+         ################################################
+         result_h2 "$subTest";
+         report_start_test "$subTest";
+         cliCheckSwitch "$obuildVer" "$nbuildVer" primary primary "$config2File.cfg" "$config2File.cfg"
+         cliCheckVersion "$oVersion"
+         report_end_test;
+
+         incr s;
+         set upgradeNo "$testcaseNo.$s";
+         ################################################
+         set subTest "$upgradeNo Check log";
+         ################################################
+         result_h2 "$subTest";
+         report_start_test "$subTest";
+	 # ----- not sure what to look for in show log
+if { 0 } {
+ 	 SendACmd "show log match error"
+	 sleep 5
+}
+         report_end_test;
+
+         incr s;
+         set upgradeNo "$testcaseNo.$s";
+         ################################################
+         set subTest "$upgradeNo Run CLI Last Pass";
+         ################################################
+         result_h2 "$subTest";
+         report_start_test "$subTest";
+
+         RunCommandAndCheck $CLISession $upgradeNo "second";
+         report_end_test;
+
+         if {$lngth == 0} {   
+            break;
+         } else {
+            incr lngth;
+         }   
+      } 
+}
+      report_end_test;
+      set time2 [clock seconds]
+      result_p "*** Time for $testNo = [expr $time2-$time1] secs\n\n"
+      close_result_file;         
+   }
+   }
+}
+
+proc Start_Session_Parser {CLISessionList lngth} {
+
+    set flag 0;
+    if {[info exist buffer]} {unset buffer }
+    set listLength [llength $CLISessionList];  
+    #puts "listLength = $listLength";  
+    #puts "lngth = $lngth"; 
+    for {set i $lngth}  {$i <= $listLength} {incr i} {
+        set line [string tolower [lindex $CLISessionList $i]];
+        set line [string trim $line];          
+        if {[regexp -nocase "end_session" $line] } {
+            set flag $i;
+            break;  
+        } elseif {[regexp -nocase "start_session" $line] } {
+            if {[info exist buffer]} {unset buffer }        
+        } else {
+            if {[string length $line]} {
+                lappend buffer $line;
+            }    
+        }
+    }    
+    if {$lngth != 0} {
+        if {[info exist buffer]} {
+           lappend retval $buffer;
+           lappend retval $flag;        
+           return $retval;
+        } else {
+           lappend retval "NO_DATA";
+           lappend retval "NO_DATA";        
+           return $retval;       
+        }
+    } else {
+        lappend retval $buffer;
+        lappend retval $flag;        
+        return $retval;
+    }    
+}
+
+
+################################################################## 
+# Procedure Name: cliDownloadImage
+#   
+# Description: Internal proc that downloads the image provided in filename to the current DUT from tftp server 
+#              provided in TFTPServerIP.
+#
+# Input args: TFTPServerIP, filename, active or not, primary or secondary
+# Output args: none
+# Typical usage:
+#             set status [DownloadImage $TFTPServerIP $filename ]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc cliDownloadImage {TFTPServerIP filename {active no} {partition ""}} {
+   cliConfigGatewayNetwork
+   global DUTs_info
+   global whichDutNow
+   result_debug "--- cliDownloadImage: Send download image $TFTPServerIP $filename to $partition"
+   set rtValue "legal"
+   set buf ""
+   if { [isExosPlatform DUT1 ] == 1 } {
+      global switchPort2DefaultRouter
+      global connectionTimeout
+
+      set virtualRouter [GetVrString $whichDutNow]
+
+      set origConnectionTimeout $connectionTimeout
+      set connectionTimeout 5000
+      set pid [pid]
+      set fd_in [open "Tmp/temp_$pid" "w"]
+      after 5000
+      if {[regexp -nocase "mgmt" $switchPort2DefaultRouter]} {
+         SendACmd "show vlan mgmt"
+         SendACmd "show iproute vr $virtualRouter"
+         set buf [SendACmd "download image $TFTPServerIP $filename $partition" NULL $fd_in]
+      } else {
+         set virtualRouter [GetVrString $whichDutNow]
+         set buf [SendACmd "download image $TFTPServerIP $filename vr $virtualRouter $partition" NULL $fd_in]
+      }
+      set connectionTimeout $origConnectionTimeout
+      close $fd_in
+      set fd_in [open "Tmp/temp_$pid" "r"]
+      set rtValue [check_illegality $fd_in]
+      close $fd_in
+      file delete "Tmp/temp_$pid"
+      result_debug "the rtValue $rtValue"
+      if {$rtValue=="legal"} {
+         set buf "ok"
+      } else {
+         set buf "error"
+         set buf "ok"				;# exos tmp
+      }
+   }
+   if {$active == "yes" && $buf == "ok"} {
+      set maxWait 20
+      set status [MyWaitForReboot $maxWait "after download image to active partition"]
+   }
+   cliUnconfigGatewayNetwork
+   return $buf
+}
+
+################################################################## 
+# Procedure Name: cliCheckDownloadImage
+#   
+# Description: proc that checks the downloaded image success from the lift of tftp servers provided in
+#              tftpServerList
+#
+# Input args: tftpServerList, filename, active or no, primary or secondary
+# Output args: none
+# Typical usage:
+#             set status [DownloadImage $TFTPServerIP $filename ]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc cliCheckDownloadImage {tftpServerList filename {active no} {partition ""}} {
+
+   foreach TFTPServerIP $tftpServerList {    
+     result_debug "Start downloading image $filename from $TFTPServerIP to $partition"
+     set status [cliDownloadImage $TFTPServerIP $filename $active $partition]
+     if {$status == "ok"} {break }
+     flush stdout
+   }
+   report_start_test "Downloading image $filename from $tftpServerList to $partition" 
+   if {$status == "error"} {           
+        result_error "Failed to download image from $tftpServerList"
+   } else {
+        result_ok "Image successfully downloaded from $tftpServerList"
+   }
+   report_end_test
+   return $status   
+}
+
+################################################################## 
+# Procedure Name: isMgmtPortUp
+#   
+# Description: proc that checks whether the management port is up
+#
+# Input args: dut#
+# Output args: None
+# Typical usage:
+#             set status [isMgmtPortUp 2]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc isMgmtPortUp { {dut 1} } {
+
+global switchPort2DefaultRouter
+
+   if {[regexp -nocase "mgmt" $switchPort2DefaultRouter]} {
+      set parameterList ""
+      lappend parameterList "{Number of active ports=1} exist"
+      set status [CheckKeyValue "show vlan mgmt" $parameterList -reportResults 0]
+      unset parameterList
+      return $status   
+   } else {
+      return "ok"			;# dont care
+   }
+}
+
+################################################################## 
+# Procedure Name: MyWaitForReboot
+#   
+# Description: Internal function that performs a login to the current DUT 
+#    after waiting for wait time prints the expect_buffer to log file, 
+#    comment to report file
+#
+# Input args: wait, comment
+# Output args: none
+# Typical usage:
+#   set status [WaitForReboot $maxWait "after sending reboot command to $DUTName"]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc MyWaitForReboot {wait comment {masterCheck 1}} {
+set expect_out(buffer) "No Output:WaitForReboot"
+set timeout 300
+set flag "true"
+while {$flag == "true"} {
+   expect {
+      timeout {
+         expect "*"
+         SaveOutputBuffer $expect_out(buffer)
+         return "error"
+      }
+      full_buffer {
+         set flag "true"
+         SaveOutputBuffer $expect_out(buffer)
+      }
+      "login:" {
+         set flag "false"
+         if {$wait != 0} { 
+            puts "Wait for $wait seconds after logging in for ports to come up\n"
+            exSleep $wait
+         }
+         SaveOutputBuffer $expect_out(buffer)
+         if {[try_login_on_switch $comment "admin" "" $masterCheck]!=-1} {
+               return "ok"
+         }
+      }
+   }
+}
+return "ok"
+}
+
+proc cliCheckSwitch { priVer secVer imaSel imaBoot cfgSel cfgBoot } {
+
+   set platform [GetPlatform DUT1]
+
+   set parameterList ""
+   if {[regexp -nocase "BD-10808|Aspen|bd-88|bd-x8" $platform] == 1} {
+      lappend getKeyList "{State: } 1";
+      set slotbState [GetKeyValue "show slot b" $getKeyList];
+      unset getKeyList;
+      if {$slotbState != "Empty"} {
+         lappend parameterList "{Primary ver: *$priVer *$priVer} exist"
+         if {$secVer != "" } {
+            lappend parameterList "{Secondary ver: *$secVer *$secVer} exist"
+         }
+         lappend parameterList "{Image Selected: *$imaSel *$imaSel} exist"
+         lappend parameterList "{Image Booted: *$imaBoot *$imaBoot} exist"
+         lappend parameterList "{Config Selected: *$cfgSel *$cfgSel} exist"
+         lappend parameterList "{Config Booted: *$cfgBoot *$cfgBoot} exist"
+      } else {
+         lappend parameterList "{Primary ver: *$priVer} exist"
+         if {$secVer != "" } {
+            lappend parameterList "{Secondary ver: *$secVer} exist"
+         }
+         lappend parameterList "{Image Selected: *$imaSel} exist"
+         lappend parameterList "{Image Booted: *$imaBoot} exist"
+         lappend parameterList "{Config Selected: *$cfgSel} exist"
+         lappend parameterList "{Config Booted: *$cfgBoot} exist"
+      }
+   } else {
+      lappend parameterList "{Primary ver: *$priVer} exist"
+      if {$secVer != "" } {
+         lappend parameterList "{Secondary ver: *$secVer} exist"
+      }
+      lappend parameterList "{Image Selected: *$imaSel} exist"
+      lappend parameterList "{Image Booted: *$imaBoot} exist"
+      lappend parameterList "{Config Selected: *$cfgSel} exist"
+      lappend parameterList "{Config Booted: *$cfgBoot} exist"
+   }
+   CheckKeyValue "show switch" $parameterList
+   unset parameterList
+}
+
+proc cliCheckVersion { cliVersion } {
+
+   lappend parameterList "{Image.*$cliVersion} exist"
+   CheckKeyValue "show version" $parameterList
+   unset parameterList
+}
+
+proc cliGetVersion0 {{DUTName "DUT1"} {option 1}} {
+   global DUT1_CONNECT
+   global DUT2_CONNECT
+   global DUT3_CONNECT
+   global DUT4_CONNECT
+   global DUT5_CONNECT
+   Login [set ${DUTName}_CONNECT]
+   lappend parameterList {{version} 2}
+   set verstr [lindex [GetKeyValue "show version" $parameterList] 0];
+}
+
+proc cliGetVersion {{DUTName "DUT1"} {option 1}} {
+   global DUT1_CONNECT
+   global DUT2_CONNECT
+   global DUT3_CONNECT
+   global DUT4_CONNECT
+   global DUT5_CONNECT
+   Login [set ${DUTName}_CONNECT]
+   lappend parameterList {{XOS version} 1}
+   set verstr [lindex [GetKeyValue "show version" $parameterList] 0];
+   if ![regexp {([0-9]+)\.([0-9]+)\.([0-9]+)[\.b]([0-9]+)} $verstr match \
+      major minor patch build] {
+      error "cliGetVersion: $verstr not in good format."
+      return "error"
+   }
+   switch $option {
+      whole -
+      1 {
+         return $verstr
+      }
+      majmin -
+      2 {
+         return "$major.$minor"
+      }
+      build -
+      3 {
+        return $build
+      }
+      release -
+      4 {
+        return "$major.$minor.$patch"
+      }
+      major {
+        return $major
+      }
+      minor {
+        return $minor
+      }
+      patch {
+        return $patch
+      }
+      default {
+         return $verstr
+      }
+   }
+}
+
+# --- manipulate DUTs_info(DUT1,version), 
+# --- so that upgradecheck can call Lib procs
+proc setupDUTs_info { {DUTName "DUT1"} } {
+   global DUTs_info;
+   global DUT1_CONNECT
+
+   Login [set ${DUTName}_CONNECT];
+   lappend parameterList {{version} 1};
+   set version [lindex [GetKeyValue "show version" $parameterList] 0];
+   unset parameterList;
+   lappend parameterList {{version} 2};
+   set showVerVersion [lindex [GetKeyValue "show version" $parameterList] 0];
+   unset parameterList;
+   # Compute the version for patch builds in EXOS
+      if {[regexp -nocase "\\-" $showVerVersion]} {
+         set patchList [split $showVerVersion "-"];
+         foreach str [lrange $patchList 1 end] {
+            set version [format %s-%s $version $str];
+         }
+      }
+   set DUTs_info($DUTName,version) $version;
+}
+##################################################################
+# Procedure Name: cliSendAFile 
+# Description: upload the file to tftp server, then download it to
+#	the DUT
+# Input args:   
+#	tftpServer: the tftp server
+#	localFile: the file to be sent
+#	remoteFile: the file to be on the remote
+#	dut: the DUT# to send the file to 
+# Output args:  none
+# Typical usage:
+#       SendAFile
+# Category: Utility
+##################################################################
+proc cliSendAFile {tftpServer localFile remoteFile {dut 1} } {
+
+global DUT${dut}_CONNECT
+
+set filePrefix "[set DUT${dut}_CONNECT]"
+#set filePrefix "[set DUT${dut}_CONNECT] 123"   ;# for testing
+regsub -all { } $filePrefix {.} filePrefix
+set tftpFile $filePrefix.$remoteFile
+set platform [GetPlatform DUT${dut}]
+result_debug "$tftpFile, $platform"
+
+# upload the file to tftpserver
+global spawn_id
+
+set current_spawn_id $spawn_id
+result_debug "spawn_id = $spawn_id"
+spawn tftp $tftpServer
+result_debug "spawn_id = $spawn_id"
+SendACmd "put $localFile $tftpFile"
+send "quit\r"
+set spawn_id $current_spawn_id
+
+Login [set DUT${dut}_CONNECT]
+
+# download from tftpServer to DUT
+global switchPort2DefaultRouter
+global whichDutNow;
+cliConfigGatewayNetwork
+after 3000
+set virtualRouter [GetVrString $whichDutNow]
+SendACmd "tftp $tftpServer -v $virtualRouter -g -r $tftpFile -l $remoteFile"
+cliUnconfigGatewayNetwork
+
+return $tftpFile
+}
+
+##
+## --- need to use own Config/UnconfigGatewayNetwork
+## --- because the image version must be checked dynamically
+##
+
+################################################################################
+# Procedure Name: cliConfigGatewayNetwork   
+# Description: proc to config the gateway vlan: commvlan or mgmt and add default route
+#	       based on the values of global vars: DUTx_IP and defaultRouter etc.  The
+#	       purpose is to dynamically set up the gateway network for tftp service instead
+#	       to have static setup from config files throughout the regression.
+# Input args: n/a
+# Output args: n/a
+# Typical usage:
+#             ConfigGatewayNetwork;
+# Category: Setup
+##################################################################
+proc cliConfigGatewayNetwork {} {
+    global switchPort2DefaultRouter;  
+    global defaultRouter;
+    global whichDutNow;
+    global DUT${whichDutNow}_IP;
+    global DUT${whichDutNow}_MASK;
+
+    set ipAddr [set DUT${whichDutNow}_IP]
+
+    if [info exist DUT${whichDutNow}_MASK] {
+        set ipMask [set DUT${whichDutNow}_MASK]
+    } else {
+        set ipMask 24
+    }
+
+    result_debug "\nConfigGatewayNetwork{}: set up gateway vlan $ipAddr/$ipMask on DUT$whichDutNow"
+    if {[regexp -nocase $switchPort2DefaultRouter "mgmt"]} {
+        global supportedPlatform
+        if {[regexp -nocase "$supportedPlatform" [GetPlatform DUT${whichDutNow}]]} {
+           SendACmd "config mgmt ipa $ipAddr/$ipMask"
+           set xos_version [cliGetVersion DUT$whichDutNow 4]
+           if { $xos_version >= "10.2.0" } {
+              set virtualRouter VR-mgmt
+           } else {
+              set virtualRouter VR-0
+           }
+           SendACmd    "config ipr add default $defaultRouter vr $virtualRouter";
+       } else {
+           SendACmd "config mgmt ipa $ipAddr/$ipMask"
+       }
+    } else {
+        set gwPort [GetDUTPort $switchPort2DefaultRouter $whichDutNow]
+        SendACmd    "enable port $gwPort";
+        sleep 3
+        SendACmd    "create vlan commvlan";
+        SendACmd    "config commvlan add port $gwPort";
+        SendACmd    "config commvlan ipa $ipAddr/$ipMask";
+        set virtualRouter [GetVrString $whichDutNow];
+        SendACmd    "config ipr add default $defaultRouter vr $virtualRouter";
+    }
+}
+
+################################################################################
+# Procedure Name: cliUnconfigGatewayNetwork   
+# Description: proc to unconfig the gateway vlan: commvlan or mgmt and delete default route
+#	       based on the values of global vars: DUTx_IP and defaultRouter etc.  The
+#	       purpose is to dynamically remove the commvlan as tftp service is finished
+#	       instead to have static setup from config files throughout the regression.
+# Input args: n/a
+# Output args: n/a
+# Typical usage:
+#             UnconfigGatewayNetwork;
+# Category: Setup
+##################################################################
+proc cliUnconfigGatewayNetwork {} {
+    global switchPort2DefaultRouter; 
+    global defaultRouter;
+    global whichDutNow;
+ 
+    result_debug "\nUnconfigGatewayNetwork{}: delete gateway vlan on DUT$whichDutNow"
+    if {[regexp -nocase $switchPort2DefaultRouter "mgmt"]} {
+#         SendACmd    "disable port mgmt";
+          SendACmd    "unconf mgmt ipaddress";
+        global supportedPlatform
+        if {[regexp -nocase "$supportedPlatform" [GetPlatform DUT${whichDutNow}]]} {
+           set xos_version [cliGetVersion DUT$whichDutNow 4]
+           if { $xos_version >= "10.2.0" } {
+              set virtualRouter VR-mgmt
+           } else {
+              set virtualRouter VR-0
+           }
+            SendACmd    "config ipr del default $defaultRouter vr $virtualRouter";
+        }
+    } else {   
+         SendACmd    "delete commvlan";
+         set gwPort [GetDUTPort $switchPort2DefaultRouter $whichDutNow]
+         SendACmd    "disable port $gwPort";       
+         set virtualRouter [GetVrString $whichDutNow];
+         SendACmd    "config ipr delete default $defaultRouter vr $virtualRouter";  
+    }
+}
+

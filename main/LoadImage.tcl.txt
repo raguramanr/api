@@ -1,0 +1,1166 @@
+#!/usr/bin/tclsh
+
+package require Tclx
+
+
+proc print_usage {} {
+   # EY-03-06-2007: Changed usage info for new Panther platform.
+   puts "\r"
+   puts {Usage: LoadImage.tcl -cfg <cfg.cfg> -i386ImagePath <path to i386 image> -marinerImagePath <path to mariner image> -aspenImagePath <path to aspen image> -cougarImagePath <path to cougar image> -viperImagePath <path to viper image> -jaguarImagePath <path to jaguar image> -olympicImagePath <path to olympic image> -pantherImagePath <path to panther image> -voyagerImagePath <path to voyager image> -x650ImagePath <path to x650 image> -x480ImagePath <path to x480 image> -NWIImagePath <path to NWI image> -everestImagePath <path to everest image> -bootrom <bootrom>}
+   puts {      [<cfg>]: f48_std.cfg}
+   puts {      [<i386ImagePath>]: ./exosi386.xos}
+   puts {      [<marinerImagePath>]: ./exosmariner.xos}
+   puts {      [<aspenImagePath>]: ./exosaspen.xos}
+   puts {      [<cougarImagePath>]: ./exoscougar.xos}
+   puts {      [<viperImagePath>]: ./exosviper.xos}
+   puts {      [<jaguarImagePath>]: ./exosjaguar.xos}
+   puts {      [<olympicImagePath>]: ./exosolympic.xos}
+   puts {      [<pantherImagePath>]: ./exospanther.xos}
+   puts {      [<voyagerImagePath>]: ./exosvoyager.xos}
+   puts {      [<x650ImagePath>]: ./exosx650.xos}
+   puts {      [<x480ImagePath>]: ./exosx480.xos}
+   puts {      [<NWIImagePath>]: ./exosNWI.xos}
+   puts {      [<everestImagePath>]: ./exoseverest.xos}
+   puts {         (Script verifies the platform before download image)}
+   puts {      [<bootrom>]: bootver (assume in root of your location share)}
+   puts {          }
+   puts {         (Typical Usage:) }
+   puts {      (./LoadImage.tcl -cfg exos1243.cfg -i386ImagePath ./exosI386.xos) }
+   puts "\r"
+}
+
+set tftpServerLogin       "extreme"
+set tftpServerPasswd      "extreme"
+set tftpServerTftpboot    "/usr/tftpboot"
+
+   # checking command parameters
+   if {$argc<2} {
+      puts "Not enough parameters"
+      print_usage
+      exit
+   }
+   
+   set LIB_PATH "../Lib"
+   lappend auto_path $LIB_PATH
+
+   source ../Lib/parse_args.tcl
+   source ../Lib/mainLib.tcl
+
+##################################################################################
+#  Parse Main Args
+##################################################################################
+   # EY-03-06-2007: Added image path variable for Panther platform.
+   parse_args LoadCode $argv {
+      cfg     "NULL"
+      i386ImagePath	"NULL"
+      marinerImagePath	"NULL"
+      aspenImagePath	"NULL"
+      aspennapaImagePath "NULL"
+      cougarImagePath	"NULL"
+      viperImagePath   "NULL"
+      jaguarImagePath	"NULL"
+      olympicImagePath	"NULL"
+      pantherImagePath  "NULL"
+      voyagerImagePath  "NULL"
+      x650ImagePath "NULL"
+      x480ImagePath "NULL"
+      NWIImagePath "NULL"
+      everestImagePath "NULL"
+      bootrom "NULL"
+      in      "sc"
+      unc     "no"
+   }
+   set module "DownloadImage"
+
+   gen_index "../Lib"
+##################################################################################
+#  Source the config file
+##################################################################################
+       set sourceFile ""
+       if [catch {source "../main/cfg/common.cfg"} rea] {
+          puts "*** WARNING: Unable to source common.cfg:$rea............... ***"
+          puts "*** WARNING: Application level variables may not be defined. ***"
+          exit -1
+       }
+
+      if {$cfg != "null"} {
+          set sourceFile $cfg
+          if {([regexp -nocase "^short" $sourceFile]&&[regexp -nocase {/} $sourceFile]) || \
+              [regexp -nocase "^pt" $sourceFile]} {
+             set sourceFile [format %s/%s/%s $regType $module $sourceFile]
+             set sourceFile [string trim $sourceFile];
+             puts "Using config file: ($sourceFile)"
+          } elseif {![regexp -nocase "^cfg" $sourceFile] && ![regexp -nocase {/} $sourceFile]} {
+             if {[file exists $sourceFile]==0} {
+                set sourceFile [format %s/%s cfg $sourceFile]
+                set sourceFile [string trim $sourceFile];
+                puts "Using config file: ($sourceFile)"
+             }
+          }
+      }
+      if {[file exists $sourceFile] == 0} {
+         puts "Cannot find config file: $sourceFile\n"
+         exit
+      }
+      catch {source $sourceFile} reason
+
+
+############################################################
+# Expect Hacks
+############################################################
+
+# This is necessary to get an absolute path for logging
+set REG_PATH [pwd]
+set imageNotFound 0
+set romNotFound 0
+
+#load {expect52.dll}
+if {$tcl_platform(platform) == "windows"} {
+  load "expect52.dll"
+} else {
+  #load "/usr/lib/libexpect.so"
+  #load [file join $env(HOME) "ixia/lib/libdp40.so"]
+	load [lindex [glob "/usr/lib/libexpect*so*"] 0]
+}
+
+log_user 0
+
+if {$tcl_platform(platform) == "windows"} {
+	lappend auto_path "C:/Program Files/Ixia/TclScripts/Lib/ixTcl1.0"
+} else {
+  lappend auto_path [file join $env(HOME) "ixia/lib/mpexpr-1.0"]
+  lappend auto_path [file join $env(HOME) "ixia/lib/ixTcl1.0"]
+  lappend auto_path [file join $env(HOME) "ixia/lib/dp4.0"]
+}
+
+set auto_path [linsert $auto_path 0 . ]
+
+if {![file isdirectory Report]} {
+	file mkdir Report
+}
+if {![file isdirectory Result]} {
+	file mkdir Result
+}
+if {![file isdirectory Tmp]} {
+	file mkdir Tmp
+}
+
+if {![file isdirectory Log]} {
+	file mkdir Log
+}
+
+
+gen_index .
+
+
+
+############################################################
+
+set tStartTime [clock seconds]
+set tStartDate [clock format [clock seconds] -format "%Y-%m-%d %I.%M.%S%p"]
+set passCount       0
+set failCount       0
+set skipCount       0
+set testDuration    0
+set testHour        0
+set testMin         0
+set testSec         0
+set resultDir       "NULL"
+set skipCopy        1
+set DUT(bug)        1
+set DUT(LoadImage)  1
+
+
+#  set numDUT 1
+#   while { [info exists DUT${numDUT}_CONNECT] } {
+#      incr numDUT 1
+#   }
+#incr numDUT -1
+set numDUT  1
+
+#####################  Get code from image location to tftpserver#####
+## Note: the tftp would fail if tftp server is not setup properly.
+## To setup your tftp server correctly, visit:http://exosautoweb/document.htm
+##############################################################################
+##############################################################################
+set i386TftpFile "NULL"
+set marinerTftpFile "NULL"
+set aspenTftpFile "NULL"
+set aspennapaTftpFile "NULL"
+set cougarTftpFile "NULL"
+set viperTftpFile "NULL"
+set jaguarTftpFile "NULL"
+set olympicTftpFile "NULL"
+# EY-03-06-2007: Added TFTP file variable for Panther platform.
+set pantherTftpFile "NULL"
+set voyagerTftpFile "NULL"
+set x650TftpFile "NULL"
+set x480TftpFile "NULL"
+set NWITftpFile "NULL"
+set everestTftpFile "NULL"
+set i386Md5Sum 0
+set marinerMd5Sum 0
+set aspenMd5Sum 0
+set aspennapaMd5Sum 0
+set cougarMd5Sum 0
+set viperMd5Sum 0
+set jaguarMd5Sum 0
+set olympicMd5Sum 0
+# EY-03-06-2007: Added MD5 sum result variable for Panther platform.
+set pantherMd5Sum 0
+set voyagerMd5Sum 0
+set x650Md5Sum 0
+set x480Md5Sum 0
+set NWIMd5Sum 0
+set everestMd5Sum 0
+if {[string compare $i386ImagePath "NULL"]!=0} {
+   if {[file exists $i386ImagePath]} {
+     set tftpFile [file tail $i386ImagePath]
+     set pid [pid]
+     set i386TftpFile [format %d%di386%s $pid $tStartTime $tftpFile]
+     set fd_out [open "Tmp/tmp_$pid$tStartTime" "w"];
+     puts $fd_out "put $i386ImagePath $i386TftpFile"
+     puts $fd_out "quit"
+     close $fd_out
+     set i386Md5Sum [lindex [exec /usr/bin/md5sum $i386ImagePath] 0]
+     foreach TFTPServerIP $tftpServerList {
+        puts "Putting $i386ImagePath onto tftp Server $TFTPServerIP as $i386TftpFile"
+        if {[catch {exec /usr/bin/tftp $TFTPServerIP < ./Tmp/tmp_$pid$tStartTime} reason]} {
+           puts "error: $reason"
+           exit -1
+        }
+     }
+     file delete ./Tmp/tmp_$pid$tStartTime
+   } else {
+     puts "i386ImagePath $i386ImagePath does not exist"
+     exit -1
+   }
+}
+
+
+if {[string compare $marinerImagePath "NULL"]!=0} {
+   if {[file exists $marinerImagePath]} {
+      set tftpFile [file tail $marinerImagePath]
+      set pid [pid]
+      set marinerTftpFile [format %d%dmariner%s $pid $tStartTime $tftpFile]
+      set fd_out [open "Tmp/tmp_$pid$tStartTime" "w"];
+      puts $fd_out "put $marinerImagePath $marinerTftpFile"
+      puts $fd_out "quit"
+      close $fd_out
+      set marinerMd5Sum [lindex [exec /usr/bin/md5sum $marinerImagePath] 0]
+      foreach TFTPServerIP $tftpServerList {
+        puts "Putting $marinerImagePath onto tftp Server $TFTPServerIP as $marinerTftpFile"
+        if {[catch {exec /usr/bin/tftp $TFTPServerIP < ./Tmp/tmp_$pid$tStartTime} reason]} {
+           puts "error: $reason"
+           exit -1
+        }
+     }
+     file delete ./Tmp/tmp_$pid$tStartTime
+   } else {
+     puts "marinerImagePath $marinerImagePath does not exist"
+     exit -1
+   }
+}
+
+if {[string compare $aspenImagePath "NULL"]!=0} {
+   if {[file exists $aspenImagePath]} {
+      set tftpFile [file tail $aspenImagePath]
+      set pid [pid]
+      set aspenTftpFile [format %d%daspen%s $pid $tStartTime $tftpFile]
+      set fd_out [open "Tmp/tmp_$pid$tStartTime" "w"];
+      puts $fd_out "put $aspenImagePath $aspenTftpFile"
+      puts $fd_out "quit"
+      close $fd_out
+      set aspenMd5Sum [lindex [exec /usr/bin/md5sum $aspenImagePath] 0]
+      foreach TFTPServerIP $tftpServerList {
+        puts "Putting $aspenImagePath onto tftp Server $TFTPServerIP as $aspenTftpFile"
+        if {[catch {exec /usr/bin/tftp $TFTPServerIP < ./Tmp/tmp_$pid$tStartTime} reason]} {
+           puts "error: $reason"
+           exit -1
+        }
+     }
+     file delete ./Tmp/tmp_$pid$tStartTime
+   } else {
+     puts "aspenImagePath $aspenImagePath does not exist"
+     exit -1
+   }
+}
+
+if {[string compare $aspennapaImagePath "NULL"]!=0} {
+   if {[file exists $aspennapaImagePath]} {
+      set tftpFile [file tail $aspennapaImagePath]
+      set pid [pid]
+      set aspennapaTftpFile [format %d%daspennapa%s $pid $tStartTime $tftpFile]
+      set fd_out [open "Tmp/tmp_$pid$tStartTime" "w"];
+      puts $fd_out "put $aspennapaImagePath $aspennapaTftpFile"
+      puts $fd_out "quit"
+      close $fd_out
+      set aspennapaMd5Sum [lindex [exec /usr/bin/md5sum $aspennapaImagePath] 0]
+      foreach TFTPServerIP $tftpServerList {
+        puts "Putting $aspennapaImagePath onto tftp Server $TFTPServerIP as $aspennapaTftpFile"
+        if {[catch {exec /usr/bin/tftp $TFTPServerIP < ./Tmp/tmp_$pid$tStartTime} reason]} {
+           puts "error: $reason"
+           exit -1
+        }
+     }
+     file delete ./Tmp/tmp_$pid$tStartTime
+   } else {
+     puts "aspennapaImagePath $aspennapaImagePath does not exist"
+     exit -1
+   }
+}
+
+if {[string compare $cougarImagePath "NULL"]!=0} {
+   if {[file exists $cougarImagePath]} {
+      set tftpFile [file tail $cougarImagePath]
+      set pid [pid]
+      set cougarTftpFile [format %d%dcougar%s $pid $tStartTime $tftpFile]
+      set fd_out [open "Tmp/tmp_$pid$tStartTime" "w"];
+      puts $fd_out "put $cougarImagePath $cougarTftpFile"
+      puts $fd_out "quit"
+      close $fd_out
+      set cougarMd5Sum [lindex [exec /usr/bin/md5sum $cougarImagePath] 0]
+      foreach TFTPServerIP $tftpServerList {
+        puts "Putting $cougarImagePath onto tftp Server $TFTPServerIP as $cougarTftpFile"
+        if {[catch {exec /usr/bin/tftp $TFTPServerIP < ./Tmp/tmp_$pid$tStartTime} reason]} {
+           puts "error: $reason"
+           exit -1
+        }
+     }
+     file delete ./Tmp/tmp_$pid$tStartTime
+   } else {
+     puts "cougarImagePath $cougarImagePath does not exist"
+     exit -1
+   }
+}
+
+if {[string compare $viperImagePath "NULL"]!=0} {
+   if {[file exists $viperImagePath]} {
+      set tftpFile [file tail $viperImagePath]
+      set pid [pid]
+      set viperTftpFile [format %d%dviper%s $pid $tStartTime $tftpFile]
+      set fd_out [open "Tmp/tmp_$pid$tStartTime" "w"];
+      puts $fd_out "put $viperImagePath $viperTftpFile"
+      puts $fd_out "quit"
+      close $fd_out
+      set viperMd5Sum [lindex [exec /usr/bin/md5sum $viperImagePath] 0]
+      foreach TFTPServerIP $tftpServerList {
+        puts "Putting $viperImagePath onto tftp Server $TFTPServerIP as $viperTftpFile"
+        if {[catch {exec /usr/bin/tftp $TFTPServerIP < ./Tmp/tmp_$pid$tStartTime} reason]} {
+           puts "error: $reason"
+           exit -1
+        }
+     }
+     file delete ./Tmp/tmp_$pid$tStartTime
+   } else {
+     puts "viperImagePath $viperImagePath does not exist"
+     exit -1
+   }
+}
+
+if {[string compare $olympicImagePath "NULL"]!=0} {
+   if {[file exists $olympicImagePath]} {
+      set tftpFile [file tail $olympicImagePath]
+      set pid [pid]
+      set olympicTftpFile [format %d%dolympic%s $pid $tStartTime $tftpFile]
+      set fd_out [open "Tmp/tmp_$pid$tStartTime" "w"];
+      puts $fd_out "put $olympicImagePath $olympicTftpFile"
+      puts $fd_out "quit"
+      close $fd_out
+      set olympicMd5Sum [lindex [exec /usr/bin/md5sum $olympicImagePath] 0]
+      foreach TFTPServerIP $tftpServerList {
+        puts "Putting $olympicImagePath onto tftp Server $TFTPServerIP as $olympicTftpFile"
+        if {[catch {exec /usr/bin/tftp $TFTPServerIP < ./Tmp/tmp_$pid$tStartTime} reason]} {
+           puts "error: $reason"
+           exit -1
+        }
+     }
+     file delete ./Tmp/tmp_$pid$tStartTime
+   } else {
+     puts "olympicImagePath $olympicImagePath does not exist"
+     exit -1
+   }
+}
+
+if {[string compare $jaguarImagePath "NULL"]!=0} {
+   if {[file exists $jaguarImagePath]} {
+      set tftpFile [file tail $jaguarImagePath]
+      set pid [pid]
+      set jaguarTftpFile [format %d%djaguar%s $pid $tStartTime $tftpFile]
+      set fd_out [open "Tmp/tmp_$pid$tStartTime" "w"];
+      puts $fd_out "put $jaguarImagePath $jaguarTftpFile"
+      puts $fd_out "quit"
+      close $fd_out
+      set jaguarMd5Sum [lindex [exec /usr/bin/md5sum $jaguarImagePath] 0]
+      foreach TFTPServerIP $tftpServerList {
+        puts "Putting $jaguarImagePath onto tftp Server $TFTPServerIP as $jaguarTftpFile"
+        if {[catch {exec /usr/bin/tftp $TFTPServerIP < ./Tmp/tmp_$pid$tStartTime} reason]} {
+           puts "error: $reason"
+           exit -1
+        }
+     }
+     file delete ./Tmp/tmp_$pid$tStartTime
+   } else {
+     puts "jaguarImagePath $jaguarImagePath does not exist"
+     exit -1
+   }
+}
+
+# EY-03-06-2007: Added code to check for Panther image and put it on TFTP
+# server.
+if {[string compare $pantherImagePath "NULL"] != 0} {
+   if {[file exists $pantherImagePath]} {
+      set tftpFile [file tail $pantherImagePath];
+      set pid [pid];
+      set pantherTftpFile [format %d%dpanther%s $pid $tStartTime $tftpFile];
+      set fd_out [open "Tmp/tmp_$pid$tStartTime" "w"];
+      puts $fd_out "put $pantherImagePath $pantherTftpFile";
+      puts $fd_out "quit";
+      close $fd_out;
+      set pantherMd5Sum [lindex [exec /usr/bin/md5sum $pantherImagePath] 0];
+      foreach TFTPServerIP $tftpServerList {
+        puts "Putting $pantherImagePath onto tftp Server $TFTPServerIP as $pantherTftpFile";
+        if {[catch {exec /usr/bin/tftp $TFTPServerIP < ./Tmp/tmp_$pid$tStartTime} reason]} {
+           puts "error: $reason";
+           exit -1;
+        }
+     }
+     file delete "./Tmp/tmp_$pid$tStartTime";
+   } else {
+     puts "pantherImagePath $pantherImagePath does not exist";
+     exit -1;
+   }
+}
+if {[string compare $voyagerImagePath "NULL"] != 0} {
+   if {[file exists $voyagerImagePath]} {
+      set tftpFile [file tail $voyagerImagePath];
+      set pid [pid];
+      set voyagerTftpFile [format %d%dvoyager%s $pid $tStartTime $tftpFile];
+      set fd_out [open "Tmp/tmp_$pid$tStartTime" "w"];
+      puts $fd_out "put $voyagerImagePath $voyagerTftpFile";
+      puts $fd_out "quit";
+      close $fd_out;
+      set voyagerMd5Sum [lindex [exec /usr/bin/md5sum $voyagerImagePath] 0];
+      foreach TFTPServerIP $tftpServerList {
+        puts "Putting $voyagerImagePath onto tftp Server $TFTPServerIP as $voyagerTftpFile";
+        if {[catch {exec /usr/bin/tftp $TFTPServerIP < ./Tmp/tmp_$pid$tStartTime} reason]} {
+           puts "error: $reason";
+           exit -1;
+        }
+     }
+     file delete "./Tmp/tmp_$pid$tStartTime";
+   } else {
+     puts "voyagerImagePath $voyagerImagePath does not exist";
+     exit -1;
+   }
+}
+if {[string compare $x650ImagePath "NULL"] != 0} {
+   if {[file exists $x650ImagePath]} {
+      set tftpFile [file tail $x650ImagePath];
+      set pid [pid];
+      set x650TftpFile [format %d%dx650%s $pid $tStartTime $tftpFile];
+      set fd_out [open "Tmp/tmp_$pid$tStartTime" "w"];
+      puts $fd_out "put $x650ImagePath $x650TftpFile";
+      puts $fd_out "quit";
+      close $fd_out;
+      set x650Md5Sum [lindex [exec /usr/bin/md5sum $x650ImagePath] 0];
+      foreach TFTPServerIP $tftpServerList {
+        puts "Putting $x650ImagePath onto tftp Server $TFTPServerIP as $x650TftpFile";
+        if {[catch {exec /usr/bin/tftp $TFTPServerIP < ./Tmp/tmp_$pid$tStartTime} reason]} {
+           puts "error: $reason";
+           exit -1;
+        }
+     }
+     file delete "./Tmp/tmp_$pid$tStartTime";
+   } else {
+     puts "x650ImagePath $x650ImagePath does not exist";
+     exit -1;
+   }
+}
+
+if {[string compare $x480ImagePath "NULL"] != 0} {
+   if {[file exists $x480ImagePath]} {
+      set tftpFile [file tail $x480ImagePath];
+      set pid [pid];
+      set x480TftpFile [format %d%dx480%s $pid $tStartTime $tftpFile];
+      set fd_out [open "Tmp/tmp_$pid$tStartTime" "w"];
+      puts $fd_out "put $x480ImagePath $x480TftpFile";
+      puts $fd_out "quit";
+      close $fd_out;
+      set x480Md5Sum [lindex [exec /usr/bin/md5sum $x480ImagePath] 0];
+      foreach TFTPServerIP $tftpServerList {
+        puts "Putting $x480ImagePath onto tftp Server $TFTPServerIP as $x480TftpFile";
+        if {[catch {exec /usr/bin/tftp $TFTPServerIP < ./Tmp/tmp_$pid$tStartTime} reason]} {
+           puts "error: $reason";
+           exit -1;
+        }
+     }
+     file delete "./Tmp/tmp_$pid$tStartTime";
+   } else {
+     puts "x480ImagePath $x480ImagePath does not exist";
+     exit -1;
+   }
+}
+
+if {[string compare $NWIImagePath "NULL"] != 0} {
+   if {[file exists $NWIImagePath]} {
+      set tftpFile [file tail $NWIImagePath];
+      set pid [pid];
+      set NWITftpFile [format %d%dNWI%s $pid $tStartTime $tftpFile];
+      set fd_out [open "Tmp/tmp_$pid$tStartTime" "w"];
+      puts $fd_out "put $NWIImagePath $NWITftpFile";
+      puts $fd_out "quit";
+      close $fd_out;
+      set NWIMd5Sum [lindex [exec /usr/bin/md5sum $NWIImagePath] 0];
+      foreach TFTPServerIP $tftpServerList {
+        puts "Putting $NWIImagePath onto tftp Server $TFTPServerIP as $NWITftpFile";
+        if {[catch {exec /usr/bin/tftp $TFTPServerIP < ./Tmp/tmp_$pid$tStartTime} reason]} {
+           puts "error: $reason";
+           exit -1;
+        }
+     }
+     file delete "./Tmp/tmp_$pid$tStartTime";
+   } else {
+     puts "NWIImagePath $NWIImagePath does not exist";
+     exit -1;
+   }
+}
+
+if {[string compare $everestImagePath "NULL"]!=0} {
+   if {[file exists $everestImagePath]} {
+      set tftpFile [file tail $everestImagePath]
+      set pid [pid]
+      set everestTftpFile [format %d%deverest%s $pid $tStartTime $tftpFile]
+      set fd_out [open "Tmp/tmp_$pid$tStartTime" "w"];
+      puts $fd_out "put $everestImagePath $everestTftpFile"
+      puts $fd_out "quit"
+      close $fd_out
+      set everestMd5Sum [lindex [exec /usr/bin/md5sum $everestImagePath] 0]
+      foreach TFTPServerIP $tftpServerList {
+        puts "Putting $everestImagePath onto tftp Server $TFTPServerIP as $everestTftpFile"
+        if {[catch {exec /usr/bin/tftp $TFTPServerIP < ./Tmp/tmp_$pid$tStartTime} reason]} {
+           puts "error: $reason"
+           exit -1
+        }
+     }
+     file delete ./Tmp/tmp_$pid$tStartTime
+   } else {
+     puts "everestImagePath $everestImagePath does not exist"
+     exit -1
+   }
+}
+
+
+
+
+
+##############################################################################
+##  Get information about the DUT
+##############################################################################
+set fd_res [open_result_file "setup"]
+
+while { [info exists DUT${numDUT}_CONNECT] } {
+   set connect [set DUT${numDUT}_CONNECT]
+   set script [set DUT${numDUT}_SETUP]
+   lappend connectList $connect
+   lappend scriptList $script
+   puts "***** DUT${numDUT}_CONNECT=$connect ***** "
+   puts "***** numDUT=$numDUT ***** "
+   incr numDUT 1
+}
+incr numDUT -1
+set stat [RunSetupScript $connectList $scriptList -at download -dut $numDUT]
+if { [regexp -nocase "DUT" $stat] } {
+    set dutnumber [string range $stat 0 3]
+    result_error "Could not Login properly to $dutnumber"
+} else {
+   result_ok "Successfully performed setup on all DUT's"
+}
+unset connectList
+unset scriptList
+
+#
+# EY-04-04-2013: Check return value from get_DUTs_info.
+if {[set rc [get_DUTs_info]] != 0} {
+    result_error "Error $rc while calling get_DUTs_info.";
+    close_result_file;
+    return -1;
+}
+set fd_res [open_result_file "loadimage"]
+puts $fd_res "Using config file: $sourceFile"
+# check md5sum of the files on tftp servers for corruption
+# EY-03-06-2007: Added checks for Panther image.
+if {[string compare $i386TftpFile "NULL"]!=0 || \
+    [string compare $marinerTftpFile "NULL"]!=0 || \
+    [string compare $aspenTftpFile "NULL"]!=0 || \
+    [string compare $aspennapaTftpFile "NULL"]!=0 || \
+    [string compare $olympicTftpFile "NULL"]!=0 || \
+    [string compare $jaguarTftpFile "NULL"]!=0 || \
+    [string compare $cougarTftpFile "NULL"]!=0 || \
+    [string compare $viperTftpFile "NULL"]!=0 || \
+    [string compare $pantherTftpFile "NULL"] != 0 || \
+    [string compare $voyagerTftpFile "NULL"] != 0 || \
+    [string compare $x650TftpFile "NULL"] != 0 || \
+    [string compare $x480TftpFile "NULL"] != 0 || \
+    [string compare $NWITftpFile "NULL"] != 0 || \
+    [string compare $everestTftpFile "NULL"] != 0 } {
+   result_debug "the local i386 md5sum $i386Md5Sum"
+   result_debug "the local mariner md5sum $marinerMd5Sum"
+   result_debug "the local aspen md5sum $aspenMd5Sum"
+   result_debug "the local aspennapa md5sum $aspennapaMd5Sum"
+   result_debug "the local cougar md5sum $cougarMd5Sum"
+   result_debug "the local viper md5sum $viperMd5Sum"
+   result_debug "the local olympic md5sum $olympicMd5Sum"
+   result_debug "the local jaguar md5sum $jaguarMd5Sum"
+   result_debug "the local panther md5sum $pantherMd5Sum";
+   result_debug "the local voyager md5sum $voyagerMd5Sum";
+   result_debug "the local x650 md5sum $x650Md5Sum";
+   result_debug "the local x480 md5sum $x480Md5Sum";
+   result_debug "the local NWI md5sum $NWIMd5Sum";
+   result_debug "the local everest md5sum $everestMd5Sum";
+   set i386Buf 0
+   set marinerBuf 0
+   set aspenBuf 0
+   set aspennapaBuf 0
+   set cougarBuf 0
+   set viperBuf 0
+   set jaguarBuf 0
+   set olympicBuf 0
+   set voyagerBuf 0
+   # EY-03-06-2007: Added buffer variable for new Panther platform.
+   set pantherBuf 0
+   set x650Buf 0
+   set x480Buf 0
+   set NWIBuf 0
+   set everestBuf 0
+   foreach TFTPServerIP $tftpServerList {
+      puts "Checking the md5sum of image file on tftp server..."
+      login_linux $TFTPServerIP $tftpServerLogin $tftpServerPasswd
+      #exp_internal 1
+      if {[string compare $i386TftpFile "NULL"]!=0} {
+         set i386Buf [linuxSendACmd "/usr/bin/md5sum $tftpServerTftpboot/$i386TftpFile"]
+         result_debug "The i386 md5sum on $TFTPServerIP $i386Buf"
+      }
+      if {[string compare $marinerTftpFile "NULL"]!=0} {
+         set marinerBuf [linuxSendACmd "/usr/bin/md5sum $tftpServerTftpboot/$marinerTftpFile"]
+         result_debug "The marinerBuf md5sum on $TFTPServerIP $marinerBuf"
+      }
+      if {[string compare $aspenTftpFile "NULL"]!=0} {
+         set aspenBuf [linuxSendACmd "/usr/bin/md5sum $tftpServerTftpboot/$aspenTftpFile"]
+         result_debug "The aspenBuf md5sum on $TFTPServerIP $aspenBuf"
+      }
+      if {[string compare $aspennapaTftpFile "NULL"]!=0} {
+         set aspennapaBuf [linuxSendACmd "/usr/bin/md5sum $tftpServerTftpboot/$aspennapaTftpFile"]
+         result_debug "The aspennapaBuf md5sum on $TFTPServerIP $aspennapaBuf"
+      }
+      if {[string compare $cougarTftpFile "NULL"]!=0} {
+         set cougarBuf [linuxSendACmd "/usr/bin/md5sum $tftpServerTftpboot/$cougarTftpFile"]
+         result_debug "The cougarBuf md5sum on $TFTPServerIP $cougarBuf"
+      }
+      if {[string compare $viperTftpFile "NULL"]!=0} {
+         set viperBuf [linuxSendACmd "/usr/bin/md5sum $tftpServerTftpboot/$viperTftpFile"]
+         result_debug "The viperBuf md5sum on $TFTPServerIP $viperBuf"
+      }
+      if {[string compare $olympicTftpFile "NULL"]!=0} {
+         set olympicBuf [linuxSendACmd "/usr/bin/md5sum $tftpServerTftpboot/$olympicTftpFile"]
+         set olympicBuf [linuxSendACmd "/usr/bin/md5sum $tftpServerTftpboot/$olympicTftpFile"]
+         result_debug "The olympicBuf md5sum on $TFTPServerIP $olympicBuf"
+      }
+      if {[string compare $jaguarTftpFile "NULL"]!=0} {
+         set jaguarBuf [linuxSendACmd "/usr/bin/md5sum $tftpServerTftpboot/$jaguarTftpFile"]
+         result_debug "The jaguarBuf md5sum on $TFTPServerIP $jaguarBuf"
+      }
+      # EY-03-06-2007: Added code to compute MD5 sum for new Panther platform image.
+      if {[string compare $pantherTftpFile "NULL"]!=0} {
+         set pantherBuf [linuxSendACmd "/usr/bin/md5sum $tftpServerTftpboot/$pantherTftpFile"]
+         result_debug "The pantherBuf md5sum on $TFTPServerIP $pantherBuf"
+      }
+      if {[string compare $voyagerTftpFile "NULL"]!=0} {
+         set voyagerBuf [linuxSendACmd "/usr/bin/md5sum $tftpServerTftpboot/$voyagerTftpFile"]
+         result_debug "The voyagerBuf md5sum on $TFTPServerIP $voyagerBuf"
+      }
+      if {[string compare $x650TftpFile "NULL"]!=0} {
+         set x650Buf [SendACmd "/usr/bin/md5sum $tftpServerTftpboot/$x650TftpFile" "NULL" "NULL" "true" 1]
+         result_debug "The x650Buf md5sum on $TFTPServerIP $x650Buf"
+      }
+      if {[string compare $x480TftpFile "NULL"]!=0} {
+         set x480Buf [SendACmd "/usr/bin/md5sum $tftpServerTftpboot/$x480TftpFile" "NULL" "NULL" "true" 1]
+         result_debug "The x480Buf md5sum on $TFTPServerIP $x480Buf"
+      }
+      if {[string compare $NWITftpFile "NULL"]!=0} {
+         set NWIBuf [SendACmd "/usr/bin/md5sum $tftpServerTftpboot/$NWITftpFile" "NULL" "NULL" "true" 1]
+         result_debug "The NWIBuf md5sum on $TFTPServerIP $NWIBuf"
+      }
+      if {[string compare $everestTftpFile "NULL"]!=0} {
+         set everestBuf [linuxSendACmd "/usr/bin/md5sum $tftpServerTftpboot/$everestTftpFile"]
+         result_debug "The everestBuf md5sum on $TFTPServerIP $everestBuf"
+      }
+      if {[string compare $i386TftpFile "NULL"]!=0} {
+      if {[regexp -all $i386Md5Sum $i386Buf]==1} {
+         result_ok "Successfully matched i386 md5sum on two locations"
+      } else {
+         result_error "Error matching i386 md5sum on two locations"
+         # Remove files from tftp before exit
+         login_linux $TFTPServerIP $tftpServerLogin $tftpServerPasswd
+         SendACmd "/bin/rm $tftpServerTftpboot/$i386TftpFile" NULL NULL true 1
+         exit -1
+      }
+      }
+      if {[string compare $marinerTftpFile "NULL"]!=0} {
+      if {[regexp -all $marinerMd5Sum $marinerBuf]==1} {
+         result_ok "Successfully matched mariner md5sum on two locations"
+      } else {
+         result_error "Error matching mariner md5sum on two locations"
+         # Remove files from tftp before exit
+         login_linux $TFTPServerIP $tftpServerLogin $tftpServerPasswd
+         SendACmd "/bin/rm $tftpServerTftpboot/$marinerTftpFile" NULL NULL true 1
+         exit -1
+      }
+      }
+      if {[string compare $aspenTftpFile "NULL"]!=0} {
+      if {[regexp -all $aspenMd5Sum $aspenBuf]==1} {
+         result_ok "Successfully matched aspen md5sum on two locations"
+      } else {
+         result_error "Error matching aspen md5sum on two locations"
+         # Remove files from tftp before exit
+         login_linux $TFTPServerIP $tftpServerLogin $tftpServerPasswd
+         SendACmd "/bin/rm $tftpServerTftpboot/$aspenTftpFile" NULL NULL true 1
+         exit -1
+      }
+      }
+      if {[string compare $aspennapaTftpFile "NULL"]!=0} {
+      if {[regexp -all $aspennapaMd5Sum $aspennapaBuf]==1} {
+         result_ok "Successfully matched aspennapa md5sum on two locations"
+      } else {
+         result_error "Error matching aspennapa md5sum on two locations"
+         # Remove files from tftp before exit
+         login_linux $TFTPServerIP $tftpServerLogin $tftpServerPasswd
+         SendACmd "/bin/rm $tftpServerTftpboot/$aspenTftpFile" NULL NULL true 1
+         exit -1
+      }
+      }
+      if {[string compare $cougarTftpFile "NULL"]!=0} {
+      if {[regexp -all $cougarMd5Sum $cougarBuf]==1} {
+         result_ok "Successfully matched cougar md5sum on two locations"
+      } else {
+         result_error "Error matching cougar md5sum on two locations"
+         # Remove files from tftp before exit
+         login_linux $TFTPServerIP $tftpServerLogin $tftpServerPasswd
+         SendACmd "/bin/rm $tftpServerTftpboot/$cougarTftpFile" NULL NULL true 1
+         exit -1
+      }
+      }
+      if {[string compare $viperTftpFile "NULL"]!=0} {
+      if {[regexp -all $viperMd5Sum $viperBuf]==1} {
+         result_ok "Successfully matched viper md5sum on two locations"
+      } else {
+         result_error "Error matching viper md5sum on two locations"
+         # Remove files from tftp before exit
+         login_linux $TFTPServerIP $tftpServerLogin $tftpServerPasswd
+         SendACmd "/bin/rm $tftpServerTftpboot/$viperTftpFile" NULL NULL true 1
+         exit -1
+      }
+      }
+      if {[string compare $olympicTftpFile "NULL"]!=0} {
+      if {[regexp -all $olympicMd5Sum $olympicBuf]==1} {
+         result_ok "Successfully matched olympic md5sum on two locations"
+      } else {
+         result_error "Error matching olympic md5sum on two locations"
+         # Remove files from tftp before exit
+         login_linux $TFTPServerIP $tftpServerLogin $tftpServerPasswd
+         SendACmd "/bin/rm $tftpServerTftpboot/$olympcTftpFile" NULL NULL true 1
+         exit -1
+      }
+      }
+      if {[string compare $jaguarTftpFile "NULL"]!=0} {
+      if {[regexp -all $jaguarMd5Sum $jaguarBuf]==1} {
+         result_ok "Successfully matched jaguar md5sum on two locations"
+      } else {
+         result_error "Error matching jaguar md5sum on two locations"
+         # Remove files from tftp before exit
+         login_linux $TFTPServerIP $tftpServerLogin $tftpServerPasswd
+         SendACmd "/bin/rm $tftpServerTftpboot/$jaguarTftpFile" NULL NULL true 1
+         exit -1
+      }
+      }
+      # EY-03-06-2007: Added code to check MD5 sum of new Panther image.
+      if {[string compare $pantherTftpFile "NULL"] != 0} {
+         if {[regexp -all $pantherMd5Sum $pantherBuf] == 1} {
+            result_ok "Successfully matched panther md5sum on two locations";
+         } else {
+            result_error "Error matching panther md5sum on two locations";
+            # Remove files from tftp before exit
+            login_linux $TFTPServerIP $tftpServerLogin $tftpServerPasswd;
+            SendACmd "/bin/rm $tftpServerTftpboot/$pantherTftpFile" NULL NULL true 1;
+            exit -1;
+         }
+      }
+      if {[string compare $voyagerTftpFile "NULL"] != 0} {
+         if {[regexp -all $voyagerMd5Sum $voyagerBuf] == 1} {
+            result_ok "Successfully matched voyager md5sum on two locations";
+         } else {
+            result_error "Error matching voyager md5sum on two locations";
+            # Remove files from tftp before exit
+            login_linux $TFTPServerIP $tftpServerLogin $tftpServerPasswd;
+            SendACmd "/bin/rm $tftpServerTftpboot/$voyagerTftpFile" NULL NULL true 1;
+            exit -1;
+         }
+      }
+      if {[string compare $x650TftpFile "NULL"] != 0} {
+         if {[regexp -all $x650Md5Sum $x650Buf] == 1} {
+            result_ok "Successfully matched x650 md5sum on two locations";
+         } else {
+            result_error "Error matching x650 md5sum on two locations";
+            # Remove files from tftp before exit
+            login_linux $TFTPServerIP $tftpServerLogin $tftpServerPasswd;
+            SendACmd "/bin/rm $tftpServerTftpboot/$x650TftpFile" NULL NULL true 1;
+            exit -1;
+         }
+      }
+      if {[string compare $x480TftpFile "NULL"] != 0} {
+         if {[regexp -all $x480Md5Sum $x480Buf] == 1} {
+            result_ok "Successfully matched x480 md5sum on two locations";
+         } else {
+            result_error "Error matching x480 md5sum on two locations";
+            # Remove files from tftp before exit
+            login_linux $TFTPServerIP $tftpServerLogin $tftpServerPasswd;
+            SendACmd "/bin/rm $tftpServerTftpboot/$x480TftpFile" NULL NULL true 1;
+            exit -1;
+         }
+      }
+      if {[string compare $NWITftpFile "NULL"] != 0} {
+         if {[regexp -all $NWIMd5Sum $NWIBuf] == 1} {
+            result_ok "Successfully matched NWI md5sum on two locations";
+         } else {
+            result_error "Error matching NWI md5sum on two locations";
+            # Remove files from tftp before exit
+            login_linux $TFTPServerIP $tftpServerLogin $tftpServerPasswd;
+            SendACmd "/bin/rm $tftpServerTftpboot/$NWITftpFile" NULL NULL true 1;
+            exit -1;
+         }
+      }
+      if {[string compare $everestTftpFile "NULL"]!=0} {
+         if {[regexp -all $everestMd5Sum $everestBuf]==1} {
+            result_ok "Successfully matched everest md5sum on two locations"
+         } else {
+            result_error "Error matching everest md5sum on two locations"
+            # Remove files from tftp before exit
+            login_linux $TFTPServerIP $tftpServerLogin $tftpServerPasswd
+            SendACmd "/bin/rm $tftpServerTftpboot/$everestTftpFile" NULL NULL true 1
+            exit -1
+         }
+      }
+   }
+} else {
+   result_error "Error: No image specified"
+   exit -1
+}
+
+
+##############################################################################
+#  Open Result file after get_DUT_info
+##############################################################################
+    ;# create the report directory
+    set optionalPath ""
+    create_report_directory yes $optionalPath
+
+if {$imageNotFound||$romNotFound} {
+   set dlOK 1
+} else {
+   # EY-03-06-2007: Added Panther image path to download list.
+   puts "DownLdCode $i386TftpFile $marinerTftpFile $aspenTftpFile $aspennapaTftpFile $cougarTftpFile $viperTftpFile $olympicTftpFile $jaguarTftpFile $pantherTftpFile $voyagerTftpFile $x650TftpFile $x480TftpFile $NWITftpFile $everestTftpFile $bootrom $unc $fd_res"
+
+   set dlOK [DownLdCode $i386TftpFile $marinerTftpFile $aspenTftpFile $aspennapaTftpFile $cougarTftpFile $viperTftpFile $olympicTftpFile $jaguarTftpFile $pantherTftpFile $voyagerTftpFile $x650TftpFile $x480TftpFile $NWITftpFile $everestTftpFile $bootrom $unc $fd_res]
+}
+
+# EY-03-06-2007: Added check for Panther TFTP file.
+if {[string compare $i386TftpFile "NULL"] != 0 || \
+    [string compare $marinerTftpFile "NULL"] != 0 || \
+    [string compare $aspenTftpFile "NULL"] != 0 || \
+    [string compare $aspennapaTftpFile "NULL"] != 0 || \
+    [string compare $olympicTftpFile "NULL"] != 0 || \
+    [string compare $jaguarTftpFile "NULL"] != 0 || \
+    [string compare $cougarTftpFile "NULL"] != 0 || \
+    [string compare $viperTftpFile "NULL"] != 0 || \
+    [string compare $pantherTftpFile "NULL"] != 0 || \
+    [string compare $voyagerTftpFile "NULL"] != 0 || \
+    [string compare $x650TftpFile "NULL"] != 0  || \
+    [string compare $x480TftpFile "NULL"] != 0 || \
+    [string compare $NWITftpFile "NULL"] != 0 || \
+    [string compare $everestTftpFile "NULL"] != 0 } {
+   set i386Buf 0
+   set marinerBuf 0
+   set aspenBuf 0
+   set aspennapaBuf 0
+   set cougarBuf 0
+   set viperBuf 0
+   set jaguarBuf 0
+   set olympicBuf 0
+   # EY-03-06-2007: Added buffer variable for new Panther platform.
+   set pantherBuf 0;
+   set voyagerBuf 0;
+   set x650Buf 0;
+   set x480Buf 0;
+   set NWIBuf 0;
+   set everestBuf 0;
+   foreach TFTPServerIP $tftpServerList {
+      puts "Checking the md5sum of image file on tftp server..."
+      login_linux $TFTPServerIP $tftpServerLogin $tftpServerPasswd
+      if {[string compare $i386TftpFile "NULL"]!=0} {
+         set i386Buf [linuxSendACmd "/usr/bin/md5sum $tftpServerTftpboot/$i386TftpFile"]
+         result_debug "The i386 md5sum on $TFTPServerIP $i386Buf"
+      }
+      if {[string compare $marinerTftpFile "NULL"]!=0} {
+         set marinerBuf [linuxSendACmd "/usr/bin/md5sum $tftpServerTftpboot/$marinerTftpFile"]
+         result_debug "The marinerBuf md5sum on $TFTPServerIP $marinerBuf"
+      }
+      if {[string compare $aspenTftpFile "NULL"]!=0} {
+         set aspenBuf [linuxSendACmd "/usr/bin/md5sum $tftpServerTftpboot/$aspenTftpFile"]
+         result_debug "The aspenBuf md5sum on $TFTPServerIP $aspenBuf"
+      }
+      if {[string compare $aspennapaTftpFile "NULL"]!=0} {
+         set aspennapaBuf [linuxSendACmd "/usr/bin/md5sum $tftpServerTftpboot/$aspennapaTftpFile"]
+         result_debug "The aspennapaBuf md5sum on $TFTPServerIP $aspennapaBuf"
+      }
+      if {[string compare $cougarTftpFile "NULL"]!=0} {
+         set cougarBuf [linuxSendACmd "/usr/bin/md5sum $tftpServerTftpboot/$cougarTftpFile"]
+         result_debug "The cougarBuf md5sum on $TFTPServerIP $cougarBuf"
+      }
+      if {[string compare $viperTftpFile "NULL"]!=0} {
+         set viperBuf [linuxSendACmd "/usr/bin/md5sum $tftpServerTftpboot/$viperTftpFile"]
+         result_debug "The viperBuf md5sum on $TFTPServerIP $viperBuf"
+      }
+      if {[string compare $olympicTftpFile "NULL"]!=0} {
+         set olympicBuf [linuxSendACmd "/usr/bin/md5sum $tftpServerTftpboot/$olympicTftpFile"]
+         set olympicBuf [linuxSendACmd "/usr/bin/md5sum $tftpServerTftpboot/$olympicTftpFile"]
+         result_debug "The olympicBuf md5sum on $TFTPServerIP $olympicBuf"
+      }
+      if {[string compare $jaguarTftpFile "NULL"]!=0} {
+         set jaguarBuf [linuxSendACmd "/usr/bin/md5sum $tftpServerTftpboot/$jaguarTftpFile"]
+         result_debug "The jaguarBuf md5sum on $TFTPServerIP $jaguarBuf"
+      }
+      # EY-03-06-2007: Added code to compute MD5 sum for new Panther platform image.
+      if {[string compare $pantherTftpFile "NULL"] != 0} {
+         set pantherBuf [linuxSendACmd "/usr/bin/md5sum $tftpServerTftpboot/$pantherTftpFile"];
+         result_debug "The pantherBuf md5sum on $TFTPServerIP $pantherBuf";
+      }
+      if {[string compare $voyagerTftpFile "NULL"] != 0} {
+         set voyagerBuf [linuxSendACmd "/usr/bin/md5sum $tftpServerTftpboot/$voyagerTftpFile"];
+         result_debug "The voyagerBuf md5sum on $TFTPServerIP $voyagerBuf";
+      }
+      if {[string compare $x650TftpFile "NULL"] != 0} {
+         set x650Buf [SendACmd "/usr/bin/md5sum $tftpServerTftpboot/$x650TftpFile" "NULL" "NULL" "true" 1];
+         result_debug "The x650Buf md5sum on $TFTPServerIP $x650Buf";
+      }
+      if {[string compare $x480TftpFile "NULL"] != 0} {
+         set x480Buf [SendACmd "/usr/bin/md5sum $tftpServerTftpboot/$x480TftpFile" "NULL" "NULL" "true" 1];
+         result_debug "The x480Buf md5sum on $TFTPServerIP $x480Buf";
+      }
+      if {[string compare $NWITftpFile "NULL"] != 0} {
+         set NWIBuf [SendACmd "/usr/bin/md5sum $tftpServerTftpboot/$NWITftpFile" "NULL" "NULL" "true" 1];
+         result_debug "The NWIBuf md5sum on $TFTPServerIP $NWIBuf";
+      }
+      if {[string compare $everestTftpFile "NULL"]!=0} {
+         set everestBuf [linuxSendACmd "/usr/bin/md5sum $tftpServerTftpboot/$everestTftpFile"]
+         result_debug "The everestBuf md5sum on $TFTPServerIP $everestBuf"
+      }
+      if {[string compare $i386TftpFile "NULL"]!=0} {
+      if {[regexp -all $i386Md5Sum $i386Buf]==1} {
+         result_ok "Successfully matched i386 md5sum on two locations"
+      } else {
+         result_error "Error matching i386 md5sum on two locations"
+         # Remove files from tftp before exit
+         login_linux $TFTPServerIP $tftpServerLogin $tftpServerPasswd
+         SendACmd "/bin/rm $tftpServerTftpboot/$i386TftpFile" NULL NULL true 1
+         exit -1
+      }
+      }
+      if {[string compare $marinerTftpFile "NULL"]!=0} {
+      if {[regexp -all $marinerMd5Sum $marinerBuf]==1} {
+         result_ok "Successfully matched mariner md5sum on two locations"
+      } else {
+         result_error "Error matching mariner md5sum on two locations"
+         # Remove files from tftp before exit
+         login_linux $TFTPServerIP $tftpServerLogin $tftpServerPasswd
+         SendACmd "/bin/rm $tftpServerTftpboot/$marinerTftpFile" NULL NULL true 1
+         exit -1
+      }
+      }
+      if {[string compare $aspenTftpFile "NULL"]!=0} {
+      if {[regexp -all $aspenMd5Sum $aspenBuf]==1} {
+         result_ok "Successfully matched aspen md5sum on two locations"
+      } else {
+         result_error "Error matching aspen md5sum on two locations"
+         # Remove files from tftp before exit
+         login_linux $TFTPServerIP $tftpServerLogin $tftpServerPasswd
+         SendACmd "/bin/rm $tftpServerTftpboot/$aspenTftpFile" NULL NULL true 1
+         exit -1
+      }
+      }
+      if {[string compare $aspennapaTftpFile "NULL"]!=0} {
+      if {[regexp -all $aspennapaMd5Sum $aspennapaBuf]==1} {
+         result_ok "Successfully matched aspennapa md5sum on two locations"
+      } else {
+         result_error "Error matching aspennapa md5sum on two locations"
+         # Remove files from tftp before exit
+         login_linux $TFTPServerIP $tftpServerLogin $tftpServerPasswd
+         SendACmd "/bin/rm $tftpServerTftpboot/$aspennapaTftpFile" NULL NULL true 1
+         exit -1
+      }
+      }
+      if {[string compare $cougarTftpFile "NULL"]!=0} {
+      if {[regexp -all $cougarMd5Sum $cougarBuf]==1} {
+         result_ok "Successfully matched cougar md5sum on two locations"
+      } else {
+         result_error "Error matching cougar md5sum on two locations"
+         # Remove files from tftp before exit
+         login_linux $TFTPServerIP $tftpServerLogin $tftpServerPasswd
+         SendACmd "/bin/rm $tftpServerTftpboot/$cougarTftpFile" NULL NULL true 1
+         exit -1
+      }
+      }
+      if {[string compare $viperTftpFile "NULL"]!=0} {
+      if {[regexp -all $viperMd5Sum $viperBuf]==1} {
+         result_ok "Successfully matched viper md5sum on two locations"
+      } else {
+         result_error "Error matching viper md5sum on two locations"
+         # Remove files from tftp before exit
+         login_linux $TFTPServerIP $tftpServerLogin $tftpServerPasswd
+         SendACmd "/bin/rm $tftpServerTftpboot/$viperTftpFile" NULL NULL true 1
+         exit -1
+      }
+      }
+      if {[string compare $olympicTftpFile "NULL"]!=0} {
+      if {[regexp -all $olympicMd5Sum $olympicBuf]==1} {
+         result_ok "Successfully matched olympic md5sum on two locations"
+      } else {
+         result_error "Error matching olympic md5sum on two locations"
+         # Remove files from tftp before exit
+         login_linux $TFTPServerIP $tftpServerLogin $tftpServerPasswd
+         SendACmd "/bin/rm $tftpServerTftpboot/$olympicTftpFile" NULL NULL true 1
+         exit -1
+      }
+      }
+      if {[string compare $jaguarTftpFile "NULL"]!=0} {
+      if {[regexp -all $jaguarMd5Sum $jaguarBuf]==1} {
+         result_ok "Successfully matched jaguar md5sum on two locations"
+      } else {
+         result_error "Error matching jaguar md5sum on two locations"
+         # Remove files from tftp before exit
+         login_linux $TFTPServerIP $tftpServerLogin $tftpServerPasswd
+         SendACmd "/bin/rm $tftpServerTftpboot/$jaguarTftpFile" NULL NULL true 1
+         exit -1
+      }
+      }
+      # EY-03-06-2007: Added code to check MD5 sum of new Panther image.
+      if {[string compare $pantherTftpFile "NULL"] != 0} {
+         if {[regexp -all $pantherMd5Sum $pantherBuf] == 1} {
+            result_ok "Successfully matched panther md5sum on two locations";
+         } else {
+            result_error "Error matching panther md5sum on two locations";
+            # Remove files from tftp before exit
+            login_linux $TFTPServerIP $tftpServerLogin $tftpServerPasswd;
+            SendACmd "/bin/rm $tftpServerTftpboot/$pantherTftpFile" NULL NULL true 1;
+            exit -1;
+         }
+      }
+      if {[string compare $voyagerTftpFile "NULL"] != 0} {
+         if {[regexp -all $voyagerMd5Sum $voyagerBuf] == 1} {
+            result_ok "Successfully matched voyager md5sum on two locations";
+         } else {
+            result_error "Error matching voyager md5sum on two locations";
+            # Remove files from tftp before exit
+            login_linux $TFTPServerIP $tftpServerLogin $tftpServerPasswd;
+            SendACmd "/bin/rm $tftpServerTftpboot/$voyagerTftpFile" NULL NULL true 1;
+            exit -1;
+         }
+      }
+      if {[string compare $x650TftpFile "NULL"] != 0} {
+         if {[regexp -all $x650Md5Sum $x650Buf] == 1} {
+            result_ok "Successfully matched x650 md5sum on two locations";
+         } else {
+            result_error "Error matching x650 md5sum on two locations";
+            # Remove files from tftp before exit
+            login_linux $TFTPServerIP $tftpServerLogin $tftpServerPasswd;
+            SendACmd "/bin/rm $tftpServerTftpboot/$x650TftpFile" NULL NULL true 1;
+            exit -1;
+         }
+      }
+      if {[string compare $x480TftpFile "NULL"] != 0} {
+         if {[regexp -all $x480Md5Sum $x480Buf] == 1} {
+            result_ok "Successfully matched x480 md5sum on two locations";
+         } else {
+            result_error "Error matching x480 md5sum on two locations";
+            # Remove files from tftp before exit
+            login_linux $TFTPServerIP $tftpServerLogin $tftpServerPasswd;
+            SendACmd "/bin/rm $tftpServerTftpboot/$x480TftpFile" NULL NULL true 1;
+            exit -1;
+         }
+      }
+      if {[string compare $NWITftpFile "NULL"] != 0} {
+         if {[regexp -all $NWIMd5Sum $NWIBuf] == 1} {
+            result_ok "Successfully matched NWI md5sum on two locations";
+         } else {
+            result_error "Error matching NWI md5sum on two locations";
+            # Remove files from tftp before exit
+            login_linux $TFTPServerIP $tftpServerLogin $tftpServerPasswd;
+            SendACmd "/bin/rm $tftpServerTftpboot/$NWITftpFile" NULL NULL true 1;
+            exit -1;
+         }
+      }
+      if {[string compare $everestTftpFile "NULL"]!=0} {
+         if {[regexp -all $everestMd5Sum $everestBuf]==1} {
+            result_ok "Successfully matched everest md5sum on two locations"
+         } else {
+            result_error "Error matching everest md5sum on two locations"
+            # Remove files from tftp before exit
+            login_linux $TFTPServerIP $tftpServerLogin $tftpServerPasswd
+            SendACmd "/bin/rm $tftpServerTftpboot/$everestTftpFile" NULL NULL true 1
+            exit -1
+         }
+      }
+
+   }
+}
+
+set tEndTime [clock seconds]
+set testDuration [expr $tEndTime-$tStartTime]
+set testSec  [expr $testDuration % 60]
+set testMin  [expr $testDuration / 60]
+set testHour [expr $testMin / 60]
+set testMin  [expr $testMin % 60]
+
+  
+   # Remove files from tftp before exit
+   foreach TFTPServerIP $tftpServerList {
+      login_linux $TFTPServerIP $tftpServerLogin $tftpServerPasswd
+      catch {SendACmd "/bin/rm $tftpServerTftpboot/$i386TftpFile" NULL NULL true 1}
+      catch {SendACmd "/bin/rm $tftpServerTftpboot/$marinerTftpFile" NULL NULL true 1}
+      catch {SendACmd "/bin/rm $tftpServerTftpboot/$aspenTftpFile" NULL NULL true 1}
+      catch {SendACmd "/bin/rm $tftpServerTftpboot/$aspennapaTftpFile" NULL NULL true 1}
+      catch {SendACmd "/bin/rm $tftpServerTftpboot/$cougarTftpFile" NULL NULL true 1}
+      catch {SendACmd "/bin/rm $tftpServerTftpboot/$viperTftpFile" NULL NULL true 1}
+      catch {SendACmd "/bin/rm $tftpServerTftpboot/$olympicTftpFile" NULL NULL true 1}
+      catch {SendACmd "/bin/rm $tftpServerTftpboot/$jaguarTftpFile" NULL NULL true 1}
+      # EY-03-06-2007: Cleanup image for new Panther platform.
+      catch {SendACmd "/bin/rm $tftpServerTftpboot/$pantherTftpFile" NULL NULL true 1}
+      catch {SendACmd "/bin/rm $tftpServerTftpboot/$voyagerTftpFile" NULL NULL true 1}
+      catch {SendACmd "/bin/rm $tftpServerTftpboot/$x650TftpFile" NULL NULL true 1}
+      catch {SendACmd "/bin/rm $tftpServerTftpboot/$x480TftpFile" NULL NULL true 1}
+      catch {SendACmd "/bin/rm $tftpServerTftpboot/$NWITftpFile" NULL NULL true 1}
+      catch {SendACmd "/bin/rm $tftpServerTftpboot/$everestTftpFile" NULL NULL true 1}
+
+   }
+
+   close_result_file
+
+   #move the complete result directory to report directory
+   move_result_directory
+
+puts "\n\n*** Time for Downloading Code = $testDuration seconds"
+puts "***    ( $testHour hours, $testMin minutes, $testSec seconds )\n\n"
+
+puts stderr $dlOK
+flush stderr
+
+exit $dlOK

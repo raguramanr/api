@@ -1,0 +1,616 @@
+
+################################################################## 
+# Procedure Name: SkipOnTopologyError   
+# Description:  Any series of seperate test scripts based on one 
+#   common init file must reference  a global topology verification 
+#   flag to see whether the test should run or not.  In this case 
+#   topology2 is set to zero if the verification tests above fail.
+#   SkipOnTopologyError $DUTs_info(topology2) $testNo $time1 is called 
+#   at the top of every case that uses this topology and exits in 
+#   the case of a 0 value. THIS IS DONE so the failed cases are 
+#   uploaded to the database for rerun.
+#      
+# Input args: status <= 0 | 1 system topology verification status
+#             testNo <= test case numbers
+#             time1  <= time of test case start
+# Output args: none
+# Return value: 
+# Typical usage: 
+#	SkipOnTopologyError $DUTs_info(topology2) $testNo $time1      
+# Category: Utility
+##################################################################
+proc SkipOnTopologyError {topology testNo time1} {
+    global DUTs_info
+    if { ![info exists DUTs_info($topology)] || !$DUTs_info($topology) } {
+        report_start_test "Skipped $testNo : Topology Verification Failed or Setup not run"
+        result_skip "Skipped $testNo : Topology Verification Failed or Setup not run"
+        report_end_test
+        set time2 [clock seconds]
+        result_p "Time for $testNo = [expr $time2-$time1] secs\n\n"
+        close_result_file
+        report_end_test
+        return -code return  
+    }
+}
+
+proc CreateTopologyDiagram { } {
+    global CURRENT_EX_RESULT_FILENAME
+
+    # First find out if result file is complete...
+    catch {exec grep "Time for .* = .* sec" $CURRENT_EX_RESULT_FILENAME} endLineFound
+    if { ![regexp "Time for .* = .* sec" $endLineFound] } {
+	return
+    }
+
+    set logfileStr [GetLogfileStr $CURRENT_EX_RESULT_FILENAME]
+    #puts "\nlogfileStr=$logfileStr"
+
+    set INFOLines [GetInfoLines $logfileStr]
+
+    set DUTsUsed [GetDUTsUsed $INFOLines]
+
+    if { [llength $DUTsUsed] == 0 } {
+	puts "No DUT's used in the test [lindex [split $CURRENT_EX_RESULT_FILENAME "/"] end]. Topology diagram not created."
+	return
+    }
+
+    puts "\nDUTsUsed='$DUTsUsed'"
+    puts "\nINFOLines='$INFOLines'"
+
+}
+
+proc GetLogfileStr { logfilename } {
+
+    set logfileStr ""
+    set fd [open $logfilename "r"]
+    set logfileStr ""
+    while { ![eof $fd] } {
+	gets $fd line
+	if { [string length [string trim $line]] > 0 } {
+	    lappend logfileStr [string trim $line]
+	}
+    }
+    close $fd
+
+    return [GetUsableLogfileStr $logfileStr]
+}
+
+proc GetUsableLogfileStr { logfileStr } {
+
+    set stopFlag "COMPLETED_TOPOLOGY_DIAGRAM_CHECK"
+
+    if { ![regexp $stopFlag $logfileStr] } {
+	set stopFlag "!!!!!.*!!!!!|\\(\\(\\(\\(\\(.*\\)\\)\\)\\)\\)"
+    }
+
+    set newStr ""
+
+    foreach line $logfileStr {
+	if { [regexp $stopFlag $line] } {
+	    break
+	}
+	lappend newStr $line
+    }
+
+    return $newStr
+
+}
+
+proc StopTopologyDiagram { } {
+    result_debug "COMPLETED_TOPOLOGY_DIAGRAM_CHECK"
+}
+
+proc GetDUTsUsed { infoLines } {
+
+    set DUTsUsed ""
+    foreach item $infoLines {
+	set first [lindex $item 0]
+	set second [lindex $item 3]
+	if { ![regexp $first $DUTsUsed] } {
+	    lappend DUTsUsed $first
+	}
+	if { ![regexp $second $DUTsUsed] } {
+	    lappend DUTsUsed $second
+	}
+    }
+
+    return [lsort $DUTsUsed]
+}
+
+proc GetInfoLines { str } {
+
+    set infoLines ""
+    foreach line $str {
+	if { [regexp "INFO: DUT.* goes to" $line] } {
+	    set startdut [lindex $line 1]
+	    set startport [lindex $line 2]
+	    set enddut [lindex $line 5]
+	    if { $enddut == "portId" } {
+		set enddut "IXIA"
+	    }
+	    if { $enddut == "DUT0" } {
+		set enddut "HUB"
+	    }
+	    set endport [lindex $line 6]
+	    set tempLine [string trim "$startdut $startport === $enddut $endport"]
+	    if { [lsearch $infoLines $tempLine] == -1 } {
+		lappend infoLines $tempLine
+	    }
+	}
+    }
+    return [lsort [GetUniqueInfoItems "$infoLines"]]
+}
+
+proc GetUniqueInfoItems { infoLines } {
+
+    set reverseInfoLines ""
+    foreach item $infoLines {
+	lappend reverseInfoLines "[lrange $item 3 end] === [lrange $item 0 1]"
+    }
+
+    set newList $infoLines
+    foreach OrigItem $infoLines {
+	foreach ReverseItem $reverseInfoLines {
+	    if { $OrigItem == $ReverseItem } {
+		set newList [ldelete "$infoLines" "$ReverseItem"]
+	    }
+	}
+    }
+    return "$newList"
+}
+
+##################################################################
+# Procedure Name: generateTopologyFile
+# Description:
+#        Generate the topology drawing using information in portMappingList
+#        and cfg file
+# Input args: output file name
+#             cfg file name
+# Return value: none
+# Output args: none
+# Typical usage:
+#        generateTopologyFile "[get_result_dir]/topology.txt"
+# Category: Topology
+##################################################################
+
+proc generateTopologyFile { file cfg } {
+global portMappingList
+global switchPort2DefaultRouter
+global dutDosPort
+global topology
+global SERVER1
+global SERVER2
+global bootpserver
+global ixiaCh1
+global testVendorName
+global TrafficGen
+
+# create variables to hold tester name and IP, that is the same char length for each name
+# - create variable name same length as largest tester name length (-1 for '$'),
+#   so we can insert in diagram below, and keep formatting
+set tName_ "NONE   "
+switch -exact -- $TrafficGen {
+    agilent {
+        set tName_ "AGILENT"
+        set tLegend "For AGILENT port:   Port_id Card/Port"
+    }
+    stc {
+        set tName_ "TestCenter   "
+        set tLegend "For TestCenter port:      Port_id Slot:Port"
+    }
+    ixia {
+        set tName_ "IXIA   "
+        set tLegend "For IXIA port:      Port_id Slot:Port"
+    }
+    ept {
+    }
+    none {
+        set tName_ "None"
+        set tLegend "For    port:   Port_id Card/Port"
+    }
+    default {
+        set tName_ "None"
+        set tLegend "For    port:   Port_id Card/Port"
+    }
+}
+#the ports in the initial drawing are specified with the following syntax:
+# <from_DUT:to_DUT:trunk#> e.g. the port in DUT1 for the first trunk 
+# connecting to DUT2  is <1:2:1> 
+# X is for Tester (AGILENT|IXIA)  and 0 is for a hub.
+# These ports are then replaced with port numbers actually learned.
+set iprTopology "
+                        Testbed Topology for $cfg
+
+                           +-------------------+
+                           |            <X:5:2>|----------------------------+
+                           |            <X:5:1>|---------------------------+|
+                network---| <tIpAddr________>  |                        ||
+ +------------------------|<X:3:2>$tName_ <X:4:2>|----------------------+ ||
+ |+------------------------|<X:3:1>     <X:4:1>|------------------------+| ||
+ ||                        |                   |                        || ||
+ ||       +----------------|<X:1:1>     <X:2:2>|--------------+         || ||
+ ||       |            +---|<X:1:2>     <X:2:1>|-+            |         || ||
+ ||       |            |   |    <X:0:1>        | |            |         || ||
+ ||       |            |   +-------------------+ |            |         || ||
+ ||       |            |              |          |            |         || ||
+ ||      +------------------+         |         +------------------+    || ||
+ ||      |<1:X:1><1:X:2>    |         |         |<2:X:1><2:X:2>    |    || ||
+ ||      |           <1:NET>|-network | network-|<2:NET>           |    || ||
+ ||      | <DUT1_IP________>|         |         |<DUT2_IP________> |    || ||
+ ||      |                  |         |         |                  |    || ||
+ ||      |           <1:2:1>|---------|---------|<2:1:1>           |    || ||
+ ||   +--|<1:5:1>    <1:2:2>|---------|---------|<2:1:2>    <2:5:1>|--+ || ||
+ ||   |+-|<1:5:2>    <1:2:3>|---------|---------|<2:1:3>    <2:5:2>|-+| || ||
+ ||   || | <DUT1_CONNECT___>|-console | console-|<DUT2_CONNECT___> | || || ||
+ ||   || |     DUT1  <1:4:1>|--+      |      +--|<2:3:1>DUT2       | || || ||
+ ||   || |           <1:4:2>|-+|      |      |+-|<2:3:2>           | || || ||
+ ||   || |                  | ||      |      || |                  | || || ||
+ ||   || |           <1:0:1>|------+  |  +------|<2:0:1>           | || || ||
+ ||   || |<1:3:1><1:3:2>    | ||   |  |  |   || |    <2:4:1><2:4:2>| || || ||
+ ||   || +------------------+ ||   |  |  |   || +------------------+ || || ||
+ ||   ||  |            |      ||   +-----+   ||            |      |  || || ||
+ ||   ||  |            |      ||   | hub |   ||            |      |  || || ||
+ ||   ||  |            |      ||   +-----+   ||            |      |  || || ||
+ ||   || +------------------+ ||   |  |  |   || +------------------+ || || ||
+ ||   || |<3:1:1><3:1:2>    | ||   |  |  |   || |    <4:2:1><4:2:2>| || || ||
+ ||   || |           <3:0:1>|------+  |  +------|<4:0:1>           | || || ||
+ ||   || |                  | ||      |      || |                  | || || ||
+ ||   || |                  | |+------|---------|<4:1:1>           | || || ||
+ ||   || |                  | +-------|---------|<4:1:2>           | || || ||
+ ||   || |                  |         |      || |                  | || || ||
+ ||   || |           <3:2:1>|---------|------+| |                  | || || ||
+ ||   || |     DUT3  <3:2:2>|---------|-------+ |      DUT4        | || || ||
+ ||   || | <DUT3_CONNECT___>|-console | console-|<DUT4_CONNECT___> | || || ||
+ ||   || |           <3:NET>|-network | network-|<4:NET>           | || || ||
+ ||   || | <DUT3_IP________>|         |         |<DUT4_IP________> | || || ||
+ ||   || |                  |         |         |                  | || || ||
+ |+---||-|<3:X:1>    <3:4:1>|---------|---------|<4:3:1>    <4:X:1>|-||-+| ||
+ +----||-|<3:X:2>    <3:4:2>|---------|---------|<4:3:2>    <4:X:2>|-||--+ ||
+      || |<3:5:1><3:5:2>    |         |         |<4:5:1> <4:5:2>   | ||    ||
+      || +------------------+         |         +------------------+ ||    ||
+      ||  |            |              |          |             |     ||    ||
+      ||  |            |  +--------------------+ |             |     ||    ||
+      ||  |            |  |     <5:0:1>        | |             |     ||    ||
+      ||  |            +--|<5:3:2>      <5:4:1>|-+             |     ||    ||
+      ||  +---------------|<5:3:1>      <5:4:2>|---------------+     ||    ||
+      ||                  |        DUT5        |                     ||    ||
+      ||        console---|<DUT5_CONNECT___>   |                     ||    ||
+      |+------------------|<5:1:2>      <5:2:2>|---------------------+|    ||
+      +-------------------|<5:1:1>      <5:2:1>|----------------------+    ||
+                          |                    |                           ||
+                          |             <5:X:1>|---------------------------+|
+               network----|<5:NET>      <5:X:2>|----------------------------+
+                          |<DUT5_IP________>   |
+                          +--------------------+
+Legend: 
+${tLegend}
+For DUT port: Slot:Port 
+   "
+set standardTopology "
+                     Testbed Topology for $cfg
+
+              +-----------------+
+              | RADIUS/TACACS(p)|
+  network ----|<SERVER1________>|
+              +-----------------+
+              +-----------------+
+              | RADIUS/TACACS(s)|
+  network ----|<SERVER2________>|
+              +-----------------+
+              +-----------------+
+              | DHCP            |
+  network ----|<bootpserver____>|
+              +-----------------+
+
+
+        +-----------------+                +-----------------+ 
+network-|<1:NET>          |                |                 |
+        |<DUT1_IP________>|                |                 |
+  DOS---|<1:DOS>   <1:X:1>|----------------|<X:1:1>          |
+        |          <1:X:2>|----------------|<X:1:2>          |
+        |          <1:X:3>|----------------|<X:1:3>          |
+        |          <1:X:4>|----------------|<X:1:4>          |
+        |          <1:X:5>|----------------|<X:1:5>          |
+        |          <1:X:6>|----------------|<X:1:6>          |
+        |          <1:X:7>|----------------|<X:1:7>          |
+        |          <1:X:8>|----------------|<X:1:8>          |
+        |          <1:X:9>|----------------|<X:1:9>          |
+        |         <1:X:10>|----------------|<X:1:10>         |
+        |         <1:X:11>|----------------|<X:1:11>         |
+        |         <1:X:12>|----------------|<X:1:12>         |
+        |     DUT1        |                |                 |
+console-|<DUT1_CONNECT___>|                |                 |
+        |         <1:X:13>|----------------|<X:1:13>         |
+        |         <1:X:14>|----------------|<X:1:14>         |
+        |         <1:X:15>|----------------|<X:1:15>         |
+        |         <1:X:16>|----------------|<X:1:16>         |
+        |         <1:X:17>|----------------|<X:1:17>         |
+        |         <1:X:18>|----------------|<X:1:18>         |
+        |         <1:X:19>|----------------|<X:1:19>         |
+        |         <1:X:20>|----------------|<X:1:20>         |
+        |         <1:X:21>|----------------|<X:1:21>         |
+        |         <1:X:22>|----------------|<X:1:22>         |
+        |         <1:X:23>|----------------|<X:1:23>         |
+        |         <1:X:24>|----------------|<X:1:24>         |
+        |                 |                |                 |
+        |<1:2:1><1:2:2>   |                |     $tName_     |
+        +-----------------+                |                 |
+         |            |         network----|<tIpAddr________>|
+         |            |                    |                 |
+         |            |                    |                 |
+        +-----------------+                |                 | 
+        |<2:1:1><2:1:2>   |                |                 |
+        |                 |                |                 |
+        |          <2:X:1>|----------------|<X:2:1>          |
+        |    DUT2  <2:X:2>|----------------|<X:2:2>          |
+console-|<DUT2_CONNECT___>|                |                 |
+        |          <2:X:3>|----------------|<X:2:3>          |
+network-|<2:NET>   <2:X:4>|----------------|<X:2:4>          |
+        |<DUT2_IP________>|                |                 |
+        +-----------------+                +-----------------+ 
+       
+Legend: 
+${tLegend}
+For DUT port: Slot:Port 
+"
+   #count number of DUTs
+   set dutCount 0
+   for {set i 1} {$i <= 6} {incr i } {
+       global DUT${i}_CONNECT
+       if ![info exist DUT${i}_CONNECT ] {
+          break
+       }
+       incr dutCount
+   }
+   switch $dutCount {
+      1 { return }
+      2 {
+         set topologyType standard
+         set topology $standardTopology
+      }
+      4 -
+      5 {
+         set topologyType ipr
+         set topology $iprTopology
+      }
+      default { 
+         report_start_test "Generating Topology Drawing."
+         result_debug "$dutCount DUTs detected. Expecting 1,2,4 or 5."
+         report_end_test
+         return
+      }
+   }
+   for { set dut 1} {$dut <= $dutCount } {incr dut} {
+      #print the network port and address
+      printPort $dut:NET [GetDUTPort $switchPort2DefaultRouter $dut ] topology
+      global DUT${dut}_IP
+      printPort DUT${dut}_IP________ [set DUT${dut}_IP] topology
+      #console address
+      printPort DUT${dut}_CONNECT___ [set DUT${dut}_CONNECT] topology
+      
+   }
+
+   # tester IP address
+    switch -exact -- $TrafficGen {
+        agilent {
+            printPort tIpAddr________ [::AgtExtreme::GetN2xServerName] topology
+        }
+        stc {
+        }
+        ixia {
+            printPort tIpAddr________ $ixiaCh1 topology
+        }
+        ept {
+        }
+        default {
+        }
+    }
+
+   #for each trunk fill in ports on both sides of the trunk
+   for { set firstSw 1} {$firstSw <= [expr $dutCount - 1] } {incr firstSw} {
+      for {set secondSw [expr $firstSw + 1] } {$secondSw <= $dutCount} \
+         {incr secondSw} {
+         set trunk 1
+         foreach trunkport [GetTrunkPortList $firstSw $secondSw] {
+            printPort $firstSw:$secondSw:$trunk $trunkport topology 
+            incr trunk
+         }
+         set trunk 1
+         foreach trunkport [GetTrunkPortList  $secondSw $firstSw] {
+            printPort $secondSw:$firstSw:$trunk $trunkport topology 
+            incr trunk
+         }
+      }
+   }
+   #standard testbed specific ports
+   if { $topologyType == "standard" } {
+      #print the DOS ports 
+      if {[info exist dutDosPort(1)]} {
+         printPort 1:DOS $dutDosPort(1) topology
+      }
+      #print the Radius and Tacacs
+      if {[info exist SERVER1 ]} {
+         printPort SERVER1________ $SERVER1 topology
+      }
+      if {[info exist SERVER2 ]} {
+         printPort SERVER2________ $SERVER2 topology
+      }
+      #print the DHCP server
+      if {[info exist bootpserver ]} {
+         printPort bootpserver____ $bootpserver topology
+      }
+   }
+   #ipr testbed specific ports
+   if { $topologyType == "ipr" } {
+      # For IPR topology only:
+      # note that in the portMappingList the tester port connecting to the
+      # hub will have multiple mappings to list all DUT on that hub. See 
+      # the following example portMappingList where port 9 is connected 
+      # to the hub.
+      #{"1 8:85 1" "2 8:86 1"  "3 1:1 2" "4 1:2 2"   "5 1 3" "6 2 3"  "7 1 4"
+      # "8 2 4"  "9 8:3 1" "9 1:3 2" "9 3 3" "9 3 4" "9 3 5"  "10 1 5" "11 2 5"}
+      #
+      #Another way to specify a hub is to have 0 as the DUT in the mapping. See
+      #port 9 in the following example.
+      #set portMappingList { "1 10 1" "2 11 1" "3 1 2" "4 3 2" \
+      #                   "5 2:1 3" "6 2:2 3" "7 6:1 4" "8 4:75 4" \
+      #                   "9 0 0" "10 1:2 5" "11 1:4 5"}
+
+
+      #find the tester port that is connected to the hub. It's the one listed
+      #multiple times in portMappingList or have 0 as the DUT.
+      foreach map $portMappingList {
+         set testerPort [lindex $map 0]
+         set dut [lindex $map 2]
+         if {[info exist seen($testerPort)] || $dut == 0 } {
+            set testerHubPort $testerPort
+            break
+         } 
+         set seen($testerPort) 1
+      }
+
+      # print tester-hub connections
+      switch -exact -- $TrafficGen {
+          agilent {
+              set n2xPortName [::AgtExtreme::GetN2xPortNameByPortId -portid $testerHubPort]
+              printPort X:0:1 "$testerHubPort $n2xPortName" topology
+          }
+          stc {
+          }
+          ixia {
+              MapIxiaPortId $testerHubPort chasis card port
+              printPort X:0:1 "$testerHubPort $card:$port" topology
+          }
+          ept {
+          }
+          default {
+          }
+      }
+
+
+      #print the ports for the hub to DUT trunk
+      for { set dut 1} {$dut <= $dutCount } {incr dut} {
+         printPort $dut:0:1 [GetATrunkPort $dut 0 1] topology
+      }
+   }
+   for {set dut 1} {$dut <= $dutCount } {incr dut} {
+      set testerConnection($dut) 1
+   }
+
+    # print DUT <-> Tester connections
+   foreach map $portMappingList {
+        set testerPort [lindex $map 0]
+        # note that testerHubPort exist only in ipr topology
+        if { $topologyType == "ipr" && $testerPort == $testerHubPort } {
+            # skip hub ports. we only print Tester to DUT connections here
+         continue
+      }
+      set dutPort [lindex $map 1]
+        set dut     [lindex $map 2]
+        switch -exact -- $TrafficGen {
+            agilent {
+                set n2xPortName [::AgtExtreme::GetN2xPortNameByPortId -portid $testerPort]
+                printPort X:$dut:$testerConnection($dut) "$testerPort $n2xPortName" topology
+                printPort $dut:X:$testerConnection($dut) $dutPort topology
+            }
+            stc {
+            }
+            ixia {
+                MapIxiaPortId $testerPort chasis card port
+                printPort X:$dut:$testerConnection($dut) "$testerPort $card:$port" topology
+                printPort $dut:X:$testerConnection($dut) $dutPort topology
+            }
+            ept {
+            }
+            default {
+            }
+        }
+        # keep track of how many Tester connections we seen so far for the dut
+        incr testerConnection($dut)
+    }
+
+   #print N/A for ports in drawing but not found in cfg
+   printNAPort topology
+   #for standard topology remove the connection lines for N/A ports
+   if { $topologyType == "standard" } {
+       regsub -all "N/A\\|----------------\\|N/A" $topology \
+          "   |                |   " topology
+   }
+   #puts $topology
+
+   #write the topology to the file
+   set fd [open $file "w"]
+   puts $fd $topology
+   close $fd
+}
+
+##################################################################
+# Procedure Name: PrintPort
+# Description:
+#        In the topology drawing, look for a string inside the < > brackets
+#        and replace it with another string. Perform necessary formatting
+# Input args: portTuple - the string to look for
+#                
+#             port - replace the portTuple with this string
+#             topology - the topology drawing 
+# Return value: none
+# Output args: none
+# Typical usage:
+#         printPort $dut:0:1 [GetATrunkPort $dut 0 1] topology
+#        
+# Category: Topology
+##################################################################
+proc printPort { portTuple port topology } {
+   upvar $topology top
+   #find the fieldWidth of the portTuple
+   if [regexp <$portTuple> $top match ] {
+      set fieldWidth [ string length $match ]
+   } else {
+      report_start_test "   Generating Topology Drawing."
+      result_error "Unable to draw port $portTuple in drawing."
+      result_debug "Please recheck portMappingList"
+      report_end_test
+      return
+   }
+      
+   #left adjusted if the portTuple is on left side of the DUT drawing
+   if ![regsub "\\|<$portTuple>" $top "|[format "%-${fieldWidth}s" $port]" \
+      top] {
+      #else right adjusted
+      regsub <$portTuple> $top [format "%${fieldWidth}s" $port] top
+   }
+}
+
+##################################################################
+# Procedure Name: printNAPort
+# Description:
+#        In the topology drawing, look for any string inside the < > brackets
+#        and replace it with "N/A". Perform necessary formatting. This procedure
+#        is used to specify ports in the drawing not found in the actual
+#        topology.
+# Input args: topology - the topology drawing 
+# Return value: none
+# Output args: none
+# Typical usage:
+#          printNAPort topology
+# Category: Topology
+##################################################################
+
+proc printNAPort { topology } {
+   upvar $topology top
+   #use while loop to regsub one at a time since field width can be 
+   #different for each portTuple
+   while {[regexp {<[^>]*>} $top ]} {
+      #left adjusted if the first match is on left side of the DUT drawing
+      if [regexp "\\|<\[^>]*>" $top match ] {
+         set fieldWidth [ string length $match ]
+         regsub "\\|<\[^>]*>" $top "[format "%-${fieldWidth}s" "|N/A" ]" top
+      } else {
+         #else right adjusted
+         regexp {<[^>]*>} $top match
+         set fieldWidth [ string length $match ]
+         regsub {<[^>]*>} $top [format "%${fieldWidth}s" N/A] top
+      }
+   } 
+}
+

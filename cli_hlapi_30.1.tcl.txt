@@ -1,0 +1,3146 @@
+#######################################################################################################
+# Procedure: _show_iparp
+#
+# Version dependent show cli for iparp.  Allows for gathering values and verifying values.
+#
+# Supported in all versions >= 15.6 .  Any testcase calling this will skip on versions < 15.6
+#
+# This procedure supports:
+#       "show iparp"
+#       "show iparp proxy"   :  pass in the arg -proxy true
+#       "show iparp vlan myvlan  : pass in -vlan "myvlan"
+#       "show iparp vr vr-name   : pass in -vr "vr-name"
+#       "show iparp 1.2.3.4      : pass in -ipaddress "1.2.3.4"
+#
+# args:    -type get|check - collect a value list from the show command or verify a value via the show command
+#          -parameterList $typicalParameterList json paths.  Use this for host table entries, use the 
+#               specific args for configuration and stats
+#          -time, yesno same as check key value.  See examples in CheckDictValue, GetDictValue
+#          -debugjson true|false.  Dumps the json structure to the screen which is necessary when developing
+#              the case.  Turn it off after development.  The cli output will still show.
+#
+#  Full supported iparp "entry" keys  !! See the config,stat and table keys remarked below
+#    set plist "{arp_op {age flags ip_addr mac           ports refresh vid vlanInstance vlan_name vr_name}} \
+#                      {0   0  192.10.1.20 00:00:00:00:00:01 4  0     4090 1000015     vlan1     VR-Default} exist}
+#
+#
+#  set parameterList ""
+#  lappend parameterList "{arp_op {ip_addr mac ports}}  {192.10.1.20  00:00:00:00:00:01  [MapDUTPortId 1]}  exist"
+#  lappend parameterList "{arp_op {ip_addr mac ports}}  {192.10.1.21  00:00:00:00:00:02  [MapDUTPortId 1]}  exist"
+#  lappend parameterList "{arp_op {ip_addr mac ports}}  {192.10.3.20  00:00:00:00:00:03  [MapDUTPortId 1]}  notExist"
+#
+#
+#######################################################################################################
+proc _show_iparp {args} {
+    global MAIN whichDutNow
+
+    set d $whichDutNow
+    set platform [GetPlatform DUT$d]
+    set v [GetVersion DUT$d]
+
+    #json variables
+    set rootKeyList "arp_stats arp_config arp_table_config";# arp_op is root for dynamic entries
+
+    parse_args _show_iparp $args {
+        type          "check"
+        parameterList ""
+        comment       ""
+        testNo        "_show_iparp" 
+        yesorno       "Yes"
+        debugjson     "false"
+        time          "null"
+        showfmt       "default"
+        exist         "exist"
+        vlan          "null"
+        ipaddress     "null"
+        vr            "null"
+        proxy         "null"
+        allocs   "null"
+        destroys   "null"
+        duplicated_ip   "null"
+        dynamic   "null"
+        failed_entries   "null"
+        forced_gc_runs   "null"
+        hash_grows   "null"
+        hits   "null"
+        in_request   "null"
+        in_response   "null"
+        incompleted   "null"
+        kernel_entries   "null"
+        lookups   "null"
+        noarp_entries   "null"
+        out_request   "null"
+        out_response   "null"
+        periodic_gc_runs   "null"
+        permanent   "null"
+        proxy_answered   "null"
+        rcv_probes_mcast   "null"
+        rcv_probes_ucast   "null"
+        rejected_count   "null"
+        rejected_if   "null"
+        rejected_ip   "null"
+        rejected_port   "null"
+        res_failed   "null"
+        rx_error   "null"
+        total   "null"
+        totalProxy   "null"
+        unres_discards   "null"
+        vr_name   "null"
+        tblDynamic   "null"
+        tblEntries   "null"
+        tblPermanent   "null"
+        tblProxy   "null"
+        arp_payload_sender_maclearn   "null"
+        checking   "null"
+        fast_convergence   "null"
+        locktime   "null"
+        max_entries   "null"
+        max_pending_entries   "null"
+        max_proxy_entries   "null"
+        reachable_time   "null"
+        reachable_time_mode   "null"
+        refresh   "null"
+        retransmit_time   "null"
+        timeout   "null"
+        vr_name   "null"
+        tblMaxEntries   "null"
+        tblMaxPending   "null"
+        tblMaxProxy   "null"
+    }
+
+    set allargs "allocs destroys duplicated_ip dynamic failed_entries forced_gc_runs \
+      hash_grows hits in_request in_response incompleted kernel_entries lookups \
+      noarp_entries out_request out_response periodic_gc_runs permanent \
+      proxy_answered rcv_probes_mcast rcv_probes_ucast rejected_count \
+      rejected_if rejected_ip rejected_port res_failed \
+      rx_error total totalProxy unres_discards vr_name tblDynamic \
+      tblEntries tblPermanent tblProxy arp_payload_sender_maclearn \
+      checking fast_convergence locktime max_entries max_pending_entries \
+      max_proxy_entries reachable_time reachable_time_mode \
+      refresh retransmit_time timeout vr_name tblMaxEntries tblMaxPending tblMaxProxy"
+
+            #   22.5 "show iparp"                    30.1 "show iparp"
+            #arp_op  (repeat for as many entries are in the table)
+            #   "age": 0,                            age: 0,
+            #   "flags": 0,                          flags: 0,
+            #   "ip_addr": "192.10.1.20",            ip_addr: "192.10.1.20",
+            #   "mac": "00:00:00:00:00:01",          mac: "00:00:00:00:00:01",
+            #   "ports": 4,                          ports: 21,
+            #   "refresh": 0,                        refresh: 0,
+            #   "vid": 4086,                         vid: 4086,
+            #   "vlanInstance": 1000026,             vlanInstance: 1000032,
+            #   "vlan_name": "vlan1",                vlan_name: "vlan1",
+            #   "vr_name": "VR-Default"              vr_name: "VR-Default"
+            #           
+            #arp_stats          
+            #   allocs: 29,                          allocs: 6926,
+            #   destroys: 25,                        destroys: 2824,
+            #   duplicated_ip: "0.0.0.0",            -------
+            #   dynamic: 1,                          dynamic: 1,
+            #   failed_entries: 0,                   -------
+            #   forced_gc_runs: 0,                   forced_gc_runs: 1017,
+            #   hash_grows: 0,                       hash_grows: 10,
+            #   hits: 5,                             hits: 19355,
+            #   in_request: 10,                      -------
+            #   in_response: 0,                      -------
+            #   incompleted: 0,                      incompleted: 0,
+            #   kernel_entries: 4,                   -------
+            #   lookups: 10,                         lookups: 66239,
+            #   noarp_entries: 3,                    -------             Arp Unneeded in cli
+            #   out_request: 4,                      -------
+            #   out_response: 0,                     -------
+            #   periodic_gc_runs: 304,               periodic_gc_runs: 103,
+            #   permanent: 0,                        permanent: 0,
+            #   proxy_answered: 0,                   -------
+            #   rcv_probes_mcast: 0,                 rcv_probes_mcast: 0,
+            #   rcv_probes_ucast: 0,                 rcv_probes_ucast: 0,
+            #   rejected_count: 10,                  -------
+            #   rejected_if: "vlan1",                -------
+            #   rejected_ip: "127.0.0.1",            -------
+            #   rejected_port: 4,                    -------
+            #   res_failed: 0,                       res_failed: 0,
+            #   rx_error: 0,                         -------
+            #   total: 1,                            total: 1,
+            #   totalProxy: 0,                       totalProxy: 0,
+            #   unres_discards: 0,                   -------
+            #   vr_name: "VR-Default"                vr_name: "VR-Default"
+            #   ---------                            tblDynamic: 6,
+            #   ---------                            tblEntries: 6,
+            #   ---------                            tblPermanent: 0,
+            #   ---------                            tblProxy: 0,
+            #           
+            #arp_config         
+            #   arp_payload_sender_maclearn: 0,     arp_payload_sender_maclearn: 0,
+            #   checking: 1,                        checking: 1,
+            #   fast_convergence: 0,                fast_convergence: 0,
+            #   locktime: 1000,                     locktime: 1000,
+            #   max_entries: 8192,                  -------
+            #   max_pending_entries: 256,           -------
+            #   max_proxy_entries: 256,             -------
+            #   reachable_time: 90000,              reachable_time: 90000,
+            #   reachable_time_mode: 1,             reachable_time_mode: 1,
+            #   refresh: 1,                         refresh: 1,
+            #   retransmit_time: 1000,              retransmit_time: 1000,
+            #   timeout: 2,                         timeout: 2,
+            #   vr_name: "VR-Default"               vr_name: "VR-Default"
+            #           
+            #arp_table_config           
+            #   --------                            tblMaxEntries: 12288,
+            #   --------                            tblMaxPending: 256,
+            #   --------                            tblMaxProxy: 256
+            #
+
+    set jPath(allocs)  arp_stats
+    set jPath(destroys)  arp_stats
+    set jPath(duplicated_ip)  arp_stats
+    set jPath(dynamic)  arp_stats
+    set jPath(failed_entries)  arp_stats
+    set jPath(forced_gc_runs)  arp_stats
+    set jPath(hash_grows)  arp_stats
+    set jPath(hits)  arp_stats
+    set jPath(in_request)  arp_stats
+    set jPath(in_response)  arp_stats
+    set jPath(incompleted)  arp_stats
+    set jPath(kernel_entries)  arp_stats
+    set jPath(lookups)  arp_stats
+    set jPath(noarp_entries)  arp_stats
+    set jPath(out_request)  arp_stats
+    set jPath(out_response)  arp_stats
+    set jPath(periodic_gc_runs)  arp_stats
+    set jPath(permanent)  arp_stats
+    set jPath(proxy_answered)  arp_stats
+    set jPath(rcv_probes_mcast)  arp_stats
+    set jPath(rcv_probes_ucast)  arp_stats
+    set jPath(rejected_count)  arp_stats
+    set jPath(rejected_if)  arp_stats
+    set jPath(rejected_ip)  arp_stats
+    set jPath(rejected_port)  arp_stats
+    set jPath(res_failed)  arp_stats
+    set jPath(rx_error)  arp_stats
+    set jPath(total)  arp_stats
+    set jPath(totalProxy)  arp_stats
+    set jPath(unres_discards)  arp_stats
+    set jPath(vr_name)  arp_stats
+    set jPath(tblDynamic)  arp_stats
+    set jPath(tblEntries)  arp_stats
+    set jPath(tblPermanent)  arp_stats
+    set jPath(tblProxy)  arp_stats
+    set jPath(arp_payload_sender_maclearn)  arp_config
+    set jPath(checking)  arp_config
+    set jPath(fast_convergence)  arp_config
+    set jPath(locktime)  arp_config
+    set jPath(max_entries)  arp_config
+    set jPath(max_pending_entries)  arp_config
+    set jPath(max_proxy_entries)  arp_config
+    set jPath(reachable_time)  arp_config
+    set jPath(reachable_time_mode)  arp_config
+    set jPath(refresh)  arp_config
+    set jPath(retransmit_time)  arp_config
+    set jPath(timeout)  arp_config
+    set jPath(vr_name)  arp_config
+    set jPath(tblMaxEntries)  arp_table_config
+    set jPath(tblMaxPending)  arp_table_config
+    set jPath(tblMaxProxy)  arp_table_config
+
+    # initialize JSON_SUB to the real values
+    foreach inarg $allargs {
+        set JSON_SUB($jPath($inarg),$inarg)          "$jPath($inarg) $inarg"
+    }
+    set JSON_SUB(arp_op,age) "arp_op age"
+    set JSON_SUB(arp_op,flags) "arp_op flags"
+    set JSON_SUB(arp_op,ip_addr) "arp_op ip_addr"
+    set JSON_SUB(arp_op,mac) "arp_op mac"
+    set JSON_SUB(arp_op,ports) "arp_op ports"
+    set JSON_SUB(arp_op,refresh) "arp_op refresh"
+    set JSON_SUB(arp_op,vid) "arp_op vid"
+    set JSON_SUB(arp_op,vlanInstance) "arp_op vlanInstance"
+    set JSON_SUB(arp_op,vlan_name) "arp_op vlan_name"
+    set JSON_SUB(arp_op,vr_name) "arp_op vr_name"
+
+    # Modify JSON_SUB based on version. If different mappings are required..
+    # >= 30.1
+    if {[CompareRelease $v "30.1"] >= 0} {
+        set JSON_SUB(arp_config,max_entries)         "arp_table_config tblMaxEntries"
+        set JSON_SUB(arp_config,max_pending_entries) "arp_table_config tblMaxPending"
+        set JSON_SUB(arp_config,max_proxy_entries)   "arp_table_config tblMaxProxy"
+        set JSON_SUB(arp_stats,duplicated_ip)        "nosupp"
+        set JSON_SUB(arp_stats,failed_entries)       "nosupp"
+        set JSON_SUB(arp_stats,in_request)           "nosupp"
+        set JSON_SUB(arp_stats,in_response)          "nosupp"
+        set JSON_SUB(arp_stats,kernel_entries)       "nosupp"
+        set JSON_SUB(arp_stats,noarp_entries)        "nosupp"
+        set JSON_SUB(arp_stats,out_request)          "nosupp"
+        set JSON_SUB(arp_stats,out_response)         "nosupp"
+        set JSON_SUB(arp_stats,proxy_answered)       "nosupp"
+        set JSON_SUB(arp_stats,rejected_count)       "nosupp"
+        set JSON_SUB(arp_stats,rejected_if)          "nosupp"
+        set JSON_SUB(arp_stats,rejected_ip)          "nosupp"
+        set JSON_SUB(arp_stats,rejected_port)        "nosupp"
+        set JSON_SUB(arp_stats,rx_error)             "nosupp"
+        set JSON_SUB(arp_stats,unres_discards)       "nosupp"
+        set hv "$v gteq 30.1"
+    } else {
+        # < 30.1
+        set JSON_SUB(arp_table_config,tblMaxEntries) "arp_config max_entries"
+        set JSON_SUB(arp_table_config,tblMaxPending) "arp_config max_pending_entries"
+        set JSON_SUB(arp_table_config,tblMaxProxy)   "arp_config max_proxy_entries"
+        set JSON_SUB(arp_stats,tblDynamic)           "nosupp"
+        set JSON_SUB(arp_stats,tblEntries)           "nosupp"
+        set JSON_SUB(arp_stats,tblPermanent)         "nosupp"
+        set JSON_SUB(arp_stats,tblProxy)             "nosupp"
+        set hv "$v lt 30.1"
+    }
+
+    # Build cli
+    if {$proxy != "null"} {
+        set cmd "show iparp proxy"
+    } elseif {$vr != "null"} {
+        set cmd "show iparp vr $vr"
+    } elseif {$ipaddress != "null"} {
+        set cmd "show iparp $ipaddress"
+    } elseif {$vlan != "null"} {
+        set cmd "show iparp vlan $vlan"
+    } else {
+        set cmd "show iparp"
+    }
+
+    # Check if there is something in the parameterList passed in which is not supported in
+    #   this running version
+    set inPList $parameterList
+    foreach inP $inPList {
+        set rk [lindex [lindex $inP 0] 0]
+        foreach rootKeySub [lindex [lindex $inP 0] 1] {
+            if {[info exists JSON_SUB($rk,$rootKeySub)]} {
+                if {$JSON_SUB($rk,$rootKeySub) == "nosupp"} {
+                    report_start_test "$testNo $inP"
+                    result_skip "Verify cli: $cmd skipping for keys $rk $rootKeySub -- no support $v"
+                    report_end_test
+                    return "1"
+                } else {
+                }
+            } else {
+                result_warning "$rk $rootKeySub key may not be setup/exist in the proc"
+            }
+        }
+    }
+    foreach inarg $allargs {
+        if {[set $inarg] == "null"} {
+            continue;
+        }
+        if {[lindex $JSON_SUB($jPath($inarg),$inarg) 0] == "nosupp"} {
+            # If this test case is accessing a register that is not supported skip the case
+            #
+            #puts "!!\n!!\nOn DUT $whichDutNow skipping for $jPath($inarg) $inarg -- $hv"
+            #_abortTestCase
+            report_start_test "$testNo $jPath($inarg) $inarg"
+            result_skip "Version On DUT $whichDutNow skipping for $jPath($inarg) $inarg"
+            report_end_test
+            return "1"
+        }
+        if {![info exists rootKeys([lindex $JSON_SUB($jPath($inarg),$inarg) 0])]} {
+            #rootKeys(arp_stats|arp_config|arp_table_config) [lindex $JSON_SUB($jPath($inarg),$inarg) 1]
+            set rootKeys([lindex $JSON_SUB($jPath($inarg),$inarg) 0]) [lindex $JSON_SUB($jPath($inarg),$inarg) 1]
+            if {[regexp -nocase "check" $type]} {
+                set rootKeyValues([lindex $JSON_SUB($jPath($inarg),$inarg) 0]) [set $inarg]
+            }
+        } else {
+            lappend rootKeys([lindex $JSON_SUB($jPath($inarg),$inarg) 0]) [lindex $JSON_SUB($jPath($inarg),$inarg) 1]
+            if {[regexp -nocase "check" $type]} {
+                lappend rootKeyValues([lindex $JSON_SUB($jPath($inarg),$inarg) 0]) [set $inarg]
+            }
+        }
+    }
+    foreach rKey $rootKeyList {
+        if {[regexp -nocase "check" $type]} {
+            if {[info exists rootKeys($rKey)] && [llength $rootKeys($rKey)] > 0} {
+                #puts "add plist \"{$rKey {$rootKeys($rKey)}} {$rootKeyValues($rKey)} $exist\" "
+                lappend parameterList "{$rKey {$rootKeys($rKey)}} {$rootKeyValues($rKey)} $exist"
+            }
+        } else {
+            if {[info exists rootKeys($rKey)] && [llength $rootKeys($rKey)] > 0} {
+                #puts "add plist \"{$rKey {$rootKeys($rKey)}}\" "
+                lappend parameterList "{$rKey {$rootKeys($rKey)}}"
+            }
+        }
+    }
+
+    # Build the final Check or Get JSON Dictionary from paramaterLists created above
+    if {[regexp -nocase "check" $type]} {
+        set res [CheckDictValue -cmd "$cmd" -yesorno "$yesorno" \
+                    -comment "$comment" -time "$time" -testNo \"$testNo\" \
+                    -parameterList $parameterList -debugjson "$debugjson"]
+        unset parameterList
+    } else {
+        set res [GetDictValue -cmd "$cmd" -yesorno "$yesorno" \
+                    -comment "$comment" -time "$time" -testNo \"$testNo\" \
+                    -parameterList $parameterList -debugjson "$debugjson"]
+        unset parameterList
+    }
+    return $res
+}
+#######################################################################################################
+# Procedure: _show_iparp_stats
+#
+# Version dependent show cli for iparp.  Allows for gathering values and verifying values.
+#
+# Supported in all versions >= 15.6 .  Any testcase calling this will skip on versions < 15.6
+#
+# This procedure supports:
+#
+#  The first dictionary root, arp_stats_vp, varies by number of ports or vlans with entries so
+#  best to use the parameterList format instead of fixed parsed args. (will work if only one entry)
+#
+#  The second root arp_stats varies by the number of vrs, so show iparp stats vr all will have
+#  an arp_stats structure for each vr.
+#
+#     set parameterList ""
+#     lappend parameterList "{arp_stats_vp {port total dynamic permanent}} {[MapDUTPortId 1] 1 1 0}"
+#     lappend parameterList "{arp_stats_vp {port total dynamic permanent}} {[MapDUTPortId 2] 1 1 0}"
+#     set res [_show_iparp_stats -parameterList $parameterList -comment "Check IP ARP Port Statistics" \
+#        -show_ports "[MapDUTPortId 1] [MapDUTPortId 2]" -type "check" -exist exist]
+#
+#     set parameterList ""
+#     lappend parameterList "{arp_stats_vp {vlan_name total dynamic permanent}} {v1 3 3 0}"
+#     lappend parameterList "{arp_stats_vp {vlan_name total dynamic permanent}} {v2 5 5 0}"  
+#     set res [_show_iparp_stats -parameterList $parameterList -comment "Check IP ARP VLAN Statistics"\
+#         -vlan "all" -type "check" -exist exist]
+#
+#     set parameterList ""
+#     lappend parameterList "{arp_stats {vr_name total dynamic permanent}} {VR-Default 8 8 0}"
+#     set res [_show_iparp_stats -parameterList "" -comment "Check IP ARP VR Statistics" \
+#         -vr "all"]
+#
+#     set parameterList ""
+#     lappend parameterList "{arp_stats {dynamic}} 3  exist"
+#     set res [_show_iparp_stats -parameterList $parameterList  \
+#         -vlan "v1" -comment "Check IP ARP VLAN Statistics"]
+#
+#  If you are sure the show cli will only reference one vlan meaning one vr as well you and just use
+#  the arguments
+#     _show_iparp_stats -failed_entries "8" -incompleted "0" -vlan "v2" \ 
+#           -comment "Check IP ARP VLAN Statistics" \
+#           -time {s: 1 i: 5 f: 60}
+#
+# NOTE: This auto adds a result_skip "No support for version $ver" and returns "ok" for 30.1 and higher
+#     set res [_show_iparp_stats -rejected_ip "12.0.0.2" -rejected_count "100" \
+#            -vlan "v1" -comment "Check IP ARP VLAN Statistics" ]
+# See the json structure comments inline below for cli support versioning.
+#            
+#######################################################################################################
+proc _show_iparp_stats {args} {
+    global MAIN whichDutNow
+
+    set d $whichDutNow
+    set platform [GetPlatform DUT$d]
+    set v [GetVersion DUT$d]
+
+    #json variables
+    set rootKeyList "arp_stats_vp arp_stats"
+
+    parse_args _show_iparp_stats $args {
+        type          "check"
+        parameterList ""
+        comment       ""
+        testNo        "_show_iparp_stats"
+        yesorno       "Yes"
+        debugjson     "false"
+        debugdict     "false"
+        time          "null"
+        showfmt       "default"
+        exist         "exist"
+        vlan          "null"
+        vr            "null"
+        summary       "null"
+        show_ports    "null"
+        linkState     "null"
+        port          "null"
+        port_name     "null"
+        ports         "null"
+        vlan_name     "null"
+        vlanifInst    "null"
+        vr_domain     "null"
+        vr_name       "null"
+        allocs        "null"
+        destroys      "null"
+        duplicated_ip "null"
+        dynamic       "null"
+        failed_entries  "null"
+        forced_gc_runs  "null"
+        hash_grows    "null"
+        hits          "null"
+        in_request    "null"
+        in_response   "null"
+        incompleted   "null"
+        kernel_entries  "null"
+        lookups       "null"
+        noarp_entries "null"
+        out_request   "null"
+        out_response  "null"
+        periodic_gc_runs  "null"
+        permanent     "null"
+        proxy_answered  "null"
+        rcv_probes_mcast  "null"
+        rcv_probes_ucast  "null"
+        rejected_count  "null"
+        rejected_if   "null"
+        rejected_ip   "null"
+        rejected_port "null"
+        res_failed    "null"
+        rx_error      "null"
+        total         "null"
+        totalProxy    "null"
+        unres_discards "null"
+        vr_name       "null"
+        tblDynamic    "null"
+        tblEntries    "null"
+        tblPermanent  "null"
+        tblProxy  "null"
+    }
+
+    if {$vlan == "null" && $vr == "null" && $show_ports == "null"} {
+        result_error "-vlan OR -vr OR -show_ports must be specificed to use this proc. _show_iparp_stats -vlan \"myvlan\" "
+    }
+    if {$permanent != "null" || $dynamic != "null" || $total != "null"} {
+        result_warning "Both arp_stats_vp and arp_stats have permanent,dynamic and total counters"
+        result_warning "You should use lappend parameterList \"\{arp_stats \{dynamic\}\} 4 exist\""
+    }
+
+    #show iparp stats vlan vlan1                
+    #          22.5                       30.1
+    #arp_stats_vp:                        arp_stats_vp: 
+    #      dynamic: 20,                         dynamic: 20, 
+    #      linkState: 0,                        linkState: 0, 
+    #      permanent: 0,                        permanent: 0, 
+    #      port: invalid port,                  port: invalid port, 
+    #      port_name: null,                     port_name: null, 
+    #      ports: null,                         ports: null, 
+    #      total: 20,                           total: 20, 
+    #      vlan_name: vlan1,                    vlan_name: vlan1, 
+    #      vlanifInst: 1000033,                 vlanifInst: 1000029, 
+    #      vr_domain: null,                     vr_domain: null, 
+    #      vr_name: VR-Default                  vr_name: VR-Default
+    #arp_stats:                           arp_stats: 
+    #      allocs: 0,                           allocs: 0, 
+    #      destroys: 0,                         destroys: 0, 
+    #      duplicated_ip: 0.0.0.0,              ------   
+    #      dynamic: 20,                         dynamic: 20, 
+    #      failed_entries: 0,                   ------
+    #      forced_gc_runs: 0,                   forced_gc_runs: 0, 
+    #      hash_grows: 0,                       hash_grows: 0, 
+    #      hits: 0,                             hits: 0, 
+    #      in_request: 0,                       ------
+    #      in_response: 0,                      ------
+    #      incompleted: 0,                      incompleted: 0, 
+    #      kernel_entries: 23,                  ------
+    #      lookups: 0,                          lookups: 0, 
+    #      noarp_entries: 3,                    ------
+    #      out_request: 0,                      ------
+    #      out_response: 0,                     ------
+    #      periodic_gc_runs: 0,                 periodic_gc_runs: 0, 
+    #      permanent: 0,                        permanent: 0, 
+    #      proxy_answered: 0,                   ------
+    #      rcv_probes_mcast: 0,                 rcv_probes_mcast: 0, 
+    #      rcv_probes_ucast: 0,                 rcv_probes_ucast: 0, 
+    #      rejected_count: 0,                   ------
+    #      rejected_if: null,                   ------
+    #      rejected_ip: 0.0.0.0,                ------
+    #      rejected_port: null,                 ------
+    #      res_failed: 0,                       res_failed: 0, 
+    #      rx_error: 0,                         ------
+    #      total: 20,                           total: 20, 
+    #      totalProxy: 0,                       totalProxy: 0, 
+    #      unres_discards: 0,                   ------
+    #      vr_name: VR-Default                  vr_name: VR-Default
+    #      -----------                          tblDynamic: 22, 
+    #      -----------                          tblEntries: 22, 
+    #      -----------                          tblPermanent: 0, 
+    #      -----------                          tblProxy: 0 
+
+    set allargs "dynamic linkState permanent port port_name ports total \
+       vlan_name vlanifInst vr_domain vr_name allocs destroys duplicated_ip \
+       dynamic failed_entries forced_gc_runs hash_grows hits in_request \
+       in_response incompleted kernel_entries lookups noarp_entries out_request \
+       out_response periodic_gc_runs permanent proxy_answered rcv_probes_mcast \
+       rcv_probes_ucast rejected_count rejected_if rejected_ip rejected_port \
+       res_failed rx_error total totalProxy unres_discards vr_name tblDynamic \
+       tblEntries tblPermanent tblProxy"
+
+    set JSON_SUB(arp_stats_vp,dynamic) "arp_stats_vp dynamic"
+    set JSON_SUB(arp_stats_vp,linkState) "arp_stats_vp linkState"
+    set JSON_SUB(arp_stats_vp,permanent) "arp_stats_vp permanent"
+    set JSON_SUB(arp_stats_vp,port) "arp_stats_vp port"
+    set JSON_SUB(arp_stats_vp,port_name) "arp_stats_vp port_name"
+    set JSON_SUB(arp_stats_vp,ports) "arp_stats_vp ports"
+    set JSON_SUB(arp_stats_vp,total) "arp_stats_vp total"
+    set JSON_SUB(arp_stats_vp,vlan_name) "arp_stats_vp vlan_name"
+    set JSON_SUB(arp_stats_vp,vlanifInst) "arp_stats_vp vlanifInst"
+    set JSON_SUB(arp_stats_vp,vr_domain) "arp_stats_vp vr_domain"
+    set JSON_SUB(arp_stats_vp,vr_name) "arp_stats_vp vr_name"
+    set JSON_SUB(arp_stats,allocs) "arp_stats allocs"
+    set JSON_SUB(arp_stats,destroys) "arp_stats destroys"
+    set JSON_SUB(arp_stats,duplicated_ip) "arp_stats duplicated_ip"
+    set JSON_SUB(arp_stats,dynamic) "arp_stats dynamic"
+    set JSON_SUB(arp_stats,failed_entries) "arp_stats failed_entries"
+    set JSON_SUB(arp_stats,forced_gc_runs) "arp_stats forced_gc_runs"
+    set JSON_SUB(arp_stats,hash_grows) "arp_stats hash_grows"
+    set JSON_SUB(arp_stats,hits) "arp_stats hits"
+    set JSON_SUB(arp_stats,in_request) "arp_stats in_request" 
+    set JSON_SUB(arp_stats,in_response) "arp_stats in_response"
+    set JSON_SUB(arp_stats,incompleted) "arp_stats incompleted"
+    set JSON_SUB(arp_stats,kernel_entries) "arp_stats kernel_entries"
+    set JSON_SUB(arp_stats,lookups) "arp_stats lookups"
+    set JSON_SUB(arp_stats,noarp_entries) "arp_stats noarp_entries"
+    set JSON_SUB(arp_stats,out_request) "arp_stats out_request"
+    set JSON_SUB(arp_stats,out_response) "arp_stats out_response"
+    set JSON_SUB(arp_stats,periodic_gc_runs) "arp_stats periodic_gc_runs"
+    set JSON_SUB(arp_stats,permanent) "arp_stats permanent"
+    set JSON_SUB(arp_stats,proxy_answered) "arp_stats proxy_answered"
+    set JSON_SUB(arp_stats,rcv_probes_mcast) "arp_stats rcv_probes_mcast"
+    set JSON_SUB(arp_stats,rcv_probes_ucast) "arp_stats rcv_probes_ucast"
+    set JSON_SUB(arp_stats,rejected_count) "arp_stats rejected_count"
+    set JSON_SUB(arp_stats,rejected_if) "arp_stats rejected_if"    
+    set JSON_SUB(arp_stats,rejected_ip) "arp_stats rejected_ip"
+    set JSON_SUB(arp_stats,rejected_port) "arp_stats rejected_port"
+    set JSON_SUB(arp_stats,res_failed) "arp_stats res_failed"
+    set JSON_SUB(arp_stats,rx_error) "arp_stats rx_error"
+    set JSON_SUB(arp_stats,total) "arp_stats total"
+    set JSON_SUB(arp_stats,totalProxy) "arp_stats totalProxy"
+    set JSON_SUB(arp_stats,unres_discards) "arp_stats unres_discards"
+    set JSON_SUB(arp_stats,vr_name) "arp_stats vr_name"
+    set JSON_SUB(arp_stats,tblDynamic) "arp_stats tblDynamic"
+    set JSON_SUB(arp_stats,tblEntries) "arp_stats tblEntries"
+    set JSON_SUB(arp_stats,tblPermanent) "arp_stats tblPermanent"
+    set JSON_SUB(arp_stats,tblProxy) "arp_stats tblProxy"
+
+    # Modify JSON_SUB based on version. If different mappings are required..
+    # >= 30.1
+    if {[CompareRelease $v "30.1"] >= 0} {
+        set JSON_SUB(arp_stats,duplicated_ip)        "nosupp"
+        set JSON_SUB(arp_stats,failed_entries)       "nosupp"
+        set JSON_SUB(arp_stats,in_request)           "nosupp"
+        set JSON_SUB(arp_stats,in_response)          "nosupp"
+        set JSON_SUB(arp_stats,kernel_entries)       "nosupp"
+        set JSON_SUB(arp_stats,noarp_entries)        "nosupp"
+        set JSON_SUB(arp_stats,out_request)          "nosupp"
+        set JSON_SUB(arp_stats,out_response)         "nosupp"
+        set JSON_SUB(arp_stats,proxy_answered)       "nosupp"
+        set JSON_SUB(arp_stats,rejected_count)       "nosupp"
+        set JSON_SUB(arp_stats,rejected_if)          "nosupp"
+        set JSON_SUB(arp_stats,rejected_ip)          "nosupp"
+        set JSON_SUB(arp_stats,rejected_port)        "nosupp"
+        set JSON_SUB(arp_stats,rx_error)             "nosupp"
+        set JSON_SUB(arp_stats,unres_discards)       "nosupp"
+        set hv "$v gteq 30.1"
+    } else {
+        # < 30.1
+        set JSON_SUB(arp_stats,tblDynamic)           "nosupp"
+        set JSON_SUB(arp_stats,tblEntries)           "nosupp"
+        set JSON_SUB(arp_stats,tblPermanent)         "nosupp"
+        set JSON_SUB(arp_stats,tblProxy)             "nosupp"
+        set hv "$v lt 30.1"
+    }
+    # Determine command
+    if {$summary != "null"} {
+        set cmd "show iparp stats summary"
+    } elseif {$vlan != "null"} {
+        set cmd "show iparp stats vlan $vlan"
+    } elseif {$vr != "null"} {
+        set cmd "show iparp stats vr $vr"
+    } else {
+        set cmd "show iparp stats ports $show_ports"
+    }
+    # Check if there is something in the parameterList passed in which is not supported in
+    #   this running version
+    set inPList $parameterList
+    foreach inP $inPList {
+        set rk [lindex [lindex $inP 0] 0]
+        foreach rootKeySub [lindex [lindex $inP 0] 1] {
+            if {[info exists JSON_SUB($rk,$rootKeySub)]} {
+                if {$JSON_SUB($rk,$rootKeySub) == "nosupp"} {
+                    report_start_test "$testNo $inP"
+                    result_skip "Verify cli: $cmd skipping for keys $rk $rootKeySub -- no support $v"
+                    report_end_test
+                    return "1"
+                } else {
+                }
+            } else {
+                result_warning "$rk $rootKeySub key may not be setup/exist in the proc"
+            }
+        }
+    }
+    foreach rk $rootKeyList {
+        foreach inarg $allargs {
+            if {![info exists JSON_SUB($rk,$inarg)]} {
+                continue;
+            }
+            if {[set $inarg] == "null"} {
+                continue;
+            }
+            if {[lindex $JSON_SUB($rk,$inarg) 0] == "nosupp"} {
+                # If this test case is accessing a register that is not supported skip the case
+                #
+                report_start_test "$testNo $rk $inarg"
+                result_skip "$cmd\nDUT $whichDutNow skipping for $rk $inarg -- $hv"
+                report_end_test
+                #_abortTestCase
+                return "1"
+            }
+            if {![info exists rootKeys([lindex $JSON_SUB($rk,$inarg) 0])]} {
+                #rootKeys(arp_stats|arp_config|arp_table_config) [lindex $JSON_SUB($rk,$inarg) 1]
+                set rootKeys([lindex $JSON_SUB($rk,$inarg) 0]) [lindex $JSON_SUB($rk,$inarg) 1]
+                if {[regexp -nocase "check" $type]} {
+                    set rootKeyValues([lindex $JSON_SUB($rk,$inarg) 0]) [set $inarg]
+                }
+            } else {
+                lappend rootKeys([lindex $JSON_SUB($rk,$inarg) 0]) [lindex $JSON_SUB($rk,$inarg) 1]
+                if {[regexp -nocase "check" $type]} {
+                    lappend rootKeyValues([lindex $JSON_SUB($rk,$inarg) 0]) [set $inarg]
+                }
+            }
+        }
+    }
+    foreach rKey $rootKeyList {
+        if {[regexp -nocase "check" $type]} {
+            if {[info exists rootKeys($rKey)] && [llength $rootKeys($rKey)] > 0} {
+                #puts "add plist \"{$rKey {$rootKeys($rKey)}} {$rootKeyValues($rKey)} $exist\" "
+                lappend parameterList "{$rKey {$rootKeys($rKey)}} {$rootKeyValues($rKey)} $exist"
+            }
+        } else {
+            if {[info exists rootKeys($rKey)] && [llength $rootKeys($rKey)] > 0} {
+                #puts "add plist \"{$rKey {$rootKeys($rKey)}}\" "
+                lappend parameterList "{$rKey {$rootKeys($rKey)}}"
+            }
+        }
+    }
+
+    # Build the final Check or Get JSON Dictionary from paramaterLists created above
+    if {[regexp -nocase "check" $type]} {
+        set res [CheckDictValue -cmd "$cmd" -yesorno "$yesorno" -testNo \"$testNo\" \
+                    -comment "$comment" -time "$time" -debugdict "$debugdict" \
+                    -parameterList "$parameterList" -debugjson "$debugjson"]
+        unset parameterList
+    } else {
+        set res [GetDictValue -cmd "$cmd" -yesorno "$yesorno" -testNo \"$testNo\" \
+                    -comment "$comment" -time "$time" -debugdict "$debugdict" \
+                    -parameterList "$parameterList" -debugjson "$debugjson"]
+        unset parameterList
+    }
+    return $res
+}
+proc _show_vlan {args} {
+    global MAIN whichDutNow
+
+    parse_args _show_iparp_stats $args {
+        type          "check"
+        parameterList ""
+        comment       ""
+        testNo        "_show_vlan"
+        yesorno       "Yes"
+        debugjson     "false"
+        debugdict     "false"
+        time          "null"
+        showfmt       "default"
+        exist         "exist"
+        vlan          "null"
+        vr            "null"
+        ports         "null"
+        action        "null"
+        activePorts   "null"
+        adminState    "null"
+        algorithm     "null"
+        altIsPrimary  "null"
+        arpSup        "null"
+        atcktInst     "null"
+        bgpInstances  "null"
+        bgpModule     "null"
+        bgpStartCode  "null"
+        cepPvid       "null"
+        count1        "null"
+        description   "null"
+        dot1ahMode    "null"
+        erlLoopbackPort    "null"
+        erlPort            "null"
+        filter             "null"
+        flags              "null"
+        inactivePort       "null"
+        ipAddress          "null"
+        ipMtu              "null"
+        ipProxyArp         "null"
+        ipStatus           "null"
+        ipforwardingStatus       "null"
+        ipmcforwardingStatus     "null"
+        ipv4DadState             "null"
+        ipv6forwardingStatus     "null"
+        ipv6mcforwardingStatus   "null"
+        iqosProfile              "null"
+        isAddedByIdm             "null"
+        isAddedByMvrp            "null"
+        isAddedByXnv             "null"
+        isAlternateIp            "null"
+        isLoopbackPort           "null"
+        isMacBasedVLANsEnabled   "null"
+        isMlagGroupPort          "null"
+        isNetLogInAutheticated   "null"
+        isNetLogInEnabled        "null"
+        isOpenFlowEnabled        "null"
+        isPvlanSystemPort        "null"
+        isPvlanTranslatePort     "null"
+        isRemoteMirrorEnabled    "null"
+        isTrillAccessEnabled     "null"
+        isTrillAppointedForwarder    "null"
+        isTrillDesignated        "null"
+        isTrillNetworkEnabled    "null"
+        isTrillSuspended    "null"
+        isUplinkPort        "null"
+        isVpstBlocked       "null"
+        isisInstances       "null"
+        isisModule          "null"
+        isisStartCode       "null"
+        limitLearning       "null"
+        limitLearningAction "null"
+        limitLearningNum    "null"
+        linkState         "null"
+        loopbackStatus    "null"
+        maskForDisplay    "null"
+        masterPort        "null"
+        mplsInstances     "null"
+        mplsL3VpnNotificationEnable    "null"
+        mplsModule        "null"
+        mplsStartCode     "null"
+        name1    "null"
+        name10   "null"
+        name2    "null"
+        name3    "null"
+        name4    "null"
+        name5    "null"
+        name6    "null"
+        name7    "null"
+        name8    "null"
+        name9    "null"
+        ndSup    "null"
+        netmask    "null"
+        noBvlans    "null"
+        noCvlans    "null"
+        noIpAddresses    "null"
+        noLearningDomains    "null"
+        noProto    "null"
+        noSvlans    "null"
+        noVlans    "null"
+        noVmans    "null"
+        ospfInstances    "null"
+        ospfModule    "null"
+        ospfStartCode    "null"
+        ospfv3Instances    "null"
+        ospfv3Module    "null"
+        ospfv3StartCode    "null"
+        overwrite_untagged_port    "null"
+        pimInstances    "null"
+        pimModule    "null"
+        pimStartCode    "null"
+        port    "null"
+        portFilterList    "null"
+        portList    "null"
+        priority    "null"
+        qosProfile    "null"
+        rateShaping    "null"
+        ripInstances    "null"
+        ripModule    "null"
+        ripStartCode    "null"
+        ripngInstances    "null"
+        ripngModule    "null"
+        ripngStartCode    "null"
+        rtagStatus    "null"
+        serviceCount    "null"
+        state    "null"
+        stpStatus    "null"
+        tag    "null"
+        tagStatus    "null"
+        taggedPorts    "null"
+        untaggedPorts    "null"
+        vManMode    "null"
+        vlanFrlQos    "null"
+        vlanType    "null"
+        vrDescription    "null"
+        vrId    "null"
+        vrIpv4AdminState    "null"
+        vrIpv6AdminState    "null"
+        vrOperCause    "null"
+        vrOperState    "null"
+        vrParentId    "null"
+        vrParentName    "null"
+        vrType    "null"
+        vrfCount    "null"
+        xSvid    "null"     
+        ignore_bpdu    "null"
+        ignore_stp    "null"
+        vlan_name    "null"
+    }
+
+    set d $whichDutNow
+    set platform [GetPlatform DUT$d]
+    set v [GetVersion DUT$d]
+
+    #json variables
+    set rootKeyList "vlanProc stp_vlan"
+    set allargs "action activePorts adminState algorithm altIsPrimary arpSup atcktInst bgpInstances \
+        bgpModule bgpStartCode cepPvid count1 description dot1ahMode erlLoopbackPort erlPort \
+        filter flags inactivePort ipAddress ipMtu ipProxyArp ipStatus ipforwardingStatus \
+        ipmcforwardingStatus ipv4DadState ipv6forwardingStatus ipv6mcforwardingStatus iqosProfile \
+        isAddedByIdm isAddedByMvrp isAddedByXnv isAlternateIp isLoopbackPort isMacBasedVLANsEnabled \
+        isMlagGroupPort isNetLogInAutheticated isNetLogInEnabled isOpenFlowEnabled \
+        isPvlanSystemPort isPvlanTranslatePort isRemoteMirrorEnabled isTrillAccessEnabled \
+        isTrillAppointedForwarder isTrillDesignated isTrillNetworkEnabled isTrillSuspended \
+        isUplinkPort isVpstBlocked isisInstances isisModule isisStartCode limitLearning \
+        limitLearningAction limitLearningNum linkState loopbackStatus maskForDisplay masterPort \
+        mplsInstances mplsL3VpnNotificationEnable mplsModule mplsStartCode name1 name10 name2 \
+        name3 name4 name5 name6 name7 name8 name9 ndSup netmask noBvlans noCvlans noIpAddresses \
+        noLearningDomains noProto noSvlans noVlans noVmans ospfInstances ospfModule ospfStartCode \
+        ospfv3Instances ospfv3Module ospfv3StartCode overwrite_untagged_port pimInstances pimModule \
+        pimStartCode port portFilterList portList priority qosProfile rateShaping ripInstances \
+        ripModule ripStartCode ripngInstances ripngModule ripngStartCode rtagStatus serviceCount \
+        state stpStatus tag tagStatus taggedPorts untaggedPorts vManMode vlanFrlQos vlanType \
+        vrDescription vrId vrIpv4AdminState vrIpv6AdminState vrOperCause vrOperState vrParentId \
+        vrParentName vrType vrfCount xSvid ignore_bpdu ignore_stp vlan_name"
+
+    #     <=22.5                                  30.1=>
+    #vlanProc                               vlanProc    
+    #      action: null,                          action: null,     
+    #      activePorts: 4,                        activePorts: 4,   
+    #      adminState: 1,                         adminState: 1,    
+    #      algorithm: 0,                          algorithm: 0,     
+    #      altIsPrimary: 0,                       altIsPrimary: 0,  
+    #      arpSup: 0,                             arpSup: 0,    
+    #      atcktInst: 0,                          atcktInst: 0,     
+    #      bgpInstances: 0,                       bgpInstances: 0,  
+    #      bgpModule: null,                       bgpModule: null,  
+    #      bgpStartCode: null,                    bgpStartCode: null,   
+    #      cepPvid: 0,                            cepPvid: 0,   
+    #      count1: 4,                             count1: 4,    
+    #      description: null,                     description: null,    
+    #      dot1ahMode: 0,                         dot1ahMode: 0,    
+    #      erlLoopbackPort: 0,                    erlLoopbackPort: 0,   
+    #      erlPort: 0,                            erlPort: 0,   
+    #      filter: ANY,                           filter: ANY,  
+    #      flags: null,                           flags: null,  
+    #      inactivePort: 0,                       inactivePort: 0,  
+    #      ipAddress: 192.10.1.10,                ipAddress: 192.10.1.10,   
+    #      ipMtu: 0,                              ipMtu: 0,     
+    #      ipProxyArp: 2,                         ipProxyArp: 2,    
+    #      ipStatus: 1,                           ipStatus: 1,  
+    #      ipforwardingStatus: 1,                 ipforwardingStatus: 1,    
+    #      ipmcforwardingStatus: 0,               ipmcforwardingStatus: 0,  
+    #      ipv4DadState: 1,                          ---------------    
+    #      ipv6forwardingStatus: 0,               ipv6forwardingStatus: 0,  
+    #      ipv6mcforwardingStatus: 0,             ipv6mcforwardingStatus: 0,    
+    #      iqosProfile: 0,                        iqosProfile: 0,   
+    #      isAddedByIdm: 0,                       isAddedByIdm: 0,  
+    #      isAddedByMvrp: 0,                      isAddedByMvrp: 0,     
+    #      isAddedByXnv: 0,                       isAddedByXnv: 0,  
+    #      isAlternateIp: 0,                      isAlternateIp: 0,     
+    #      isLoopbackPort: 0,                     isLoopbackPort: 0,    
+    #      isMacBasedVLANsEnabled: 0,             isMacBasedVLANsEnabled: 0,    
+    #      isMlagGroupPort: 0,                    isMlagGroupPort: 0,   
+    #      isNetLogInAutheticated: 0,             isNetLogInAutheticated: 0,    
+    #      isNetLogInEnabled: 0,                  isNetLogInEnabled: 0,     
+    #      isOpenFlowEnabled: 0,                  isOpenFlowEnabled: 0,     
+    #      isPvlanSystemPort: 0,                  isPvlanSystemPort: 0,     
+    #      isPvlanTranslatePort: 0,               isPvlanTranslatePort: 0,  
+    #      isRemoteMirrorEnabled: 0,              isRemoteMirrorEnabled: 0,     
+    #      isTrillAccessEnabled: 0,               isTrillAccessEnabled: 0,  
+    #      isTrillAppointedForwarder: 0,          isTrillAppointedForwarder: 0,     
+    #      isTrillDesignated: 0,                  isTrillDesignated: 0,     
+    #      isTrillNetworkEnabled: 0,              isTrillNetworkEnabled: 0,     
+    #      isTrillSuspended: 0,                   isTrillSuspended: 0,  
+    #      isUplinkPort: 0,                       isUplinkPort: 0,  
+    #      isVpstBlocked: 0,                      isVpstBlocked: 0,     
+    #      isisInstances: 0,                      isisInstances: 0,     
+    #      isisModule: null,                      isisModule: null,     
+    #      isisStartCode: null,                   isisStartCode: null,  
+    #      limitLearning: 0,                      limitLearning: 0,     
+    #      limitLearningAction: 0,                limitLearningAction: 0,   
+    #      limitLearningNum: 0,                   limitLearningNum: 0,  
+    #      linkState: 0,                          linkState: 0,     
+    #      loopbackStatus: 0,                     loopbackStatus: 0,    
+    #      maskForDisplay: 24,                    maskForDisplay: 24,   
+    #      masterPort: invalid port,              masterPort: invalid port,     
+    #      mplsInstances: 0,                      mplsInstances: 0,     
+    #      mplsL3VpnNotificationEnable: 0,        mplsL3VpnNotificationEnable: 0,   
+    #      mplsModule: null,                      mplsModule: null,     
+    #      mplsStartCode: null,                   mplsStartCode: null,  
+    #      name1: vlan1,                          name1: vlan1,     
+    #      name10: null,                          name10: null,     
+    #      name2: VR-Default,                     name2: VR-Default,    
+    #      name3: null,                           name3: null,  
+    #      name4: by user,                        name4: by user,   
+    #      name5: null,                           name5: null,  
+    #      name6: null,                           name6: null,  
+    #      name7: null,                           name7: null,  
+    #      name8: null,                           name8: null,  
+    #      name9: null,                           name9: null,  
+    #      ndSup: 0,                              ndSup: 0,     
+    #      netmask: 0.0.0.0,                      netmask: 0.0.0.0,     
+    #      noBvlans: 0,                           noBvlans: 0,  
+    #      noCvlans: 0,                           noCvlans: 0,  
+    #      noIpAddresses: 0,                      noIpAddresses: 0,     
+    #      noLearningDomains: 0,                  noLearningDomains: 0,     
+    #      noProto: 0,                            noProto: 0,   
+    #      noSvlans: 0,                           noSvlans: 0,  
+    #      noVlans: 0,                            noVlans: 0,   
+    #      noVmans: 0,                            noVmans: 0,   
+    #      ospfInstances: 0,                      ospfInstances: 0,     
+    #      ospfModule: null,                      ospfModule: null,     
+    #      ospfStartCode: null,                   ospfStartCode: null,  
+    #      ospfv3Instances: 0,                    ospfv3Instances: 0,   
+    #      ospfv3Module: null,                    ospfv3Module: null,   
+    #      ospfv3StartCode: null,                 ospfv3StartCode: null,    
+    #      overwrite_untagged_port: 2,            overwrite_untagged_port: 2,   
+    #      pimInstances: 0,                       pimInstances: 0,  
+    #      pimModule: null,                       pimModule: null,  
+    #      pimStartCode: null,                    pimStartCode: null,   
+    #      port: invalid port,                    port: invalid port,   
+    #      portFilterList: null,                  portFilterList: null,     
+    #      portList: null,                        portList: null,   
+    #      priority: 0,                           priority: 0,  
+    #      qosProfile: 0,                         qosProfile: 0,    
+    #      rateShaping: 0,                        rateShaping: 0,   
+    #      ripInstances: 0,                       ripInstances: 0,  
+    #      ripModule: null,                       ripModule: null,  
+    #      ripStartCode: null,                    ripStartCode: null,   
+    #      ripngInstances: 0,                     ripngInstances: 0,    
+    #      ripngModule: null,                     ripngModule: null,    
+    #      ripngStartCode: null,                  ripngStartCode: null,     
+    #      rtagStatus: 0,                         rtagStatus: 0,    
+    #      serviceCount: 0,                       serviceCount: 0,  
+    #      state: 0,                              state: 0,     
+    #      stpStatus: 0,                          stpStatus: 0,     
+    #      tag: 100,                              tag: 100,     
+    #      tagStatus: 1,                          tagStatus: 1,     
+    #      taggedPorts: null,                     taggedPorts: null,    
+    #      untaggedPorts: 4-7,                    untaggedPorts: 4-7,   
+    #      vManMode: 0,                           vManMode: 0,  
+    #      vlanFrlQos: 0,                         vlanFrlQos: 0,    
+    #      vlanType: 3,                           vlanType: 3,  
+    #      vrDescription: null,                   vrDescription: null,  
+    #      vrId: 0,                               vrId: 0,  
+    #      vrIpv4AdminState: 0,                   vrIpv4AdminState: 0,  
+    #      vrIpv6AdminState: 0,                   vrIpv6AdminState: 0,  
+    #      vrOperCause: 0,                        vrOperCause: 0,   
+    #      vrOperState: 0,                        vrOperState: 0,   
+    #      vrParentId: 0,                         vrParentId: 0,    
+    #      vrParentName: null,                    vrParentName: null,   
+    #      vrType: 0,                             vrType: 0,    
+    #      vrfCount: 0,                           vrfCount: 0,  
+    #      xSvid: 0                              xSvid: 0   
+    #stp_vlan:                          stp_vlan:   
+    #      ignore_bpdu: 0,                        ignore_bpdu: 0,   
+    #      ignore_stp: 0,                         ignore_stp: 0,    
+    #      vlan_name: vlan1                       vlan_name: vlan1
+
+    set JSON_SUB(vlanProc,action) "vlanProc action"
+    set JSON_SUB(vlanProc,activePorts) "vlanProc activePorts"
+    set JSON_SUB(vlanProc,adminState) "vlanProc adminState"
+    set JSON_SUB(vlanProc,algorithm) "vlanProc algorithm"
+    set JSON_SUB(vlanProc,altIsPrimary) "vlanProc altIsPrimary"
+    set JSON_SUB(vlanProc,arpSup) "vlanProc arpSup"
+    set JSON_SUB(vlanProc,atcktInst) "vlanProc atcktInst"
+    set JSON_SUB(vlanProc,bgpInstances) "vlanProc bgpInstances"
+    set JSON_SUB(vlanProc,bgpModule) "vlanProc bgpModule"
+    set JSON_SUB(vlanProc,bgpStartCode) "vlanProc bgpStartCode"
+    set JSON_SUB(vlanProc,cepPvid) "vlanProc cepPvid"
+    set JSON_SUB(vlanProc,count1) "vlanProc count1"
+    set JSON_SUB(vlanProc,description) "vlanProc description"
+    set JSON_SUB(vlanProc,dot1ahMode) "vlanProc dot1ahMode"
+    set JSON_SUB(vlanProc,erlLoopbackPort) "vlanProc erlLoopbackPort"
+    set JSON_SUB(vlanProc,erlPort) "vlanProc erlPort"
+    set JSON_SUB(vlanProc,filter) "vlanProc filter"
+    set JSON_SUB(vlanProc,flags) "vlanProc flags"
+    set JSON_SUB(vlanProc,inactivePort) "vlanProc inactivePort"
+    set JSON_SUB(vlanProc,ipAddress) "vlanProc ipAddress"
+    set JSON_SUB(vlanProc,ipMtu) "vlanProc ipMtu"
+    set JSON_SUB(vlanProc,ipProxyArp) "vlanProc ipProxyArp"
+    set JSON_SUB(vlanProc,ipStatus) "vlanProc ipStatus"
+    set JSON_SUB(vlanProc,ipforwardingStatus) "vlanProc ipforwardingStatus"
+    set JSON_SUB(vlanProc,ipmcforwardingStatus) "vlanProc ipmcforwardingStatus"
+    set JSON_SUB(vlanProc,ipv4DadState) "vlanProc ipv4DadState"
+    set JSON_SUB(vlanProc,ipv6forwardingStatus) "vlanProc ipv6forwardingStatus"
+    set JSON_SUB(vlanProc,ipv6mcforwardingStatus) "vlanProc ipv6mcforwardingStatus"
+    set JSON_SUB(vlanProc,iqosProfile) "vlanProc iqosProfile"
+    set JSON_SUB(vlanProc,isAddedByIdm) "vlanProc isAddedByIdm"
+    set JSON_SUB(vlanProc,isAddedByMvrp) "vlanProc isAddedByMvrp"
+    set JSON_SUB(vlanProc,isAddedByXnv) "vlanProc isAddedByXnv"
+    set JSON_SUB(vlanProc,isAlternateIp) "vlanProc isAlternateIp"
+    set JSON_SUB(vlanProc,isLoopbackPort) "vlanProc isLoopbackPort"
+    set JSON_SUB(vlanProc,isMacBasedVLANsEnabled) "vlanProc isMacBasedVLANsEnabled"
+    set JSON_SUB(vlanProc,isMlagGroupPort) "vlanProc isMlagGroupPort"
+    set JSON_SUB(vlanProc,isNetLogInAutheticated) "vlanProc isNetLogInAutheticated"
+    set JSON_SUB(vlanProc,isNetLogInEnabled) "vlanProc isNetLogInEnabled"
+    set JSON_SUB(vlanProc,isOpenFlowEnabled) "vlanProc isOpenFlowEnabled"
+    set JSON_SUB(vlanProc,isPvlanSystemPort) "vlanProc isPvlanSystemPort"
+    set JSON_SUB(vlanProc,isPvlanTranslatePort) "vlanProc isPvlanTranslatePort"
+    set JSON_SUB(vlanProc,isRemoteMirrorEnabled) "vlanProc isRemoteMirrorEnabled"
+    set JSON_SUB(vlanProc,isTrillAccessEnabled) "vlanProc isTrillAccessEnabled"
+    set JSON_SUB(vlanProc,isTrillAppointedForwarder) "vlanProc isTrillAppointedForwarder"
+    set JSON_SUB(vlanProc,isTrillDesignated) "vlanProc isTrillDesignated"
+    set JSON_SUB(vlanProc,isTrillNetworkEnabled) "vlanProc isTrillNetworkEnabled"
+    set JSON_SUB(vlanProc,isTrillSuspended) "vlanProc isTrillSuspended"
+    set JSON_SUB(vlanProc,isUplinkPort) "vlanProc isUplinkPort"
+    set JSON_SUB(vlanProc,isVpstBlocked) "vlanProc isVpstBlocked"
+    set JSON_SUB(vlanProc,isisInstances) "vlanProc isisInstances"
+    set JSON_SUB(vlanProc,isisModule) "vlanProc isisModule"
+    set JSON_SUB(vlanProc,isisStartCode) "vlanProc isisStartCode"
+    set JSON_SUB(vlanProc,limitLearning) "vlanProc limitLearning"
+    set JSON_SUB(vlanProc,limitLearningAction) "vlanProc limitLearningAction"
+    set JSON_SUB(vlanProc,limitLearningNum) "vlanProc limitLearningNum"
+    set JSON_SUB(vlanProc,linkState) "vlanProc linkState"
+    set JSON_SUB(vlanProc,loopbackStatus) "vlanProc loopbackStatus"
+    set JSON_SUB(vlanProc,maskForDisplay) "vlanProc maskForDisplay"
+    set JSON_SUB(vlanProc,masterPort) "vlanProc masterPort"
+    set JSON_SUB(vlanProc,mplsInstances) "vlanProc mplsInstances"
+    set JSON_SUB(vlanProc,mplsL3VpnNotificationEnable) "vlanProc mplsL3VpnNotificationEnable"
+    set JSON_SUB(vlanProc,mplsModule) "vlanProc mplsModule"
+    set JSON_SUB(vlanProc,mplsStartCode) "vlanProc mplsStartCode"
+    set JSON_SUB(vlanProc,name1) "vlanProc name1"
+    set JSON_SUB(vlanProc,name10) "vlanProc name10"
+    set JSON_SUB(vlanProc,name2) "vlanProc name2"
+    set JSON_SUB(vlanProc,name3) "vlanProc name3"
+    set JSON_SUB(vlanProc,name4) "vlanProc name4"
+    set JSON_SUB(vlanProc,name5) "vlanProc name5"
+    set JSON_SUB(vlanProc,name6) "vlanProc name6"
+    set JSON_SUB(vlanProc,name7) "vlanProc name7"
+    set JSON_SUB(vlanProc,name8) "vlanProc name8"
+    set JSON_SUB(vlanProc,name9) "vlanProc name9"
+    set JSON_SUB(vlanProc,ndSup) "vlanProc ndSup"
+    set JSON_SUB(vlanProc,netmask) "vlanProc netmask"
+    set JSON_SUB(vlanProc,noBvlans) "vlanProc noBvlans"
+    set JSON_SUB(vlanProc,noCvlans) "vlanProc noCvlans"
+    set JSON_SUB(vlanProc,noIpAddresses) "vlanProc noIpAddresses"
+    set JSON_SUB(vlanProc,noLearningDomains) "vlanProc noLearningDomains"
+    set JSON_SUB(vlanProc,noProto) "vlanProc noProto"
+    set JSON_SUB(vlanProc,noSvlans) "vlanProc noSvlans"
+    set JSON_SUB(vlanProc,noVlans) "vlanProc noVlans"
+    set JSON_SUB(vlanProc,noVmans) "vlanProc noVmans"
+    set JSON_SUB(vlanProc,ospfInstances) "vlanProc ospfInstances"
+    set JSON_SUB(vlanProc,ospfModule) "vlanProc ospfModule"
+    set JSON_SUB(vlanProc,ospfStartCode) "vlanProc ospfStartCode"
+    set JSON_SUB(vlanProc,ospfv3Instances) "vlanProc ospfv3Instances"
+    set JSON_SUB(vlanProc,ospfv3Module) "vlanProc ospfv3Module"
+    set JSON_SUB(vlanProc,ospfv3StartCode) "vlanProc ospfv3StartCode"
+    set JSON_SUB(vlanProc,overwrite_untagged_port) "vlanProc overwrite_untagged_port"
+    set JSON_SUB(vlanProc,pimInstances) "vlanProc pimInstances"
+    set JSON_SUB(vlanProc,pimModule) "vlanProc pimModule"
+    set JSON_SUB(vlanProc,pimStartCode) "vlanProc pimStartCode"
+    set JSON_SUB(vlanProc,port) "vlanProc port"
+    set JSON_SUB(vlanProc,portFilterList) "vlanProc portFilterList"
+    set JSON_SUB(vlanProc,portList) "vlanProc portList"
+    set JSON_SUB(vlanProc,priority) "vlanProc priority"
+    set JSON_SUB(vlanProc,qosProfile) "vlanProc qosProfile"
+    set JSON_SUB(vlanProc,rateShaping) "vlanProc rateShaping"
+    set JSON_SUB(vlanProc,ripInstances) "vlanProc ripInstances"
+    set JSON_SUB(vlanProc,ripModule) "vlanProc ripModule"
+    set JSON_SUB(vlanProc,ripStartCode) "vlanProc ripStartCode"
+    set JSON_SUB(vlanProc,ripngInstances) "vlanProc ripngInstances"
+    set JSON_SUB(vlanProc,ripngModule) "vlanProc ripngModule"
+    set JSON_SUB(vlanProc,ripngStartCode) "vlanProc ripngStartCode"
+    set JSON_SUB(vlanProc,rtagStatus) "vlanProc rtagStatus"
+    set JSON_SUB(vlanProc,serviceCount) "vlanProc serviceCount"
+    set JSON_SUB(vlanProc,state) "vlanProc state"
+    set JSON_SUB(vlanProc,stpStatus) "vlanProc stpStatus"
+    set JSON_SUB(vlanProc,tag) "vlanProc tag"
+    set JSON_SUB(vlanProc,tagStatus) "vlanProc tagStatus"
+    set JSON_SUB(vlanProc,taggedPorts) "vlanProc taggedPorts"
+    set JSON_SUB(vlanProc,untaggedPorts) "vlanProc untaggedPorts"
+    set JSON_SUB(vlanProc,vManMode) "vlanProc vManMode"
+    set JSON_SUB(vlanProc,vlanFrlQos) "vlanProc vlanFrlQos"
+    set JSON_SUB(vlanProc,vlanType) "vlanProc vlanType"
+    set JSON_SUB(vlanProc,vrDescription) "vlanProc vrDescription"
+    set JSON_SUB(vlanProc,vrId) "vlanProc vrId"
+    set JSON_SUB(vlanProc,vrIpv4AdminState) "vlanProc vrIpv4AdminState"
+    set JSON_SUB(vlanProc,vrIpv6AdminState) "vlanProc vrIpv6AdminState"
+    set JSON_SUB(vlanProc,vrOperCause) "vlanProc vrOperCause"
+    set JSON_SUB(vlanProc,vrOperState) "vlanProc vrOperState"
+    set JSON_SUB(vlanProc,vrParentId) "vlanProc vrParentId"
+    set JSON_SUB(vlanProc,vrParentName) "vlanProc vrParentName"
+    set JSON_SUB(vlanProc,vrType) "vlanProc vrType"
+    set JSON_SUB(vlanProc,vrfCount) "vlanProc vrfCount"
+    set JSON_SUB(vlanProc,xSvid) "vlanProc xSvid"
+    set JSON_SUB(stp_vlan,ignore_bpdu)  "stp_vlan ignore_bpdu"
+    set JSON_SUB(stp_vlan,ignore_stp)   "stp_vlan ignore_stp"
+    set JSON_SUB(stp_vlan,vlan_name)    "stp_vlan vlan_name"
+
+    # Modify JSON_SUB based on version. If different mappings are required..
+    # >= 30.1
+    if {[CompareRelease $v "30.1"] >= 0} {
+        set JSON_SUB(vlanProc,ipv4DadState)        "nosupp"
+    }
+  
+    # Build cli
+    # - add sub command for vlan
+    if {$vlan != "null"} {
+        set cmd "show vlan $vlan"
+    } else {
+        set cmd "show vlan"
+    }
+
+    # Check if there is something in the parameterList passed in which is not supported in
+    #   this running version
+    set inPList $parameterList
+    foreach inP $inPList {
+        set rk [lindex [lindex $inP 0] 0]
+        foreach rootKeySub [lindex [lindex $inP 0] 1] {
+            if {[info exists JSON_SUB($rk,$rootKeySub)]} {
+                if {$JSON_SUB($rk,$rootKeySub) == "nosupp"} {
+                    report_start_test "$testNo $inP"
+                    result_skip "Verify cli: $cmd skipping for keys $rk $rootKeySub -- no support $v"
+                    report_end_test
+                    return "1"
+                } else {
+                }
+            } else {
+                result_warning "$rk $rootKeySub key may not be setup/exist in the proc"
+            }
+        }
+    }
+    foreach rk $rootKeyList {
+        foreach inarg $allargs {
+            if {![info exists JSON_SUB($rk,$inarg)]} {
+                continue;
+            }
+            if {[set $inarg] == "null"} {
+                continue;
+            }
+            if {[lindex $JSON_SUB($rk,$inarg) 0] == "nosupp"} {
+                # If this test case is accessing a register that is not supported skip the case
+                #
+                report_start_test "$testNo $rk $inarg"
+                result_skip "On DUT $whichDutNow skipping for $rk $inarg"
+                report_end_test
+                #_abortTestCase
+                return "1"
+            }
+            if {![info exists rootKeys([lindex $JSON_SUB($rk,$inarg) 0])]} {
+                #rootKeys(arp_stats|arp_config|arp_table_config) [lindex $JSON_SUB($rk,$inarg) 1]
+                set rootKeys([lindex $JSON_SUB($rk,$inarg) 0]) [lindex $JSON_SUB($rk,$inarg) 1]
+                if {[regexp -nocase "check" $type]} {
+                    set rootKeyValues([lindex $JSON_SUB($rk,$inarg) 0]) [set $inarg]
+                }
+            } else {
+                lappend rootKeys([lindex $JSON_SUB($rk,$inarg) 0]) [lindex $JSON_SUB($rk,$inarg) 1]
+                if {[regexp -nocase "check" $type]} {
+                    lappend rootKeyValues([lindex $JSON_SUB($rk,$inarg) 0]) [set $inarg]
+                }
+            }
+        }
+    }
+    foreach rKey $rootKeyList {
+        if {[regexp -nocase "check" $type]} {
+            if {[info exists rootKeys($rKey)] && [llength $rootKeys($rKey)] > 0} {
+                #puts "add plist \"{$rKey {$rootKeys($rKey)}} {$rootKeyValues($rKey)} $exist\" "
+                lappend parameterList "{$rKey {$rootKeys($rKey)}} {$rootKeyValues($rKey)} $exist"
+            }
+        } else {
+            if {[info exists rootKeys($rKey)] && [llength $rootKeys($rKey)] > 0} {
+                #puts "add plist \"{$rKey {$rootKeys($rKey)}}\" "
+                lappend parameterList "{$rKey {$rootKeys($rKey)}}"
+            }
+        }
+    }
+
+    # Build the final Check or Get JSON Dictionary from paramaterLists created above
+    if {[regexp -nocase "check" $type]} {
+        set res [CheckDictValue -cmd "$cmd" -yesorno "$yesorno" \
+                    -comment "$comment" -time "$time" -testNo \"$testNo\" \
+                    -parameterList $parameterList -debugjson "$debugjson"]
+        unset parameterList
+    } else {
+        set res [GetDictValue -cmd "$cmd" -yesorno "$yesorno" \
+                    -comment "$comment" -time "$time" -testNo \"$testNo\" \
+                    -parameterList $parameterList -debugjson "$debugjson"]
+        unset parameterList
+    }
+    return $res
+
+}
+# _show_ipstat_ipv4
+proc _show_ipstat_ipv4 {args} {
+    global MAIN whichDutNow
+
+    parse_args _show_ipstat_ipv4 $args {
+        type          "check"
+        parameterList ""
+        comment       ""
+        testNo        "_show_ipstat_ipv4"
+        yesorno       "Yes"
+        debugjson     "false"
+        time          "null"
+        showfmt       "default"
+        exist         "exist"
+        vlan          "null"
+        broadAddr      "null"
+        netAddr        "null"
+        netMask        "null"
+        rxBroadcast    "null"
+        rxBytes        "null"
+        rxDrop         "null"
+        rxErrs         "null"
+        rxMulticast    "null"
+        rxPackets      "null"
+        rxUnknownProto "null"
+        txBroadcast    "null"
+        txBytes        "null"
+        txDrop         "null"
+        txErrs         "null"
+        txMulticast    "null"
+        txPackets      "null"
+    }
+
+    if {$vlan == "null"} {
+        result_warning "The -vlan argument must be used with this proc"
+        return;
+    }
+
+    set d $whichDutNow
+    set platform [GetPlatform DUT$d]
+    set v [GetVersion DUT$d]
+
+    #json variables
+    set rootKeyList "ifIpStats"
+    set allargs "broadAddr netAddr netMask rxBroadcast rxBytes rxDrop rxErrs rxMulticast \
+        rxPackets rxUnknownProto txBroadcast txBytes txDrop txErrs txMulticast txPackets"
+
+    #show ipstats ipv4 vlan vlan1
+    #ifIpStats:                         ifIpStats: 
+    #      broadAddr: 192.10.1.255,            broadAddr: 192.10.1.255,
+    #      netAddr: 192.10.1.10,               netAddr: 192.10.1.10,
+    #      netMask: 255.255.255.0,             netMask: 255.255.255.0,
+    #      rxBroadcast: 0,                     rxBroadcast: 0,
+    #      rxBytes: 352,                       rxBytes: 352,
+    #      rxDrop: 0,                          rxDrop: 0,
+    #      rxErrs: 0,                          rxErrs: 0,
+    #      rxMulticast: 11,                    rxMulticast: 11,
+    #      rxPackets: 11,                      rxPackets: 11,
+    #      rxUnknownProto: 0,                  rxUnknownProto: 0,
+    #      txBroadcast: 0,                     txBroadcast: 0,
+    #      txBytes: 544,                       txBytes: 544,
+    #      txDrop: 0,                          txDrop: 0,
+    #      txErrs: 0,                          txErrs: 0,
+    #      txMulticast: 14,                    txMulticast: 14,
+    #      txPackets: 14,                      txPackets: 14,
+    #      vlan: vlan1,                        vlan: vlan1,
+    #      vrName: null                        vrName: null
+
+    set JSON_SUB(ifIpStats,broadAddr)    "ifIpStats broadAddr"
+    set JSON_SUB(ifIpStats,netAddr)    "ifIpStats netAddr"
+    set JSON_SUB(ifIpStats,netMask)    "ifIpStats netMask"
+    set JSON_SUB(ifIpStats,rxBroadcast)    "ifIpStats rxBroadcast"
+    set JSON_SUB(ifIpStats,rxBytes)    "ifIpStats rxBytes"
+    set JSON_SUB(ifIpStats,rxDrop)    "ifIpStats rxDrop"
+    set JSON_SUB(ifIpStats,rxErrs)    "ifIpStats rxErrs"
+    set JSON_SUB(ifIpStats,rxMulticast)    "ifIpStats rxMulticast"
+    set JSON_SUB(ifIpStats,rxPackets)    "ifIpStats rxPackets"
+    set JSON_SUB(ifIpStats,rxUnknownProto)    "ifIpStats rxUnknownProto"
+    set JSON_SUB(ifIpStats,txBroadcast)    "ifIpStats txBroadcast"
+    set JSON_SUB(ifIpStats,txBytes)    "ifIpStats txBytes"
+    set JSON_SUB(ifIpStats,txDrop)    "ifIpStats txDrop"
+    set JSON_SUB(ifIpStats,txErrs)    "ifIpStats txErrs"
+    set JSON_SUB(ifIpStats,txMulticast)    "ifIpStats txMulticast"
+    set JSON_SUB(ifIpStats,txPackets)    "ifIpStats txPackets"
+    set JSON_SUB(ifIpStats,vlan)    "ifIpStats vlan"
+    set JSON_SUB(ifIpStats,vrName)    "ifIpStats vrName"    
+
+    # Modify JSON_SUB based on version. If different mappings are required..
+    # >= 30.1
+    if {[CompareRelease $v "30.1"] >= 0} {
+        #set JSON_SUB(vlanProc,ipv4DadState)        "nosupp"
+    }
+   
+    # Build cli
+
+    # - add sub command for vlan
+    set cmd "show ipstats ipv4 vlan $vlan"
+
+    # Check if there is something in the parameterList passed in which is not supported in
+    #   this running version
+    set inPList $parameterList
+    foreach inP $inPList {
+        set rk [lindex [lindex $inP 0] 0]
+        foreach rootKeySub [lindex [lindex $inP 0] 1] {
+            if {[info exists JSON_SUB($rk,$rootKeySub)]} {
+                if {$JSON_SUB($rk,$rootKeySub) == "nosupp"} {
+                    report_start_test "$testNo $inP"
+                    result_skip "Verify cli: $cmd skipping for keys $rk $rootKeySub -- no support $v"
+                    report_end_test
+                    return "1"
+                } else {
+                }
+            } else {
+                result_warning "$rk $rootKeySub key may not be setup/exist in the proc"
+            }
+        }
+    }
+    foreach rk $rootKeyList {
+        foreach inarg $allargs {
+            if {![info exists JSON_SUB($rk,$inarg)]} {
+                continue;
+            }
+            if {[set $inarg] == "null"} {
+                continue;
+            }
+            if {[lindex $JSON_SUB($rk,$inarg) 0] == "nosupp"} {
+                # If this test case is accessing a register that is not supported skip the case
+                #
+                report_start_test "$testNo $rk $inarg"
+                result_skip "On DUT $whichDutNow skipping for $rk $inarg"
+                report_end_test
+                #_abortTestCase
+                return "1"
+            }
+            if {![info exists rootKeys([lindex $JSON_SUB($rk,$inarg) 0])]} {
+                #rootKeys(arp_stats|arp_config|arp_table_config) [lindex $JSON_SUB($rk,$inarg) 1]
+                set rootKeys([lindex $JSON_SUB($rk,$inarg) 0]) [lindex $JSON_SUB($rk,$inarg) 1]
+                if {[regexp -nocase "check" $type]} {
+                    set rootKeyValues([lindex $JSON_SUB($rk,$inarg) 0]) [set $inarg]
+                }
+            } else {
+                lappend rootKeys([lindex $JSON_SUB($rk,$inarg) 0]) [lindex $JSON_SUB($rk,$inarg) 1]
+                if {[regexp -nocase "check" $type]} {
+                    lappend rootKeyValues([lindex $JSON_SUB($rk,$inarg) 0]) [set $inarg]
+                }
+            }
+        }
+    }
+    foreach rKey $rootKeyList {
+        if {[regexp -nocase "check" $type]} {
+            if {[info exists rootKeys($rKey)] && [llength $rootKeys($rKey)] > 0} {
+                #puts "add plist \"{$rKey {$rootKeys($rKey)}} {$rootKeyValues($rKey)} $exist\" "
+                lappend parameterList "{$rKey {$rootKeys($rKey)}} {$rootKeyValues($rKey)} $exist"
+            }
+        } else {
+            if {[info exists rootKeys($rKey)] && [llength $rootKeys($rKey)] > 0} {
+                #puts "add plist \"{$rKey {$rootKeys($rKey)}}\" "
+                lappend parameterList "{$rKey {$rootKeys($rKey)}}"
+            }
+        }
+    }
+
+    # Build the final Check or Get JSON Dictionary from paramaterLists created above
+
+    if {[regexp -nocase "check" $type]} {
+        set res [CheckDictValue -cmd "$cmd" -yesorno "$yesorno" \
+                    -comment "$comment" -time "$time" -testNo \"$testNo\" \
+                    -parameterList $parameterList -debugjson "$debugjson"]
+        unset parameterList
+    } else {
+        set res [GetDictValue -cmd "$cmd" -yesorno "$yesorno" \
+                    -comment "$comment" -time "$time" -testNo \"$testNo\" \
+                    -parameterList $parameterList -debugjson "$debugjson"]
+        unset parameterList
+    }
+    return $res
+
+}
+# _show_ipstat_ipv6
+proc _show_ipstat_ipv6 {args} {
+    global MAIN whichDutNow
+
+    parse_args _show_ipstat_ipv6 $args {
+        type          "check"
+        parameterList ""
+        comment       ""
+        testNo        "_show_ipstat_ipv6"
+        yesorno       "Yes"
+        debugjson     "false"
+        time          "null"
+        showfmt       "default"
+        exist         "exist"
+        vlan          "null"           
+        Icmp6vlan          "null"
+        Icmp6InAdminProhibs    "null"
+        Icmp6InDestUnreachs    "null"
+        Icmp6InEchoReplies     "null"
+        Icmp6InEchos           "null"
+        Icmp6InErrors          "null"
+        Icmp6InGroupMembQueries    "null"
+        Icmp6InGroupMembReductions "null"
+        Icmp6InGroupMembResponses  "null"
+        Icmp6InMsgs                "null"
+        Icmp6InNeighborAdvertisements  "null"
+        Icmp6InNeighborSolicits  "null"
+        Icmp6InParmProblems      "null"
+        Icmp6InPktTooBigs        "null"
+        Icmp6InRedirects         "null"
+        Icmp6InRouterAdvertisements  "null"
+        Icmp6InRouterSolicits        "null"
+        Icmp6InTimeExcds             "null"
+        Icmp6OutAdminProhibs         "null"
+        Icmp6OutDestUnreachs         "null"
+        Icmp6OutEchoReplies          "null"
+        Icmp6OutEchos    "null"
+        Icmp6OutErrors    "null"
+        Icmp6OutGroupMembQueries    "null"
+        Icmp6OutGroupMembReductions    "null"
+        Icmp6OutGroupMembResponses    "null"
+        Icmp6OutMsgs    "null"
+        Icmp6OutNeighborAdvertisements    "null"
+        Icmp6OutNeighborSolicits    "null"
+        Icmp6OutParmProblems    "null"
+        Icmp6OutPktTooBigs    "null"
+        Icmp6OutRedirects    "null"
+        Icmp6OutRouterAdvertisements    "null"
+        Icmp6OutRouterSolicits    "null"
+        Icmp6OutTimeExcds    "null"
+        Ip6FragCreates    "null"
+        Ip6FragFails    "null"
+        Ip6FragOKs    "null"
+        Ip6InAddrErrors    "null"
+        Ip6InDelivers    "null"
+        Ip6InDiscards    "null"
+        Ip6InHdrErrors    "null"
+        Ip6InMcastPkts    "null"
+        Ip6InNoRoutes    "null"
+        Ip6InReceives    "null"
+        Ip6InTooBigErrors    "null"
+        Ip6InTruncatedPkts    "null"
+        Ip6InUnknownProtos    "null"
+        Ip6LastChange    "null"
+        Ip6OutDiscards    "null"
+        Ip6OutForwDatagrams    "null"
+        Ip6OutMcastPkts    "null"
+        Ip6OutNoRoutes    "null"
+        Ip6OutRequests    "null"
+        Ip6ReasmFails    "null"
+        Ip6ReasmOKs    "null"
+        Ip6ReasmReqds    "null"
+        Ip6ReasmTimeout    "null"
+        clearCnt    "null"
+        mldDoneFwd    "null"
+        mldDoneOrig    "null"
+        mldDoneRecv    "null"
+        mldErrorRecv    "null"
+        mldQueryFwd    "null"
+        mldQueryOrig    "null"
+        mldQueryRecv    "null"
+        mldUnknownRecv    "null"
+        mldv1JoinFwd    "null"
+        mldv1JoinOrig    "null"
+        mldv1JoinRecv    "null"
+        mldv2JoinFwd    "null"
+        mldv2JoinOrig    "null"
+        mldv2JoinRecv    "null" 
+    }
+
+    if {$vlan == "null"} {
+        result_warning "The -vlan argument must be used with this proc"
+        return;
+    }
+    if {$debugjson == "true"} {
+        puts "\n!!\n!!"
+        puts "-------------------------------------------------------------------------------------"
+        puts "         This proc has 2 altered arg keys to avoid duplicating the -vlan arg"
+        puts "ipv6_mib_vlan->vlan is accessed using -Icmp6vlan"
+        puts "mcmMldStats->vlan has been removed b/c it was returning null instead of the vlan name."
+        puts "-------------------------------------------------------------------------------------\n!!\n!!"
+    }
+    set d $whichDutNow
+    set platform [GetPlatform DUT$d]
+    set v [GetVersion DUT$d]
+
+    #json variables
+    set rootKeyList "ipv6_mib_vlan mcmMldStats"
+    # modified Icmp6 vlan key to be Icmp6vlan to allow easy naming for proc
+    set allargs "Icmp6vlan Icmp6InAdminProhibs Icmp6InDestUnreachs Icmp6InEchoReplies Icmp6InEchos \
+        Icmp6InErrors Icmp6InGroupMembQueries Icmp6InGroupMembReductions Icmp6InGroupMembResponses \
+        Icmp6InMsgs Icmp6InNeighborAdvertisements Icmp6InNeighborSolicits Icmp6InParmProblems \
+        Icmp6InPktTooBigs Icmp6InRedirects Icmp6InRouterAdvertisements Icmp6InRouterSolicits \
+        Icmp6InTimeExcds Icmp6OutAdminProhibs Icmp6OutDestUnreachs Icmp6OutEchoReplies Icmp6OutEchos \
+        Icmp6OutErrors Icmp6OutGroupMembQueries Icmp6OutGroupMembReductions Icmp6OutGroupMembResponses \
+        Icmp6OutMsgs Icmp6OutNeighborAdvertisements Icmp6OutNeighborSolicits Icmp6OutParmProblems \
+        Icmp6OutPktTooBigs Icmp6OutRedirects Icmp6OutRouterAdvertisements Icmp6OutRouterSolicits \
+        Icmp6OutTimeExcds Ip6FragCreates Ip6FragFails Ip6FragOKs Ip6InAddrErrors Ip6InDelivers \
+        Ip6InDiscards Ip6InHdrErrors Ip6InMcastPkts Ip6InNoRoutes Ip6InReceives Ip6InTooBigErrors \
+        Ip6InTruncatedPkts Ip6InUnknownProtos Ip6LastChange Ip6OutDiscards Ip6OutForwDatagrams \
+        Ip6OutMcastPkts Ip6OutNoRoutes Ip6OutRequests Ip6ReasmFails Ip6ReasmOKs Ip6ReasmReqds \
+        Ip6ReasmTimeout clearCnt mldDoneFwd mldDoneOrig mldDoneRecv mldErrorRecv mldQueryFwd \
+        mldQueryOrig mldQueryRecv mldUnknownRecv mldv1JoinFwd mldv1JoinOrig mldv1JoinRecv \
+        mldv2JoinFwd mldv2JoinOrig mldv2JoinRecv"
+
+
+    #show ipstats ipv6 vlan vlan1
+    #22.5                                      30.1
+    #ipv6_mib_vlan:                           ipv6_mib_vlan: 
+    #      Icmp6InAdminProhibs: 0,                 Icmp6InAdminProhibs: 0,
+    #      Icmp6InDestUnreachs: 0,                 Icmp6InDestUnreachs: 0,
+    #      Icmp6InEchoReplies: 0,                  Icmp6InEchoReplies: 0,
+    #      Icmp6InEchos: 0,                        Icmp6InEchos: 0,
+    #      Icmp6InErrors: 0,                       Icmp6InErrors: 0,
+    #      Icmp6InGroupMembQueries: 0,             Icmp6InGroupMembQueries: 0,
+    #      Icmp6InGroupMembReductions: 0,          Icmp6InGroupMembReductions: 0,
+    #      Icmp6InGroupMembResponses: 0,           Icmp6InGroupMembResponses: 0,
+    #      Icmp6InMsgs: 0,                         Icmp6InMsgs: 0,
+    #      Icmp6InNeighborAdvertisements: 0,       Icmp6InNeighborAdvertisements: 0,
+    #      Icmp6InNeighborSolicits: 0,             Icmp6InNeighborSolicits: 0,
+    #      Icmp6InParmProblems: 0,                 Icmp6InParmProblems: 0,
+    #      Icmp6InPktTooBigs: 0,                   Icmp6InPktTooBigs: 0,
+    #      Icmp6InRedirects: 0,                    Icmp6InRedirects: 0,
+    #      Icmp6InRouterAdvertisements: 0,         Icmp6InRouterAdvertisements: 0,
+    #      Icmp6InRouterSolicits: 0,               Icmp6InRouterSolicits: 0,
+    #      Icmp6InTimeExcds: 0,                    Icmp6InTimeExcds: 0,
+    #      Icmp6OutAdminProhibs: 0,                Icmp6OutAdminProhibs: 0,
+    #      Icmp6OutDestUnreachs: 0,                Icmp6OutDestUnreachs: 0,
+    #      Icmp6OutEchoReplies: 0,                 Icmp6OutEchoReplies: 0,
+    #      Icmp6OutEchos: 0,                       Icmp6OutEchos: 0,
+    #      Icmp6OutErrors: 0,                      Icmp6OutErrors: 0,
+    #      Icmp6OutGroupMembQueries: 0,            Icmp6OutGroupMembQueries: 0,
+    #      Icmp6OutGroupMembReductions: 0,         Icmp6OutGroupMembReductions: 0,
+    #      Icmp6OutGroupMembResponses: 10,         Icmp6OutGroupMembResponses: 13,
+    #      Icmp6OutMsgs: 14,                       Icmp6OutMsgs: 17,
+    #      Icmp6OutNeighborAdvertisements: 0,      Icmp6OutNeighborAdvertisements: 0,
+    #      Icmp6OutNeighborSolicits: 2,            Icmp6OutNeighborSolicits: 2,
+    #      Icmp6OutParmProblems: 0,                Icmp6OutParmProblems: 0,
+    #      Icmp6OutPktTooBigs: 0,                  Icmp6OutPktTooBigs: 0,
+    #      Icmp6OutRedirects: 0,                   Icmp6OutRedirects: 0,
+    #      Icmp6OutRouterAdvertisements: 0,        Icmp6OutRouterAdvertisements: 0,
+    #      Icmp6OutRouterSolicits: 2,              Icmp6OutRouterSolicits: 2,
+    #      Icmp6OutTimeExcds: 0,                   Icmp6OutTimeExcds: 0,
+    #      Ip6FragCreates: 0,                      Ip6FragCreates: 0,
+    #      Ip6FragFails: 0,                        Ip6FragFails: 0,
+    #      Ip6FragOKs: 0,                          Ip6FragOKs: 0,
+    #      Ip6InAddrErrors: 66,                    Ip6InAddrErrors: 0,
+    #      Ip6InDelivers: 0,                       Ip6InDelivers: 0,
+    #      Ip6InDiscards: 0,                       Ip6InDiscards: 0,
+    #      Ip6InHdrErrors: 0,                      Ip6InHdrErrors: 0,
+    #      Ip6InMcastPkts: 0,                      Ip6InMcastPkts: 0,
+    #      Ip6InNoRoutes: 0,                       Ip6InNoRoutes: 0,
+    #      Ip6InReceives: 0,                       Ip6InReceives: 13,
+    #      Ip6InTooBigErrors: 0,                   Ip6InTooBigErrors: 0,
+    #      Ip6InTruncatedPkts: 4912,               Ip6InTruncatedPkts: 0,
+    #      Ip6InUnknownProtos: 0,                  Ip6InUnknownProtos: 0,
+    #      Ip6LastChange: 0,                       Ip6LastChange: 0,
+    #      Ip6OutDiscards: 0,                      Ip6OutDiscards: 0,
+    #      Ip6OutForwDatagrams: 720,               Ip6OutForwDatagrams: 0,
+    #      Ip6OutMcastPkts: 0,                     Ip6OutMcastPkts: 19,
+    #      Ip6OutNoRoutes: 0,                      Ip6OutNoRoutes: 0,
+    #      Ip6OutRequests: 0,                      Ip6OutRequests: 19,
+    #      Ip6ReasmFails: 0,                       Ip6ReasmFails: 0,
+    #      Ip6ReasmOKs: 0,                         Ip6ReasmOKs: 0,
+    #      Ip6ReasmReqds: 0,                       Ip6ReasmReqds: 0,
+    #      Ip6ReasmTimeout: 0,                     Ip6ReasmTimeout: 0,
+    #      vlan: vlan1,                            vlan: vlan1,
+    #      vrName: null                            vrName: null
+    #mcmMldStats:                       mcmMldStats: 
+    #      clearCnt: 0,                        clearCnt: 0,
+    #      mldDoneFwd: 0,                      mldDoneFwd: 0,
+    #      mldDoneOrig: 0,                     mldDoneOrig: 0,
+    #      mldDoneRecv: 0,                     mldDoneRecv: 0,
+    #      mldErrorRecv: 0,                    mldErrorRecv: 0,
+    #      mldQueryFwd: 0,                     mldQueryFwd: 0,
+    #      mldQueryOrig: 0,                    mldQueryOrig: 0,
+    #      mldQueryRecv: 0,                    mldQueryRecv: 0,
+    #      mldUnknownRecv: 0,                  mldUnknownRecv: 0,
+    #      mldv1JoinFwd: 0,                    mldv1JoinFwd: 0,
+    #      mldv1JoinOrig: 0,                   mldv1JoinOrig: 0,
+    #      mldv1JoinRecv: 0,                   mldv1JoinRecv: 0,
+    #      mldv2JoinFwd: 0,                    mldv2JoinFwd: 0,
+    #      mldv2JoinOrig: 0,                   mldv2JoinOrig: 0,
+    #      mldv2JoinRecv: 0,                   mldv2JoinRecv: 0,
+    #      vlan: null                          vlan: null
+    #
+    set JSON_SUB(ipv6_mib_vlan,Icmp6InAdminProhibs)    "ipv6_mib_vlan Icmp6InAdminProhibs"
+    set JSON_SUB(ipv6_mib_vlan,Icmp6InDestUnreachs)    "ipv6_mib_vlan Icmp6InDestUnreachs"
+    set JSON_SUB(ipv6_mib_vlan,Icmp6InEchoReplies)    "ipv6_mib_vlan Icmp6InEchoReplies"
+    set JSON_SUB(ipv6_mib_vlan,Icmp6InEchos)    "ipv6_mib_vlan Icmp6InEchos"
+    set JSON_SUB(ipv6_mib_vlan,Icmp6InErrors)    "ipv6_mib_vlan Icmp6InErrors"
+    set JSON_SUB(ipv6_mib_vlan,Icmp6InGroupMembQueries)    "ipv6_mib_vlan Icmp6InGroupMembQueries"
+    set JSON_SUB(ipv6_mib_vlan,Icmp6InGroupMembReductions)    "ipv6_mib_vlan Icmp6InGroupMembReductions"
+    set JSON_SUB(ipv6_mib_vlan,Icmp6InGroupMembResponses)    "ipv6_mib_vlan Icmp6InGroupMembResponses"
+    set JSON_SUB(ipv6_mib_vlan,Icmp6InMsgs)    "ipv6_mib_vlan Icmp6InMsgs"
+    set JSON_SUB(ipv6_mib_vlan,Icmp6InNeighborAdvertisements)    "ipv6_mib_vlan Icmp6InNeighborAdvertisements"
+    set JSON_SUB(ipv6_mib_vlan,Icmp6InNeighborSolicits)    "ipv6_mib_vlan Icmp6InNeighborSolicits"
+    set JSON_SUB(ipv6_mib_vlan,Icmp6InParmProblems)    "ipv6_mib_vlan Icmp6InParmProblems"
+    set JSON_SUB(ipv6_mib_vlan,Icmp6InPktTooBigs)    "ipv6_mib_vlan Icmp6InPktTooBigs"
+    set JSON_SUB(ipv6_mib_vlan,Icmp6InRedirects)    "ipv6_mib_vlan Icmp6InRedirects"
+    set JSON_SUB(ipv6_mib_vlan,Icmp6InRouterAdvertisements)    "ipv6_mib_vlan Icmp6InRouterAdvertisements"
+    set JSON_SUB(ipv6_mib_vlan,Icmp6InRouterSolicits)    "ipv6_mib_vlan Icmp6InRouterSolicits"
+    set JSON_SUB(ipv6_mib_vlan,Icmp6InTimeExcds)    "ipv6_mib_vlan Icmp6InTimeExcds"
+    set JSON_SUB(ipv6_mib_vlan,Icmp6OutAdminProhibs)    "ipv6_mib_vlan Icmp6OutAdminProhibs"
+    set JSON_SUB(ipv6_mib_vlan,Icmp6OutDestUnreachs)    "ipv6_mib_vlan Icmp6OutDestUnreachs"
+    set JSON_SUB(ipv6_mib_vlan,Icmp6OutEchoReplies)    "ipv6_mib_vlan Icmp6OutEchoReplies"
+    set JSON_SUB(ipv6_mib_vlan,Icmp6OutEchos)    "ipv6_mib_vlan Icmp6OutEchos"
+    set JSON_SUB(ipv6_mib_vlan,Icmp6OutErrors)    "ipv6_mib_vlan Icmp6OutErrors"
+    set JSON_SUB(ipv6_mib_vlan,Icmp6OutGroupMembQueries)    "ipv6_mib_vlan Icmp6OutGroupMembQueries"
+    set JSON_SUB(ipv6_mib_vlan,Icmp6OutGroupMembReductions)    "ipv6_mib_vlan Icmp6OutGroupMembReductions"
+    set JSON_SUB(ipv6_mib_vlan,Icmp6OutGroupMembResponses)    "ipv6_mib_vlan Icmp6OutGroupMembResponses"
+    set JSON_SUB(ipv6_mib_vlan,Icmp6OutMsgs)    "ipv6_mib_vlan Icmp6OutMsgs"
+    set JSON_SUB(ipv6_mib_vlan,Icmp6OutNeighborAdvertisements)    "ipv6_mib_vlan Icmp6OutNeighborAdvertisements"
+    set JSON_SUB(ipv6_mib_vlan,Icmp6OutNeighborSolicits)    "ipv6_mib_vlan Icmp6OutNeighborSolicits"
+    set JSON_SUB(ipv6_mib_vlan,Icmp6OutParmProblems)    "ipv6_mib_vlan Icmp6OutParmProblems"
+    set JSON_SUB(ipv6_mib_vlan,Icmp6OutPktTooBigs)    "ipv6_mib_vlan Icmp6OutPktTooBigs"
+    set JSON_SUB(ipv6_mib_vlan,Icmp6OutRedirects)    "ipv6_mib_vlan Icmp6OutRedirects"
+    set JSON_SUB(ipv6_mib_vlan,Icmp6OutRouterAdvertisements)    "ipv6_mib_vlan Icmp6OutRouterAdvertisements"
+    set JSON_SUB(ipv6_mib_vlan,Icmp6OutRouterSolicits)    "ipv6_mib_vlan Icmp6OutRouterSolicits"
+    set JSON_SUB(ipv6_mib_vlan,Icmp6OutTimeExcds)    "ipv6_mib_vlan Icmp6OutTimeExcds"
+    set JSON_SUB(ipv6_mib_vlan,Ip6FragCreates)    "ipv6_mib_vlan Ip6FragCreates"
+    set JSON_SUB(ipv6_mib_vlan,Ip6FragFails)    "ipv6_mib_vlan Ip6FragFails"
+    set JSON_SUB(ipv6_mib_vlan,Ip6FragOKs)    "ipv6_mib_vlan Ip6FragOKs"
+    set JSON_SUB(ipv6_mib_vlan,Ip6InAddrErrors)    "ipv6_mib_vlan Ip6InAddrErrors"
+    set JSON_SUB(ipv6_mib_vlan,Ip6InDelivers)    "ipv6_mib_vlan Ip6InDelivers"
+    set JSON_SUB(ipv6_mib_vlan,Ip6InDiscards)    "ipv6_mib_vlan Ip6InDiscards"
+    set JSON_SUB(ipv6_mib_vlan,Ip6InHdrErrors)    "ipv6_mib_vlan Ip6InHdrErrors"
+    set JSON_SUB(ipv6_mib_vlan,Ip6InMcastPkts)    "ipv6_mib_vlan Ip6InMcastPkts"
+    set JSON_SUB(ipv6_mib_vlan,Ip6InNoRoutes)    "ipv6_mib_vlan Ip6InNoRoutes"
+    set JSON_SUB(ipv6_mib_vlan,Ip6InReceives)    "ipv6_mib_vlan Ip6InReceives"
+    set JSON_SUB(ipv6_mib_vlan,Ip6InTooBigErrors)    "ipv6_mib_vlan Ip6InTooBigErrors"
+    set JSON_SUB(ipv6_mib_vlan,Ip6InTruncatedPkts)    "ipv6_mib_vlan Ip6InTruncatedPkts"
+    set JSON_SUB(ipv6_mib_vlan,Ip6InUnknownProtos)    "ipv6_mib_vlan Ip6InUnknownProtos"
+    set JSON_SUB(ipv6_mib_vlan,Ip6LastChange)    "ipv6_mib_vlan Ip6LastChange"
+    set JSON_SUB(ipv6_mib_vlan,Ip6OutDiscards)    "ipv6_mib_vlan Ip6OutDiscards"
+    set JSON_SUB(ipv6_mib_vlan,Ip6OutForwDatagrams)    "ipv6_mib_vlan Ip6OutForwDatagrams"
+    set JSON_SUB(ipv6_mib_vlan,Ip6OutMcastPkts)    "ipv6_mib_vlan Ip6OutMcastPkts"
+    set JSON_SUB(ipv6_mib_vlan,Ip6OutNoRoutes)    "ipv6_mib_vlan Ip6OutNoRoutes"
+    set JSON_SUB(ipv6_mib_vlan,Ip6OutRequests)    "ipv6_mib_vlan Ip6OutRequests"
+    set JSON_SUB(ipv6_mib_vlan,Ip6ReasmFails)    "ipv6_mib_vlan Ip6ReasmFails"
+    set JSON_SUB(ipv6_mib_vlan,Ip6ReasmOKs)    "ipv6_mib_vlan Ip6ReasmOKs"
+    set JSON_SUB(ipv6_mib_vlan,Ip6ReasmReqds)    "ipv6_mib_vlan Ip6ReasmReqds"
+    set JSON_SUB(ipv6_mib_vlan,Ip6ReasmTimeout)  "ipv6_mib_vlan Ip6ReasmTimeout"
+    set JSON_SUB(ipv6_mib_vlan,icmp6vlan)        "ipv6_mib_vlan vlan";# modified from vlan to avoid
+    set JSON_SUB(ipv6_mib_vlan,vlan)             "ipv6_mib_vlan vlan";
+                                                                      # match with procvlan arg
+    set JSON_SUB(ipv6_mib_vlan,vrName)           "ipv6_mib_vlan vrName"
+    
+    set JSON_SUB(mcmMldStats,clearCnt)         "mcmMldStats clearCnt"
+    set JSON_SUB(mcmMldStats,mldDoneFwd)       "mcmMldStats mldDoneFwd"
+    set JSON_SUB(mcmMldStats,mldDoneOrig)      "mcmMldStats mldDoneOrig"
+    set JSON_SUB(mcmMldStats,mldDoneRecv)      "mcmMldStats mldDoneRecv"
+    set JSON_SUB(mcmMldStats,mldErrorRecv)     "mcmMldStats mldErrorRecv"
+    set JSON_SUB(mcmMldStats,mldQueryFwd)      "mcmMldStats mldQueryFwd"
+    set JSON_SUB(mcmMldStats,mldQueryOrig)     "mcmMldStats mldQueryOrig"
+    set JSON_SUB(mcmMldStats,mldQueryRecv)     "mcmMldStats mldQueryRecv"
+    set JSON_SUB(mcmMldStats,mldUnknownRecv)   "mcmMldStats mldUnknownRecv"
+    set JSON_SUB(mcmMldStats,mldv1JoinFwd)     "mcmMldStats mldv1JoinFwd"
+    set JSON_SUB(mcmMldStats,mldv1JoinOrig)    "mcmMldStats mldv1JoinOrig"
+    set JSON_SUB(mcmMldStats,mldv1JoinRecv)    "mcmMldStats mldv1JoinRecv"
+    set JSON_SUB(mcmMldStats,mldv2JoinFwd)     "mcmMldStats mldv2JoinFwd"
+    set JSON_SUB(mcmMldStats,mldv2JoinOrig)    "mcmMldStats mldv2JoinOrig"
+    set JSON_SUB(mcmMldStats,mldv2JoinRecv)    "mcmMldStats mldv2JoinRecv"
+    set JSON_SUB(mcmMldStats,vlan)             "mcmMldStats vlan";# displaying null for the vlan
+
+    # Modify JSON_SUB based on version. If different mappings are required..
+    # >= 30.1
+    if {[CompareRelease $v "30.1"] >= 0} {
+        #set JSON_SUB(vlanProc,ipv4DadState)        "nosupp"
+    }
+
+    # Build cli
+
+    # - add sub command for vlan
+    set cmd "show ipstats ipv6 vlan $vlan"
+
+    # Check if there is something in the parameterList passed in which is not supported in
+    #   this running version
+    set inPList $parameterList
+    foreach inP $inPList {
+        set rk [lindex [lindex $inP 0] 0]
+        foreach rootKeySub [lindex [lindex $inP 0] 1] {
+            if {[info exists JSON_SUB($rk,$rootKeySub)]} {
+                if {$JSON_SUB($rk,$rootKeySub) == "nosupp"} {
+                    report_start_test "$testNo $inP"
+                    result_skip "Verify cli: $cmd skipping for keys $rk $rootKeySub -- no support $v"
+                    report_end_test
+                    return "1"
+                } else {
+                }
+            } else {
+                result_warning "$rk $rootKeySub key may not be setup/exist in the proc"
+            }
+        }
+    }
+    foreach rk $rootKeyList {
+        foreach inarg $allargs {
+            if {![info exists JSON_SUB($rk,$inarg)]} {
+                continue;
+            }
+            if {[set $inarg] == "null"} {
+                continue;
+            }
+            if {[lindex $JSON_SUB($rk,$inarg) 0] == "nosupp"} {
+                # If this test case is accessing a register that is not supported skip the case
+                #
+                report_start_test "$testNo $rk $inarg"
+                result_skip "On DUT $whichDutNow skipping for $rk $inarg"
+                report_end_test
+                #_abortTestCase
+                return "1"
+            }
+            if {![info exists rootKeys([lindex $JSON_SUB($rk,$inarg) 0])]} {
+                #rootKeys(arp_stats|arp_config|arp_table_config) [lindex $JSON_SUB($rk,$inarg) 1]
+                set rootKeys([lindex $JSON_SUB($rk,$inarg) 0]) [lindex $JSON_SUB($rk,$inarg) 1]
+                if {[regexp -nocase "check" $type]} {
+                    set rootKeyValues([lindex $JSON_SUB($rk,$inarg) 0]) [set $inarg]
+                }
+            } else {
+                lappend rootKeys([lindex $JSON_SUB($rk,$inarg) 0]) [lindex $JSON_SUB($rk,$inarg) 1]
+                if {[regexp -nocase "check" $type]} {
+                    lappend rootKeyValues([lindex $JSON_SUB($rk,$inarg) 0]) [set $inarg]
+                }
+            }
+        }
+    }
+    foreach rKey $rootKeyList {
+        if {[regexp -nocase "check" $type]} {
+            if {[info exists rootKeys($rKey)] && [llength $rootKeys($rKey)] > 0} {
+                #puts "add plist \"{$rKey {$rootKeys($rKey)}} {$rootKeyValues($rKey)} $exist\" "
+                lappend parameterList "{$rKey {$rootKeys($rKey)}} {$rootKeyValues($rKey)} $exist"
+            }
+        } else {
+            if {[info exists rootKeys($rKey)] && [llength $rootKeys($rKey)] > 0} {
+                #puts "add plist \"{$rKey {$rootKeys($rKey)}}\" "
+                lappend parameterList "{$rKey {$rootKeys($rKey)}}"
+            }
+        }
+    }
+
+    # Build the final Check or Get JSON Dictionary from paramaterLists created above
+
+    if {[regexp -nocase "check" $type]} {
+        set res [CheckDictValue -cmd "$cmd" -yesorno "$yesorno" \
+                    -comment "$comment" -time "$time" -testNo \"$testNo\" \
+                    -parameterList $parameterList -debugjson "$debugjson"]
+        unset parameterList
+    } else {
+        set res [GetDictValue -cmd "$cmd" -yesorno "$yesorno" \
+                    -comment "$comment" -time "$time" -testNo \"$testNo\" \
+                    -parameterList $parameterList -debugjson "$debugjson"]
+        unset parameterList
+    }
+    return $res
+}
+
+# _show_ipconfig
+proc _show_ipconfig {args} {
+    global MAIN whichDutNow
+
+    parse_args _show_ipconfig $args {
+        type          "check"
+        parameterList ""
+        comment       ""
+        testNo        "_show_ipconfig"
+        yesorno       "Yes"
+        debugjson     "false"
+        time          "null"
+        showfmt       "default"
+        exist         "exist"
+        iur_enabled    "null"
+        afi    "null"
+        icmpIgnoreBcasts    "null"
+        vrName    "null"
+        looseSourceRoute    "null"
+        recordRoute    "null"        
+        recordTimestamp    "null"
+        routerAlert    "null"
+        strictSourceRoute    "null"
+        iprs_enabled    "null"
+        ipv4    "null"
+        ipv6    "null"
+        platid    "null"
+        addrFamily    "null"
+        compress    "null"
+        dbgGetCmd    "null"
+        dest    "null"
+        iprc_enable    "null"
+        exact    "null"
+        flagOnly    "null"
+        imm_children    "null"
+        ipv6Info    "null" 
+        mask    "null"
+        parent    "null"
+        self    "null"
+        total    "null"
+        totalCompressed    "null"
+        validate    "null"
+        vrId    "null"
+        dontReqIpf    "null" 
+        current_max_ecmp    "null"
+        max_ecmp    "null"
+        addrFamily    "null"
+        iprpp_enable    "null"
+        interval    "null"
+        misses    "null"
+        lifetime    "null" 
+        maxinterval    "null"
+        mcast    "null"
+        mininterval    "null"
+        preference    "null"
+        broadAddr    "null"
+        flags    "null"
+        ipAddress    "null"
+        nSIA    "null"
+        pmtu    "null" 
+        prefixLen    "null"
+        vlan    "null"
+        urpfEnabled    "null"
+        ecmpHash  "null"
+        ecmpHashAlg   "null"
+        ecmpHashMethod   "null"
+        hash            "null"
+        recursionLevel  "null"
+        runningHash   "null"
+    }
+
+    if {$debugjson == "true"} {
+        puts "\n!!\n!!"
+        puts "-------------------------------------------------------------------------------------"
+        puts "     This proc has 5 altered arg keys to avoid duplicating enable and vlan args"
+        puts "show_urpf_info->vlanName is accessed using -vlan"
+        puts "icmpUseRedirects->enabled is accessed using -iur_enabled"
+        puts "ipRouteSharing->enabled is accessed using -iprs_enabled"
+        puts "ipRouteCompression->enable is accessed using -iprc_enable"
+        puts "ipRoutePingProtect->enable is accessed using -iprpp_enable"
+        puts "-------------------------------------------------------------------------------------\n!!\n!!"
+    }
+    set d $whichDutNow
+    set platform [GetPlatform DUT$d]
+    set v [GetVersion DUT$d]
+
+    #json variables
+    set rootKeyList "icmpUseRedirects rtMgrVrConfig ipOption ipRouteSharing ipRouteCompression \
+        rtMgrIpForwardingCfg maxEcmpPaths forwardingTableHash ipRoutePingProtect irdpConfig \
+        ifIpConfig show_urpf_info"
+    # 
+    set allargs "iur_enabled afi icmpIgnoreBcasts vrName looseSourceRoute recordRoute \
+        recordTimestamp routerAlert strictSourceRoute iprs_enabled ipv4 ipv6 platid \
+        addrFamily compress dbgGetCmd dest iprc_enable exact flagOnly imm_children ipv6Info \
+        mask parent self total totalCompressed validate vrId dontReqIpf \
+        current_max_ecmp max_ecmp addrFamily iprpp_enable interval misses lifetime \
+        maxinterval mcast mininterval preference broadAddr flags ipAddress nSIA pmtu \
+        prefixLen vlan urpfEnabled ecmpHash ecmpHashAlg ecmpHashMethod hash recursionLevel runningHash"
+
+    #show ipconfig 
+    #22.5                                      30.1
+    #icmpUseRedirects:                icmpUseRedirects: 
+    #      enabled: 0                   -------------
+    #rtMgrVrConfig:                    rtMgrVrConfig: 
+    #      afi: 0,                         afi: 0, 
+    #      icmpIgnoreBcasts: 1,            icmpIgnoreBcasts: 1, 
+    #      vrName: VR-Default              vrName: VR-Default
+    #ipOption:                         ipOption: 
+    #      looseSourceRoute: 1,            looseSourceRoute: 1, 
+    #      recordRoute: 1,                 recordRoute: 1, 
+    #      recordTimestamp: 1,             recordTimestamp: 1, 
+    #      routerAlert: 1,                 routerAlert: 1, 
+    #      strictSourceRoute: 1            strictSourceRoute: 1
+    #ipRouteSharing:                   ipRouteSharing: 
+    #      enabled: 0,                     enabled: 0, 
+    #      ipv4: 0,                        ipv4: 0, 
+    #      ipv6: 0,                        ipv6: 0, 
+    #      platid: 0,                      platid: 0, 
+    #      vrName: VR-Default              vrName: VR-Default
+    #ipRouteCompression:              ipRouteCompression: 
+    #      addrFamily: 0,                  addrFamily: 0, 
+    #      compress: 0,                    compress: 0, 
+    #      dbgGetCmd: 0,                   dbgGetCmd: 0, 
+    #      dest: 0.0.0.0,                  dest: 0.0.0.0, 
+    #      enable: 1,                      enable: 1, 
+    #      exact: 0,                       exact: 0, 
+    #      flagOnly: 0,                    flagOnly: 0, 
+    #      imm_children: 0,                imm_children: 0, 
+    #      ipv6Info: ::/0,                 ipv6Info: ::/0, 
+    #      mask: 0.0.0.0,                  mask: 0.0.0.0, 
+    #      parent: 0,                      parent: 0, 
+    #      self: 0,                        self: 0, 
+    #      total: 0,                       total: 0, 
+    #      totalCompressed: 0,             totalCompressed: 0, 
+    #      validate: 0,                    validate: 0, 
+    #      vrId: 2,                        vrId: 2, 
+    #      vrName: VR-Default              vrName: VR-Default
+    #rtMgrIpForwardingCfg:           rtMgrIpForwardingCfg: 
+    #      dontReqIpf: 1                   dontReqIpf: 1
+    #maxEcmpPaths:                   maxEcmpPaths: 
+    #      current_max_ecmp: 0,            current_max_ecmp: 0, 
+    #      max_ecmp: 0                     max_ecmp: 0
+    #forwardingTableHash:            forwardingTableHash: 
+    #      ecmpHash      0                 ecmpHash      0
+    #      ecmpHashAlg   0                 ecmpHashAlg   0           
+    #      ecmpHashMethod  0               ecmpHashMethod  0                    
+    #      hash          32                hash          32                   
+    #      recursionLevel  1               recursionLevel  1          
+    #      runningHash      32             runningHash      32
+    #ipRoutePingProtect:            ipRoutePingProtect:     
+    #      addrFamily: 0,                  addrFamily: 0,     
+    #      enable: 1,                      enable: 1,     
+    #      interval: 2,                    interval: 2,     
+    #      misses: 3                       misses: 3    
+    #irdpConfig:                    irdpConfig:     
+    #      lifetime: 1800,                 lifetime: 1800,     
+    #      maxinterval: 600,               maxinterval: 600,     
+    #      mcast: 0,                       mcast: 0,     
+    #      mininterval: 450,               mininterval: 450,     
+    #      preference: 0                   preference: 0    
+    #ifIpConfig:                           ifIpConfig:     
+    #      broadAddr: 192.10.1.255,        broadAddr: 192.10.1.255,     
+    #      flags: EUf---MPuRX------        flags: EUf---MPuRX-------,     
+    #      ipAddress: 192.10.1.10,         ipAddress: 192.10.1.10,     
+    #      nSIA: 0,                        nSIA: 0,     
+    #      pmtu: 1500,                     pmtu: 1500,     
+    #      prefixLen: 24,                  prefixLen: 24,     
+    #      vlan: vlan1                     vlan: vlan1    
+    #show_urpf_info:                show_urpf_info:     
+    #      urpfEnabled: 0,                 urpfEnabled: 0,     
+    #      vlanName: vlan1                 vlanName: vlan1 
+    set JSON_SUB(icmpUseRedirects,iur_enabled) "icmpUseRedirects enabled";# sub to avoid arg dups
+    set JSON_SUB(icmpUseRedirects,enabled)     "icmpUseRedirects enabled"
+    set JSON_SUB(rtMgrVrConfig,afi)            "rtMgrVrConfig afi"
+    set JSON_SUB(rtMgrVrConfig,icmpIgnoreBcasts) "rtMgrVrConfig icmpIgnoreBcasts"
+    set JSON_SUB(rtMgrVrConfig,vrName)         "rtMgrVrConfig vrName" 
+    set JSON_SUB(ipOption,looseSourceRoute)    "ipOption looseSourceRoute"
+    set JSON_SUB(ipOption,recordRoute)         "ipOption recordRoute"
+    set JSON_SUB(ipOption,recordTimestamp)     "ipOption recordTimestamp"
+    set JSON_SUB(ipOption,routerAlert)         "ipOption routerAlert"
+    set JSON_SUB(ipOption,strictSourceRoute)   "ipOption strictSourceRoute" 
+    set JSON_SUB(ipRouteSharing,iprs_enabled)  "ipRouteSharing enabled";# sub to avoid arg dups
+    set JSON_SUB(ipRouteSharing,enabled)       "ipRouteSharing enabled";
+    set JSON_SUB(ipRouteSharing,ipv4)          "ipRouteSharing ipv4"
+    set JSON_SUB(ipRouteSharing,ipv6)          "ipRouteSharing ipv6"
+    set JSON_SUB(ipRouteSharing,platid)        "ipRouteSharing platid"
+    set JSON_SUB(ipRouteSharing,vrName)        "ipRouteSharing vrName" 
+    set JSON_SUB(ipRouteCompression,addrFamily) "ipRouteCompression addrFamily"
+    set JSON_SUB(ipRouteCompression,compress)   "ipRouteCompression compress"
+    set JSON_SUB(ipRouteCompression,dbgGetCmd)  "ipRouteCompression dbgGetCmd"
+    set JSON_SUB(ipRouteCompression,dest)       "ipRouteCompression dest"
+    set JSON_SUB(ipRouteCompression,iprc_enable) "ipRouteCompression enable";# sub to avoid arg dups
+    set JSON_SUB(ipRouteCompression,exact)      "ipRouteCompression exact"
+    set JSON_SUB(ipRouteCompression,flagOnly)   "ipRouteCompression flagOnly"
+    set JSON_SUB(ipRouteCompression,imm_children) "ipRouteCompression imm_children"
+    set JSON_SUB(ipRouteCompression,ipv6Info)   "ipRouteCompression ipv6Info"
+    set JSON_SUB(ipRouteCompression,mask)       "ipRouteCompression mask"
+    set JSON_SUB(ipRouteCompression,parent)     "ipRouteCompression parent"
+    set JSON_SUB(ipRouteCompression,self)       "ipRouteCompression self"
+    set JSON_SUB(ipRouteCompression,total)      "ipRouteCompression total"
+    set JSON_SUB(ipRouteCompression,totalCompressed) "ipRouteCompression totalCompressed"
+    set JSON_SUB(ipRouteCompression,validate)   "ipRouteCompression validate"
+    set JSON_SUB(ipRouteCompression,vrId)       "ipRouteCompression vrId"
+    set JSON_SUB(ipRouteCompression,vrName)     "ipRouteCompression vrName" 
+    set JSON_SUB(rtMgrIpForwardingCfg,dontReqIpf) "rtMgrIpForwardingCfg dontReqIpf" 
+    set JSON_SUB(maxEcmpPaths,current_max_ecmp) "maxEcmpPaths current_max_ecmp"
+    set JSON_SUB(maxEcmpPaths,max_ecmp)         "maxEcmpPaths max_ecmp"
+    set JSON_SUB(forwardingTableHash,ecmpHash) "forwardingTableHash  ecmpHash"
+    set JSON_SUB(forwardingTableHash,ecmpHashAlg) "forwardingTableHash  ecmpHashAlg"
+    set JSON_SUB(forwardingTableHash,ecmpHashMethod) "forwardingTableHash  ecmpHashMethod"
+    set JSON_SUB(forwardingTableHash,hash) "forwardingTableHash  hash"
+    set JSON_SUB(forwardingTableHash,recursionLevel) "forwardingTableHash  recursionLevel"
+    set JSON_SUB(forwardingTableHash,runningHash) "forwardingTableHash  runningHash"
+    set JSON_SUB(ipRoutePingProtect,addrFamily  "ipRoutePingProtect addrFamily"
+    set JSON_SUB(ipRoutePingProtect,iprpp_enable) "ipRoutePingProtect enable";# sub to avoid arg dups
+    set JSON_SUB(ipRoutePingProtect,enable) "ipRoutePingProtect enable"
+    set JSON_SUB(ipRoutePingProtect,interval)   "ipRoutePingProtect interval"
+    set JSON_SUB(ipRoutePingProtect,misses)     "ipRoutePingProtect misses" 
+    set JSON_SUB(irdpConfig,lifetime)           "irdpConfig lifetime"
+    set JSON_SUB(irdpConfig,maxinterval)        "irdpConfig maxinterval"
+    set JSON_SUB(irdpConfig,mcast)              "irdpConfig mcast"
+    set JSON_SUB(irdpConfig,mininterval)        "irdpConfig mininterval"
+    set JSON_SUB(irdpConfig,preference)         "irdpConfig preference" 
+    set JSON_SUB(ifIpConfig,broadAddr)          "ifIpConfig broadAddr"
+    set JSON_SUB(ifIpConfig,flags)              "ifIpConfig flags"
+    set JSON_SUB(ifIpConfig,ipAddress)          "ifIpConfig ipAddress"
+    set JSON_SUB(ifIpConfig,nSIA)               "ifIpConfig nSIA"
+    set JSON_SUB(ifIpConfig,pmtu)               "ifIpConfig pmtu"
+    set JSON_SUB(ifIpConfig,prefixLen)          "ifIpConfig prefixLen"
+    set JSON_SUB(ifIpConfig,vlan)               "ifIpConfig vlan" 
+    set JSON_SUB(show_urpf_info,urpfEnabled)    "show_urpf_info urpfEnabled"
+    set JSON_SUB(show_urpf_info,vlan)           "show_urpf_info vlanName"
+
+
+    # Modify JSON_SUB based on version. If different mappings are required..
+    # < 30.1 no support for these
+    if {[CompareRelease $v "30.1"] < 0} {
+    } else {
+        # -- We are going to have to check the flags passed in once get details
+        set JSON_SUB(icmpUseRedirects,iur_enabled)  "nosupp"
+        set JSON_SUB(icmpUseRedirects,enabled)  "nosupp"
+    }
+
+    # Build cli
+    # - add sub command for vlan
+    set cmd "show ipconfig"
+
+    # Check if there is something in the parameterList passed in which is not supported in
+    #   this running version
+    set inPList $parameterList
+    foreach inP $inPList {
+        set rk [lindex [lindex $inP 0] 0]
+        foreach rootKeySub [lindex [lindex $inP 0] 1] {
+            if {[info exists JSON_SUB($rk,$rootKeySub)]} {
+                if {$JSON_SUB($rk,$rootKeySub) == "nosupp"} {
+                    report_start_test "$testNo $inP"
+                    result_skip "Verify cli: $cmd skipping for keys $rk $rootKeySub -- no support $v"
+                    report_end_test
+                    return "1"
+                } else {
+                }
+            } else {
+                result_warning "$rk $rootKeySub key may not be setup/exist in the proc"
+            }
+        }
+    }
+    foreach rk $rootKeyList {
+        foreach inarg $allargs {
+            if {![info exists JSON_SUB($rk,$inarg)]} {
+                continue;
+            }
+            if {[set $inarg] == "null"} {
+                continue;
+            }
+            if {[lindex $JSON_SUB($rk,$inarg) 0] == "nosupp"} {
+                # If this test case is accessing a register that is not supported skip the case
+                #
+                report_start_test "$testNo $rk $inarg"
+                result_skip "No support in $v for keys $rk $inarg . Skipping"
+                report_end_test
+                #_abortTestCase
+                return "1"
+            }
+            if {![info exists rootKeys([lindex $JSON_SUB($rk,$inarg) 0])]} {
+                #rootKeys(arp_stats|arp_config|arp_table_config) [lindex $JSON_SUB($rk,$inarg) 1]
+                set rootKeys([lindex $JSON_SUB($rk,$inarg) 0]) [lindex $JSON_SUB($rk,$inarg) 1]
+                if {[regexp -nocase "check" $type]} {
+                    set rootKeyValues([lindex $JSON_SUB($rk,$inarg) 0]) [set $inarg]
+                }
+            } else {
+                lappend rootKeys([lindex $JSON_SUB($rk,$inarg) 0]) [lindex $JSON_SUB($rk,$inarg) 1]
+                if {[regexp -nocase "check" $type]} {
+                    lappend rootKeyValues([lindex $JSON_SUB($rk,$inarg) 0]) [set $inarg]
+                }
+            }
+        }
+    }
+    foreach rKey $rootKeyList {
+        if {[regexp -nocase "check" $type]} {
+            if {[info exists rootKeys($rKey)] && [llength $rootKeys($rKey)] > 0} {
+                #puts "add plist \"{$rKey {$rootKeys($rKey)}} {$rootKeyValues($rKey)} $exist\" "
+                lappend parameterList "{$rKey {$rootKeys($rKey)}} {$rootKeyValues($rKey)} $exist"
+            }
+        } else {
+            if {[info exists rootKeys($rKey)] && [llength $rootKeys($rKey)] > 0} {
+                #puts "add plist \"{$rKey {$rootKeys($rKey)}}\" "
+                lappend parameterList "{$rKey {$rootKeys($rKey)}}"
+            }
+        }
+    }
+
+    # Build the final Check or Get JSON Dictionary from paramaterLists created above
+
+    if {[regexp -nocase "check" $type]} {
+        set res [CheckDictValue -cmd "$cmd" -yesorno "$yesorno" \
+                    -comment "$comment" -time "$time" -testNo \"$testNo\" \
+                    -parameterList $parameterList -debugjson "$debugjson"]
+        unset parameterList
+    } else {
+        set res [GetDictValue -cmd "$cmd" -yesorno "$yesorno" \
+                    -comment "$comment" -time "$time" -testNo \"$testNo\" \
+                    -parameterList $parameterList -debugjson "$debugjson"]
+        unset parameterList
+    }
+    return $res
+}
+# _show_ipconfig_ipv4
+proc _show_ipconfig_ipv4 {$args} {
+    # Same same
+    _show_ipconfig $args
+}
+# _show_ipconfig_ipv6
+proc _show_ipconfig_ipv6 {args} {
+    global MAIN whichDutNow
+
+    parse_args _show_ipconfig_ipv6 $args {
+        type          "check"
+        parameterList ""
+        comment       ""
+        testNo        "_show_ipconfig_ipv6"
+        yesorno       "Yes"
+        debugjson     "false"
+        time          "null"
+        showfmt       "default"
+        exist         "exist"
+        iprs_enabled    "null"
+        ipv4    "null"
+        ipv6    "null"
+        platid    "null"
+        addrFamily    "null"
+        compress    "null"
+        dbgGetCmd    "null"
+        dest    "null"
+        iprc_enable    "null"
+        exact    "null"
+        flagOnly    "null"
+        imm_children    "null"
+        ipv6Info    "null" 
+        mask    "null"
+        parent    "null"
+        self    "null"
+        total    "null"
+        totalCompressed    "null"
+        validate    "null"
+        vrId    "null"
+        vrName    "null" 
+        forcePs220v    "null"
+        rateLimitOverhead    "null"
+        switchingMode    "null"
+        temporaryFlooding    "null"
+        v6IcmpRedirectFastPath    "null"
+        dontReqIpf    "null" 
+        current_max_ecmp    "null"
+        max_ecmp    "null"
+        addrFamily    "null"
+        iprpp_enable    "null"
+        interval    "null"
+        misses    "null"
+        ifcfg_flags    "null"
+        pmtu    "null"
+        vlan    "null" 
+        address    "null"
+        ifaddr_flags    "null"
+        maskLen    "null"
+        scopedAddr "null"
+        state    "null"
+    }
+
+    if {$debugjson == "true"} {
+        puts "\n!!\n!!"
+        puts "-------------------------------------------------------------------------------------"
+        puts "     This proc has 5 altered arg keys to avoid duplicating enable and vlan args"
+        puts "ifIpv6Config->flags is accessed using -ifcfg_flags"
+        puts "ifIpv6Address->flags is accessed using -ifaddr_flags"
+        puts "ipRouteCompression->enable is accessed using -iprc_enable"
+        puts "ipRoutePingProtect->enable is accessed using -iprpp_enable"
+        puts "-------------------------------------------------------------------------------------\n!!\n!!"
+    }
+    set d $whichDutNow
+    set platform [GetPlatform DUT$d]
+    set v [GetVersion DUT$d]
+
+    #json variables
+    set rootKeyList "ipRouteSharing ipRouteCompression switchSettings \
+        maxEcmpPaths ipRoutePingProtect ifIpv6Config ifIpv6Address"
+    #
+    set allargs "iprs_enabled ipv4 ipv6 platid vrName \
+        addrFamily compress dbgGetCmd dest iprc_enable exact flagOnly imm_children ipv6Info \
+        mask parent self total totalCompressed validate vrId \
+        forcePs220v rateLimitOverhead switchingMode temporaryFlooding v6IcmpRedirectFastPath dontReqIpf \
+        current_max_ecmp max_ecmp addrFamily iprpp_enable interval misses ifcfg_flags pmtu vlan \
+        address ifaddr_flags maskLen scopedAddr state"
+
+    #show ipconfig
+    #22.5                                      30.1
+    #ipRouteSharing:                   ipRouteSharing:
+    #      enabled: 0,                     enabled: 0,
+    #      ipv4: 0,                        ipv4: 0,
+    #      ipv6: 0,                        ipv6: 0,
+    #      platid: 0,                      platid: 0,
+    #      vrName: VR-Default              vrName: VR-Default
+    #ipRouteCompression:              ipRouteCompression:
+    #      addrFamily: 0,                  addrFamily: 0,
+    #      compress: 0,                    compress: 0,
+    #      dbgGetCmd: 0,                   dbgGetCmd: 0,
+    #      dest: 0.0.0.0,                  dest: 0.0.0.0,
+    #      enable: 1,                      enable: 1,
+    #      exact: 0,                       exact: 0,
+    #      flagOnly: 0,                    flagOnly: 0,
+    #      imm_children: 0,                imm_children: 0,
+    #      ipv6Info: ::/0,                 ipv6Info: ::/0,
+    #      mask: 0.0.0.0,                  mask: 0.0.0.0,
+    #      parent: 0,                      parent: 0,
+    #      self: 0,                        self: 0,
+    #      total: 0,                       total: 0,
+    #      totalCompressed: 0,             totalCompressed: 0,
+    #      validate: 0,                    validate: 0,
+    #      vrId: 2,                        vrId: 2,
+    #      vrName: VR-Default              vrName: VR-Default
+    #switchSettings:                 switchSettings:
+    #      forcePs220v: 0,                 forcePs220v: 0, 
+    #      rateLimitOverhead: 20,          rateLimitOverhead: 20, 
+    #      switchingMode: 1,               switchingMode: 1, 
+    #      temporaryFlooding: 1,           temporaryFlooding: 1, 
+    #      v6IcmpRedirectFastPath: 0       v6IcmpRedirectFastPath: 0
+    #maxEcmpPaths:                   maxEcmpPaths:
+    #      current_max_ecmp: 0,            current_max_ecmp: 0,
+    #      max_ecmp: 0                     max_ecmp: 0
+    #                                ipRoutePingProtect:
+    #                                      addrFamily: 0,
+    #                                      enable: 1,
+    #                                      interval: 2,
+    #                                      misses: 3
+    #                                ifIpv6Config: 
+    #                                      flags: EUf-R-, 
+    #                                      pmtu: 1500, 
+    #                                      vlan: vlan1
+    #                                ifIpv6Address: 
+    #                                      address: 2001::1:1/64, 
+    #                                      flags: -EUf---R-, 
+    #                                      maskLen: 64, 
+    #                                      state: 1, 
+    #                                      vlan: vlan1
+    #                                ifIpv6Address: 
+    #                                      address: fe80::214:96ff:fea3:3101/64, 
+    #                                      flags: -EUfP--R-, 
+    #                                      maskLen: 64, 
+    #                                      scopedAddr: fe80::214:96ff:fea3:3101%vlan1, 
+    #                                      state: 1, 
+    #                                      vlan: vlan1
+    set JSON_SUB(ipRouteSharing,iprs_enabled)  "ipRouteSharing enabled";# sub to avoid arg dups
+    set JSON_SUB(ipRouteSharing,enabled)       "ipRouteSharing enabled"
+    set JSON_SUB(ipRouteSharing,ipv4)          "ipRouteSharing ipv4"
+    set JSON_SUB(ipRouteSharing,ipv6)          "ipRouteSharing ipv6"
+    set JSON_SUB(ipRouteSharing,platid)        "ipRouteSharing platid"
+    set JSON_SUB(ipRouteSharing,vrName)        "ipRouteSharing vrName"
+    set JSON_SUB(ipRouteCompression,addrFamily) "ipRouteCompression addrFamily"
+    set JSON_SUB(ipRouteCompression,compress)   "ipRouteCompression compress"
+    set JSON_SUB(ipRouteCompression,dbgGetCmd)  "ipRouteCompression dbgGetCmd"
+    set JSON_SUB(ipRouteCompression,dest)       "ipRouteCompression dest"
+    set JSON_SUB(ipRouteCompression,iprc_enable) "ipRouteCompression enable"
+    set JSON_SUB(ipRouteCompression,exact)      "ipRouteCompression exact"
+    set JSON_SUB(ipRouteCompression,flagOnly)   "ipRouteCompression flagOnly"
+    set JSON_SUB(ipRouteCompression,imm_children) "ipRouteCompression imm_children"
+    set JSON_SUB(ipRouteCompression,ipv6Info)   "ipRouteCompression ipv6Info"
+    set JSON_SUB(ipRouteCompression,mask)       "ipRouteCompression mask"
+    set JSON_SUB(ipRouteCompression,parent)     "ipRouteCompression parent"
+    set JSON_SUB(ipRouteCompression,self)       "ipRouteCompression self"
+    set JSON_SUB(ipRouteCompression,total)      "ipRouteCompression total"
+    set JSON_SUB(ipRouteCompression,totalCompressed) "ipRouteCompression totalCompressed"
+    set JSON_SUB(ipRouteCompression,validate)   "ipRouteCompression validate"
+    set JSON_SUB(ipRouteCompression,vrId)       "ipRouteCompression vrId"
+    set JSON_SUB(ipRouteCompression,vrName)     "ipRouteCompression vrName"
+    set JSON_SUB(switchSettings,forcePs220v)            "switchSettings forcePs220v"
+    set JSON_SUB(switchSettings,rateLimitOverhead)      "switchSettings rateLimitOverhead"
+    set JSON_SUB(switchSettings,switchingMode)          "switchSettings switchingMode"
+    set JSON_SUB(switchSettings,temporaryFlooding)      "switchSettings temporaryFlooding"
+    set JSON_SUB(switchSettings,v6IcmpRedirectFastPath) "switchSettings v6IcmpRedirectFastPath"
+    set JSON_SUB(maxEcmpPaths,current_max_ecmp) "maxEcmpPaths current_max_ecmp"
+    set JSON_SUB(maxEcmpPaths,max_ecmp)         "maxEcmpPaths max_ecmp"
+    set JSON_SUB(ipRoutePingProtect,addrFamily) "ipRoutePingProtect addrFamily"
+    set JSON_SUB(ipRoutePingProtect,iprpp_enable) "ipRoutePingProtect enable";# sub dup args
+    set JSON_SUB(ipRoutePingProtect,enable)       "ipRoutePingProtect enable"
+    set JSON_SUB(ipRoutePingProtect,interval)   "ipRoutePingProtect interval"
+    set JSON_SUB(ipRoutePingProtect,misses)     "ipRoutePingProtect misses"
+    set JSON_SUB(ifIpv6Config,ifcfg_flags)      "ifIpv6Config flags";# sub dup args
+    set JSON_SUB(ifIpv6Config,flags)            "ifIpv6Config flags"
+    set JSON_SUB(ifIpv6Config,pmtu)             "ifIpv6Config pmtu"
+    set JSON_SUB(ifIpv6Config,vlan)             "ifIpv6Config vlan"
+    set JSON_SUB(ifIpv6Address,address)         "ifIpv6Address address"
+    set JSON_SUB(ifIpv6Address,ifaddr_flags)           "ifIpv6Address flags";# sub dup args
+    set JSON_SUB(ifIpv6Address,flags)           "ifIpv6Address flags"
+    set JSON_SUB(ifIpv6Address,maskLen)         "ifIpv6Address maskLen"
+    set JSON_SUB(ifIpv6Address,scopedAddr)      "ifIpv6Address scopedAddr"
+    set JSON_SUB(ifIpv6Address,state)           "ifIpv6Address state"
+    set JSON_SUB(ifIpv6Address,vlan)            "ifIpv6Address vlan"
+
+
+    # Modify JSON_SUB based on version. If different mappings are required..
+    # < 30.1 no support for these
+    if {[CompareRelease $v "30.1"] < 0} {
+        #set JSON_SUB(ipRoutePingProtect,addrFamily    "nosupp"
+        #set JSON_SUB(ipRoutePingProtect,enable)       "nosupp"
+        #set JSON_SUB(ipRoutePingProtect,iprpp_enable) "nosupp"
+        #set JSON_SUB(ipRoutePingProtect,interval)     "nosupp"
+        #set JSON_SUB(ipRoutePingProtect,misses)       "nosupp"
+        #set JSON_SUB(ifIpv6Config,flags)              "nosupp"
+        #set JSON_SUB(ifIpv6Config,ifcfg_flags)        "nosupp"
+        #set JSON_SUB(ifIpv6Config,pmtu)               "nosupp"
+        #set JSON_SUB(ifIpv6Config,vlan)               "nosupp"
+        #set JSON_SUB(ifIpv6Address,address)           "nosupp"
+        #set JSON_SUB(ifIpv6Address,flags)             "nosupp"
+        #set JSON_SUB(ifIpv6Config,ifaddr_flags)       "nosupp"
+        #set JSON_SUB(ifIpv6Address,maskLen)           "nosupp"
+        #set JSON_SUB(ifIpv6Address,scopedAddr)        "nosupp"
+        #set JSON_SUB(ifIpv6Address,state)             "nosupp"
+        #set JSON_SUB(ifIpv6Address,vlan)              "nosupp"
+    } else {
+        # -- We are going to have to check the flags passed in once get details
+
+    }
+
+    # Build cli
+    # - add sub command for vlan
+    set cmd "show ipconfig ipv6"
+
+    # Check if there is something in the parameterList passed in which is not supported in
+    #   this running version
+    set inPList $parameterList
+    foreach inP $inPList {
+        set rk [lindex [lindex $inP 0] 0]
+        foreach rootKeySub [lindex [lindex $inP 0] 1] {
+            if {[info exists JSON_SUB($rk,$rootKeySub)]} {
+                if {$JSON_SUB($rk,$rootKeySub) == "nosupp"} {
+                    report_start_test "$testNo $inP"
+                    result_skip "Verify cli: $cmd skipping for keys $rk $rootKeySub -- no support $v"
+                    report_end_test
+                    return "1"
+                } else {
+                }
+            } else {
+                result_warning "$rk $rootKeySub key may not be setup/exist in the proc"
+            }
+        }
+    }
+    foreach rk $rootKeyList {
+        foreach inarg $allargs {
+            if {![info exists JSON_SUB($rk,$inarg)]} {
+                continue;
+            }
+            if {[set $inarg] == "null"} {
+                continue;
+            }
+            if {[lindex $JSON_SUB($rk,$inarg) 0] == "nosupp"} {
+                # If this test case is accessing a register that is not supported skip the case
+                #
+                report_start_test "$testNo $rk $inarg"
+                result_skip "On DUT $whichDutNow skipping for $rk $inarg"
+                report_end_test
+                #_abortTestCase
+                return "1"
+            }
+            if {![info exists rootKeys([lindex $JSON_SUB($rk,$inarg) 0])]} {
+                #rootKeys(arp_stats|arp_config|arp_table_config) [lindex $JSON_SUB($rk,$inarg) 1]
+                set rootKeys([lindex $JSON_SUB($rk,$inarg) 0]) [lindex $JSON_SUB($rk,$inarg) 1]
+                if {[regexp -nocase "check" $type]} {
+                    set rootKeyValues([lindex $JSON_SUB($rk,$inarg) 0]) [set $inarg]
+                }
+            } else {
+                lappend rootKeys([lindex $JSON_SUB($rk,$inarg) 0]) [lindex $JSON_SUB($rk,$inarg) 1]
+                if {[regexp -nocase "check" $type]} {
+                    lappend rootKeyValues([lindex $JSON_SUB($rk,$inarg) 0]) [set $inarg]
+                }
+            }
+        }
+    }
+    foreach rKey $rootKeyList {
+        if {[regexp -nocase "check" $type]} {
+            if {[info exists rootKeys($rKey)] && [llength $rootKeys($rKey)] > 0} {
+                #puts "add plist \"{$rKey {$rootKeys($rKey)}} {$rootKeyValues($rKey)} $exist\" "
+                lappend parameterList "{$rKey {$rootKeys($rKey)}} {$rootKeyValues($rKey)} $exist"
+            }
+        } else {
+            if {[info exists rootKeys($rKey)] && [llength $rootKeys($rKey)] > 0} {
+                #puts "add plist \"{$rKey {$rootKeys($rKey)}}\" "
+                lappend parameterList "{$rKey {$rootKeys($rKey)}}"
+            }
+        }
+    }
+
+    # Build the final Check or Get JSON Dictionary from paramaterLists created above
+
+    if {[regexp -nocase "check" $type]} {
+        set res [CheckDictValue -cmd "$cmd" -yesorno "$yesorno" \
+                    -comment "$comment" -time "$time" -testNo \"$testNo\" \
+                    -parameterList $parameterList -debugjson "$debugjson"]
+        unset parameterList
+    } else {
+        set res [GetDictValue -cmd "$cmd" -yesorno "$yesorno" \
+                    -comment "$comment" -time "$time" -testNo \"$testNo\" \
+                    -parameterList $parameterList -debugjson "$debugjson"]
+        unset parameterList
+    }
+    return $res
+}
+
+
+
+
+
+
+
+
+# _show_ipconfig_ipv4_vlan
+proc _show_ipconfig_ipv4_vlan {args} {
+    global MAIN whichDutNow
+
+    parse_args _show_ipconfig_ipv4_vlan $args {
+        type          "check"
+        parameterList ""
+        comment       ""
+        testNo        "_show_ipconfig_ipv4_vlan"
+        yesorno       "Yes"
+        debugjson     "false"
+        time          "null"
+        showfmt       "default"
+        exist         "exist"
+        broadAddr     "null"
+        flags         "null"
+        ipAddress     "null"
+        nSIA          "null"
+        pmtu          "null"
+        prefixLen     "null"
+        vlan          "null"
+        urpfEnabled   "null"
+    }
+
+    if {$vlan == "null"} {
+        result_warning "The -vlan arg is required for this proc"
+        return;
+    }
+
+    set d $whichDutNow
+    set platform [GetPlatform DUT$d]
+    set v [GetVersion DUT$d]
+
+    #json variables
+    set rootKeyList "ifIpConfig show_urpf_info"
+    #
+    set allargs "broadAddr flags ipAddress nSIA pmtu prefixLen vlan urpfEnabled"
+
+    #show ipconfig
+    #22.5                                      30.1
+    #show_urpf_info:                         show_urpf_info: 
+    #      urpfEnabled: 0,                       urpfEnabled: 0, 
+    #      vlanName: vlan1                       vlanName: vlan1
+    #ifIpConfig:                             ifIpConfig: 
+    #      broadAddr: 192.10.1.255,              broadAddr: 192.10.1.255, 
+    #      flags: EUf---MPuRX--------,           flags: EUf---MPuRX-------, 
+    #      ipAddress: 192.10.1.10,               ipAddress: 192.10.1.10, 
+    #      nSIA: 0,                              nSIA: 0, 
+    #      pmtu: 1500,                           pmtu: 1500, 
+    #      prefixLen: 24,                        prefixLen: 24, 
+    #      vlan: vlan1                           vlan: vlan1
+    set JSON_SUB(ifIpConfig,broadAddr)          "ifIpConfig broadAddr"
+    set JSON_SUB(ifIpConfig,flags)              "ifIpConfig flags"
+    set JSON_SUB(ifIpConfig,ipAddress)          "ifIpConfig ipAddress"
+    set JSON_SUB(ifIpConfig,nSIA)               "ifIpConfig nSIA"
+    set JSON_SUB(ifIpConfig,pmtu)               "ifIpConfig pmtu"
+    set JSON_SUB(ifIpConfig,prefixLen)          "ifIpConfig prefixLen"
+    set JSON_SUB(ifIpConfig,vlan)               "ifIpConfig vlan"
+    set JSON_SUB(show_urpf_info,urpfEnabled)    "show_urpf_info urpfEnabled"
+    set JSON_SUB(show_urpf_info,vlan)           "show_urpf_info vlanName"
+
+
+    # Modify JSON_SUB based on version. If different mappings are required..
+    # < 30.1 no support for these
+    if {[CompareRelease $v "30.1"] >= 0} {
+        # -- We are going to have to check the flags passed in once get details
+
+    }
+
+    # Build cli
+    # - add sub command for vlan
+    set cmd "show ipconfig ipv4 vlan $vlan"
+
+    # Check if there is something in the parameterList passed in which is not supported in
+    #   this running version
+    set inPList $parameterList
+    foreach inP $inPList {
+        set rk [lindex [lindex $inP 0] 0]
+        foreach rootKeySub [lindex [lindex $inP 0] 1] {
+            if {[info exists JSON_SUB($rk,$rootKeySub)]} {
+                if {$JSON_SUB($rk,$rootKeySub) == "nosupp"} {
+                    report_start_test "$testNo $inP"
+                    result_skip "Verify cli: $cmd skipping for keys $rk $rootKeySub -- no support $v"
+                    report_end_test
+                    return "1"
+                } else {
+                }
+            } else {
+                result_warning "$rk $rootKeySub key may not be setup/exist in the proc"
+            }
+        }
+    }
+    foreach rk $rootKeyList {
+        foreach inarg $allargs {
+            if {![info exists JSON_SUB($rk,$inarg)]} {
+                continue;
+            }
+            if {[set $inarg] == "null"} {
+                continue;
+            }
+            if {[lindex $JSON_SUB($rk,$inarg) 0] == "nosupp"} {
+                # If this test case is accessing a register that is not supported skip the case
+                #
+                report_start_test "$testNo $rk $inarg"
+                result_skip "On DUT $whichDutNow skipping for $rk $inarg"
+                report_end_test
+                #_abortTestCase
+                return "1"
+            }
+            if {![info exists rootKeys([lindex $JSON_SUB($rk,$inarg) 0])]} {
+                #rootKeys(arp_stats|arp_config|arp_table_config) [lindex $JSON_SUB($rk,$inarg) 1]
+                set rootKeys([lindex $JSON_SUB($rk,$inarg) 0]) [lindex $JSON_SUB($rk,$inarg) 1]
+                if {[regexp -nocase "check" $type]} {
+                    set rootKeyValues([lindex $JSON_SUB($rk,$inarg) 0]) [set $inarg]
+                }
+            } else {
+                lappend rootKeys([lindex $JSON_SUB($rk,$inarg) 0]) [lindex $JSON_SUB($rk,$inarg) 1]
+                if {[regexp -nocase "check" $type]} {
+                    lappend rootKeyValues([lindex $JSON_SUB($rk,$inarg) 0]) [set $inarg]
+                }
+            }
+        }
+    }
+    foreach rKey $rootKeyList {
+        if {[regexp -nocase "check" $type]} {
+            if {[info exists rootKeys($rKey)] && [llength $rootKeys($rKey)] > 0} {
+                #puts "add plist \"{$rKey {$rootKeys($rKey)}} {$rootKeyValues($rKey)} $exist\" "
+                lappend parameterList "{$rKey {$rootKeys($rKey)}} {$rootKeyValues($rKey)} $exist"
+            }
+        } else {
+            if {[info exists rootKeys($rKey)] && [llength $rootKeys($rKey)] > 0} {
+                #puts "add plist \"{$rKey {$rootKeys($rKey)}}\" "
+                lappend parameterList "{$rKey {$rootKeys($rKey)}}"
+            }
+        }
+    }
+
+    # Build the final Check or Get JSON Dictionary from paramaterLists created above
+
+    if {[regexp -nocase "check" $type]} {
+        set res [CheckDictValue -cmd "$cmd" -yesorno "$yesorno" \
+                    -comment "$comment" -time "$time" -testNo \"$testNo\" \
+                    -parameterList $parameterList -debugjson "$debugjson"]
+        unset parameterList
+    } else {
+        set res [GetDictValue -cmd "$cmd" -yesorno "$yesorno" \
+                    -comment "$comment" -time "$time" -testNo \"$testNo\" \
+                    -parameterList $parameterList -debugjson "$debugjson"]
+        unset parameterList
+    }
+    return $res
+}
+# _show_ipconfig_ipv6_vlan
+proc _show_ipconfig_ipv6_vlan {args} {
+    global MAIN whichDutNow
+
+    parse_args _show_ipconfig_ipv6_vlan $args {
+        type          "check"
+        parameterList ""
+        comment       ""
+        testNo        "_show_ipconfig_ipv6_vlan"
+        yesorno       "Yes"
+        debugjson     "false"
+        time          "null"
+        showfmt       "default"
+        exist         "exist"
+        ipv6HopLimit  "null"
+        vlanIfInstance "null"
+        zeroInRA       "null"
+        ifcfg_flags    "null"
+        pmtu    "null"
+        vlan    "null"
+        address    "null"
+        ifaddr_flags    "null"
+        maskLen    "null"
+        scopedAddr "null"
+        state    "null"
+    }
+
+    if {$vlan == "null"} {
+        result_warning "The -vlan arg is required for this proc"
+        return;
+    }
+
+    if {$debugjson == "true"} {
+        puts "\n!!\n!!"
+        puts "-------------------------------------------------------------------------------------"
+        puts "     This proc has 2 altered arg keys to avoid duplicating flag args"
+        puts "ifIpv6Config->flags is accessed using -ifcfg_flags"
+        puts "ifIpv6Address->flags is accessed using -ifaddr_flags"
+        puts "-------------------------------------------------------------------------------------\n!!\n!!"
+    }
+    set d $whichDutNow
+    set platform [GetPlatform DUT$d]
+    set v [GetVersion DUT$d]
+
+    #json variables
+    set rootKeyList "ntIpv6HopLimitConfig ifIpv6Config ifIpv6Address"
+    #
+    set allargs "ipv6HopLimit vlanIfInstance zeroInRA ifcfg_flags pmtu vlan \
+        address ifaddr_flags maskLen scopedAddr state"
+
+    #show ipconfig
+    #22.5                                          30.1
+    #ntIpv6HopLimitConfig:                         ntIpv6HopLimitConfig:
+    #      ipv6HopLimit: 64,                           ipv6HopLimit: 64,
+    #      vlanIfInstance: 1000037,                    vlanIfInstance: 1000037,
+    #      vlanName: vlan1,                            vlanName: vlan1,
+    #      zeroInRA: 0                                 zeroInRA: 0
+    #ifIpv6Config:                                 ifIpv6Config: 
+    #      flags: EUf-R-,                              flags: EUf-R-, 
+    #      pmtu: 1500,                                 pmtu: 1500, 
+    #      vlan: vlan1                                 vlan: vlan1
+    #ifIpv6Address:                               ifIpv6Address: 
+    #      address: 2001::1:1/64,                      address: 2001::1:1/64, 
+    #      flags: -EUf---R-,                           flags: -EUf---R-, 
+    #      maskLen: 64,                                maskLen: 64, 
+    #      state: 1,                                   state: 1, 
+    #      vlan: vlan1                                 vlan: vlan1
+    #ifIpv6Address:                               ifIpv6Address: 
+    #      address: fe80::a00:27ff:feeb:82c7/64,       address: fe80::214:96ff:fea3:3101/64, 
+    #      flags: -EUfP--R-,                           flags: -EUfP--R-, 
+    #      maskLen: 64,                                maskLen: 64, 
+    #      scopedAddr: fe80::a00:27ff:feeb:82c7%vlan1, scopedAddr: fe80::214:96ff:fea3:3101%vlan1, 
+    #      state: 1,                                   state: 1, 
+    #      vlan: vlan1                                 vlan: vlan1
+    set JSON_SUB(ntIpv6HopLimitConfig,ipv6HopLimit)    "ntIpv6HopLimitConfig ipv6HopLimit"
+    set JSON_SUB(ntIpv6HopLimitConfig,vlanIfInstance)  "ntIpv6HopLimitConfig vlanIfInstance"
+    set JSON_SUB(ntIpv6HopLimitConfig,vlan)            "ntIpv6HopLimitConfig vlanName"
+    set JSON_SUB(ntIpv6HopLimitConfig,zeroInRA)        "ntIpv6HopLimitConfig zeroInRA"
+    set JSON_SUB(ifIpv6Config,flags)            "ifIpv6Config flags"
+    set JSON_SUB(ifIpv6Config,ifcfg_flags)      "ifIpv6Config flags"
+    set JSON_SUB(ifIpv6Config,pmtu)             "ifIpv6Config pmtu"
+    set JSON_SUB(ifIpv6Config,vlan)             "ifIpv6Config vlan"
+    set JSON_SUB(ifIpv6Address,address)         "ifIpv6Address address"
+    set JSON_SUB(ifIpv6Address,flags)           "ifIpv6Address flags"
+    set JSON_SUB(ifIpv6Address,ifaddr_flags)    "ifIpv6Address flags"
+    set JSON_SUB(ifIpv6Address,maskLen)         "ifIpv6Address maskLen"
+    set JSON_SUB(ifIpv6Address,scopedAddr)      "ifIpv6Address scopedAddr"
+    set JSON_SUB(ifIpv6Address,state)           "ifIpv6Address state"
+    set JSON_SUB(ifIpv6Address,vlan)            "ifIpv6Address vlan"
+
+
+    # Modify JSON_SUB based on version. If different mappings are required..
+    # < 30.1 no support for these
+    if {[CompareRelease $v "30.1"] >= 0} {
+        # -- We are going to have to check the flags passed in once get details
+
+    }
+
+    # Build cli
+    # - add sub command for vlan
+    set cmd "show ipconfig ipv6 vlan $vlan"
+
+    # Check if there is something in the parameterList passed in which is not supported in
+    #   this running version
+    set inPList $parameterList
+    foreach inP $inPList {
+        set rk [lindex [lindex $inP 0] 0]
+        foreach rootKeySub [lindex [lindex $inP 0] 1] {
+            if {[info exists JSON_SUB($rk,$rootKeySub)]} {
+                if {$JSON_SUB($rk,$rootKeySub) == "nosupp"} {
+                    report_start_test "$testNo $inP"
+                    result_skip "Verify cli: $cmd skipping for keys $rk $rootKeySub -- no support $v"
+                    report_end_test
+                    return "1"
+                } else {
+                }
+            } else {
+                result_warning "$rk $rootKeySub key may not be setup/exist in the proc"
+            }
+        }
+    }
+    foreach rk $rootKeyList {
+        foreach inarg $allargs {
+            if {![info exists JSON_SUB($rk,$inarg)]} {
+                continue;
+            }
+            if {[set $inarg] == "null"} {
+                continue;
+            }
+            if {[lindex $JSON_SUB($rk,$inarg) 0] == "nosupp"} {
+                # If this test case is accessing a register that is not supported skip the case
+                #
+                report_start_test "$testNo $rk $inarg"
+                result_skip "On DUT $whichDutNow skipping for $rk $inarg"
+                report_end_test
+                #_abortTestCase
+                return "1"
+            }
+            if {![info exists rootKeys([lindex $JSON_SUB($rk,$inarg) 0])]} {
+                #rootKeys(arp_stats|arp_config|arp_table_config) [lindex $JSON_SUB($rk,$inarg) 1]
+                set rootKeys([lindex $JSON_SUB($rk,$inarg) 0]) [lindex $JSON_SUB($rk,$inarg) 1]
+                if {[regexp -nocase "check" $type]} {
+                    set rootKeyValues([lindex $JSON_SUB($rk,$inarg) 0]) [set $inarg]
+                }
+            } else {
+                lappend rootKeys([lindex $JSON_SUB($rk,$inarg) 0]) [lindex $JSON_SUB($rk,$inarg) 1]
+                if {[regexp -nocase "check" $type]} {
+                    lappend rootKeyValues([lindex $JSON_SUB($rk,$inarg) 0]) [set $inarg]
+                }
+            }
+        }
+    }
+    foreach rKey $rootKeyList {
+        if {[regexp -nocase "check" $type]} {
+            if {[info exists rootKeys($rKey)] && [llength $rootKeys($rKey)] > 0} {
+                #puts "add plist \"{$rKey {$rootKeys($rKey)}} {$rootKeyValues($rKey)} $exist\" "
+                lappend parameterList "{$rKey {$rootKeys($rKey)}} {$rootKeyValues($rKey)} $exist"
+            }
+        } else {
+            if {[info exists rootKeys($rKey)] && [llength $rootKeys($rKey)] > 0} {
+                #puts "add plist \"{$rKey {$rootKeys($rKey)}}\" "
+                lappend parameterList "{$rKey {$rootKeys($rKey)}}"
+            }
+        }
+    }
+
+    # Build the final Check or Get JSON Dictionary from paramaterLists created above
+
+    if {[regexp -nocase "check" $type]} {
+        set res [CheckDictValue -cmd "$cmd" -yesorno "$yesorno" \
+                    -comment "$comment" -time "$time" -testNo \"$testNo\" \
+                    -parameterList $parameterList -debugjson "$debugjson"]
+        unset parameterList
+    } else {
+        set res [GetDictValue -cmd "$cmd" -yesorno "$yesorno" \
+                    -comment "$comment" -time "$time" -testNo \"$testNo\" \
+                    -parameterList $parameterList -debugjson "$debugjson"]
+        unset parameterList
+    }
+    return $res
+}
+#######################################################################################
+# Procedure: _show_ospf_interfaces
+#
+#   addoncli = vlan vlanName|vlanName|area x.x.x.x|detail|null
+#
+#
+#######################################################################################
+proc _show_ospf_interfaces {args} {
+    global MAIN whichDutNow
+
+    parse_args _show_ospf_interfaces $args {
+        type          "check"
+        parameterList ""
+        comment       ""
+        testNo        "_show_ospf_interfaces"
+        yesorno       "Yes"
+        debugjson     "false"
+        time          "null"
+        showfmt       "default"
+        exist         "exist"
+        addoncli      "null"
+        ospfAddressLessIf    "null"
+        ospfIfAdminStat    "null"
+        ospfIfAreaId    "null"
+        ospfIfAuthEncrypted    "null"
+        ospfIfAuthKey    "null"
+        ospfIfAuthType    "null"
+        ospfIfBackupDesignatedRouter    "null"
+        ospfIfBfdCfg    "null"
+        ospfIfChangeFull    "null"
+        ospfIfDadState    "null"
+        ospfIfDemand    "null"
+        ospfIfDesignatedRouter    "null"
+        ospfIfDesignatedRouterID    "null"
+        ospfIfEvents    "null"
+        ospfIfForwardEnabled    "null"
+        ospfIfHelloInterval    "null"
+        ospfIfInst    "null"
+        ospfIfIpAddress    "null"
+        ospfIfIpMask    "null"
+        ospfIfIpMaskLength    "null"
+        ospfIfLinkType    "null"
+        ospfIfMNetFlag    "null"
+        ospfIfMetricStatus    "null"
+        ospfIfMetricType    "null"
+        ospfIfMetricValue    "null"
+        ospfIfMulticastForwarding    "null"
+        ospfIfName    "null"
+        ospfIfNeighborIP    "null"
+        ospfIfNeighborNum    "null"
+        ospfIfNeighborStatus    "null"
+        ospfIfPassive    "null"
+        ospfIfPollInterval    "null"
+        ospfIfPrimIpAddress    "null"
+        ospfIfRetransInterval    "null"
+        ospfIfRtrDeadInterval    "null"
+        ospfIfRtrPriority    "null"
+        ospfIfShutDownPriority    "null"
+        ospfIfShutDownStatus    "null"
+        ospfIfState    "null"
+        ospfIfStatus    "null"
+        ospfIfTransitDelay    "null"
+        ospfIfType    "null"
+        ospfIfWaitInterval    "null"
+        ospfIfWaitIntervalAuto    "null"
+        ospfRestartHelperIP    "null"
+        ospfRestartHelperInterval    "null"
+        ospfRestartHelperReason    "null"
+        ospfRestartHelperStatus    "null"
+        ospfRestartHelperStrictLSAChecking    "null"
+        ospfRestartHelperSupport    "null"
+        ospfRestartHelperTimeElapsed    "null"
+        ospfRouterEnabled    "null"
+        ospfRouterId    "null"
+        numOfDownIfs    "null"
+        numOfOspfIfs    "null"
+        numOfRouterIfs  "null"
+        ospfNbrAreaId   "null"
+        ospfNbrBackupDesignatedRouter   "null"
+        ospfNbrBfdSessnState    "null"
+        ospfNbrDesignatedRouter    "null"
+        ospfNbrEvents    "null"
+        ospfNbrHelloPassTime   "null" 
+        ospfNbrIpAddr    "null"
+        ospfNbrLsRetransQLen   "null" 
+        ospfNbrOptions    "null"
+        ospfNbrOptionsOpq    "null"
+        ospfNbrPriority    "null"
+        ospfNbrRstrHelperON    "null"
+        ospfNbrRtrId    "null"
+        ospfNbrState   "null" 
+        ospfNbrUpTime   "null" 
+        ospfNbrVlanName   "null" 
+    }
+
+    set d $whichDutNow
+    set platform [GetPlatform DUT$d]
+    set v [GetVersion DUT$d]
+
+    #json variables
+    set rootKeyList "ospfInterface ospfInterfaceStat"
+    #
+    set allargs "ospfAddressLessIf ospfIfAdminStat ospfIfAreaId ospfIfAuthEncrypted \
+    ospfIfAuthKey ospfIfAuthType ospfIfBackupDesignatedRouter ospfIfBfdCfg \
+    ospfIfChangeFull ospfIfDadState ospfIfDemand ospfIfDesignatedRouter ospfIfDesignatedRouterID \
+    ospfIfEvents ospfIfForwardEnabled ospfIfHelloInterval ospfIfInst ospfIfIpAddress ospfIfIpMask \
+    ospfIfIpMaskLength ospfIfLinkType ospfIfMNetFlag ospfIfMetricStatus ospfIfMetricType \
+    ospfIfMetricValue ospfIfMulticastForwarding ospfIfName ospfIfNeighborIP ospfIfNeighborNum \
+    ospfIfNeighborStatus ospfIfPassive ospfIfPollInterval ospfIfPrimIpAddress ospfIfRetransInterval \
+    ospfIfRtrDeadInterval ospfIfRtrPriority ospfIfShutDownPriority ospfIfShutDownStatus ospfIfState \
+    ospfIfStatus ospfIfTransitDelay ospfIfType ospfIfWaitInterval ospfIfWaitIntervalAuto \
+    ospfRestartHelperIP ospfRestartHelperInterval ospfRestartHelperReason ospfRestartHelperStatus \
+    ospfRestartHelperStrictLSAChecking ospfRestartHelperSupport ospfRestartHelperTimeElapsed \
+    ospfRouterEnabled ospfRouterId numOfDownIfs numOfOspfIfs numOfRouterIfs ospfNbrAreaId \
+    ospfNbrBackupDesignatedRouter ospfNbrBfdSessnState ospfNbrDesignatedRouter ospfNbrEvents \
+    ospfNbrHelloPassTime ospfNbrIpAddr ospfNbrLsRetransQLen ospfNbrOptions ospfNbrOptionsOpq \
+    ospfNbrPriority ospfNbrRstrHelperON ospfNbrRtrId ospfNbrState ospfNbrUpTime ospfNbrVlanName"
+
+
+    #show ospf interface area 0.0.0.0
+    #22.5                                              30.1             
+    #ospfInterface:                                       ospfInterface: 
+    #      ospfAddressLessIf: 0,                          ospfAddressLessIf: 0, 
+    #      ospfIfAdminStat: 2,                            ospfIfAdminStat: 2, 
+    #      ospfIfAreaId: 0.0.0.0,                         ospfIfAreaId: 0.0.0.0, 
+    #      ospfIfAuthEncrypted: 1,                        ospfIfAuthEncrypted: 1, 
+    #      ospfIfAuthKey: null,                           ospfIfAuthKey: null, 
+    #      ospfIfAuthType: 0,                             ospfIfAuthType: 0, 
+    #      ospfIfBackupDesignatedRouter: 0.0.0.0,         ospfIfBackupDesignatedRouter: 0.0.0.0, 
+    #      ospfIfBfdCfg: 0,                               ospfIfBfdCfg: 0, 
+    #      ospfIfChangeFull: 0,                           ospfIfChangeFull: 0, 
+    #      ospfIfDadState: 1,                             -----------
+    #      ospfIfDemand: 2,                               ospfIfDemand: 2, 
+    #      ospfIfDesignatedRouter: 0.0.0.0,               ospfIfDesignatedRouter: 0.0.0.0, 
+    #      ospfIfDesignatedRouterID: 0.0.0.0,             ospfIfDesignatedRouterID: 0.0.0.0, 
+    #      ospfIfEvents: 0,                               ospfIfEvents: 0, 
+    #      ospfIfForwardEnabled: 1,                       ospfIfForwardEnabled: 1, 
+    #      ospfIfHelloInterval: 10,                       ospfIfHelloInterval: 10, 
+    #      ospfIfInst: 1000033,                           ospfIfInst: 1000029, 
+    #      ospfIfIpAddress: 192.10.1.10,                  ospfIfIpAddress: 192.10.1.10, 
+    #      ospfIfIpMask: 255.255.255.0,                   ospfIfIpMask: 255.255.255.0, 
+    #      ospfIfIpMaskLength: 24,                        ospfIfIpMaskLength: 24, 
+    #      ospfIfLinkType: 0,                             ospfIfLinkType: 0, 
+    #      ospfIfMNetFlag: 0,                             ospfIfMNetFlag: 0, 
+    #      ospfIfMetricStatus: 1,                         ospfIfMetricStatus: 1, 
+    #      ospfIfMetricType: 1,                           ospfIfMetricType: 1, 
+    #      ospfIfMetricValue: 5,                          ospfIfMetricValue: 5, 
+    #      ospfIfMulticastForwarding: 1,                  ospfIfMulticastForwarding: 1, 
+    #      ospfIfName: vlan1,                             ospfIfName: vlan1, 
+    #      ospfIfNeighborIP: 0.0.0.0,                     ospfIfNeighborIP: 0.0.0.0, 
+    #      ospfIfNeighborNum: 0,                          ospfIfNeighborNum: 0, 
+    #      ospfIfNeighborStatus: 0,                       ospfIfNeighborStatus: 0, 
+    #      ospfIfPassive: 2,                              ospfIfPassive: 2, 
+    #      ospfIfPollInterval: 120,                       ospfIfPollInterval: 120, 
+    #      ospfIfPrimIpAddress: 0.0.0.0,                  ospfIfPrimIpAddress: 0.0.0.0, 
+    #      ospfIfRetransInterval: 5,                      ospfIfRetransInterval: 5, 
+    #      ospfIfRtrDeadInterval: 40,                     ospfIfRtrDeadInterval: 40, 
+    #      ospfIfRtrPriority: 1,                          ospfIfRtrPriority: 1, 
+    #      ospfIfShutDownPriority: 1024,                  ospfIfShutDownPriority: 1024, 
+    #      ospfIfShutDownStatus: 0,                       ospfIfShutDownStatus: 0, 
+    #      ospfIfState: 1,                                ospfIfState: 1, 
+    #      ospfIfStatus: 1,                               ospfIfStatus: 1, 
+    #      ospfIfTransitDelay: 1,                         ospfIfTransitDelay: 1, 
+    #      ospfIfType: 1,                                 ospfIfType: 1, 
+    #      ospfIfWaitInterval: 0,                         ospfIfWaitInterval: 0, 
+    #      ospfIfWaitIntervalAuto: 1,                     ospfIfWaitIntervalAuto: 1, 
+    #      ospfRestartHelperIP: 0.0.0.0,                  ospfRestartHelperIP: 0.0.0.0, 
+    #      ospfRestartHelperInterval: 0,                  ospfRestartHelperInterval: 0, 
+    #      ospfRestartHelperReason: -1,                   ospfRestartHelperReason: -1, 
+    #      ospfRestartHelperStatus: 0,                    ospfRestartHelperStatus: 0, 
+    #      ospfRestartHelperStrictLSAChecking: 1,         ospfRestartHelperStrictLSAChecking: 1, 
+    #      ospfRestartHelperSupport: 0,                   ospfRestartHelperSupport: 0, 
+    #      ospfRestartHelperTimeElapsed: 0,               ospfRestartHelperTimeElapsed: 0, 
+    #      ospfRouterEnabled: 1,                          ospfRouterEnabled: 1, 
+    #      ospfRouterId: 192.10.1.10                      ospfRouterId: 192.10.1.10
+    #ospfInterfaceStat:                               ospfInterfaceStat:
+    #      numOfDownIfs: 0,                               numOfDownIfs: 0,
+    #      numOfOspfIfs: 1,                               numOfOspfIfs: 1,
+    #      numOfRouterIfs: 1                              numOfRouterIfs: 1
+    #ospfNeighbor:                                    ospfNeighbor: 
+    #      ospfNbrAreaId: 0.0.0.0,                        ospfNbrAreaId: 0.0.0.0, 
+    #      ospfNbrBackupDesignatedRouter: 192.10.1.10,    ospfNbrBackupDesignatedRouter: 192.10.1.10, 
+    #      ospfNbrBfdSessnState: 0,                       ospfNbrBfdSessnState: 0, 
+    #      ospfNbrDesignatedRouter: 192.10.1.11,          ospfNbrDesignatedRouter: 192.10.1.11, 
+    #      ospfNbrEvents: 6,                              ospfNbrEvents: 6, 
+    #      ospfNbrHelloPassTime: 00:00:00:02,             ospfNbrHelloPassTime: 00:00:00:02, 
+    #      ospfNbrIpAddr: 192.10.1.11,                    ospfNbrIpAddr: 192.10.1.11, 
+    #      ospfNbrLsRetransQLen: 0,                       ospfNbrLsRetransQLen: 0, 
+    #      ospfNbrOptions: 66,                            ospfNbrOptions: 66, 
+    #      ospfNbrOptionsOpq: 1,                          ospfNbrOptionsOpq: 1, 
+    #      ospfNbrPriority: 1,                            ospfNbrPriority: 1, 
+    #      ospfNbrRstrHelperON: 0,                        ospfNbrRstrHelperON: 0, 
+    #      ospfNbrRtrId: 192.10.1.11,                     ospfNbrRtrId: 192.10.1.11, 
+    #      ospfNbrState: 8,                               ospfNbrState: 8, 
+    #      ospfNbrUpTime: 00:00:01:00,                    ospfNbrUpTime: 00:00:01:00, 
+    #      ospfNbrVlanName: vlan1                         ospfNbrVlanName: vlan1
+    set JSON_SUB(ospfInterfaceStat,numOfDownIfs)     "ospfInterfaceStat numOfDownIfs"
+    set JSON_SUB(ospfInterfaceStat,numOfOspfIfs)     "ospfInterfaceStat numOfOspfIfs"
+    set JSON_SUB(ospfInterfaceStat,numOfRouterIfs)   "ospfInterfaceStat numOfRouterIfs"
+    set JSON_SUB(ospfInterface,ospfAddressLessIf)    "ospfInterface ospfAddressLessIf"
+    set JSON_SUB(ospfInterface,ospfIfAdminStat)      "ospfInterface ospfIfAdminStat"
+    set JSON_SUB(ospfInterface,ospfIfAreaId)         "ospfInterface ospfIfAreaId"
+    set JSON_SUB(ospfInterface,ospfIfAuthEncrypted)    "ospfInterface ospfIfAuthEncrypted"
+    set JSON_SUB(ospfInterface,ospfIfAuthKey)    "ospfInterface ospfIfAuthKey"
+    set JSON_SUB(ospfInterface,ospfIfAuthType)    "ospfInterface ospfIfAuthType"
+    set JSON_SUB(ospfInterface,ospfIfBackupDesignatedRouter)    "ospfInterface ospfIfBackupDesignatedRouter"
+    set JSON_SUB(ospfInterface,ospfIfBfdCfg)    "ospfInterface ospfIfBfdCfg"
+    set JSON_SUB(ospfInterface,ospfIfChangeFull)    "ospfInterface ospfIfChangeFull"
+    set JSON_SUB(ospfInterface,ospfIfDadState)    "ospfInterface ospfIfDadState"
+    set JSON_SUB(ospfInterface,ospfIfDemand)    "ospfInterface ospfIfDemand"
+    set JSON_SUB(ospfInterface,ospfIfDesignatedRouter)    "ospfInterface ospfIfDesignatedRouter"
+    set JSON_SUB(ospfInterface,ospfIfDesignatedRouterID)    "ospfInterface ospfIfDesignatedRouterID"
+    set JSON_SUB(ospfInterface,ospfIfEvents)    "ospfInterface ospfIfEvents"
+    set JSON_SUB(ospfInterface,ospfIfForwardEnabled)    "ospfInterface ospfIfForwardEnabled"
+    set JSON_SUB(ospfInterface,ospfIfHelloInterval)    "ospfInterface ospfIfHelloInterval"
+    set JSON_SUB(ospfInterface,ospfIfInst)    "ospfInterface ospfIfInst"
+    set JSON_SUB(ospfInterface,ospfIfIpAddress)    "ospfInterface ospfIfIpAddress"
+    set JSON_SUB(ospfInterface,ospfIfIpMask)    "ospfInterface ospfIfIpMask"
+    set JSON_SUB(ospfInterface,ospfIfIpMaskLength)    "ospfInterface ospfIfIpMaskLength"
+    set JSON_SUB(ospfInterface,ospfIfLinkType)    "ospfInterface ospfIfLinkType"
+    set JSON_SUB(ospfInterface,ospfIfMNetFlag)    "ospfInterface ospfIfMNetFlag"
+    set JSON_SUB(ospfInterface,ospfIfMetricStatus)    "ospfInterface ospfIfMetricStatus"
+    set JSON_SUB(ospfInterface,ospfIfMetricType)    "ospfInterface ospfIfMetricType"
+    set JSON_SUB(ospfInterface,ospfIfMetricValue)    "ospfInterface ospfIfMetricValue"
+    set JSON_SUB(ospfInterface,ospfIfMulticastForwarding)    "ospfInterface ospfIfMulticastForwarding"
+    set JSON_SUB(ospfInterface,ospfIfName)    "ospfInterface ospfIfName"
+    set JSON_SUB(ospfInterface,ospfIfNeighborIP)    "ospfInterface ospfIfNeighborIP"
+    set JSON_SUB(ospfInterface,ospfIfNeighborNum)    "ospfInterface ospfIfNeighborNum"
+    set JSON_SUB(ospfInterface,ospfIfNeighborStatus)    "ospfInterface ospfIfNeighborStatus"
+    set JSON_SUB(ospfInterface,ospfIfPassive)    "ospfInterface ospfIfPassive"
+    set JSON_SUB(ospfInterface,ospfIfPollInterval)    "ospfInterface ospfIfPollInterval"
+    set JSON_SUB(ospfInterface,ospfIfPrimIpAddress)    "ospfInterface ospfIfPrimIpAddress"
+    set JSON_SUB(ospfInterface,ospfIfRetransInterval)    "ospfInterface ospfIfRetransInterval"
+    set JSON_SUB(ospfInterface,ospfIfRtrDeadInterval)    "ospfInterface ospfIfRtrDeadInterval"
+    set JSON_SUB(ospfInterface,ospfIfRtrPriority)    "ospfInterface ospfIfRtrPriority"
+    set JSON_SUB(ospfInterface,ospfIfShutDownPriority)    "ospfInterface ospfIfShutDownPriority"
+    set JSON_SUB(ospfInterface,ospfIfShutDownStatus)    "ospfInterface ospfIfShutDownStatus"
+    set JSON_SUB(ospfInterface,ospfIfState)    "ospfInterface ospfIfState"
+    set JSON_SUB(ospfInterface,ospfIfStatus)    "ospfInterface ospfIfStatus"
+    set JSON_SUB(ospfInterface,ospfIfTransitDelay)    "ospfInterface ospfIfTransitDelay"
+    set JSON_SUB(ospfInterface,ospfIfType)    "ospfInterface ospfIfType"
+    set JSON_SUB(ospfInterface,ospfIfWaitInterval)    "ospfInterface ospfIfWaitInterval"
+    set JSON_SUB(ospfInterface,ospfIfWaitIntervalAuto)    "ospfInterface ospfIfWaitIntervalAuto"
+    set JSON_SUB(ospfInterface,ospfRestartHelperIP)    "ospfInterface ospfRestartHelperIP"
+    set JSON_SUB(ospfInterface,ospfRestartHelperInterval)    "ospfInterface ospfRestartHelperInterval"
+    set JSON_SUB(ospfInterface,ospfRestartHelperReason)    "ospfInterface ospfRestartHelperReason"
+    set JSON_SUB(ospfInterface,ospfRestartHelperStatus)    "ospfInterface ospfRestartHelperStatus"
+    set JSON_SUB(ospfInterface,ospfRestartHelperStrictLSAChecking)    "ospfInterface ospfRestartHelperStrictLSAChecking"
+    set JSON_SUB(ospfInterface,ospfRestartHelperSupport)    "ospfInterface ospfRestartHelperSupport"
+    set JSON_SUB(ospfInterface,ospfRestartHelperTimeElapsed)    "ospfInterface ospfRestartHelperTimeElapsed"
+    set JSON_SUB(ospfInterface,ospfRouterEnabled)    "ospfInterface ospfRouterEnabled"
+    set JSON_SUB(ospfInterface,ospfRouterId)    "ospfInterface ospfRouterId"
+
+    set JSON_SUB(ospfNeighbor,ospfNbrAreaId)    "ospfNeighbor ospfNbrAreaId"
+    set JSON_SUB(ospfNeighbor,ospfNbrBackupDesignatedRouter)    "ospfNeighbor ospfNbrBackupDesignatedRouter"
+    set JSON_SUB(ospfNeighbor,ospfNbrBfdSessnState)    "ospfNeighbor ospfNbrBfdSessnState"
+    set JSON_SUB(ospfNeighbor,ospfNbrDesignatedRouter)    "ospfNeighbor ospfNbrDesignatedRouter"
+    set JSON_SUB(ospfNeighbor,ospfNbrEvents)    "ospfNeighbor ospfNbrEvents"
+    set JSON_SUB(ospfNeighbor,ospfNbrHelloPassTime)    "ospfNeighbor ospfNbrHelloPassTime"
+    set JSON_SUB(ospfNeighbor,ospfNbrIpAddr)    "ospfNeighbor ospfNbrIpAddr"
+    set JSON_SUB(ospfNeighbor,ospfNbrLsRetransQLen)    "ospfNeighbor ospfNbrLsRetransQLen"
+    set JSON_SUB(ospfNeighbor,ospfNbrOptions)    "ospfNeighbor ospfNbrOptions"
+    set JSON_SUB(ospfNeighbor,ospfNbrOptionsOpq)    "ospfNeighbor ospfNbrOptionsOpq"
+    set JSON_SUB(ospfNeighbor,ospfNbrPriority)    "ospfNeighbor ospfNbrPriority"
+    set JSON_SUB(ospfNeighbor,ospfNbrRstrHelperON)    "ospfNeighbor ospfNbrRstrHelperON"
+    set JSON_SUB(ospfNeighbor,ospfNbrRtrId)    "ospfNeighbor ospfNbrRtrId"
+    set JSON_SUB(ospfNeighbor,ospfNbrState)    "ospfNeighbor ospfNbrState"
+    set JSON_SUB(ospfNeighbor,ospfNbrUpTime)    "ospfNeighbor ospfNbrUpTime"
+    set JSON_SUB(ospfNeighbor,ospfNbrVlanName)    "ospfNeighbor ospfNbrVlanName"
+
+    # Modify JSON_SUB based on version. If different mappings are required..
+    # < 30.1 no support for these
+    if {[CompareRelease $v "30.1"] >= 0} {
+        # -- We are going to have to check the flags passed in once get details
+        set JSON_SUB(ospfInterface,ospfIfDadState) "nosupp"
+    }
+
+    # Build CLI
+    # - add sub command for vlan
+    if {$addoncli == "null"} {
+        set cmd "show ospf interfaces"
+    } else {
+        set cmd "show ospf interfaces $addoncli"
+    }
+
+    # Check if there is something in the parameterList passed in which is not supported in
+    #   this running version
+    set inPList $parameterList
+    foreach inP $inPList {
+        set rk [lindex [lindex $inP 0] 0]
+        foreach rootKeySub [lindex [lindex $inP 0] 1] {
+            if {[info exists JSON_SUB($rk,$rootKeySub)]} {
+                if {$JSON_SUB($rk,$rootKeySub) == "nosupp"} {
+                    report_start_test "$testNo $inP"
+                    result_skip "Verify cli: $cmd skipping for keys $rk $rootKeySub -- no support $v"
+                    report_end_test
+                    return "1"
+                } else {
+                }
+            } else {
+                result_warning "$rk $rootKeySub key may not be setup/exist in the proc"
+            }
+        }
+    }
+    foreach rk $rootKeyList {
+        foreach inarg $allargs {
+            if {![info exists JSON_SUB($rk,$inarg)]} {
+                continue;
+            }
+            if {[set $inarg] == "null"} {
+                continue;
+            }
+            if {[lindex $JSON_SUB($rk,$inarg) 0] == "nosupp"} {
+                # If this test case is accessing a register that is not supported skip the case
+                #
+                report_start_test "$testNo $rk $inarg"
+                result_skip "On DUT $whichDutNow skipping for $rk $inarg"
+                report_end_test
+                #_abortTestCase
+                return "1"
+            }
+            if {![info exists rootKeys([lindex $JSON_SUB($rk,$inarg) 0])]} {
+                #rootKeys(arp_stats|arp_config|arp_table_config) [lindex $JSON_SUB($rk,$inarg) 1]
+                set rootKeys([lindex $JSON_SUB($rk,$inarg) 0]) [lindex $JSON_SUB($rk,$inarg) 1]
+                if {[regexp -nocase "check" $type]} {
+                    set rootKeyValues([lindex $JSON_SUB($rk,$inarg) 0]) [set $inarg]
+                }
+            } else {
+                lappend rootKeys([lindex $JSON_SUB($rk,$inarg) 0]) [lindex $JSON_SUB($rk,$inarg) 1]
+                if {[regexp -nocase "check" $type]} {
+                    lappend rootKeyValues([lindex $JSON_SUB($rk,$inarg) 0]) [set $inarg]
+                }
+            }
+        }
+    }
+    foreach rKey $rootKeyList {
+        if {[regexp -nocase "check" $type]} {
+            if {[info exists rootKeys($rKey)] && [llength $rootKeys($rKey)] > 0} {
+                #puts "add plist \"{$rKey {$rootKeys($rKey)}} {$rootKeyValues($rKey)} $exist\" "
+                lappend parameterList "{$rKey {$rootKeys($rKey)}} {$rootKeyValues($rKey)} $exist"
+            }
+        } else {
+            if {[info exists rootKeys($rKey)] && [llength $rootKeys($rKey)] > 0} {
+                #puts "add plist \"{$rKey {$rootKeys($rKey)}}\" "
+                lappend parameterList "{$rKey {$rootKeys($rKey)}}"
+            }
+        }
+    }
+
+    # Build the final Check or Get JSON Dictionary from paramaterLists created above
+
+    if {[regexp -nocase "check" $type]} {
+        set res [CheckDictValue -cmd "$cmd" -yesorno "$yesorno" \
+                    -comment "$comment" -time "$time" -testNo \"$testNo\" \
+                    -parameterList $parameterList -debugjson "$debugjson"]
+        unset parameterList
+    } else {
+        set res [GetDictValue -cmd "$cmd" -yesorno "$yesorno" \
+                    -comment "$comment" -time "$time" -testNo \"$testNo\" \
+                    -parameterList $parameterList -debugjson "$debugjson"]
+        unset parameterList
+    }
+    return $res
+}

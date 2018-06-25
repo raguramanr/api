@@ -1,0 +1,474 @@
+#!/usr/bin/tclsh
+
+
+set MIBS_DIR   ./local/mibs
+set LIB_DIR    ./local/lib
+set API_DIR    ./local/API
+set CODE_LIB   ./local/LIB
+set TRAPD_CONF $LIB_DIR/snmptrapd.conf
+set TRAP_FILE $LIB_DIR/trap
+set L2_CODE    ./local/TESTCASE/L2
+set L3_CODE    ./local/TESTCASE/L3
+set RIP_CODE    ./local/TESTCASE/RIP
+set OSPF_BASIC_CODE    ./local/TESTCASE/ospf-basic
+set STP_CODE    ./local/TESTCASE/SpanningTree
+set ESRP_CODE    ./local/TESTCASE/ESRP
+set MAIN_DIR   ./local/MAIN
+set SNMP_CFG   $MAIN_DIR/snmp.cfg
+set WEB_DIR   ./local/WEB
+set USER autotest-rtp
+set GROUP sqa
+
+proc getUserInput {info} {
+puts "$info"
+flush stdout
+set answer [gets stdin]
+
+while {[string tolower $answer] != "y" && 
+       [string tolower $answer] != "n" } {
+   puts "Type 'y' or 'n'"
+   puts -nonewline "$info"
+   flush stdout
+   set answer [gets stdin]
+}
+
+if {[string tolower $answer] == "n" } {
+   return 0
+}
+
+return 1
+
+}
+
+proc checkRoot { } {
+# Do you have root permission ?
+set output [exec id]
+if { [regexp {.*uid\=0\(root\).*} $output] == 0 } {
+   puts "ERROR: you must be a super-user to execute this script. installation aborted !!!\n"
+   exit
+}
+}
+
+
+proc installNetSnmp { } {
+
+global LIB_DIR
+global USER
+global GROUP
+# Determine whether net-snmp libraries are already installed
+set count 0
+foreach file [glob -nocomplain /usr/lib/libnetsnmp*] {
+   set count [expr $count + 1]
+}
+
+if { $count != 0 } {
+   if {[file exists /usr/lib/libnetsnmp.so.5.0.9]} {
+      puts "INFO: net-snmp libraries already installed\n"
+   } else {
+      puts "INFO: installing net-snmp version 5.0.9 libraries\n"
+      foreach file [glob -nocomplain $LIB_DIR/libnetsnmp*] {
+         eval [exec cp -rf $file /usr/lib/]
+      }
+   }
+} else {
+   puts "INFO: installing net-snmp libraries\n"
+   foreach file [glob -nocomplain $LIB_DIR/libnetsnmp*] {
+      eval [exec cp -rf $file /usr/lib/]
+   }
+}
+
+set count 0
+foreach file [glob -nocomplain /usr/bin/snmp*] {
+   set count [expr $count + 1]
+}
+
+if { $count != 0 } {
+   catch {set version [exec /usr/bin/snmpget --version >& /tmp/err]}
+   set version [exec wc -l /tmp/err]
+   if { [lindex $version 0] > 10 } {
+       puts "INFO: ucd-snmp is installed. net-snmp will be installed\n"
+       foreach file [glob -nocomplain ./local/bin/snmp*] {
+          eval [exec cp -rf $file /usr/bin/]
+       }
+   } else {
+       puts "INFO: net-snmp utilities already installed\n"
+   }
+} else {
+   puts "INFO: installing snmp utility executables\n"
+   foreach file [glob -nocomplain ./local/bin/snmp*] {
+      eval [exec cp -rf $file /usr/bin/]
+   }
+} 
+
+# Stop the snmptrapd if running
+catch {set output [exec /bin/ps -e | grep snmptrapd]}
+if {[info exists output]} {
+   foreach item [split $output "\n"] {
+      if { [regexp "snmptrapd" $item] && ![regexp "grep" $item] } {
+         catch {eval [exec kill -9 [lindex $item 0]]}
+      }
+   }
+}
+
+# Remove any snmp_trap_ file if any from /tmp directory
+foreach file [glob -nocomplain /tmp/snmp_trap_*] {
+   catch {eval [exec rm -rf $file]}
+}
+
+set count 0
+foreach file [glob -nocomplain /usr/sbin/snmp.*] {
+   set count [expr $count + 1]
+}
+
+if { $count != 0 } {
+   catch {set version [exec /usr/sbin/snmptrapd --version >&/tmp/err]}
+   set version [exec wc -l /tmp/err]
+   if { [lindex $version 0] > 10 } {
+       puts "INFO: ucd-snmp is already installed. net-snmp will be installed\n"
+       foreach file [glob -nocomplain ./local/sbin/snmp*] {
+          eval [exec cp -rf $file /usr/sbin/]
+       }
+   } else {
+       puts "INFO: net-snmp daemons already installed\n"
+   }
+} else {
+   puts "INFO: installing net-snmp daemons\n"
+   foreach file [glob -nocomplain ./local/sbin/snmp*] {
+      eval [exec cp -rf $file /usr/sbin/]
+   }
+}
+
+# Install the net-snmp include directory
+
+eval [exec mkdir -p /usr/include/net-snmp/agent]
+eval [exec mkdir -p /usr/include/net-snmp/library]
+eval [exec mkdir -p /usr/include/net-snmp/machine]
+eval [exec mkdir -p /usr/include/net-snmp/system]
+
+foreach file [glob -nocomplain ./local/include/net-snmp/*.h] {
+  eval [exec cp -rf $file /usr/include/net-snmp]
+}
+
+foreach file [glob -nocomplain ./local/include/net-snmp/agent/*.h] {
+  eval [exec cp -rf $file /usr/include/net-snmp/agent/]
+}
+
+foreach file [glob -nocomplain ./local/include/net-snmp/library/*.h] {
+  eval [exec cp -rf $file /usr/include/net-snmp/library]
+}
+
+foreach file [glob -nocomplain ./local/include/net-snmp/machine/*.h] {
+  eval [exec cp -rf $file /usr/include/net-snmp/machine]
+}
+
+foreach file [glob -nocomplain ./local/include/net-snmp/system/*.h] {
+  eval [exec cp -rf $file /usr/include/net-snmp/system/]
+}
+
+#Randomly check whether the files are installed or not
+lappend checkFile /usr/include/net-snmp/machine/generic.h
+lappend checkFile /usr/include/net-snmp/library/snmpv3-security-includes.h
+lappend checkFile /usr/include/net-snmp/agent/net-snmp-agent-includes.h
+lappend checkFile /usr/include/net-snmp/system/sunos.h
+
+foreach file $checkFile {
+  if {![file exists $file]} {
+     puts "ERROR: net-snmp include files are not correctly intalled. installation aborted !!!\n"
+     exit
+  }
+}
+
+}
+
+proc checkAutomationDirs { } {
+# Checking whether /auto/automation/ directory exists or not
+if {![file exists /auto/branch/automation/]} {
+  puts "ERROR: please checkout the automation code in /auto/branch/automation directory. installation aborted !!!\n"
+  exit 
+}
+if {![file exists /auto/automation/Lib]} {
+  puts "ERROR: /auto/branch/automation/Lib directory does not exists. installation aborted !!!\n"
+  exit 
+}
+
+if {![file exists /auto/automation/main]} {
+  puts "ERROR: /auto/branch/automation/main directory does not exists. installation aborted !!!\n"
+  exit 
+}
+
+if {![file exists /auto/automation/main/cfg]} {
+  puts "ERROR: /auto/branch/automation/main/cfg directory does not exists. installation aborted !!!\n"
+  exit 
+}
+
+}
+
+proc installTrapFile { } {
+global MIBS_DIR
+global TRAPD_CONF
+global TRAP_FILE
+global USER
+global GROUP
+
+# Copy the trap handle program in /bin directory 
+puts "INFO: copying trap shell script to /auto/branch/automation/Lib directory\n"
+eval [exec cp -rf $TRAP_FILE /auto/branch/automation/Lib/]
+eval [exec chown $USER:$GROUP /auto/branch/automation/Lib/trap]
+eval [exec chmod 777 /auto/branch/automation/Lib/trap]
+puts "INFO: creating softlink for /auto/branch/automation/Lib/trap file to /bin/trap\n"
+catch {eval [exec ln -s /auto/branch/automation/Lib/trap /bin/trap]}
+
+# Copy the snmptrapd's configuration file
+
+if {![file exists /usr/share/snmp/] } {
+   puts "INFO: /usr/share/snmp directory does not exist. creating ...\n"
+   eval [exec mkdir -p /usr/share/snmp/]
+}
+
+puts "INFO: copying snmptrapd.conf file to /usr/share/snmp directory\n"
+eval [exec cp -rf $TRAPD_CONF /usr/share/snmp/]
+
+}
+
+proc installL2Scripts { } {
+global API_DIR
+global CODE_LIB
+global L2_CODE
+global MAIN_DIR
+global SNMP_CFG
+global USER
+global GROUP
+
+# Installing SNMP code base
+# /auto/automation directory exists. So copy SNMP based L2 scripts
+eval [exec mkdir -p /auto/branch/automation/SnmpFunctionaltest/]
+eval [exec chown $USER:$GROUP /auto/branch/automation/SnmpFunctionaltest]
+if {[file exists /auto/branch/automation/SnmpFunctionaltest/L2]} {
+  eval [exec rm -rf /auto/branch/automation/SnmpFunctionaltest/L2]
+}
+eval [exec cp -rf $L2_CODE /auto/branch/automation/SnmpFunctionaltest/L2]
+eval [exec rm -rf /auto/branch/automation/SnmpFunctionaltest/L2/Report]
+eval [exec chown $USER:$GROUP /auto/branch/automation/SnmpFunctionaltest/L2]
+foreach file [glob -nocomplain /auto/branch/automation/SnmpFunctionaltest/L2/*] {
+   eval [exec chown $USER:$GROUP $file]
+   eval [exec chmod 777 $file]
+}
+}
+
+proc installLibFile { } {
+global CODE_LIB
+global USER
+global GROUP
+global MIBS_DIR
+global SNMP_CFG
+global API_DIR
+
+# Copy all the mibs
+puts "INFO: copying mibs to /usr/share/snmp directory\n"
+eval [exec cp -rf $MIBS_DIR /usr/share/snmp/]
+
+foreach file [glob -nocomplain $CODE_LIB/*.*] {
+   eval [exec cp -rf $file /auto/branch/automation/Lib/]
+}
+
+foreach file [glob -nocomplain /auto/branch/automation/Lib/*] {
+   eval [exec chown $USER:$GROUP $file]
+   eval [exec chmod 777 $file]
+}
+
+}
+
+proc installAutoWeb { } {
+global WEB_DIR
+global USER
+global GROUP
+
+# Install autoweb related changes
+if {![file exists /autoweb/Http]} {
+    puts "ERROR: /autoweb/Http directory does not exist. installation aborted !!!\n"
+    exit 
+}
+
+puts "INFO: copying autoweb files to /autoweb/Http directory\n"
+eval [exec mkdir -p /autoweb/Http/cgi-bin/cgi.tcl/snmpData]
+eval [exec chown $USER:$GROUP /autoweb/Http/cgi-bin/cgi.tcl/snmpData]
+
+if {![file exists /autoweb/Http/cgi-bin/cgiScripts]} {
+   eval [exec mkdir -p /autoweb/Http/cgi-bin/cgiScripts]
+   eval [exec chown $USER:$GROUP /autoweb/Http/cgi-bin/cgiScripts]
+}
+
+foreach file [glob -nocomplain $WEB_DIR/*.cgi] {
+   eval [exec cp -rf $file /autoweb/Http/cgi-bin/cgiScripts/]
+}
+eval [exec chown $USER:$GROUP /autoweb/Http/cgi-bin/cgiScripts/]
+foreach file [glob -nocomplain /autoweb/Http/cgi-bin/cgiScripts/*] {
+   eval [exec chown $USER:$GROUP $file]
+   eval [exec chmod 777 $file]
+}
+
+if {![file exists /autoweb/Http/html]} {
+   eval [exec mkdir -p /autoweb/Http/html]
+   eval [exec chown $USER:$GROUP /autoweb/Http/html]
+}
+
+foreach file [glob -nocomplain $WEB_DIR/*.htm] {
+   eval [exec cp -rf $file /autoweb/Http/html/]
+}
+foreach file [glob -nocomplain /autoweb/Http/html/*] {
+   eval [exec chown $USER:$GROUP $file]
+   eval [exec chmod 777 $file]
+}
+
+}
+
+proc installL3Scripts { } {
+global L3_CODE
+global USER
+global GROUP
+
+# Installing SNMP code base
+# /auto/automation directory exists. So copy SNMP based L2 scripts
+eval [exec mkdir -p /auto/automation/SnmpFunctionaltest/]
+eval [exec chown $USER:$GROUP /auto/automation/SnmpFunctionaltest]
+if {[file exists /auto/automation/SnmpFunctionaltest/L3]} {
+  eval [exec rm -rf /auto/automation/SnmpFunctionaltest/L3]
+}
+eval [exec cp -rf $L3_CODE /auto/automation/SnmpFunctionaltest/L3]
+eval [exec rm -rf /auto/automation/SnmpFunctionaltest/L3/Report]
+eval [exec chown $USER:$GROUP /auto/automation/SnmpFunctionaltest/L3]
+foreach file [glob -nocomplain /auto/automation/SnmpFunctionaltest/L3/*] {
+   eval [exec chown $USER:$GROUP $file]
+   eval [exec chmod 777 $file]
+}
+
+}
+
+proc installRIPScripts { } {
+global RIP_CODE
+global USER
+global GROUP
+
+# Installing SNMP code base
+# /auto/automation directory exists. So copy SNMP based RIP scripts
+eval [exec mkdir -p /auto/automation/SnmpFunctionaltest/]
+eval [exec chown $USER:$GROUP /auto/automation/SnmpFunctionaltest]
+if {[file exists /auto/automation/SnmpFunctionaltest/RIP]} {
+  eval [exec rm -rf /auto/automation/SnmpFunctionaltest/RIP]
+}
+eval [exec cp -rf $RIP_CODE /auto/automation/SnmpFunctionaltest/RIP]
+eval [exec rm -rf /auto/automation/SnmpFunctionaltest/RIP/Report]
+eval [exec chown $USER:$GROUP /auto/automation/SnmpFunctionaltest/RIP]
+foreach file [glob -nocomplain /auto/automation/SnmpFunctionaltest/RIP/*] {
+   eval [exec chown $USER:$GROUP $file]
+   eval [exec chmod 777 $file]
+}
+}
+
+proc installOSPFScripts { } {
+global OSPF_BASIC_CODE
+global USER
+global GROUP
+
+
+# Installing SNMP code base
+# /auto/automation directory exists. So copy SNMP based OSPF scripts
+eval [exec mkdir -p /auto/automation/SnmpFunctionaltest/]
+eval [exec chown $USER:$GROUP /auto/automation/SnmpFunctionaltest]
+if {[file exists /auto/automation/SnmpFunctionaltest/ospf-basic]} {
+  eval [exec rm -rf /auto/automation/SnmpFunctionaltest/ospf-basic]
+}
+eval [exec cp -rf $OSPF_BASIC_CODE /auto/automation/SnmpFunctionaltest/ospf-basic]
+eval [exec rm -rf /auto/automation/SnmpFunctionaltest/ospf-basic/Report]
+eval [exec chown $USER:$GROUP /auto/automation/SnmpFunctionaltest/ospf-basic]
+foreach file [glob -nocomplain /auto/automation/SnmpFunctionaltest/ospf-basic/*] {
+   eval [exec chown $USER:$GROUP $file]
+   eval [exec chmod 777 $file]
+}
+}
+
+proc installSTPScripts { } {
+global STP_CODE
+global USER
+global GROUP
+
+
+# Installing SNMP code base
+# /auto/automation directory exists. So copy SNMP based OSPF scripts
+eval [exec mkdir -p /auto/automation/SnmpFunctionaltest/]
+eval [exec chown $USER:$GROUP /auto/automation/SnmpFunctionaltest]
+if {[file exists /auto/automation/SnmpFunctionaltest/SpanningTree]} {
+  eval [exec rm -rf /auto/automation/SnmpFunctionaltest/SpanningTree]
+}
+eval [exec cp -rf $STP_CODE /auto/automation/SnmpFunctionaltest/SpanningTree]
+eval [exec rm -rf /auto/automation/SnmpFunctionaltest/ospf-basic/Report]
+eval [exec chown $USER:$GROUP /auto/automation/SnmpFunctionaltest/SpanningTree]
+foreach file [glob -nocomplain /auto/automation/SnmpFunctionaltest/SpanningTree/*] {
+   eval [exec chown $USER:$GROUP $file]
+   eval [exec chmod 777 $file]
+}
+}
+
+proc installESRPScripts { } {
+global ESRP_CODE
+global USER
+global GROUP
+
+
+# Installing SNMP code base
+# /auto/automation directory exists. So copy SNMP based OSPF scripts
+eval [exec mkdir -p /auto/automation/SnmpFunctionaltest/]
+eval [exec chown $USER:$GROUP /auto/automation/SnmpFunctionaltest]
+if {[file exists /auto/automation/SnmpFunctionaltest/ESRP]} {
+  eval [exec rm -rf /auto/automation/SnmpFunctionaltest/ESRP]
+}
+eval [exec cp -rf $ESRP_CODE /auto/automation/SnmpFunctionaltest/ESRP]
+eval [exec rm -rf /auto/automation/SnmpFunctionaltest/ospf-basic/Report]
+eval [exec chown $USER:$GROUP /auto/automation/SnmpFunctionaltest/ESRP]
+foreach file [glob -nocomplain /auto/automation/SnmpFunctionaltest/ESRP/*] {
+   eval [exec chown $USER:$GROUP $file]
+   eval [exec chmod 777 $file]
+}
+}
+
+
+###############################################################################
+# ----- Installation MAIN script starts here                                  #
+###############################################################################
+
+checkRoot
+
+checkAutomationDirs
+installTrapFile
+if {[getUserInput "Do you want to install net-snmp ? (y/n)" ]} {
+
+#   installNetSnmp
+   installTrapFile
+
+}
+
+#puts "INFO: updating SNMP automation library files ..."
+#installLibFile
+
+# --- ModuleName FunctionName
+
+#set modules { { L2 installL2Scripts              } \
+#              { L3 installL3Scripts              } \
+#              { RIP installRIPScripts            } \
+#              { OSPF-BASIC installOSPFScripts    } \
+#              { ESRP installESRPScripts          } \
+#              { SpanningTree installSTPScripts            } \
+#            }
+              
+#foreach mod $modules {
+ 
+#if {[getUserInput "Do you want to install [lindex $mod 0 ] Scripts ? (y/n)" ]} {
+#   puts "INFO: installing [lindex $mod 0] SNMP automation scripts ..."
+#   eval "[lindex $mod 1]"
+# 
+#}
+
+#} 
+
+
+puts "INFO: installation completed...\n"

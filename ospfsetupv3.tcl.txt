@@ -1,0 +1,669 @@
+proc extrMakeConnectedInterface {args} {
+
+	parse_args extrMakeConnectedInterface $args {
+
+		interfaceIpAddress ""
+		interfaceMacAddress ""
+	}
+
+	
+	interfaceEntry clearAllItems addressTypeIpV6
+	interfaceEntry clearAllItems addressTypeIpV4
+	interfaceEntry setDefault 
+	
+	interfaceIpV6 setDefault 
+	interfaceIpV6 config -maskWidth                          64
+	interfaceIpV6 config -ipAddress                          "$interfaceIpAddress"
+	if {[interfaceEntry addItem addressTypeIpV6]} {
+		error "interfaceEntry : addItem addressTypeIpV6"
+	}
+	interfaceEntry config -enable                             true
+	interfaceEntry config -description                        "$interfaceIpAddress/64"
+	interfaceEntry config -macAddress                         "$interfaceMacAddress"
+	if {[interfaceTable addInterface interfaceTypeConnected]} {
+
+		error "interfaceTable : addInterface interfaceTypeConnected"
+	}
+
+	interfaceEntry clearAllItems addressTypeIpV6
+	interfaceEntry clearAllItems addressTypeIpV4
+	interfaceEntry setDefault 
+
+	interfaceEntry config -connectedVia 			"$interfaceIpAddress/64"	
+#	interfaceEntry config -enable                             true
+#	interfaceEntry config -description                        "ProtocolInterface - $card:$port"
+	if {[interfaceTable addInterface interfaceTypeRouted]} {
+
+		error "interfaceTable : addInterface interfaceTypeRouted"
+	}
+
+}
+
+proc extrMakeOspfRouterv3 {args} {
+    parse_args extrMakeOspfRouterv3 $args {
+        interfaceIp ""
+        areaId 0
+        helloInterval 10
+        deadInterval 40
+        networkType "ospfV3InterfaceBroadcast"
+        instanceId 0
+        interfaceId -1
+        routeMetric "0"
+        numNetworks 0
+        prefix ""
+        metric "1"
+        maskWidth ""
+        routeOrigin "ospfV3RouteOriginAnotherArea"
+        networkIp ""
+        routerId ""
+        txPortId  "1"
+	routerno "1"
+    }
+
+       # get the port information
+    MapIxiaPortId $txPortId chassis card port
+    result_debug "extrMakeOSPFRouterV: Chas: $chassis Card: $card Port: $port"
+
+    set maskWidth $prefix
+#    ospfV3Server select $chassis $card $port
+#    ospfV3Server clearAllRouters
+    ospfV3Interface setDefault
+    ospfV3Interface config -enable true
+    ospfV3Interface config -areaId $areaId
+#    ospfV3Interface config -options [expr $::ospfV3InterfaceOptionV6Bit|$::ospfV3InterfaceOptionEBit|$::ospfV3InterfaceOptionRBit]2
+    ospfV3Interface config -helloInterval $helloInterval
+    ospfV3Interface config -deadInterval $deadInterval
+    ospfV3Interface config -protocolInterfaceDescription "$interfaceIp/64"
+    ospfV3Interface config -type $networkType
+    ospfV3Interface config -instanceId 0
+    ospfV3Interface config -interfaceId -1
+    if {[ospfV3Router addInterface interface1]} {
+        error "extrMakeOspfV3Router: ospfRouterV3 addInterface interface1 failed."
+    }
+
+    set idx 0
+    set rangeId 1
+    while {[llength $networkIp] > $idx} {
+    set myIp [lindex $networkIp $idx]
+    set rMetric [lindex $routeMetric $idx]
+    set prefx [lindex $prefix $idx]
+    set routeOrg [lindex $routeOrigin $idx]
+    set noOfNetworks [lindex $numNetworks $idx]
+    incr idx
+
+    ospfV3RouteRange setDefault
+    ospfV3RouteRange config -enable true
+    ospfV3RouteRange config -routeOrigin $routeOrg
+    ospfV3RouteRange config -metric $rMetric
+    ospfV3RouteRange config -numRoutes $noOfNetworks
+    ospfV3RouteRange config -maskWidth $prefx
+    ospfV3RouteRange config -networkIpAddress $myIp
+    ospfV3RouteRange config -iterationStep 1
+
+    ospfV3Router addRouteRange [format "routeRange%02d" $rangeId]
+#    ospfV3RouteRange setDefault
+    incr rangeId
+}
+
+#    if {[ospfV3Router addRouteRange routeRange1]} {
+#        error "extrMakeOspfRouter: ospfRouter addRouteRange routeRange1 failed."
+#    }
+
+    ospfV3Router setDefault
+    ospfV3Router config -enable true
+    ospfV3Router config -routerId $routerId
+    ospfV3Router config -disableAutoGenerateRouterLsa false
+    ospfV3Router config -disableAutoGenerateLinkLsa false
+    ospfV3Router config -enableDiscardLearnedLsas false
+    ospfV3Router config -maxNumLsaPerSecond 1000
+
+if {[ospfV3Server addRouter router${routerno}]} {
+        error "extrMakeOspfV3Router: ospfServerV3 addRouter router1 failed."
+    }
+
+    return 0
+} ;# extrMakeOspfRouter
+
+#############################################################################################################################
+
+##################################################################
+# Procedure Name: setupOSPFRouterv3
+#
+# Description: This proc is used to setup ixia port as a ospf router. It can create multiple interfaces
+#              supplied via interfaceIpList
+#
+#
+#
+# Input args:  args
+# Output args: None.
+# Return value: -1 on error only
+# Typical usage:
+#setupOSPFRouter -dutIp "62.1.0.109" -interfaceIpList "62.1.0.23" -maskList "255.255.255.0" -areaIdList "0" -helloIntervalList "10" \
+#                -deadIntervalList "40" -networkTypeList "ospfBroadcast" -metricList "10" -mtuSizeList 1500 \
+#                -linkTypeList "ospfLinkTransit" -numNetworksList 10000 -prefixList "30" -routeOriginList "ospfRouteOriginArea" \
+#                -networkIpList "37.0.0.0" -routerIdList "62.1.0.23" -txPortId 2
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: SendTraffic
+##################################################################
+proc setupOSPFextraRouterv3 {args} {
+   global TrafficGen
+    parse_args setupOSPFextraRouterv3 $args {
+        interfaceMacList ""
+        interfaceIpList ""
+        maskWidth "64"
+        areaIdList "0"
+        helloIntervalList "10"
+        deadIntervalList "40"
+        networkTypeList "ospfV3InterfaceBroadcast"
+        metricList "0"
+        numNetworksList "0"
+        prefixList ""
+        routeOriginList "ospfV3RouteOriginAnotherArea"
+        networkIpList ""
+        routeMetricList "10"
+        routerIdList ""
+      dutIp ""
+        txPortId  "1"
+    }
+
+   set tag "none"
+   switch -exact -- $TrafficGen {
+      ixia -
+      ixvm {
+         
+         
+    # get the port information
+    MapIxiaPortId $txPortId chassis card port
+    result_debug "setupOSPFRouterV3: Chas: $chassis Card: $card Port: $port"
+
+    # select the port
+    port setDefault
+
+    set IXIA_10G [getIxiaPortType $txPortId]
+    result_debug "IXIA_10G === $IXIA_10G"
+    if {$IXIA_10G == 98} {
+            result_debug "Chas: $chassis Card: $card Port: $port"
+            port config -autonegotiate                      false
+            port config -advertise100FullDuplex             false
+            port config -advertise100HalfDuplex             false
+            port config -advertise10FullDuplex              false
+            port config -advertise10HalfDuplex              false
+            port config -advertise1000FullDuplex            false
+            port config -portMode                           port10GigLanMode
+    }
+
+    port set $chassis $card $port
+    ipAddressTable clear
+    ipAddressTable setDefault
+    ipAddressTable config -defaultGateway 0.0.0.0
+    if {[ipAddressTable set $chassis $card $port]} {
+		error "ipAddressTable : set $chassis $card $port."
+	} 
+    arpServer setDefault
+    arpServer config -retries 3
+    arpServer config -mode 0
+    arpServer config -rate 260417
+    arpServer config -requestRepeatCount 3
+    if {[arpServer set $chassis $card $port]} {
+		error "arpServer : set $chassis $card $port."
+	}
+    if {[interfaceTable select $chassis $card $port]} {
+		error "interfaceTable : select $chassis $card $port."
+	}
+
+
+    interfaceTable setDefault
+    interfaceTable clearAllInterfaces
+	set macAddrList ""
+	for {set i 1} {$i<=[llength $interfaceIpList]} {incr i} {
+	
+		set macAddr [uniqMac $chassis $card $port]
+#		set macAddr {00 01 02 03 04 ff}
+		set macAddr [lreplace $macAddr end end [format %02x [expr [expr 0x[lindex $macAddr end]] + $i]]]
+		lappend macAddrList $macAddr
+	}
+puts "------macAddrList ---- $macAddrList"
+	for {set i 0} {$i<[llength $interfaceIpList]} {incr i} {
+	
+		set interfaceIp [lindex $interfaceIpList $i]
+		set macAddr [lindex $macAddrList $i]
+		extrMakeConnectedInterface -interfaceIpAddress $interfaceIp -interfaceMacAddress $macAddr 
+		
+	}
+
+if {0} {
+
+    interfaceIpV6 setDefault
+    interfaceIpV6 config -maskWidth $maskWidth
+    interfaceIpV6 config -ipAddress [lindex $interfaceIpList 0]
+    interfaceEntry addItem addressTypeIpV6
+
+
+    if {[llength $interfaceMacList] > 0} {
+        set macAddr [lindex $interfaceMacList 0]
+        if {$macAddr == "default"} {
+            if {[port get $chassis $card $port]} {
+                error "setupOSPFRouter: port get $chassis $card $port failed."
+            }
+            set macAddr [port cget -MacAddress]
+
+        }
+    } else {
+        set macAddr [uniqMac $chassis $card $port]
+    }
+
+    interfaceEntry setDefault
+    interfaceEntry config -enable true
+    interfaceEntry config -description "protocol interface-$card.$port"
+    interfaceEntry config -macAddress $macAddr
+    interfaceTable addInterface
+    interfaceEntry clearAllItems addressTypeIpV6
+    interfaceEntry clearAllItems addressTypeIpV4
+
+}
+
+    if {[ospfV3Server select $chassis $card $port]} {
+        error "setupOSPFRouter: ospfServer select $chassis $card $port failed."
+
+    }
+    if {[ospfV3Server clearAllRouters]} {
+        error "setupOSPFRouter: ospfServer clearAllRouters failed."
+    }
+
+    for {set i 0} {$i<[llength $interfaceIpList]} {incr i} {
+        set interfaceIp [lindex $interfaceIpList $i]
+        set areaId [lindex $areaIdList $i]
+        set helloInterval [lindex $helloIntervalList $i]
+        set deadInterval [lindex $deadIntervalList $i]
+        set networkType [lindex $networkTypeList $i]
+        set metric [lindex $metricList $i]
+        set numNetworks [lindex $numNetworksList $i]
+        set prefix [lindex $prefixList $i]
+        set routeOrigin [lindex $routeOriginList $i]
+        set networkIp [lindex $networkIpList $i]
+        set routeMetric [lindex $routeMetricList $i]
+        set routerId [lindex $routerIdList $i]
+
+        set returnCode [extrMakeOspfRouterv3 -interfaceIp $interfaceIp \
+                                           -areaId $areaId -helloInterval $helloInterval \
+                                           -deadInterval $deadInterval \
+                                           -networkType $networkType -metric $metric \
+                                           -numNetworks $numNetworks -prefix $prefix \
+                                           -routeOrigin $routeOrigin \
+                                           -networkIp $networkIp \
+                                           -routeMetric $routeMetric -routerId $routerId -routerno [expr $i + 1] \
+                                           -txPortId $txPortId]
+        if {$returnCode==-1} {
+            return -1
+        }
+    }
+
+    protocolServer setDefault
+    protocolServer config -enableArpResponse true
+    protocolServer config -enablePingResponse true
+    protocolServer config -enableOspfV3Service true
+    if {[protocolServer set $chassis $card $port]} {
+        error "setupOSPFRouter: protocolServer set $chassis $card $port failed."
+    }
+
+    set portList [list [list $chassis $card $port]]
+    result_debug "Writing Configuration to Hardware..."
+    if {[ixWriteConfigToHardware portList]} {
+        result_debug "Error writing config to hardware"
+    }
+      }
+      stc {
+         set portId $txPortId
+         set txPortId [hMapPortIdToSpirentPort $txPortId]
+         cleanupOspfV3 $txPortId
+         set txPortId [hMapPortIdToSpirentPort $txPortId]
+         if {[info exists mtuSizeList]} {
+            logcmd stc::perform SetupPortsCommand -PortList $txPortId -Mtu [lindex $mtuSizeList 0]
+         }
+         for {set i 0} {$i<[llength $interfaceIpList]} {incr i} {
+            set interfaceIp [lindex $interfaceIpList $i]
+            set areaId [int2ip [lindex $areaIdList $i]]
+#            set areaId [getIpV4MaskWidth2 [lindex $areaIdList $i]]
+            set helloInterval [lindex $helloIntervalList $i]
+            set deadInterval [lindex $deadIntervalList $i]
+            set networkType [lindex $networkTypeList $i]
+            set metric [lindex $metricList $i]
+            set numNetworks [lindex $numNetworksList $i]
+            set prefix [lindex $prefixList $i]
+            set routeOrigin [lindex $routeOriginList $i]
+            set networkIp [lindex $networkIpList $i]
+            set routeMetric [lindex $routeMetricList $i]
+            set routerId [lindex $routerIdList $i]
+            
+            set linkLocalAddr "fe80::[expr 1+$portId+$i]"
+            
+            if {($tag == "none") || !$tag} {
+               array set cmdResults [logcmd stc::perform DeviceCreateCommand \
+                                        -ParentList [logcmd stc::get system1 -children-project] \
+                                        -port $txPortId -IfStack "Ipv6If EthIIIf" -IfCount "1 1"]
+               set deviceHndl $cmdResults(-ReturnList)
+               logcmd stc::config [logcmd stc::get $deviceHndl -children-Ipv6If] \
+                  -Address $interfaceIp -PrefixLength $maskWidth -gateway [makeIpv6Gateway $interfaceIp]
+               logcmd stc::create Ipv6If -under $deviceHndl \
+                  -stackedonendpoint-Targets [lindex [logcmd stc::get $deviceHndl -children-EthIIIf] 0] \
+                  -toplevelif-Sources $deviceHndl -Address $linkLocalAddr
+            } else {
+               array set cmdResults [logcmd stc::perform DeviceCreateCommand \
+                                        -ParentList [logcmd stc::get system1 -children-project] \
+                                        -port $txPortId -IfStack "Ipv6If VlanIf EthIIIf" -IfCount "1 1 1"]
+               set deviceHndl $cmdResults(-ReturnList)
+               logcmd stc::config [logcmd stc::get $deviceHndl -children-Ipv6If] -Address $interfaceIp \
+                  -PrefixLength $maskWidth -gateway [makeIpv6Gateway $interfaceIp]
+               logcmd stc::create Ipv6If -under $deviceHndl \
+                  -stackedonendpoint-Targets [lindex [logcmd stc::get $deviceHndl -children-VlanIf] 0] \
+                  -toplevelif-Sources $deviceHndl -Address $linkLocalAddr
+               logcmd stc::config [logcmd stc::get $deviceHndl -children-VlanIf] -VlanId $tag 
+            }
+            logcmd stc::config $deviceHndl -RouterId $routerId
+            
+            if {$networkType == "ospfV3InterfaceBroadcast"} {
+               set networkType BROADCAST
+            }
+				
+            set ospfAttributes "-under $deviceHndl"
+            if {$areaId != ""} {
+               append ospfAttributes " -AreaId $areaId"					
+            }
+            if {$deadInterval != ""} {
+               append ospfAttributes " -RouterDeadInterval $deadInterval"					
+            }
+            if {$networkType != ""} {
+               append ospfAttributes " -NetworkType $networkType"					
+            }
+            if {$metric != ""} {
+               if {[llength $metric] > 1} {set tmetric [lindex $metric 0]} else {set tmetric $metric}
+               if {$tmetric < 1} {set tmetric 1}
+               append ospfAttributes " -IfCost $tmetric"					
+            }
+            
+            puts $ospfAttributes
+            
+            set ospfRouterConfig [eval "logcmd stc::create Ospfv3RouterConfig [subst $ospfAttributes]"]
+            
+            set routerLsaAttrs "-under $ospfRouterConfig -AdvertisingRouterId $routerId"
+#            switch -glob [lindex $routeOrigin 0] {
+#               ospfV3RouteOriginExternal* { append routerLsaAttrs " -RouterType EBIT" }
+#               ospfRouteOriginArea { append routerLsaAttrs " -RouterType BBIT" }
+#               default { }
+#            } 
+            set hRouterLsa [eval "logcmd stc::create Ospfv3RouterLsa [subst $routerLsaAttrs] -LinkStateId 0"]
+#            set hLinkLsa [eval "logcmd stc::create Ospfv3LinkLsaBlk -under $ospfRouterConfig -AdvertisingRouterId $routerId -LinkLocalIfAddr $linkLocalAddr"]
+#            logcmd stc::config [logcmd stc::get $hLinkLsa -children-Ipv6NetworkBlock] -NetworkCount 1 -StartIpList $interfaceIp
+            
+            set idx 0
+            while {[llength $networkIp] > $idx} {
+               set myIp [lindex $networkIp $idx]
+               set rMetric [lindex $routeMetric $idx]
+               set prefx [lindex $prefix $idx]
+               set routeOrg [lindex $routeOrigin $idx]
+               set noOfNetworks [lindex $numNetworks $idx]
+               incr idx
+               switch $routeOrg {
+                  ospfV3RouteOriginExternalType1 {
+                     logcmd stc::config $hRouterLsa -RouterType EBIT
+                     set ospfRouteAttrs "-under $ospfRouterConfig -LsType AS_EXT_LSA"
+#                     set ospfRouteAttrs "-under $ospfRouterConfig"
+                     if {$routerId != ""} {
+                        append ospfRouteAttrs " -AdvertisingRouterId $routerId"
+                     }
+                     if {$rMetric != ""} {
+#                        append ospfRouteAttrs " -prefixMetric $rMetric"
+                        append ospfRouteAttrs " -Metric $rMetric"
+                     }
+                     
+                     append ospfRouteAttrs " -MetricType FALSE"						
+#                     set ospfRoute [eval logcmd stc::create  Ospfv3IntraAreaPrefixLsaBlk [subst $ospfRouteAttrs] -LinkStateId $idx]
+                     set ospfRoute [eval logcmd stc::create Ospfv3AsExternalLsaBlock [subst $ospfRouteAttrs] -LinkStateId $idx -RouteCategory unique]
+                     logcmd stc::config [logcmd stc::get $ospfRoute -children-Ipv6NetworkBlock] -NetworkCount $noOfNetworks -StartIpList $myIp -PrefixLength $prefx
+                  }
+                  ospfV3RouteOriginExternalType2 {
+                     set ospfRouteAttrs "-under $ospfRouterConfig -LsType AS_EXT_LSA"
+                     if {$routerId != ""} {
+                        append ospfRouteAttrs " -AdvertisingRouterId $routerId"
+                     }
+                     if {$rMetric != ""} {
+                        append ospfRouteAttrs " -Metric $rMetric"
+                     }
+                     append ospfRouteAttrs " -MetricType TRUE"
+                     set ospfRoute [eval logcmd stc::create Ospfv3AsExternalLsaBlock [subst $ospfRouteAttrs] -LinkStateId $idx -RouteCategory unique]
+                     logcmd stc::config [logcmd stc::get $ospfRoute -children-Ipv6NetworkBlock] -NetworkCount $noOfNetworks -StartIpList $myIp -PrefixLength $prefx
+                  }
+                  ospfV3RouteOriginAnotherArea {
+                     set ospfRouteAttrs "-under $ospfRouterConfig "
+                     if {$routerId != ""} {
+                        append ospfRouteAttrs " -AdvertisingRouterId $routerId -RefLsType 8193 -LinkStateId 1" ;# -refadvertisingrouterid
+                     }
+                     if {$rMetric != ""} {
+                        append ospfRouteAttrs " -Metric $rMetric"
+                     }
+                     set ospfRoute [eval logcmd stc::create Ospfv3InterAreaPrefixLsaBlk [subst $ospfRouteAttrs] \
+                                       -RouteCategory unique -LinkStateId $idx]
+                     logcmd stc::config [logcmd stc::get $ospfRoute -children-Ipv6NetworkBlock] \
+                        -NetworkCount $noOfNetworks -StartIpList $myIp -PrefixLength $prefx
+
+                  }
+                  default { error "Unsupported OSPFv3 route origin : $routeOrigin" }
+               }
+            }
+         }
+      }
+   } ;# end of switch
+} ;# setupOSPFRouter
+
+##################################################################
+# Procedure Name: startOspfV3
+#
+# Description: This proc is used to start test equipment ospf protocol adjacency
+#              on the list of ports supplied via txPortIdList
+#
+#
+#
+# Input args:  txPortIdList
+# Output args: None.
+# Return value: none
+# Typical usage:
+#      startOspf 2
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: SendTraffic
+##################################################################
+proc startOspfV3 {txPortIdList} {
+
+   global TrafficGen
+   
+   switch -exact -- $TrafficGen {
+      ixia -
+      ixvm {
+         
+    set pList ""
+    foreach txPortId $txPortIdList {
+        MapIxiaPortId $txPortId cha car por
+        result_debug "startOspf: Chas: $cha Card: $car Port: $por"
+        lappend pList "$cha $car $por"
+    }
+
+    if {[ixStartOspfV3 pList]} {
+        error "startOspf: ixStartOspf failed."
+    }
+}
+      stc {
+         startOspf $txPortIdList
+      }
+   }
+}
+
+##################################################################
+# Procedure Name: stopOspfV3
+#
+# Description: This proc is used to stop test equipment ospf protocol adjacency
+#              on the list of ports supplied via txPortIdList
+#              This proc is opposite of startOspf
+#
+#
+#
+# Input args:  txPortIdList
+# Output args: None.
+# Return value: none
+# Typical usage:
+#      stopOspf 2
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: SendTraffic
+##################################################################
+proc stopOspfV3 {txPortIdList} {
+   
+   global TrafficGen
+   
+   switch -exact -- $TrafficGen {
+      ixia -
+      ixvm {
+         
+    set pList ""
+    foreach txPortId $txPortIdList {
+        MapIxiaPortId $txPortId cha car por
+        result_debug "stopOspf: Chas: $cha Card: $car Port: $por"
+        lappend pList "$cha $car $por"
+    }
+
+    if {[ixStopOspfV3 pList]} {
+        error "stopOspf: ixStopOspf failed."
+    }
+}
+      stc {
+         foreach txPortId $txPortIdList {
+            set txPortId [hMapPortIdToSpirentPort $txPortId]
+            foreach emulatedDevice [set DeviceList [logcmd stc::get $txPortId -affiliationport-Sources]] {
+               foreach {lsatype cmd} {ospfV3AsExternalLsaBlock Ospfv3AgeExternalLsaCommand \
+                                         ospfV3InterAreaPrefixLsaBlk Ospfv3AgeInterAreaPrefixLsa \
+                                         Ospfv3NetworkLsa Ospfv3AgeNetworkLsaCommand \
+                                         Ospfv3InterAreaRouterLsaBlock Ospfv3AgeInterAreaRouterLsaCommand \
+                                         Ospfv3RouterLsa Ospfv3AgeRouterLsaCommand} {
+
+#                                         Ospfv3LinkLsa Ospfv3AgeLinkLsaCommand 
+
+
+                  if {[llength [set lsalist [logcmd stc::get [logcmd stc::get $emulatedDevice -children-ospfv3routerconfig] -children-$lsatype]]] > 0} {
+puts "AGING LSAs : $lsalist"
+#                     logcmd stc::perform $cmd -LsaList $lsalist
+#                     logcmd stc::apply
+#                      foreach lsa $lsalist {
+#                         logcmd stc::delete $lsa
+#                      }
+                  }
+               }
+puts "SHUTTING DOWN ROUTER"
+#               after 10000
+               logcmd stc::perform Ospfv3ShutdownRoutersCommand -RouterList $emulatedDevice
+            }
+#puts "WAITING 30 SEC"
+         }
+ #        after 30000
+      }
+   }
+}
+##################################################################
+# Procedure Name: cleanupOspfV3
+#
+# Description: This proc is used to cleanup test equipment port for ospfv3 configuration
+#              that was performed by setupOSPFRouterV3
+#
+#
+#
+# Input args:  txPortIdList
+# Output args: None.
+# Return value: none
+# Typical usage:
+#      cleanupOspfV3 2
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: SendTraffic
+##################################################################
+
+proc cleanupOspfV3 {txPortIdList} {
+   
+   global TrafficGen
+   
+   switch -exact -- $TrafficGen {
+      ixia -
+      ixvm {
+         
+    foreach txPortId $txPortIdList {
+        # get the port information
+        MapIxiaPortId $txPortId cha car por
+        result_debug "cleanupOspf: Chas: $cha Card: $car Port: $por"
+
+        # select the port
+        if {[ospfV3Server select $cha $car $por]} {
+            error "cleanupOspf: ospfServer select $cha $car $por failed."
+        }
+
+        if {[ospfV3Server getRouter router1]} {
+            error "cleanupOspf: ospfServer getRouter router1 failed."
+        }
+
+        ospfV3Router clearAllInterfaces
+        ospfV3Router clearAllLsaGroups
+        ospfV3Router clearAllRouteRanges
+        ospfRouter setDefault
+
+        if {[ospfV3Server clearAllRouters]} {
+            error "cleanupOspf: ospfServer clearAllRouters failed."
+        }
+        ospfV3Server write
+
+       interfaceTable select $cha $car $por
+       interfaceEntry clearAllItems addressTypeIpV6
+       interfaceEntry clearAllItems addressTypeIpV4
+       interfaceTable clearAllInterfaces
+       interfaceEntry setDefault
+       interfaceIpV6 setDefault
+       interfaceTable write
+
+        protocolServer setDefault
+        protocolServer config -enableArpResponse false
+        protocolServer config -enablePingResponse false
+        protocolServer config -enableOspfService false
+
+        if {[protocolServer set $cha $car $por]} {
+            error "cleanupOspf: Error Setting Protocol Server"
+        }
+        if {[protocolServer write $cha $car $por]} {
+            error "cleanupOspf: protocolServer write $cha $car $por failed."
+        }
+    } ;# foreach txPortId
+      }
+      stc {
+         foreach txPortId $txPortIdList {
+            set txPortId [hMapPortIdToSpirentPort $txPortId]
+            foreach emulatedDevice [logcmd stc::get $txPortId -affiliationport-Sources] {
+               set ipv4If [logcmd stc::get $emulatedDevice -children-Ipv4If]
+               if {$ipv4If != ""} {                 
+                  foreach {lsatype cmd} {Ospfv3AsExternalLsaBlock Ospfv3InterAreaPrefixLsaBlk} {
+                     if {[llength [set lsalist [logcmd stc::get [logcmd stc::get $emulatedDevice -children-ospfv3routerconfig] -children-$lsatype]]] > 0} {
+                        puts "DELETING LSAS"
+                        foreach lsa $lsalist {
+                           logcmd stc::delete $lsa
+                        }
+                     }
+                  }
+               }
+            }
+         }
+         logcmd stc::apply
+#         after 2000
+puts "DELETING ROUTER"
+         cleanupBgpv6 $txPortIdList
+      }
+   }
+} ;# cleanupOspf
+

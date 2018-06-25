@@ -1,0 +1,1221 @@
+proc _CreateInvFile { tclFile } {
+    global DEBUGON
+
+    set tcInvFile "${tclFile}.inv"
+    # open inv file
+    set inv_in [open "$tcInvFile" "w"]
+    set hitTitle 0
+    set inTitle 0
+    set hitNum 0
+    set fd_in [open "$tclFile" "r"]
+    while {[gets $fd_in line] != -1} {
+        set line [string trim $line ";"]
+        set cookedLine [cookString $line]
+        set cookedLine [split $cookedLine]
+        if {[llength $cookedLine] == 0} {
+            continue;
+        }
+        set myLine [string trim $line]
+        
+        if {[regexp -nocase {^proc} $myLine]} {
+            set tempNum "[lindex $cookedLine 1]"
+        }
+        if {[lindex $cookedLine 0]=="set" && [lindex $cookedLine 1]=="testNo"} {
+            if {[regexp -nocase "procname" $line]} {
+                set line "set testNo $tempNum"
+            }
+            if {[regexp -nocase "info level" $line]} {
+                set line "set testNo $tempNum"
+            }
+            regsub -all {\\$} $line "" line
+            set hitNum 1
+            puts $inv_in $line
+        } elseif {!$hitNum} {
+            set myLine [string trim $line]
+            if {[regexp -nocase {^set} $myLine]} {
+                puts $inv_in "#$line"
+            } else {
+                continue
+            }
+        }
+        set cookedLine [cookString $line]
+        set cookedLine [split $cookedLine]
+        if {[lindex $cookedLine 0]=="set" && ([lindex $cookedLine 1]=="title" || [lindex $cookedLine 1]=="title1")} {
+            if {$DEBUGON} {puts $line}
+            set myLine [string trim $line]
+            if {[regexp -nocase {\\$} $myLine]} {
+                set inTitle 1
+            }
+            regsub -all {\$testNo } $line "" line
+            regsub -all {\$} $line "" line
+            if {$DEBUGON} {puts "POST $line"}
+            puts $inv_in $line
+            set hitTitle 1
+            if {$hitTitle} {
+                set gotEnd 0
+                set catchLoop 0
+                set catchString ""
+                while {!$gotEnd} {
+                    gets $fd_in line
+                    set cookedLine [cookString $line]
+                    set cookedLine [split $cookedLine]
+                    if {[llength $cookedLine] == 0} {
+                        if {$DEBUGON} {puts "Hit zero"}
+                        close $inv_in
+                        close $fd_in
+                        set gotEnd 1
+                        set inTitle 0
+                    }
+                    set myLine [string trim $line]
+                    if {[regexp -nocase {^#} $myLine]} {
+                        if {$DEBUGON} {puts "#?? $line"}
+                        close $inv_in
+                        close $fd_in
+                        set gotEnd 1
+                        set inTitle 0
+                    }
+                    if {[regexp -nocase {^set} $myLine] && !$inTitle} {
+                        if {$DEBUGON} {puts "set?? $line"}
+                        close $inv_in
+                        close $fd_in
+                        set gotEnd 1
+                        set inTitle 0
+                    }
+                    if {[regexp -nocase {^\}} $myLine]} {
+                        if {$DEBUGON} {puts "right curly?? $line"}
+                        close $inv_in
+                        close $fd_in
+                        set gotEnd 1
+                        set inTitle 0
+                    }
+                    if {[regexp -nocase {^else} $myLine]} {
+                        if {$DEBUGON} {puts "right curly?? $line"}
+                        close $inv_in
+                        close $fd_in
+                        set gotEnd 1
+                        set inTitle 0
+                    }
+                    if {$DEBUGON} {puts "pre $line"}
+                    if {!$gotEnd} {
+                        regsub -all {\$testNo } $line "" line
+                        regsub -all {\$} $line "" line
+                        regsub -all "       " $line " " line
+                        regsub -all "      " $line " " line
+                        regsub -all "     " $line " " line
+                        regsub -all "    " $line " " line
+                        regsub -all "   " $line " " line
+                        regsub -all "  " $line " " line
+                        puts $inv_in $line
+                    }
+                    if {$DEBUGON} {puts "post $line"}
+                    incr catchLoop
+                    append catchString "\\n$line";
+                    if {$catchLoop > 10} {
+                        puts $catchString
+                        close $inv_in
+                        close $fd_in
+                        exit;
+                    }
+                }
+                break
+            }
+        }
+    }
+}
+#########################################################################
+# proc _GetFeatureAreasFromDb
+#
+#
+#
+#
+#
+#
+#########################################################################
+proc _GetFeatureAreasFromDb {} {
+    global DBNAME2
+    global DBIPADDRESS2
+    global DBHANDLE2
+    global DEBUGON
+    global EXISTINGFEATURENAMESByArea
+    global DBUSERNAME2; # autoweb
+    global DBPASSWORD2; # autoweb
+
+    set featureTypesList ""
+
+    set dbconnectstatus [_conn_to_db2 -host $DBIPADDRESS2 \
+                                     -db $DBNAME2 \
+                                     -user $DBUSERNAME2 \
+                                     -password $DBPASSWORD2 \
+                                     -status  "" \
+                                     -handler $DBHANDLE2]
+    set DBHANDLE2 [lindex $dbconnectstatus 0]
+    set connectStatus [lindex $dbconnectstatus 1]
+    #puts "-----\nStatus $connectStatus handler $DBHANDLE2\n-----"
+
+    # -----------------------------------------------------------------
+    #  Get the real execution time for this module on this hardware.
+    # -----------------------------------------------------------------
+    set allFeatures [mysqlsel $DBHANDLE2 "SELECT feature_type \
+        FROM feature_table WHERE feature_id >= '0'" -list]
+    if {$allFeatures == ""} {
+        puts "NO FEATURES RETURNED"
+    	return 0
+    }
+    if {$DEBUGON} {puts "==== FOUND Features.  Populate this platform ===="; flush stdout; after 50;}
+    
+    foreach fList $allFeatures {
+        set fType [lindex $fList 0]
+        if {$fType != ""} {
+            if {[lsearch $featureTypesList $fType] < 0} {
+                lappend featureTypesList $fType
+                if {$DEBUGON} {puts "Adding type $fType"; flush stdout; after 50;}
+            }
+        } else {
+            if {$DEBUGON} {
+                puts "====  Feature Name or Feature Type is missing. \
+                     Type $fType Name $fName  ======"; flush stdout; after 50;
+            }
+        }
+    }
+    return $featureTypesList;
+}
+# --------------------------------------------------------------------
+# Connect to database with user set handles
+#
+# --------------------------------------------------------------------
+proc _conn_to_db2 { args } {
+    global mysqlstatus mysql_handler this_db 
+
+    parse_args _conn_to_db2 $args {
+        host ""
+        db "$this_db"
+        user ""
+        password ""
+        status "$mysqlstatus"
+        handler ""
+    }
+    #if {[mysqlstatus $handler -numeric] == 2} {
+    #    return [list "$handler" "connected"]
+    #}
+    set mysql_handler $handler
+    set this_db $db
+    if {[info exists mysql_handler] && $mysql_handler != ""} {
+        catch {mysqlclose $mysql_handler} result
+    }
+    
+    catch {mysqlconnect -host $host -user $user -password $password -db $db} mysql_handler
+    if {$mysqlstatus(code) !=0} {
+        puts stderr $mysqlstatus(message)
+        return [list "$mysql_handler" "$mysqlstatus(code)"]
+    }
+    return [list "$mysql_handler" "$mysqlstatus(code)"]
+}
+
+#########################################################################
+# proc _GetAllFeatureInfoByAreaFromDb
+#
+#
+#
+#
+#
+#
+#########################################################################
+proc _GetAllFeatureInfoByAreaFromDb {} {
+    global DBNAME2
+    global DBIPADDRESS2
+    global DBHANDLE2
+    global DEBUGON
+    global EXISTINGFEATURENAMESByAreaLists
+    global EXISTINGFEATUREDIRSByAreaLists
+    global EXISTINGFEATUREDIRSByName
+    global EXISTINGFEATUREOTPSModule
+    global SUBTYPESBYAREAFEATUREDIR
+    global ACTIVEBYAREAFEATUREDIR
+    global ENDRELEASEBYAREAFEATUREDIR
+    global STARTRELEASEBYAREAFEATUREDIR
+    global FEATURETYPEEXISTS
+    global AutoAreasByDBTypes
+    global DBUSERNAME2; # autoweb
+    global DBPASSWORD2; # autoweb
+
+    set dbconnectstatus [_conn_to_db2 -host $DBIPADDRESS2 \
+                                     -db $DBNAME2 \
+                                     -user $DBUSERNAME2 \
+                                     -password $DBPASSWORD2 \
+                                     -status  "" \
+                                     -handler $DBHANDLE2]
+    set DBHANDLE2 [lindex $dbconnectstatus 0]
+    set connectStatus [lindex $dbconnectstatus 1]
+    #puts "-----\nStatus $connectStatus handler $DBHANDLE2\n-----"
+
+    # -----------------------------------------------------------------
+    # Get the areaList so area lists can be created
+    # -----------------------------------------------------------------
+    set areaList [_GetFeatureAreasFromDb]
+    foreach myArea $areaList {
+        set EXISTINGFEATURENAMESByAreaLists($myArea) ""
+        set EXISTINGFEATUREDIRSByAreaLists($myArea) ""
+    }
+    # -----------------------------------------------------------------
+    #  Get the real execution time for this module on this hardware.
+    # -----------------------------------------------------------------
+    set allFeatures [mysqlsel $DBHANDLE2 "SELECT feature_id, feature_directory, \
+        feature_type, feature_sub_type, feature_name, otps_module, status, end_release_id, start_release_id \
+        FROM feature_table WHERE feature_id >= '0' ORDER BY feature_directory" -list]
+    if {$allFeatures == ""} {
+        puts "NO FEATURES RETURNED"
+    	return 0
+    }
+    if {$DEBUGON} {puts "==== FOUND Features.  Populate this platform ===="; flush stdout; after 50;}
+    foreach fList $allFeatures {
+        set fId   [lindex $fList 0]
+        set fDir [lindex $fList 1]
+        set fType [lindex $fList 2]
+        set fSType [lindex $fList 3]
+        set fName [lindex $fList 4]
+        set fOTPS [lindex $fList 5]
+        set fActive [lindex $fList 6]
+        set fEndRel [lindex $fList 7]
+        set fStartRel [lindex $fList 8]
+        if {$fType != "" && $fName != ""} {
+            #EXISTINGFEATURENAMESByAreaLists
+            #EXISTINGFEATUREDIRSByAreaLists
+            #EXISTINGFEATUREDIRSByName
+            lappend EXISTINGFEATURENAMESByAreaLists($fType) $fName
+            lappend EXISTINGFEATUREDIRSByAreaLists($fType) $fDir
+            set SUBTYPESBYAREAFEATUREDIR($fType,$fDir) $fSType
+            set ACTIVEBYAREAFEATUREDIR($fType,$fDir) $fActive
+            set ENDRELEASEBYAREAFEATUREDIR($fType,$fDir) $fEndRel
+            set STARTRELEASEBYAREAFEATUREDIR($fType,$fDir) $fStartRel
+            set EXISTINGFEATURENameByDir($fDir) $fName
+            set EXISTINGFEATUREOTPSModule($AutoAreasByDBTypes($fType),$fDir) $fOTPS
+            set FEATURETYPEEXISTS($AutoAreasByDBTypes($fType),$fDir) 1
+            if {$DEBUGON} {
+                puts "====\n  Add EXISTINGFEATURENAMESByAreaLists($fType) : $fName \n\
+                            Add EXISTINGFEATUREDIRSByAreaLists($fType) : $fDir \n\
+                            EXISTINGFEATURENameByDir($fDir) $fName\n\
+                            SUBTYPESBYAREAFEATUREDIR($fType,$fDir) $fSType ======"; flush stdout; after 50;
+            }
+        } else {
+            if {$DEBUGON} {
+                puts "====  Feature Name or Feature Type is missing. \
+                     Type $fType Name $fName  ======"; flush stdout; after 50;
+            }
+        }
+    }
+    return;
+}
+#########################################################################
+# proc _GetAllRegressionAreas
+#
+#
+#
+#
+#
+#
+#########################################################################
+proc _GetAllRegressionAreas {} {
+    global SKIPAREALIST
+    global SKIPFEATUREDIRSLIST
+    global DEBUGONREGRESSIONAREAS
+
+    if {$DEBUGONREGRESSIONAREAS} {puts "\n*****\n*****\nCurrently in ROOT directory [pwd]\n*****\n*****"}
+    
+    set AreasMinusSkipList ""
+    set AllDirs [glob -type d *]
+    foreach dir $AllDirs {
+        if {[lsearch $SKIPAREALIST $dir] == -1} {
+            if {$dir == "CVS" || $dir == "cvs"} {
+                continue;
+            }
+            lappend AreasMinusSkipList $dir
+            if {$dir == "CLItest"} {
+                lappend AreasMinusSkipList cli-ew
+            }
+            if {$DEBUGONREGRESSIONAREAS} {puts "===FOUND Regression Area: $dir ======"; flush stdout; after 50;}
+            # The SKIPFEATUREDIRLIST array is initialized in gather_testcase_info
+            #    There may not be a skip features for all areas, so we need to init
+            #    those array indexes if they have not been defined in gather_testcase_info
+            set currentArea [string tolower $dir]
+            if {![info exists SKIPFEATUREDIRSLIST($currentArea)]} {
+                set SKIPFEATUREDIRSLIST($currentArea) "";
+            }
+        }
+    }
+    return $AreasMinusSkipList
+}
+#########################################################################
+# proc _GetAllCurrentDirFeatures
+#
+#
+#
+#
+#
+#
+#########################################################################
+proc _GetAllCurrentDirFeatures {} {
+    
+
+    global SKIPAREALIST
+    global SKIPFEATUREDIRSLIST
+    global DEBUGONDIRFEATURES
+
+    if {$DEBUGONDIRFEATURES} {puts "\n*****\n*****\nCurrently in directory [pwd]\n*****\n*****"}
+    
+    set AreasMinusSkipList ""
+    set AllDirs [glob -type d *]
+    set AllDirs [lsort $AllDirs]
+    foreach dir $AllDirs {
+        if {[lsearch $SKIPAREALIST $dir] == -1} {
+            if {$dir == "CVS" || $dir == "cvs"} {
+                continue;
+            }
+            lappend AreasMinusSkipList $dir
+            if {$DEBUGONDIRFEATURES} {puts "===FOUND Regression Directory: $dir ======"; flush stdout; after 50;}
+            # The SKIPFEATUREDIRLIST array is initialized in gather_testcase_info
+            #    There may not be a skip features for all areas, so we need to init
+            #    those array indexes if they have not been defined in gather_testcase_info
+            set currentArea [string tolower $dir]
+            if {![info exists SKIPFEATUREDIRSLIST($currentArea)]} {
+                set SKIPFEATUREDIRSLIST($currentArea) "";
+            }
+        }
+    }
+    return $AreasMinusSkipList
+}
+#########################################################################
+# proc _GetAllFeatureTCLFiles
+#
+#
+#
+#
+#
+#
+#########################################################################
+proc _GetAllFeatureTCLFiles {} {
+    global SKIPFEATUREDIRSLIST
+    global DEBUGONTCLFILES
+
+    set Files ""
+    set currentArea [string tolower [file tail [pwd]]]
+    if {$DEBUGONTCLFILES} {puts "\n*****\n*****\nCurrently in Feature directory [pwd]\n*****\n*****"}
+    set AllFiles [glob -nocomplain -type f *.tcl]
+    foreach aFile $AllFiles {
+        if {[regexp -nocase {init} $aFile]} {
+            continue;
+        }
+        if {[regexp -nocase {end} $aFile]} {
+            continue;
+        }
+        set firstIndex [lindex [split $aFile .] 0]
+        if {![regexp -nocase {[0-9]+} $firstIndex]} {
+            if {$DEBUGONTCLFILES} {puts "$aFile $firstIndex is not an integer"}
+            continue;
+        }
+        lappend Files $aFile
+        if {$DEBUGONTCLFILES} {puts "FOUND $currentArea TCL File: $aFile"; flush stdout; after 50;}
+    }
+    return $Files
+}
+#########################################################################
+# proc _GetUniquePlatfromsFromDb
+#
+#
+#
+#
+#
+#
+#########################################################################
+proc _GetUniquePlatfromsFromDb {} {
+    global DBNAME2
+    global DBIPADDRESS2
+    global DBHANDLE2
+    global DEBUGON
+
+    set uniquePlatformList ""
+
+    # -----------------------------------------------------------------
+    #  Get the real execution time for this module on this hardware.
+    # -----------------------------------------------------------------
+    set allPlatformNames [mysqlsel $DBHANDLE1 "SELECT platform_name  \
+        FROM platform_table WHERE platform_id >= '1' " -flatlist]
+    set $allPlatformNames ""
+    if {$allPlatformNames == ""} {
+    	puts "No platform names found"
+    	return 0
+    } else {
+        #if {[catch {mysqlclose $DBHANDLE1} reason]} {
+        #    puts "couldn't close mysql connection - reason:\n$reason\n"
+        #}
+        # -------------------------------------------------------------
+        # Pair down the list to only unique platforms
+        # -------------------------------------------------------------
+        foreach $plat allPlatformNames {
+            if {[lsearch $uniquePlatformList $plat] = -1} {
+                if {$DEBUGON} {puts "===FOUND Unique Platform: $plat ======"; flush stdout; after 50;}
+                lappend $uniquePlatformList $plat
+            }
+        }
+        return $uniquePlatformList;
+    }
+}
+#########################################################################
+# proc _InsertBranchToInvDb
+#
+#
+#
+#
+#
+#
+#########################################################################
+proc _InsertBranchToInvDb {} {
+    global DEBUGINSERTINV
+    global POST_TO_DB
+    global SKIPFEATUREDIRSLIST
+    global EXISTINGFEATUREOTPSModule
+    global DEBUGINSERTINVDBPOST
+    global DEBUGONREGRESSIONAREAS
+    global DEBUGONDIRFEATURES
+    global DEBUGONTCLFILES
+    global DEBUGGETINVDB
+    global EXISTINGINVBYAREADIRTC
+    global DBHANDLE2
+
+    # ----------------------------------------------------------------------------
+    # Get all existing inventory in an array set to 1 EXISTINGINVBYAREADIRTC
+    # ----------------------------------------------------------------------------
+    _GetInvInfoFromAutoWeb
+    set counter 1
+    set AREASLIST [_GetAllRegressionAreas]
+    foreach area $AREASLIST {
+        cd $area
+        if {$area == "CLItest"} {
+            continue
+        }
+        # ------------------------------------------------------------------------
+        # ------------------------------------------------------------------------
+        #puts "\n==========================================================================\n\
+        #       Gather feature info from area $area in\n\
+        #       Dir: [pwd]\n\
+        #      =========================================================================="
+        # ------------------------------------------------------------------------
+        #  Get all of feature names in the area
+        # ------------------------------------------------------------------------
+        set FEATURESLIST [_GetAllCurrentDirFeatures]
+        foreach feature $FEATURESLIST {
+            if {[lsearch $SKIPFEATUREDIRSLIST([string tolower $area]) $feature] >= 0} {
+                continue;
+            }
+            cd $feature
+            set AllTclFiles [_GetAllFeatureTCLFiles]
+            set i 0
+            foreach tclFile $AllTclFiles {
+                
+                if {[info exists EXISTINGINVBYAREADIRTC($area,$feature,$tclFile)] && $EXISTINGINVBYAREADIRTC($area,$feature,$tclFile)} {
+                    if {$DEBUGINSERTINV} {puts "$counter $area $feature $tclFile inventory EXISTS ALREADY"; incr counter; flush stdout; after 150;}
+                    continue;
+                }
+                # ---------------------------------------------------------------
+                # Gather the  test case info for inserting to DB
+                # ---------------------------------------------------------------
+                set insert_clause ""
+                set insert_clause [append insert_clause "insert into inventory "]
+                set insert_clause [append insert_clause "(a_featurearea, "]
+                set insert_clause [append insert_clause "a_featuredir, "]
+                set insert_clause [append insert_clause "a_testcase) "]
+                
+                set insert_clause [append insert_clause "values (\"$area\", "]
+                set insert_clause [append insert_clause "\"$feature\", "]
+                set insert_clause [append insert_clause "\"$tclFile\") "]
+                if {$DEBUGINSERTINVDBPOST} {puts "$insert_clause"; puts "====="; flush stdout; after 100;}
+                if {$POST_TO_DB} {
+                    mysqlexec $DBHANDLE2 $insert_clause
+                }
+                incr i
+                if {$i == 30} {
+                    after 100;
+                    flush stdout;
+                    after 50;
+                    set i 0
+                }
+            }
+            cd ..
+        }
+        if {$area == "cli-ew"} {
+            cd ..
+        }
+        cd ..
+    }
+}
+#########################################################################
+# proc _GetInvInfoFromAutoWeb
+#
+#
+#
+#
+#
+#
+#########################################################################
+proc _GetInvInfoFromAutoWeb {} {
+    global DBNAME2
+    global DBIPADDRESS2
+    global DBHANDLE2
+    global DBUSERNAME2; # autoweb
+    global DBPASSWORD2; # autoweb
+    global DEBUGGETINVDB
+    global EXISTINGINVBYAREADIRTC
+
+
+    set dbconnectstatus [_conn_to_db2 -host $DBIPADDRESS2 \
+                                     -db $DBNAME2 \
+                                     -user $DBUSERNAME2 \
+                                     -password $DBPASSWORD2 \
+                                     -status  "" \
+                                     -handler $DBHANDLE2]
+    set DBHANDLE2 [lindex $dbconnectstatus 0]
+    set connectStatus [lindex $dbconnectstatus 1]
+    #puts "-----\nStatus $connectStatus handler $DBHANDLE2\n-----"
+
+    set allInventory [mysqlsel $DBHANDLE2 "SELECT a_featurearea, a_featuredir, \
+        a_testcase \
+        FROM inventory" -list]
+    if {$allInventory == ""} {
+        puts "NO FEATURES RETURNED"
+    	return 0
+    }
+    foreach fList $allInventory {
+        set fArea   [lindex $fList 0]
+        set fDir [lindex $fList 1]
+        set fTC [lindex $fList 2]
+        if {$fArea != "" && $fDir != "" && $fTC != ""} {
+            set EXISTINGINVBYAREADIRTC(${fArea},${fDir},${fTC}) 1
+            if {$DEBUGGETINVDB} {
+                puts "====  EXISTINGINVBYAREADIRTC(${fArea},${fDir},${fTC}) 1 ======"; 
+                flush stdout; after 50;
+            }
+        } else {
+            if {$DEBUGGETINVDB} {
+                puts "====  E M P T Y   fArea: $fArea fDir: $fDir fTC: $fTC ======"; 
+                flush stdout; after 50;
+            }
+        }
+    }
+    return;
+}
+#########################################################################
+# proc _InsertBranchToInvDb
+#
+#
+#
+#
+#
+#
+#########################################################################
+proc _InsertBranchFeaturesIntoAutoweb {} {
+    global DEBUGINSERTFEATUREAUTOWEB
+    global DEBUGINSERTFEATURESPOST
+    global EXISTINGINVBYAREADIRTC
+    global POST_TO_DB
+    global SKIPFEATUREDIRSLIST
+    global FEATURETYPEEXISTS
+    global DBTypesByAutoArea
+    global DBHANDLE2
+
+    set counter 1
+    # Populate existing features in autoweb
+    _GetAllFeatureInfoByAreaFromDb
+
+    set AREASLIST [_GetAllRegressionAreas]
+    foreach area $AREASLIST {
+        cd $area
+        if {$area == "CLItest"} {
+            continue
+        }
+        # ------------------------------------------------------------------------
+        # ------------------------------------------------------------------------
+        #puts "\n==========================================================================\n\
+        #       Gather feature info from area $area in\n\
+        #       Dir: [pwd]\n\
+        #      =========================================================================="
+        # ------------------------------------------------------------------------
+        #  Get all of feature names in the area
+        # ------------------------------------------------------------------------
+        set FEATURESLIST [_GetAllCurrentDirFeatures]
+        foreach feature $FEATURESLIST {
+            set i 0
+            if {[lsearch $SKIPFEATUREDIRSLIST([string tolower $area]) $feature] >= 0} {
+                continue;
+            }
+            cd $feature
+
+            set insert_clause ""
+            #FEATURETYPEEXISTS($AutoAreasByDBTypes($fType),$fDir)
+            if {[info exists FEATURETYPEEXISTS($area,$feature)] && $FEATURETYPEEXISTS($area,$feature)} {
+                if {$DEBUGINSERTFEATUREAUTOWEB} {puts "$counter $area $feature autoweb EXISTS ALREADY"; incr counter;}
+                cd ..
+                continue;
+            }
+            set insert_clause [append insert_clause "insert into feature_table "]
+            set insert_clause [append insert_clause "(system_id, "]
+            set insert_clause [append insert_clause "feature_type, "]
+            set insert_clause [append insert_clause "feature_sub_type, "]
+            set insert_clause [append insert_clause "feature_name, "]
+            set insert_clause [append insert_clause "feature_directory, "]
+            set insert_clause [append insert_clause "feature_rse, "]
+            set insert_clause [append insert_clause "feature_rsm, "]
+            set insert_clause [append insert_clause "feature_devm, "]
+            set insert_clause [append insert_clause "feature_aa, "]
+            set insert_clause [append insert_clause "deleted, "]
+            set insert_clause [append insert_clause "status) "]
+            
+            set insert_clause [append insert_clause "values "]
+            set insert_clause [append insert_clause "(\"2\", "]
+            set insert_clause [append insert_clause "\"$DBTypesByAutoArea($area)\", "]
+            set insert_clause [append insert_clause "\"undefined\", "]
+            set insert_clause [append insert_clause "\"$feature\", "]
+            set insert_clause [append insert_clause "\"$feature\", "]
+            set insert_clause [append insert_clause "\"TBD\", "]
+            set insert_clause [append insert_clause "\"TBD\", "]
+            set insert_clause [append insert_clause "\"TBD\", "]
+            set insert_clause [append insert_clause "\"TBD\", "]
+            set insert_clause [append insert_clause "\"0\", "]
+            set insert_clause [append insert_clause "\"NotActive\")"]
+            if {$DEBUGINSERTFEATURESPOST} {puts "=====";puts "$insert_clause"; flush stdout; after 50;}
+            if {$POST_TO_DB} {
+                mysqlexec $DBHANDLE2 $insert_clause
+            }
+            incr i
+            if {$i == 30} {
+                after 50;
+                flush stdout;
+                after 50;
+                set i 0
+            }
+            cd ..
+        }
+        if {$area == "cli-ew"} {
+            cd ..
+        }
+        cd ..
+    }
+}
+#########################################################################
+# proc _GetTreeDirs
+#
+#
+#
+#
+#
+#
+#########################################################################
+proc _GetTreeDirs {} {
+    global SKIPFEATUREDIRSLIST
+    global FEATURETYPEEXISTS
+    global TREEDIRBYAREA
+    global DBTypesByAutoArea
+
+    set counter 1
+
+    set AREASLIST [_GetAllRegressionAreas]
+    foreach area $AREASLIST {
+        if {![info exists DBTypesByAutoArea($area)]} {
+            continue;
+        }
+        cd $area
+        if {$area == "CLItest"} {
+            continue
+        }
+        # ------------------------------------------------------------------------
+        # ------------------------------------------------------------------------
+        #puts "\n==========================================================================\n\
+        #       Gather feature info from area $area in\n\
+        #       Dir: [pwd]\n\
+        #      =========================================================================="
+        # ------------------------------------------------------------------------
+        #  Get all of feature names in the area
+        # ------------------------------------------------------------------------
+        set FEATURESLIST [_GetAllCurrentDirFeatures]
+        foreach feature $FEATURESLIST {
+            set i 0
+            if {[lsearch $SKIPFEATUREDIRSLIST([string tolower $area]) $feature] >= 0} {
+                continue;
+            }
+
+            #FEATURETYPEEXISTS($AutoAreasByDBTypes($fType),$fDir)
+            set myArea $DBTypesByAutoArea($area)
+            if {![info exists TREEDIRBYAREA($myArea)]} {
+                #puts "No exist create TREEDIRBYAREA($myArea)"
+                set TREEDIRBYAREA($myArea) $feature 
+            } else {
+                #puts "Exists lappend TREEDIRBYAREA($myArea)"
+                lappend TREEDIRBYAREA($myArea) $feature
+            }
+        }
+        cd ..
+    }
+}
+#########################################################################
+# proc _GetSVNTreeDirs
+#
+#
+#
+#
+#
+#
+#########################################################################
+proc _GetSVNTreeDirs {} {
+    global SKIPFEATUREDIRSLIST
+    global FEATURETYPEEXISTS
+    global TREEDIRBYAREA
+    global DBTypesByAutoArea
+
+    set counter 1
+
+    set AREASLIST [_GetAllRegressionAreas]
+    foreach area $AREASLIST {
+        if {![info exists DBTypesByAutoArea($area)]} {
+            continue;
+        }
+        cd $area
+        if {$area == "CLItest"} {
+            continue
+        }
+        # ------------------------------------------------------------------------
+        # ------------------------------------------------------------------------
+        #puts "\n==========================================================================\n\
+        #       Gather feature info from area $area in\n\
+        #       Dir: [pwd]\n\
+        #      =========================================================================="
+        # ------------------------------------------------------------------------
+        #  Get all of feature names in the area
+        # ------------------------------------------------------------------------
+        set FEATURESLIST [_GetAllCurrentDirFeatures]
+        foreach feature $FEATURESLIST {
+            set i 0
+            if {[lsearch $SKIPFEATUREDIRSLIST([string tolower $area]) $feature] >= 0} {
+                continue;
+            }
+
+            #FEATURETYPEEXISTS($AutoAreasByDBTypes($fType),$fDir)
+            set myArea $DBTypesByAutoArea($area)
+            if {![info exists TREEDIRBYAREA($myArea)]} {
+                #puts "No exist create TREEDIRBYAREA($myArea)"
+                set TREEDIRSVNBYAREA($myArea) $feature
+            } else {
+                #puts "Exists lappend TREEDIRBYAREA($myArea)"
+                lappend TREEDIRBYAREA($myArea) $feature
+            }
+        }
+        cd ..
+    }
+}
+#####################################################################################
+#
+# Create a directory list file for regserver
+#
+#
+#####################################################################################
+proc _CreateBranchModList {} {
+    global SKIPFEATUREDIRSLIST
+    global DEBUGONREGRESSIONAREAS
+    global DEBUGONDIRFEATURES
+    global DEBUGONRUNREG
+    global DBTypesByAutoArea
+    global EXISTINGFEATURENAMESByAreaLists
+    global EXISTINGFEATUREDIRSByAreaLists
+    global SUBTYPESBYAREAFEATUREDIR
+    global ACTIVEBYAREAFEATUREDIR
+    global ENDRELEASEBYAREAFEATUREDIR
+    global STARTRELEASEBYAREAFEATUREDIR
+    global DISCOVEREDAREA
+    global DBHANDLE1
+    global theStdMods
+    global theRtrMods
+    global INRELEASE
+    global AREASUSED
+    global ISIO
+
+    set counter 1
+    set AREASLIST [_GetAllRegressionAreas];  # Get all areas from the file system
+    foreach area $AREASLIST {
+        cd $area
+        if {$area == "CLItest"} {
+            continue
+        }
+        set dbArea $DBTypesByAutoArea($area);
+        set theStdMods($dbArea) ""
+        set theRtrMods($dbArea) ""
+        lappend AREASUSED $dbArea
+        # ------------------------------------------------------------------------
+        # ------------------------------------------------------------------------
+        #puts "\n==========================================================================\n\
+        #       Gather feature info from area $area in\n\
+        #       Dir: [pwd]\n\
+        #      =========================================================================="
+        # ------------------------------------------------------------------------
+        #  Get all of feature names in the area
+        # ------------------------------------------------------------------------
+        # stdMods(functional,All)
+        # rtrMods(functional,All)
+        # stdMods(snmp,All)
+        set sub2 ""
+        set FEATURESLIST [_GetAllCurrentDirFeatures]; # Get all directories from the file system
+        foreach feature $FEATURESLIST {
+            if {[lsearch $SKIPFEATUREDIRSLIST([string tolower $area]) $feature] >= 0} {
+                continue;
+            }
+            if {[info exists ACTIVEBYAREAFEATUREDIR($dbArea,$feature)] && $ACTIVEBYAREAFEATUREDIR($dbArea,$feature) != "Active"} {
+                if {$DEBUGONRUNREG} {puts "===";puts "BAIL ($dbArea,$feature) NOTACTIVE"; flush stdout; after 50;}
+                #continue;
+            }
+            if {[info exists ENDRELEASEBYAREAFEATUREDIR($dbArea,$feature)] && \
+                 ($ENDRELEASEBYAREAFEATUREDIR($dbArea,$feature) == "NULL" || \
+                 $ENDRELEASEBYAREAFEATUREDIR($dbArea,$feature) == "")} {
+                 set ENDRELEASEBYAREAFEATUREDIR($dbArea,$feature) "30.0.0"
+            }
+            if {[info exists STARTRELEASEBYAREAFEATUREDIR($dbArea,$feature)] && \
+                 ($STARTRELEASEBYAREAFEATUREDIR($dbArea,$feature) == "NULL" || \
+                 $STARTRELEASEBYAREAFEATUREDIR($dbArea,$feature) == "")} {
+                 set STARTRELEASEBYAREAFEATUREDIR($dbArea,$feature) "0.0.0"
+            }
+            if {$INRELEASE != "ALL" && [info exists ENDRELEASEBYAREAFEATUREDIR($dbArea,$feature)] && \
+                 $ENDRELEASEBYAREAFEATUREDIR($dbArea,$feature) < "$INRELEASE" } {
+                if {$DEBUGONRUNREG} {puts "===";puts "BAIL ($dbArea,$feature) OLDER RELEASE \
+                                    $ENDRELEASEBYAREAFEATUREDIR($dbArea,$feature) < $INRELEASE"; flush stdout; after 50;}
+                continue;
+            }
+            if {$INRELEASE != "ALL" && [info exists STARTRELEASEBYAREAFEATUREDIR($dbArea,$feature)] && \
+                 $STARTRELEASEBYAREAFEATUREDIR($dbArea,$feature) >= "$INRELEASE" } {
+                if {$DEBUGONRUNREG} {puts "===";puts "BAIL ($dbArea,$feature) NEWER RELEASE \
+                                    $STARTRELEASEBYAREAFEATUREDIR($dbArea,$feature) >= $INRELEASE"; flush stdout; after 50;}
+                continue;
+            }
+            # Check to see if the feature is in the automation feature table
+            if {[info exists SUBTYPESBYAREAFEATUREDIR($dbArea,$feature)]} {
+                if {$SUBTYPESBYAREAFEATUREDIR($dbArea,$feature) == "standard"} {
+                    if {$DEBUGONRUNREG} {puts "===";puts "Adding stdMod theStdMods($dbArea) $feature"; flush stdout; after 50;}
+                    lappend theStdMods($dbArea) $feature
+                } elseif {$SUBTYPESBYAREAFEATUREDIR($dbArea,$feature) == "routing"} {
+                    if {$DEBUGONRUNREG} {puts "===";puts "Adding stdMod theRtrMods($dbArea) $feature"; flush stdout; after 50;}
+                    lappend theRtrMods($dbArea) $feature
+                }
+            } else {
+                if {$ISIO == "no"} {
+                    continue
+                }
+                while {1} {
+                    set keepChoice Y
+                    puts -nonewline "This module $area / $feature is not in the automation database.  Add it locally?(Y/n)\[$keepChoice\]: ";
+                    flush stdout;
+                    gets stdin keepChoice
+                    if {$keepChoice==""} {
+                        set keepChoice Y
+                    }
+                    if {$keepChoice != "Y" && $keepChoice != "N" && $keepChoice != "y" && $keepChoice != "n"} {
+                        puts "Error: Selection must be Y or N"
+                    } else {
+                        break
+                    }
+                }
+                if {$keepChoice == "N" || $keepChoice == "n"} {continue}
+                while {1} {
+                    set sub "1"
+                    set sub2 ""
+                    puts -nonewline "Is it a standard(1) or routing(2)?(1 default)\[$sub\]: ";
+                    flush stdout;
+                    gets stdin sub
+                    if {$sub == ""} {
+                        set sub 1
+                    }
+                    if {$sub == 1} {set sub2 2}
+                    if {$sub == 2} {set sub2 5}
+                    if {$sub2 != "2" && $sub2 != "5" } {
+                        puts "Error: Selection must be 1 or 2"
+                        continue
+                    } else {
+                        break
+                    }
+                }
+                if {$keepChoice == "Y"} {
+       if {$DEBUGONRUNREG} {puts "===";puts "SUB $sub2"; flush stdout; after 50;}
+                    if {$sub2 == 2} {set SUBTYPESBYAREAFEATUREDIR($dbArea,$feature) "standard"}
+                    if {$sub2 == 5} {set SUBTYPESBYAREAFEATUREDIR($dbArea,$feature) "routing"}
+                    if {$SUBTYPESBYAREAFEATUREDIR($dbArea,$feature) == "standard"} {
+                        if {$DEBUGONRUNREG} {puts "===";puts "Adding stdMod theStdMods($dbArea) $feature $sub2"; flush stdout; after 50;}
+                        lappend theStdMods($area) $feature
+                    } elseif {$SUBTYPESBYAREAFEATUREDIR($dbArea,$feature) == "routing"} {
+                        if {$DEBUGONRUNREG} {puts "===";puts "Adding stdMod theStdMods($dbArea) $feature $sub2"; flush stdout; after 50;}
+                        lappend theRtrMods($area) $feature
+                    }
+                }
+            }
+            #EXISTINGFEATURENAMESByAreaLists($fType) $fName
+            #EXISTINGFEATUREDIRSByAreaLists($fType) $fDir
+            #SUBTYPESBYAREAFEATUREDIR($fType,$fDir)           
+        }
+        if {$area == "cli-ew"} {
+            cd ..
+        }
+        cd ..
+    }
+    _CreateTPInvFile
+}
+###################################################################################
+#
+# Create the test plan inventory
+#
+###################################################################################
+proc _CreateTPInvFile {  } {
+    global DEBUGON
+    global AREASUSED
+    global INRELEASE
+    global INSVNTAG
+    global theStdMods
+    global theRtrMods
+    global FILEDIR
+
+    set cfgFile "${FILEDIR}/${INSVNTAG}.cfg"
+    # open inv file
+    set inv_in [open "$cfgFile" "w"]
+    foreach area $AREASUSED {
+        set line "set stdMods($area,All) \{ \\";
+        puts $inv_in $line
+        foreach tp $theStdMods($area) {
+            set line "          $tp \\"
+            puts $inv_in $line
+        }
+        set line "}\n\n";
+        puts $inv_in $line
+    }
+    foreach area $AREASUSED {
+        set line "set rtrMods($area,All) \{ \\";
+        puts $inv_in $line
+        foreach tp $theRtrMods($area) {
+            set line "          $tp \\"
+            puts $inv_in $line
+        }
+        set line "}\n\n";
+        puts $inv_in $line
+    }
+    close $inv_in
+}
+########################################################################
+# proc designed to compare names in all vital locations for match
+#
+#
+########################################################################
+proc verify_names {args} {
+    parse_args verify_names $args {
+        category "FunctionalTest"
+        itarPath "/iTest_15.3.1"
+        modPath "Enterprise"
+    }
+    #puts "pwd [pwd]"
+    set all_modules [get_itest_modules -itarPath "$itarPath" -modPath "$modPath"]
+
+    #puts "$all_modules"
+
+    return $all_modules
+
+}
+########################################################################
+#  Proc to verify a list of modules against
+#  iTar, iTest.cfg, database, and auto tree
+#
+########################################################################
+proc _VerifyModEntries {args} {
+    global DEBUGON 0
+    global DEBUGONREGRESSIONAREAS 0
+    global DEBUGONDIRFEATURES 0
+    global DEBUGONRUNREG 0
+
+    global DBNAME1
+    global DBHANDLE1
+    global SKIPAREALIST
+    global SKIPFEATUREDIRSLIST
+    global EXISTINGFEATURENAMESByAreaLists
+    global EXISTINGFEATUREDIRSByName
+    global EXISTINGFEATUREDIRSByAreaLists
+    global EXISTINGFEATUREOTPSModule
+    global EXISTINGINVBYAREADIRTC
+    global SUBTYPESBYAREAFEATUREDIR
+    global ACTIVEBYAREAFEATUREDIR
+    global ENDRELEASEBYAREAFEATUREDIR
+    global DBTypesByAutoDirs
+    global INRELEASE
+    global INSVNTAG
+    global FILEDIR
+    global ISIO
+    global TREEDIRBYAREA
+    global DBNAME2
+    global DBPASSWORD2
+    global DBUSERNAME2
+    global DBIPADDRESS2
+    global DBHANDLE2
+    global AutoAreasByDBTypes
+    global DBTypesByAutoArea
+    global CATEGORY ITARPATHDEF MODPATHDEF
+    set DEBUGON 0
+    set DEBUGONREGRESSIONAREAS 0
+    set DEBUGONDIRFEATURES 0
+    set DEBUGONRUNREG 0
+    set FILEDIR [pwd]
+    set DBNAME2 devweb_db ;# Automation code repository target for these scripts
+    set DBUSERNAME2 regression_user ;# 
+    set DBPASSWORD2 extreme ;# 
+    set DBIPADDRESS2 10.69.6.200 ;# Automation code repository target for these scripts
+    set DBHANDLE2 ""
+    set AREAMAPARRAY "" 
+    set TREEDIRBYAREA(NULL) ""
+    set SKIPAREALIST {Tmp tmp Autoweb Benchmarktest Doc EPICenter EPICenter-test Lib iTest main Tools \
+         users Util PerformanceTest XML_API cli-ew CLItest Stresstest Scalabilitytest}
+    set SKIPFEATUREDIRSLIST(functionaltest) {ACL_24e3 ARM cleanup CLI DF EXOS_MPLS IPv6_LPM ipx mpls-ldp \
+         MPLS-TLS NAT newmpls PXM QOS-ISQ QOS-PRI utils WAN-MLP WAN-PHY WAN-PPP}
+    set SKIPFEATUREDIRSLIST(performancetest) {NAT}
+    set SKIPFEATUREDIRSLIST(xml-api) {Lib}
+    set SKIPFEATUREDIRSLIST(cli-ew) {"dvmrp" "flow" "ipx" "nat" "slb" "wan-common" "wan-e1" "wan-t1" "wan-t3"}
+    # -------- MAP DB Feature Types to auto tree directories ----------
+    set AutoAreasByDBTypes(benchmark) Benchmarktest
+    set AutoAreasByDBTypes(cli) cli-ew
+    set AutoAreasByDBTypes(diagnostics) DiagnosticsTest
+    set AutoAreasByDBTypes(epicenter) EPICenter-test
+    set AutoAreasByDBTypes(functional) Functionaltest
+    set AutoAreasByDBTypes(ixscriptmate) ixScriptMate
+    set AutoAreasByDBTypes(performance) PerformanceTest
+    set AutoAreasByDBTypes(scalability) Scalabilitytest
+    set AutoAreasByDBTypes(snmp) SnmpFunctionaltest
+    set AutoAreasByDBTypes(stress) Stresstest
+    set AutoAreasByDBTypes(systems) SystemTest
+    set AutoAreasByDBTypes(xml) XML_API
+    set AutoAreasByDBTypes(fit) FeatureInteraction
+
+    set DBTypesByAutoArea(Benchmarktest) benchmark
+    set DBTypesByAutoArea(CLItest) cli
+    set DBTypesByAutoArea(cli-ew) cli
+    set DBTypesByAutoArea(uploadanddownload) cli
+    set DBTypesByAutoArea(DiagnosticsTest) diagnostics
+    set DBTypesByAutoArea(EPICenter) epicenter
+    set DBTypesByAutoArea(EPICenter-test) epicenter 
+    set DBTypesByAutoArea(Functionaltest) functional
+    set DBTypesByAutoArea(ixScriptMate) ixscriptmate
+    set DBTypesByAutoArea(PerformanceTest) performance
+    set DBTypesByAutoArea(Scalabilitytest) scalability
+    set DBTypesByAutoArea(SnmpFunctionaltest) snmp
+    set DBTypesByAutoArea(Stresstest) stress
+    set DBTypesByAutoArea(SystemTest) systems
+    set DBTypesByAutoArea(XML_API) xml
+    set DBTypesByAutoArea(FeatureInteraction) fit
+    # -----------------------------------------------------------------
+    set counter 1
+    #puts "[pwd]"
+    source /auto/automation/Lib/parse_args.tcl
+    source /auto/automation/Lib/mainLib.tcl
+    source /auto/automation/Lib/mysqlLib.tcl
+    source /auto/automation/Lib/mgmt_reporting.tcl
+    source /auto/automation/Lib/itestrt.tcl
+    global mysqlIP
+    global my_db
+    global autoPath
+    ##################################################################################
+    #  Parse Args
+    ##################################################################################
+    parse_args _VerifyModEntries $args {
+        svntag      "NULL"
+        modList     "NULL"
+        regType     "functional"
+        io          "no"
+        svnCheck    "0"
+    }
+
+    if {$svntag == "NULL" || $modList == "NULL"} {
+        return;
+    }
+    ##################################################################################
+    #  Source the config files
+    ##################################################################################
+    set INSVNTAG $svntag
+    set ISIO $io
+    ############################################################
+    # ----------------------------------------------------------
+    #  Connect to the databases
+    # ----------------------------------------------------------
+    set dbconnectstatus [_conn_to_db2 -host $DBIPADDRESS2 \
+                                 -db $DBNAME2 \
+                                 -user $DBUSERNAME2 \
+                                 -password $DBPASSWORD2 \
+                                 -status  "" \
+                                 -handler $DBHANDLE2]
+    set DBHANDLE2 [lindex $dbconnectstatus 0]
+    set connectStatus [lindex $dbconnectstatus 1]
+    #puts "\n\n=== Connected to $DBIPADDRESS2 $DBNAME2 Handle $DBHANDLE2 Status $connectStatus ==="
+    ############################################################
+    cd /${svntag}/automation/
+    # ==========================================================
+    # Get All Feature Info from autoweb_db
+    # ==========================================================
+    global istdMods irtrMods
+    global stdMods rtrMods
+
+    _GetAllFeatureInfoByAreaFromDb;
+    #puts "DB list: $EXISTINGFEATUREDIRSByAreaLists($regType)"
+    set iTarMods [verify_names -category "FunctionalTest" -itarPath "$ITARPATHDEF" -modPath "$MODPATHDEF"]
+    #puts "\niTarModules: $iTarMods\n\n"
+
+    # iTest.cfg modules
+    set iTestCfgList [concat $istdMods($regType,All) $irtrMods($regType,All)];
+    #puts "iTest List: \n$iTestCfgList\n"
+    # regular runReg.cfg modules
+    set runCfgList [concat $stdMods($regType,All) $rtrMods($regType,All)];
+    #puts "runReg List:\n$runCfgList"
+    # Dir Tree Features
+    _GetTreeDirs
+    foreach myMod $modList {
+       #puts "lsearch $myMod in itestcfglsit [lsearch $iTestCfgList $myMod]"
+       if {[lsearch $iTestCfgList $myMod] >= 0} {
+           if {[lsearch $TREEDIRBYAREA($regType) $myMod] == -1} {
+               puts "Module $myMod in iTestCfg but not exit Automation Tree"
+           }
+           if {[lsearch $iTarMods $myMod] == -1} {
+               puts "Module $myMod in iTestCfg but does not exist in iTar"
+           }
+           if {[lsearch $EXISTINGFEATUREDIRSByAreaLists($regType) $myMod] == -1} {
+               puts "Module $myMod in iTestCfg but does exist not database"
+           }           
+       }
+       if {[lsearch $runCfgList $myMod] >= 0} {
+           if {[lsearch $TREEDIRBYAREA($regType) $myMod] == -1} {
+               puts "Module $myMod in runReg.cfg but not exit Automation Tree: pwd [pwd]"
+           }
+           if {[lsearch $EXISTINGFEATUREDIRSByAreaLists($regType) $myMod] == -1} {
+               puts "Module $myMod in runReg.cfg but does exist not database: pwd [pwd]"
+           }
+           if {$svnCheck} {
+               if [catch {exec /usr/bin/svn info [pwd]/$AutoAreasByDBTypes($regType)/$myMod}  catch_msg] {
+                   puts "Please Verfiy that $regType $myMod has been added"
+               } else {
+                   #puts "I got $catch_msg"
+               }
+           }
+       }
+
+
+  #     if {[lsearch $iTestCfgList $myMod] >= 0 && } {
+  #         puts "Error: !!! Module $myMod is in iTest.cfg, no match in iTar"
+  #     }
+  #     if {[lsearch $TREEDIRBYAREA($regType) $myMod] == -1} {
+  #         puts "Module $myMod does not exists in Automation Tree"
+  #     }
+  #     #puts "iTestCfg Check"
+  #     if {[lsearch $iTestCfgList $myMod] == -1} {
+  #         puts "Module $myMod does not exist in iTest.cfg"
+  #     }
+  #    #puts "iTar Check"
+  #     if {[lsearch $iTarMods $myMod] == -1} {
+  #         puts "Module $myMod does not exist in iTar"
+  #     }
+  #     #puts "Database Check"
+  #     if {[lsearch $EXISTINGFEATUREDIRSByAreaLists($regType) $myMod] == -1} {
+  #         puts "Module $myMod does not database"
+  #     }
+    }
+}

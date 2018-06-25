@@ -1,0 +1,831 @@
+#!/usr/bin/tclsh
+
+################################################################
+#  Procedure Name: snmpCheckOspfInterfaceParameters
+#  
+#  Description:
+#  This procedure checks the ospf parameters on particular interface.
+#
+#  Input Variables:
+#    session         - Session identifier which identifies the connection
+#                      with the DUT
+#    ipaddr          - Interface IP address 
+#    areaid          - Interface AreaId 
+#    type            - Interface Type 
+#    ospfstate       - Interface OSPF State 
+#    rtrpriority     - Interface Router Priority 
+#    transitdelay    - Interface TransitDelay
+#    hellointerval   - Interface HelloInterval 
+#    rtrdeadinterval - Interface Router DeadInterval
+#    authtype        - Interface Authentication Type 
+#    state           - Interface State
+#    dr              - Interface DesignatedRouter 
+#    bdr             - Interface Backup DesignatedRouter 
+#    authtype        - Interface Authentication Type 
+#    authkey         - Interface Authentication Key value 
+#
+#  Optional Args:
+#    fd              - File descriptor of open log file   
+# 
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    0 - On failure 
+#    1 - On success 
+#
+#  Possible Usage:
+#    snmpCheckOspfInterfaceParameters -session $sessionid -state "disable"
+###############################################################
+
+proc snmpCheckOspfInterfaceParameters { args } {
+    parse_args snmpCheckOspfInterfaceParameters $args {
+       session ""
+       ipaddr ""
+       areaid    ""
+       type      ""
+       ospfstate ""
+       rtrpriority ""
+       transitdelay ""
+       hellointerval ""
+       rtrdeadinterval ""
+       retransinterval ""
+       authtype ""
+       ifstate ""
+       dr ""
+       bdr ""
+       authtype ""
+       authkey ""
+       fd "NULL"
+       comment "snmpCheckOspfInterfaceParameters"
+    }
+ 
+    set func "snmpCheckOspfInterfaceParameters:" 
+    set retVal 0
+
+    if { $session == "" || $ipaddr == "" } {
+       error "$func SNMP session id, interface address must be specified"
+       return $retVal 
+    }   
+
+    snmpDebug DEBUG "session is $session, interface address is $ipaddr "
+
+    report_start_test "$comment"
+    if { [llength $areaid] != 0 } {
+       set result [snmpGet -session $session -oid ospfIfAreaId.$ipaddr.0]
+       set areaId [snmpUtilGetVal ipaddr $result]
+       if {[string compare $areaid $areaId] == 0} {
+          result_ok "Interface Parameter: Area Id $areaid exist. PASS"
+          set retVal 1
+        } else {
+          result_error "Interface Parameter: Area Id $areaid not found. FAIL"
+        }
+    }
+    if { [llength $ospfstate] != 0 } {
+       set result [snmpGet -session $session -oid ospfIfAdminStat.$ipaddr.0]
+       if {[string compare "enable" $ospfstate] == 0} {
+          lappend parameterList {{.*enabled(1)*} exist}
+          snmpCheckKeyValue $parameterList -output $result \
+                    -comment "OSPF is enabled on the interface $ipaddr" -fd $fd
+          set retVal 1
+       }
+       
+       if {[string compare "disable" $ospfstate] == 0} {
+          lappend parameterList {{.*disabled(2)*} exist}
+          snmpCheckKeyValue $parameterList -output $result \
+                    -comment "OSPF is disabled on the interface $ipaddr" -fd $fd
+          set retVal 1
+       }
+    }
+    if { [llength $transitdelay] != 0 } {
+       set result [snmpGet -session $session -oid ospfIfTransitDelay.$ipaddr.0]
+       set delay [snmpUtilGetVal int $result]
+       if {[string compare $delay $transitdelay] == 0} {
+          result_ok "Interface Parameter: Transit delay $transitdelay exist. PASS"
+          set retVal 1
+        } else {
+          result_error "Interface Parameter: Transit delay $transitdelay not found. FAIL"
+        }
+    }
+    if { [llength $hellointerval] != 0 } {
+       set result [snmpGet -session $session -oid ospfIfHelloInterval.$ipaddr.0]
+       set interval [snmpUtilGetVal int $result]
+       if {[string compare $interval $hellointerval] == 0} {
+          result_ok "Interface Parameter: helloInterval $hellointerval exist. PASS"
+          set retVal 1
+        } else {
+          result_error "Interface Parameter: helloInterval $hellointerval not found. FAIL"
+        }
+    }
+    if { [llength $rtrdeadinterval] != 0 } {
+       set result [snmpGet -session $session -oid ospfIfRtrDeadInterval.$ipaddr.0]
+       set deadinterval [snmpUtilGetVal int $result]
+       if {[string compare $deadinterval $rtrdeadinterval] == 0} {
+          result_ok "Interface Parameter: rtrdeadinterval $rtrdeadinterval exist. PASS"
+          set retVal 1
+        } else {
+          result_error "Interface Parameter: rtrdeadinterval $rtrdeadinterval not found. FAIL"
+        }
+    }
+    if { [llength $rtrdeadinterval] != 0 } {
+       set result [snmpGet -session $session -oid ospfIfRtrDeadInterval.$ipaddr.0]
+       set deadinterval [snmpUtilGetVal int $result]
+       if {[string compare $deadinterval $rtrdeadinterval] == 0} {
+          result_ok "Interface Parameter: rtrdeadinterval $rtrdeadinterval exist. PASS"
+          set retVal 1
+        } else {
+          result_error "Interface Parameter: rtrdeadinterval $rtrdeadinterval not found.FAIL"
+        }
+    }
+    if { [llength $retransinterval] != 0 } {
+       set result [snmpGet -session $session -oid ospfIfRetransInterval.$ipaddr.0]
+       set retransInterval [snmpUtilGetVal int $result]
+       if {[string compare $retransInterval $retransinterval] == 0} {
+          result_ok "Interface Parameter: retransmit Interval $retransinterval exist. PASS"
+          set retVal 1
+        } else {
+          result_error "Interface Parameter: retransmit Interval $retransinterval not found.FAIL"
+        }
+    }
+    if { [llength $authtype] != 0 } {
+       set result [snmpGet -session $session -oid ospfIfAuthType.$ipaddr.0]
+       set AuthType [snmpUtilGetVal int $result]
+       if {[string compare $authtype "NONE"] ==0 } {
+          set type 0
+       } elseif {[string compare $authtype "SIMPLE"] ==0 } {
+          set type 1
+       } elseif {[string compare $authtype "MD5"] == 0 } {
+          set type 2
+       }
+       if {[string compare $type $AuthType] == 0} {
+          result_ok "Interface Parameter: Authentication Type $authtype exist. PASS"
+          set retVal 1
+        } else {
+          result_error "Interface Parameter: Authentication Type $authtype not found. FAIL"
+        }
+    }
+    if { [llength $authkey] != 0 } {
+       set result [snmpGet -session $session -oid ospfIfAuthKey.$ipaddr.0]
+       set AuthKeyValue [snmpUtilGetVal hex $result]
+       if {[string compare $AuthKeyValue $authkey] == 0 } {
+          result_ok "Interface Parameter: Authentication Key Value $authkey exist. PASS"
+          set retVal 1
+        } else {
+          result_error "Interface Parameter: Authentication Key Value $authkey not found. FAIL"
+       }
+    }
+    if { [llength $rtrpriority] != 0 } {
+       set result [snmpGet -session $session -oid ospfIfRtrPriority.$ipaddr.0]
+       set routerPriority [snmpUtilGetVal int $result]
+       if {[string compare $routerPriority $rtrpriority] == 0} {
+          result_ok "Interface Parameter: Router Priority $rtrpriority exist. PASS"
+          set retVal 1
+        } else {
+          result_error "Interface Parameter: Router Priority $rtrpriority not found. FAIL"
+        }
+    }
+    if { [llength $ifstate] != 0 } {
+       set result [snmpGet -session $session -oid ospfIfState.$ipaddr.0]
+       snmpDebug DEBUG "ifstate  is $result, interface address is $ipaddr "
+
+       if {[string compare $ifstate "down"] == 0 } {
+          lappend parameterList {{.*down(1)*} exist}
+          snmpCheckKeyValue $parameterList -output $result \
+                    -comment "OSPF interface state is $ifstate on the interface $ipaddr" -fd $fd
+          set retVal 1
+       }
+       if {[string compare $ifstate "loopback"] == 0 } {
+          lappend parameterList {{.*loopback(2)*} exist}
+          snmpCheckKeyValue $parameterList -output $result \
+                    -comment "OSPF interface state is $ifstate on the interface $ipaddr" -fd $fd
+          set retVal 1
+       }
+       if {[string compare $ifstate "waiting"] == 0 } {
+          lappend parameterList {{.*waiting(3)*} exist}
+          snmpCheckKeyValue $parameterList -output $result \
+                    -comment "OSPF interface state is $ifstate on the interface $ipaddr" -fd $fd
+          set retVal 1
+       }
+       if {[string compare $ifstate "pointtoPoint"] == 0 } {
+          lappend parameterList {{.*pointtoPoint(4)*} exist}
+          snmpCheckKeyValue $parameterList -output $result \
+                    -comment "OSPF interface state is $ifstate on the interface $ipaddr" -fd $fd
+          set retVal 1
+       }
+       if {[string compare $ifstate "designatedRouter"] == 0 } {
+          lappend parameterList {{.*designatedRouter(5)*} exist}
+          snmpCheckKeyValue $parameterList -output $result \
+                    -comment "OSPF interface state is $ifstate on the interface $ipaddr" -fd $fd
+          set retVal 1
+       }
+       if {[string compare $ifstate "backupDesignatedRouter"] == 0 } {
+          lappend parameterList {{.*backupDesignatedRouter(6)*} exist}
+          snmpCheckKeyValue $parameterList -output $result \
+                    -comment "OSPF interface state is $ifstate on the interface $ipaddr" -fd $fd
+          set retVal 1
+       }
+       if {[string compare $ifstate "otherDesignatedRouter"] == 0 } {
+          lappend parameterList {{.*otherDesignatedRouter(7)*} exist}
+          snmpCheckKeyValue $parameterList -output $result \
+                    -comment "OSPF interface state is $ifstate on the interface $ipaddr" -fd $fd
+          set retVal 1
+       }
+    }
+
+    report_end_test
+    snmpDebug DEBUG "$func - End\n" $fd
+    return $retVal
+}
+################################################################
+#  Procedure Name: snmpCheckOspfInterfaceMetricValues
+#  
+#  Description:
+#  This procedure checks the ospf cost parameters on particular interface.
+#
+#  Input Variables:
+#    session     - Session identifier which identifies the connection
+#                  with the DUT
+#    ipaddr      - Interface IP address 
+#    cost        - Interface Cost 
+#
+#  Optional Args:
+#    fd          - File descriptor of open log file   
+# 
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    0 - On failure 
+#    1 - On success 
+#
+#  Possible Usage:
+#    snmpCheckOspfInterfaceParameters -session $sessionid -cost "10"
+###############################################################
+proc snmpCheckOspfInterfaceMetricValues { args } {
+    parse_args snmpCheckOspfInterfaceMetricValues $args {
+       session ""
+       ipaddr ""
+       cost ""
+       fd "NULL"
+       comment "snmpCheckOspfInterfaceMetricValues"
+    }
+ 
+    set func "snmpCheckOspfInterfaceMetricValues:" 
+    set retVal 0
+
+    if { $session == "" || $ipaddr == "" || $cost == "" } {
+       error "$func SNMP session id, interface address, cost must be specified"
+       return $retVal
+    }   
+
+    snmpDebug DEBUG "session is $session, interface address is $ipaddr, cost is $cost "
+
+    report_start_test "$comment"
+    set result [snmpGet -session $session -oid ospfIfMetricValue.$ipaddr.0.0]
+    set metric [snmpUtilGetVal int $result]
+    if {[string compare $cost $metric] == 0} {
+       result_ok "Interface Parameter: Cost $cost exist $result . PASS"
+       set retVal 1
+     } else {
+       result_error "Interface Parameter: Cost $cost not found. $result  FAIL"
+     }
+
+     report_end_test
+     snmpDebug DEBUG "$func - End\n" $fd
+     return $retVal
+}
+
+################################################################
+#  Procedure Name: snmpSetupCommonVlan
+#  
+#  Description: ospf topology specific proc that is used to setup a common ospf vlan setup
+#
+#  Input Variables:
+#    session     - Session identifier which identifies the connection
+#                  with the DUT
+#    vlan1ip     - vlan1 IP address 
+#    vlan2ip     - vlan2 IP address 
+#    vlanarea    - vlan Area Id 
+#    dutid       - Dut ID 
+#    status      - Enable ospf 
+#
+#  Optional Args:
+#    fd - File descriptor of open log file   
+# 
+#  Output Variables: 
+#     list of vlan ids.
+#
+#  Return Variables:
+#    0 - On failure 
+#    1 - On success 
+#
+#  Possible Usage:
+#    snmpSetupCommonVlan -session $sessionid -vlan1ip $DUT1vlan1IP -vlan2ip $DUT1vlan2IP \
+#                        -vlanarea $vlanArea -dutid 1
+###############################################################
+proc snmpSetupCommonVlan { args } {
+    parse_args snmpSetupCommonVlan $args {
+       session ""
+       vlan1ip ""
+       vlan2ip ""
+       vlanarea ""
+       dutid ""
+       status "enable"
+       fd "NULL"
+       comment "snmpSetupCommonVlan"
+    }
+ 
+    set func "snmpSetupCommonVlan:" 
+
+    if { $session == "" || $vlan1ip == "" || $vlan2ip == "" || $vlanarea == "" || $dutid == "" } {
+       error "$func SNMP session id, vlan1ip, vlan2ip, vlanarea and dutid must be specified"
+       return 0
+    }   
+
+    snmpDebug DEBUG "session is $session, vlan1ip is $vlan1ip, vlan2ip is $vlan2ip, \
+                     area is $vlanarea, dut id is $dutid"
+
+    snmpChangeIpForwarding -session $session -status "enable" -fd $fd
+    set vlan1_id [snmpCreateVlan -session $session -name "vlan1" -fd $fd]
+    snmpAssignIPAddrToVlan -session $session -vlanid $vlan1_id -addr $vlan1ip \
+               -mask "255.255.255.0" -fd $fd
+    snmpChangeIpForwarding -session $session -status "enable" -vlanid $vlan1_id -fd $fd
+    snmpAddPortToVlan -session $session -vlanid $vlan1_id -port [GetATrunkPort $dutid 0] -fd $fd
+
+    lappend vlanlist "$vlan1_id"
+
+    SendACmd        "create ospf area $vlanarea"
+    set vlan2_id [snmpCreateVlan -session $session -name "vlan2" -fd $fd]
+    snmpAssignIPAddrToVlan -session $session -vlanid $vlan2_id -addr $vlan2ip \
+               -mask "255.255.255.0" -fd $fd
+    snmpChangeIpForwarding -session $session -status "enable" -vlanid $vlan2_id -fd $fd
+    snmpAddPortToVlan -session $session -vlanid $vlan2_id \
+                      -port [MapDUTPortId [expr $dutid * 2] $dutid] -fd $fd
+
+    lappend vlanlist "$vlan2_id"
+
+    switch [GetVersion "DUT$dutid" ] {
+       4 {
+          SendACmd  "conf ospf add vlan vlan1"
+          SendACmd  "conf ospf vlan vlan1 area $vlanarea"
+          SendACmd  "conf ospf add vlan vlan2"
+          SendACmd  "conf ospf vlan vlan2 area $vlanarea" }
+       6 -
+       default {
+          SendACmd  "conf ospf add vlan vlan1 area $vlanarea"
+          SendACmd  "conf ospf add vlan vlan2 area $vlanarea" }
+    }
+    if { $status == "enable" } { 
+       SendACmd "enable ospf" 
+    } elseif { $status == "disable" } {
+       SendACmd "disable ospf"
+    }
+            
+    snmpDebug DEBUG "$func - End\n" $fd
+    return $vlanlist
+}
+
+################################################################
+#  Procedure Name: snmpCleanupCommonVlan
+#  
+#  Description: ospf topology specific proc that is used to cleanup the configuration performed
+#               by snmpSetupCommonVlan
+#  Input Variables:
+#    session     - Session identifier which identifies the connection
+#                  with the DUT
+#    vlanid      - list of vlanid's returned from snmpSetupCommonVlan 
+#    vlanarea    - vlan Area Id 
+#    dutid       - Dut ID 
+#
+#  Optional Args:
+#    fd - File descriptor of open log file   
+# 
+#  Output Variables: 
+#     None.
+#
+#  Return Variables:
+#    0 - On failure 
+#    1 - On success 
+#
+#  Possible Usage:
+#    snmpSetupCommonVlan -session $sessionid -vlanid $vlanList -vlanarea $vlanArea -dutid 1
+###############################################################
+proc snmpCleanupCommonVlan { args } {
+    parse_args snmpCleanupCommonVlan $args {
+       session ""
+       vlanid ""
+       vlanarea ""
+       dutid ""
+       fd "NULL"
+       comment "snmpCleanupCommonVlan"
+    }
+
+    set func "snmpCleanupCommonVlan:"
+
+    if { $session == "" || $vlanid == "" || $vlanarea == "" || $dutid == ""} {
+       error "$func SNMP session id, vlanid, vlanarea, dutid must be specified"
+    }
+
+   snmpDelPortFromVlan -session $session -vlanid [lindex $vlanid 0]\
+                    -port [GetATrunkPort $dutid 0] -fd $fd
+   snmpDelPortFromVlan -session $session -vlanid [lindex $vlanid 1]\
+                    -port [MapDUTPortId [expr $dutid * 2] $dutid] -fd $fd
+
+   snmpDelIPAddrFromVlan -session $session -vlanid [lindex $vlanid 0] -fd $fd
+   snmpDelIPAddrFromVlan -session $session -vlanid [lindex $vlanid 1] -fd $fd
+
+   snmpDeleteVlan -session $session -vlanid [lindex $vlanid 0] -fd $fd
+   snmpDeleteVlan -session $session -vlanid [lindex $vlanid 1] -fd $fd
+
+   SendACmd        "disable ospf"
+   SendACmd        "delete ospf area $vlanarea"
+}
+
+################################################################
+#  Procedure Name: snmpCheckOspfNeighborParameters
+#  
+#  Description: This procedure checks the ospf parameters on particular interface.
+#
+#  Input Variables:
+#    session     - Session identifier which identifies the connection
+#                  with the DUT
+#    status      - If the value is "exist", the neighbor parameter must be
+#                  exist. If "notexist", the neighbor parameters should notexist.
+#                  Default is "exist"
+#    ipaddr      - neighbor ip address 
+#    nbrstate    - neighbor interface state 
+#
+#  Optional Args:
+#    fd          - File descriptor of open log file   
+# 
+#  Output Variables: 
+#     None.
+#
+#  Return Variables:
+#    0 - On failure 
+#    1 - On success 
+#
+#  Possible Usage:
+#    snmpCheckOspfNeighborParameters -session $sessionid -ipaddr $vlan1IP -nbrstate "full" 
+###############################################################
+proc snmpCheckOspfNeighborParameters { args } {
+    parse_args snmpCheckOspfNeighborParameters $args {
+       session ""
+       ipaddr ""
+       nbrstate ""
+       status "exist"
+       fd "NULL"
+       comment "snmpCheckOspfNeighborParameters"
+    }
+ 
+    set func "snmpCheckOspfNeighborParameters:" 
+    set retVal 0
+
+    if { $session == "" || $ipaddr == "" } {
+       error "$func SNMP session id, interface address must be specified"
+       return $retVal 
+    }   
+
+    if { $status != "" } {
+       set status [string tolower $status]
+       if { !([string compare "exist" $status] == 0  ||
+            [string compare "notexist" $status] == 0) } {
+          error "$func $result is invalid argument should be exist or notexist"
+          return $retVal
+       }
+    }
+
+    snmpDebug DEBUG "session is $session, neighbor interface address is $ipaddr "
+
+    report_start_test "$comment"
+
+    if { [llength $nbrstate] != 0 } {
+       set result [snmpGet -session $session -oid ospfNbrState.$ipaddr.0]
+       snmpDebug DEBUG "nbrstate is $result, neighbor interface address is $ipaddr "
+
+       if {[regexp -nocase ".*No Such Instance.*" $result]} {
+          if { $status == "exist" } {
+             result_error "OSPF Neighbor interface state $ipaddr doesn't exist in the \
+                        ospfNbrTable result. FAIL"
+          } else {
+             result_ok "OSPF Neighbor interface state $ipaddr exist in the \
+                        ospfNbrTable result $status. PASS"
+             set retval 1
+          }
+       } else {
+          if { $status == "notexist" } {
+             result_error "OSPF Neighbor interface state $ipaddr doesn't exist in the \
+                        ospfNbrTable. FAIL"
+          } 
+
+          if {[string compare $nbrstate "down"] == 0 } {
+             lappend parameterList {{.*down(1)*} exist}
+             snmpCheckKeyValue $parameterList -output $result \
+                       -comment "OSPF Neigbhor interface state is $nbrstate on the \
+                                 interface $ipaddr" -fd $fd
+             set retVal 1
+          }
+          if {[string compare $nbrstate "attempt"] == 0 } {
+             lappend parameterList {{.*attempt(2)*} exist}
+             snmpCheckKeyValue $parameterList -output $result \
+                       -comment "OSPF Neigbhor interface state is $nbrstate on the \
+                                 interface $ipaddr" -fd $fd
+             set retVal 1
+          }
+          if {[string compare $nbrstate "init"] == 0 } {
+             lappend parameterList {{.*init(3)*} exist}
+             snmpCheckKeyValue $parameterList -output $result \
+                       -comment "OSPF Neigbhor interface state is $nbrstate on the \
+                                 interface $ipaddr" -fd $fd
+             set retVal 1
+          }
+          if {[string compare $nbrstate "twoWay"] == 0 } {
+             lappend parameterList {{.*twoWay(4)*} exist}
+             snmpCheckKeyValue $parameterList -output $result \
+                       -comment "OSPF Neigbhor interface state is $nbrstate on the \
+                                 interface $ipaddr" -fd $fd
+             set retVal 1
+          }
+          if {[string compare $nbrstate "exchangeStart"] == 0 } {
+             lappend parameterList {{.*exchangeStart(5)*} exist}
+             snmpCheckKeyValue $parameterList -output $result \
+                       -comment "OSPF Neigbhor interface state is $nbrstate on the \
+                                 interface $ipaddr" -fd $fd
+             set retVal 1
+          }
+          if {[string compare $nbrstate "exchange"] == 0 } {
+             lappend parameterList {{.*exchange(6)*} exist}
+             snmpCheckKeyValue $parameterList -output $result \
+                       -comment "OSPF Neigbhor interface state is $nbrstate on the \
+                                 interface $ipaddr" -fd $fd
+             set retVal 1
+          }
+          if {[string compare $nbrstate "loading"] == 0 } {
+             lappend parameterList {{.*loading(7)*} exist}
+             snmpCheckKeyValue $parameterList -output $result \
+                       -comment "OSPF Neigbhor interface state is $nbrstate on the \
+                                 interface $ipaddr" -fd $fd
+             set retVal 1
+          }
+          if {[string compare $nbrstate "full"] == 0 } {
+             lappend parameterList {{.*full(7)*} exist}
+             snmpCheckKeyValue $parameterList -output $result \
+                       -comment "OSPF Neigbhor interface state is $nbrstate on the \
+                                 interface $ipaddr" -fd $fd
+             set retVal 1
+          }
+       }
+
+    }
+    report_end_test
+    snmpDebug DEBUG "$func - End\n" $fd
+    return $retVal
+}
+
+################################################################
+#  Procedure Name: snmpCheckOspfRouterId
+#  
+#  Description: This procedure checks the ospf router id.
+#
+#  Input Variables:
+#    session     - Session identifier which identifies the connection
+#                  with the DUT
+#    ipaddr      - ip address 
+#
+#  Optional Args:
+#    status      - If the value is "exist", the router id must be
+#                  exist. If "notexist", the router id should not exist.
+#                  Default is "exist"
+#    fd          - File descriptor of open log file   
+# 
+#  Output Variables: 
+#     None.
+#
+#  Return Variables:
+#    0 - On failure 
+#    1 - On success 
+#
+#  Possible Usage:
+#    snmpCheckOspfRouterId -session $sessionid -ipaddr $routerId 
+###############################################################
+proc snmpCheckOspfRouterId { args } {
+    parse_args snmpCheckOspfRouterId $args {
+       session ""
+       ipaddr ""
+       status "exist"
+       fd "NULL"
+       comment "snmpCheckOspfRouterId"
+    }
+ 
+    set func "snmpCheckOspfRouterId:" 
+    set retVal 0
+
+    if { $session == "" || $ipaddr == "" } {
+       error "$func SNMP session id, router id must be specified"
+       return $retVal 
+    }   
+
+    if { $status != "" } {
+       set status [string tolower $status]
+       if { !([string compare "exist" $status] == 0  ||
+            [string compare "notexist" $status] == 0) } {
+          error "$func $result is invalid argument should be exist or notexist"
+          return $retVal
+       }
+   }
+
+    snmpDebug DEBUG "session is $session, router id is $ipaddr "
+
+    report_start_test "$comment"
+
+    set result [snmpGet -session $session -oid ospfRouterId.0]
+    snmpDebug LOG "snmpGet-$result" $fd
+    set routerId [snmpUtilGetVal ipaddr $result]
+    if { $routerId != $ipaddr } {
+        if { $status == "exist" } {
+           result_error "Router Id $ipaddr does not exist. FAIL"
+        } else {
+           result_ok "Router Id $ipaddr does not exist result $status. PASS"
+           set retVal 1
+        }
+    } else {
+        if { $status == "notexist" } {
+           result_error "Router Id $ipaddr exist result $status. FAIL"
+        } else {
+           result_ok  "Router Id $ipaddr exist result $status. PASS"
+           set retVal 1
+        }
+    }
+
+    report_end_test
+    snmpDebug DEBUG "$func - End\n" $fd
+    return $retVal
+}
+
+################################################################
+#  Procedure Name: snmpCheckOspfAreaId
+#  
+#  Description: This procedure checks the ospf area id.
+#
+#  Input Variables:
+#    session     - Session identifier which identifies the connection
+#                  with the DUT
+#    ipaddr      -  area id ip address 
+#
+#  Optional Args:
+#    status      - If the value is "exist", the area id must be
+#                  exist. If "notexist", the area id should not exist.
+#                  Default is "exist"
+#    fd          - File descriptor of open log file   
+# 
+#  Output Variables: 
+#     None.
+#
+#  Return Variables:
+#    0 - On failure 
+#    1 - On success 
+#
+#  Possible Usage:
+#    snmpCheckOspfAreaId -session $sessionid -ipaddr $areaId 
+###############################################################
+proc snmpCheckOspfAreaId { args } {
+    parse_args snmpCheckOspfAreaId $args {
+       session ""
+       ipaddr ""
+       status "exist"
+       fd "NULL"
+       comment "snmpCheckOspfAreaId"
+    }
+ 
+    set func "snmpCheckOspfAreaId:" 
+    set retVal 0
+
+    if { $session == "" || $ipaddr == "" } {
+       error "$func SNMP session id, area id must be specified"
+       return $retVal 
+    }   
+    if { $status != "" } {
+       set status [string tolower $status]
+       if { !([string compare "exist" $status] == 0  ||
+            [string compare "notexist" $status] == 0) } {
+          error "$func $result is invalid argument should be exist or notexist"
+          return $retVal
+       }
+   }
+
+    snmpDebug DEBUG "session is $session, area id is $ipaddr "
+
+    report_start_test "$comment"
+
+    set result [snmpGet -session $session -oid ospfAreaStatus.$ipaddr]
+    snmpDebug LOG "snmpGet-$result" $fd
+
+   if {[regexp -nocase ".*No Such Instance.*" $result]} {
+      if { $status == "exist" } {
+         result_error "Area Id $ipaddr doesn't exist in the ospfAreaTable. FAIL"
+      } else {
+         result_ok "Area Id $ipaddr doesn't exist in the ospfAreaTable result $status. PASS"
+         set retVal 1
+      }
+    } else {
+      if { $status == "notexist" } {
+         result_error "Area Id $ipaddr  exist in the ospfAreaTable result $status. FAIL"
+      }
+      if {[regexp -nocase ".*active(1).*" $result]} {
+         result_ok "Area Id $ipaddr  exist in the ospfAreaTable result $status. PASS"
+         set retVal 1
+      }
+    }
+
+    report_end_test
+    snmpDebug DEBUG "$func - End\n" $fd
+    return $retVal
+}
+
+################################################################
+#  Procedure Name: Setup3.1.2
+#  
+#  Description: This procedure creates a vlan, assign ip address,
+#               add port to vlan, disables IP forwarding in the DUT
+#               configures ospf on the vlan and enable OSPF.
+#
+#  Input Variables:
+#    session     - Session identifier which identifies the connection
+#                  with the DUT
+#    vlanIP      -  vlan ip address 
+#
+#  Optional Args:
+#    fd          - File descriptor of open log file   
+# 
+#  Output Variables: 
+#     None.
+#
+#  Return Variables: vlan id list
+###############################################################
+
+proc Setup3.1.2 {sessionId vlanIP fd_res} {
+
+# ----- Create vlan named vlanneighbor
+   set vlan_id [snmpCreateVlan -session $sessionId -name "vlanneighbor" -fd $fd_res]
+
+# ----- Assign IP address and ports to VLAN
+   snmpAssignIPAddrToVlan -session $sessionId -vlanid $vlan_id -addr $vlanIP \
+           -mask "255.255.255.0"  -fd $fd_res
+   snmpAddPortToVlan -session $sessionId -vlanid $vlan_id -port [MapDUTPortId 1-2] -fd $fd_res
+
+# ----- Disable IP forwarding in the DUT1
+   snmpChangeIpForwarding -session $sessionId -status "enable" -fd $fd_res
+
+   SendACmd  "create ospf area $vlanIP"
+
+   switch [GetVersion "DUT1"]  {
+      4 {
+         SendACmd  "configure ospf add vlan vlanneighbor"
+         SendACmd  "configure ospf vlan vlanneighbor area $vlanIP" }
+      6 -
+      default {
+         SendACmd  "configure ospf add vlan vlanneighbor area $vlanIP" }
+   }
+
+   SendACmd  "enable ospf"
+   return $vlan_id
+}
+
+################################################################
+#  Procedure Name: Cleanup3.1.2
+#  
+#  Description: This procedure deletes a vlan, disables ospf on the vlan 
+#               and disable OSPF.
+#
+#  Input Variables:
+#    session     - Session identifier which identifies the connection
+#                  with the DUT
+#    vlanId      -  vlan id 
+#    vlanIP      -  vlan ip address 
+#
+#  Optional Args:
+#    fd          - File descriptor of open log file   
+# 
+#  Output Variables: 
+#     None.
+#
+#  Return Variables:
+###############################################################
+
+proc Cleanup3.1.2 {vlan_id sessionId vlanIP fd_res} {
+
+# ----- Delete ports from corresponding VLANs
+   snmpDelPortFromVlan -session $sessionId -vlanid $vlan_id \
+                    -port [MapDUTPortId 1-2] -fd $fd_res
+
+# ----- Delete IP address from VLAN
+   snmpDelIPAddrFromVlan -session $sessionId -vlanid $vlan_id -fd $fd_res
+
+# ----- Delete all the VLANs
+   snmpDeleteVlan -session $sessionId -vlanid $vlan_id -fd $fd_res
+
+   SendACmd     "delete ospf area $vlanIP"
+   SendACmd     "disable ospf"
+
+   snmpCloseSession -session $sessionId
+}

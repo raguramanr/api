@@ -1,0 +1,141 @@
+#!/usr/bin/tclsh
+
+
+source ../Lib/mainLib.tcl
+source ../Lib/mysqlLib.tcl
+source ../Lib/parse_args.tcl
+source runReg.cfg
+source cfg/common.cfg
+
+
+
+package require http 1.0;
+package require Tclx
+
+
+parse_args tpb_main $argv {
+    mode "null"
+    module "null"
+    cfg "null"
+    lst "dev"
+    tcList "all"
+    regPath "Functional"
+    cc ""
+    cliFlag ""
+    build ""
+    subversion ""
+    obuild ""
+    moduleArg ""
+    debugLevel "0"
+    randomIndex "unknown"
+    efence "no"
+    saveConfigPerTest "no"
+    stopRegOn "null"
+    qId "null"
+    heapTracingProcess "no"
+    ezinfofile ""
+    ezkillfile ""
+    TrafficGen "ixia"
+    harness "tcl"
+    trackport  "null"
+    launchserver "off"
+    dispatch_id "null"
+}
+#-------------------------------------------------------------------
+if {![file isdirectory Log]} {
+        file mkdir Log
+}
+if {![file isdirectory Log/Regressions]} {
+        file mkdir Log/Regressions
+}
+
+#-------------------------------------------------------------------
+set cfgList [split [string trim [string trim $cfg ".."] "/"] "/"]
+set cfgCount [llength $cfgList]
+set nameCfg [lindex $cfgList [expr $cfgCount - 1]]
+if {[catch {regsub -nocase "\.cfg" $nameCfg "" nCfg} why]} {
+    set logFileName1 "biglog${dispatch_id}.txt"
+} else {
+    set logFileName1 "${nCfg}${dispatch_id}.txt"
+}
+#-------------------------------------------------------------------
+set logFileName "Log/Regressions/$logFileName1"
+set dir "main"
+set link "http://${RESWEB}/${dir}/${logFileName}"
+
+puts "\n@@@@ TPB TCL BIG LOG Link @@@@"
+puts $link
+puts "@@@@ Test Builder END BIG LOG Link @@@@"
+
+if {[catch {open "$logFileName" a 0777} fd_big]} {
+    puts "Could not open BIG LOG"
+} else {
+    puts $fd_big "\n -------------------------------------------------------------"
+    puts $fd_big "Anchor_Start: $regPath $module" 
+    puts $fd_big " -------------------------------------------------------------\n"
+    puts $fd_big " main.tcl \
+    -mode \"$mode\" \
+    -module \"$module\"\n \
+    -cfg \"$cfg\"\n \
+    -lst \"$lst\"\n \
+    -tcList \"$tcList\"\n \
+    -regPath \"$regPath\"\n \
+    -cc \"$cc\"\n \
+    -cliFlag \"$cliFlag\"\n \
+    -build \"$build\"\n \
+    -subversion \"$subversion\"\n \
+    -obuild \"$obuild\"\n \
+    -moduleArg \"$moduleArg\"\n \
+    -debugLevel \"$debugLevel\"\n \
+    -randomIndex \"$randomIndex\"\n \
+    -efence \"$efence\"\n \
+    -saveConfigPerTest \"$saveConfigPerTest\"\n \
+    -stopRegOn \"$stopRegOn\"\n \
+    -qId \"$qId\"\n \
+    -heapTracingProcess \"$heapTracingProcess\"\n \
+    -ezinfofile \"$ezinfofile\"\n \
+    -ezkillfile \"$ezkillfile\"\n \
+    -TrafficGen \"$TrafficGen\"\n \
+    -harness \"$harness\"\n \
+    -trackport  \"$trackport\"\n \
+    -launchserver \"$launchserver\"\n"
+    puts $fd_big "\n -------------------------------------------------------------"
+    close $fd_big
+}
+if {[catch { exec {tclsh} main.tcl \
+    -mode "$mode" \
+    -module "$module" \
+    -cfg "$cfg" \
+    -lst "$lst" \
+    -tcList "$tcList" \
+    -regPath "$regPath" \
+    -cc "$cc" \
+    -cliFlag "$cliFlag" \
+    -build "$build" \
+    -subversion "$subversion" \
+    -obuild "$obuild" \
+    -moduleArg "$moduleArg" \
+    -debugLevel "$debugLevel" \
+    -randomIndex "$randomIndex" \
+    -efence "$efence" \
+    -saveConfigPerTest "$saveConfigPerTest" \
+    -stopRegOn "$stopRegOn" \
+    -qId "$qId" \
+    -heapTracingProcess "$heapTracingProcess" \
+    -ezinfofile "$ezinfofile" \
+    -ezkillfile "$ezkillfile" \
+    -TrafficGen "$TrafficGen" \
+    -harness "$harness" \
+    -trackport  "$trackport" \
+    -launchserver "$launchserver" \
+    >@stdout | busybox tee -a $logFileName } result]} {
+    
+        puts "tpb_main call to main returned error: $result"
+        puts "@@@@ TPB_MAIN call to main EXITED @@@@"
+        if {[catch {open "$logFileName" a 0777} fd_big]} {
+            puts "Could not open BIG LOG"
+        } else {
+            puts $fd_big "\n\n\ntpb_main call to main returned error: $result\n\n\n"
+            close $fd_big
+        }
+}

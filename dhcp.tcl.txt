@@ -1,0 +1,378 @@
+
+##################################################################
+# Function : GetDhcpReplyFrame 
+#
+# Comment  : Make sure it is a DHCP frame.
+#          
+# Option   : 
+#            buffer - frame 
+##################################################################
+proc GetDhcpReplyFrame {buffer {tag none}} {
+
+foreach dataFrame $buffer {     
+    # --- check for Ethernet frame 
+      if {$tag != "none" } {
+           set tempList1 [lrange $dataFrame 0 11]
+           set tempList2 [lrange $dataFrame 16 [llength $dataFrame]]
+           set tagRecv1 [lrange $dataFrame 14 14][lrange $dataFrame 15 15]
+           set tagRecv [expr 0x$tagRecv1]     
+           set dataFrame [concat $tempList1 $tempList2]
+           if {$tag != $tagRecv} {
+                continue
+           }
+      }
+
+    set tmp [string range $dataFrame 36 40];
+    if { $tmp == "08 00"} {
+        # --- check for udp   
+        set tmp [string range $dataFrame 68 70];       
+        if { $tmp == "11"} {
+            # --- check the ports
+            set tmp [string range $dataFrame 102 112];
+            if { $tmp == "00 43 00 44"} {
+                # --- check for bootreply
+                set tmp [string range $dataFrame 125 127];
+                if { $tmp == "02" } {                    
+                    return $dataFrame;
+                }    
+            }
+        }        
+    }
+}
+return "no";
+}
+
+##################################################################
+# Function : GetDhcpClientAddr 
+#
+# Comment  : Get client IP address from DHCP frame
+#          
+# Option   : 
+#            buffer - frame 
+##################################################################
+proc GetDhcpClientAddr {buffer {index 58}} {
+
+    set Firstbyte [expr 0x[lindex $buffer $index]];   
+    set Secondbyte [expr 0x[lindex $buffer [expr $index+1]]]; 
+    set Thirdbyte [expr 0x[lindex $buffer [expr $index+2]]]; 
+    set Fourthbyte [expr 0x[lindex $buffer [expr $index+3]]];       
+    set DhcpClientIP "$Firstbyte.$Secondbyte.$Thirdbyte.$Fourthbyte";
+    #puts "DhcpClientIP = $DhcpClientIP";
+    
+    return $DhcpClientIP;
+}
+
+##################################################################
+# Function : GetDHCPIP 
+#
+# Comment  : Send a DHCP discover package. Wait for Offer frame. Then
+#            send a request and wait for ack frame. 
+#            negTest: Negative test where we EXPECT FAILURE to occur.
+# Option   : 
+#            sourceMac 
+#            port number 
+##################################################################
+proc GetDHCPIP {sourceMac portid pserver {negTest 0} {tag none}} {
+set portid $portid;
+
+set optionList [list dhcpMessageType dhcpDiscover];
+####EXOS needs clent id in DISCOVER. fixed in PD3-9531770
+#lappend optionList dhcpClientId "01 $sourceMac"
+StartPortsCapture $portid;
+
+# GV 05-06-2011: Sleep needed here for some Ixia's before sending traffic
+exSleep 10;
+
+# --- send DHCP discover
+set frame [SendDhcpFrame -txPortId $portid -destMac "FF FF FF FF FF FF" \
+          -sourceMac $sourceMac -sourceIp "0.0.0.0" \
+          -destIp "255.255.255.255" -opCode "dhcpBootRequest" \
+          -optionCodeList $optionList -clientHwAddr $sourceMac -tag $tag];     	
+result_debug "DHCP Discover frame : $frame";
+
+exSleep 2
+#unset optionList;
+StopPortsCapture $portid;
+set rawPortDataList [GetCapturedFrames $portid];
+#puts "rawPortDataList --> $rawPortDataList"
+set Dhcpframe [GetDhcpReplyFrame $rawPortDataList $tag];
+puts "tag value in GetDHCPIP after frame send is $tag"
+
+set Dhcpaddress "0.0.0.0";
+if {$Dhcpframe != "no"} {
+    set messagetype [lindex $Dhcpframe 284];  
+    #the offset of DHCP message type is different between EW DHCP server and
+    #EXOS DHCP server
+    #EXOS DHCP server insert a 6 byte Address time field before the DHCP
+    #Message Type field.
+    set exosMessagetype [lindex $Dhcpframe 290];
+    if { $messagetype == "02" || $exosMessagetype == "02"} {
+        report_start_test "DHCP : Got Offer message type from DHCP server";
+
+	if {$negTest == 0} {
+	    result_ok "DHCP : Got Offer message type from DHCP server";           
+	} else {
+	    result_error "DHCP : Got Offer message type from DHCP server";           
+	}
+	report_end_test; 
+                
+        set Dhcpaddress [GetDhcpClientAddr $Dhcpframe];
+        puts "Sending request again after getting offer"
+        SendDHCPRequest $sourceMac $portid $pserver $Dhcpaddress  1 $tag;
+   
+    } else {
+        report_start_test "Did not receive message offer type from DHCP server";
+	if {$negTest == 0} {
+	    result_debug "Warning : Did not receive message offer type from DHCP server trying again";      
+            result_debug "If this failure is on a 10G xenpak port, try resetting the IXIA Xenpak HW and re-run test";     
+            #try to resend the request again
+            StartPortsCapture $portid;
+
+            # GV 05-06-2011: Sleep needed here for some Ixia's before sending traffic
+            exSleep 3;
+
+            # --- send DHCP discover
+            set frame [SendDhcpFrame -txPortId $portid -destMac "FF FF FF FF FF FF" \
+                   -sourceMac $sourceMac -sourceIp "0.0.0.0" \
+                   -destIp "255.255.255.255" -opCode "dhcpBootRequest" \
+                   -optionCodeList $optionList -clientHwAddr $sourceMac -tag $tag];
+            result_debug "DHCP Discover frame : $frame";
+            exSleep 2
+            StopPortsCapture $portid;
+            set rawPortDataList [GetCapturedFrames $portid];
+            set Dhcpframe [GetDhcpReplyFrame $rawPortDataList $tag];
+            set Dhcpaddress "0.0.0.0";
+            if {$Dhcpframe != "no"} {     
+                set messagetype [lindex $Dhcpframe 284];  
+                set exosMessagetype [lindex $Dhcpframe 290];
+               if { $messagetype == "02" || $exosMessagetype == "02"} {
+                  report_start_test "DHCP : Got Offer message type from DHCP server";
+                  set Dhcpaddress [GetDhcpClientAddr $Dhcpframe];
+                  SendDHCPRequest $sourceMac $portid $pserver $Dhcpaddress 1 $tag;
+                  report_end_test
+               }
+         } else {
+	    result_error "Did not receive message offer type from DHCP server";           
+         }
+	} else {
+	    result_ok "Did not receive message offer type from DHCP server as expected";           
+	}
+	    report_end_test;   
+    }    
+} else {
+    report_start_test "Did not receive Boot Reply from DHCP server";
+    result_debug "If this failure is on a 10G xenpak port, try resetting the IXIA Xenpak HW and re-run test";
+puts "--------- negTest --- $negTest"
+    if {$negTest == 0} {
+	    result_debug "Warning : Did not receive message offer type from DHCP server trying again";   
+            result_debug "If this failure is on a 10G xenpak port, try resetting the IXIA Xenpak HW and re-run test";        
+            #try to resend the request again
+            StartPortsCapture $portid;
+
+            # GV 05-06-2011: Sleep needed here for some Ixia's before sending traffic
+            exSleep 3;
+
+            # --- send DHCP discover
+            set frame [SendDhcpFrame -txPortId $portid -destMac "FF FF FF FF FF FF" \
+                   -sourceMac $sourceMac -sourceIp "0.0.0.0" \
+                   -destIp "255.255.255.255" -opCode "dhcpBootRequest" \
+                   -optionCodeList $optionList -clientHwAddr $sourceMac -tag $tag];
+            result_debug "DHCP Discover frame : $frame";
+            exSleep 2
+            StopPortsCapture $portid;
+            set rawPortDataList [GetCapturedFrames $portid];
+            set Dhcpframe [GetDhcpReplyFrame $rawPortDataList $tag];
+            set Dhcpaddress "0.0.0.0";
+            if {$Dhcpframe != "no"} {     
+                set messagetype [lindex $Dhcpframe 284];  
+                set exosMessagetype [lindex $Dhcpframe 290];
+               if { $messagetype == "02" || $exosMessagetype == "02"} {
+                  report_start_test "DHCP : Got Offer message type from DHCP server";
+                  set Dhcpaddress [GetDhcpClientAddr $Dhcpframe];
+                  SendDHCPRequest $sourceMac $portid $pserver $Dhcpaddress 1 $tag;
+                  report_end_test
+               }
+           } else {
+	       result_error "Did not receive Boot Reply from DHCP server";  
+               result_debug "If this failure is on a 10G xenpak port, try resetting the IXIA Xenpak HW and re-run test";         
+           }
+    } else {
+	result_ok "Did not receive Boot Reply from DHCP server as expected";           
+    }
+    report_end_test;  
+}
+
+return $Dhcpaddress;
+}
+
+##################################################################
+# Function : SendDHCPRequest 
+#
+# Comment  : Send a DHCP request package and wait for ack frame.  
+#          
+# Option   : 
+#            sourceMac - source Mac 
+#            portid - port number 
+#            serverid - dhcp server identifier
+#            requestedipa - requested ipaddress
+##################################################################
+proc SendDHCPRequest {sourceMac portid serverid requestedipa {logError 1} {tag none}} {
+
+     puts "tag value in dhcprequest is $tag"
+    
+    # --- setup option
+    set optionList [list dhcpMessageType dhcpRequest];  
+    lappend optionList dhcpClientId "01 $sourceMac";
+    lappend optionList dhcpRequestedIPAddr $requestedipa;
+    lappend optionList dhcpSvrIdentifier $serverid;
+    lappend optionList dhcpHostName "TQUACH";
+    lappend optionList dhcpParamRequestList "01 0F 03 06 2C 2E 2F 1F 21 F9 2B";  
+    StartPortsCapture $portid;
+
+    # GV 05-06-2011: Sleep needed here for some Ixia's before sending traffic
+    exSleep 3;
+
+    # --- send DHCP request
+    set frame [SendDhcpFrame -txPortId $portid -destMac "FF FF FF FF FF FF" \
+              -sourceMac $sourceMac -sourceIp "0.0.0.0" \
+              -destIp "255.255.255.255" -opCode "dhcpBootRequest" \
+              -optionCodeList $optionList -clientHwAddr $sourceMac -tag $tag];
+    #result_debug "DHCP request frame : $frame";
+    unset optionList;   
+    sleep 20;
+    StopPortsCapture $portid;
+    # --- get the reply
+    set rawPortDataList [GetCapturedFrames $portid];
+    set Dhcpframe [GetDhcpReplyFrame $rawPortDataList $tag];
+    if {$Dhcpframe != "no"} {
+        set messagetype [lindex $Dhcpframe 284];
+        ######### in EXOS a 6 byte address time inserted before message Type
+        set exosMessagetype [lindex $Dhcpframe 290];
+        if { $messagetype == "05" || $exosMessagetype == "05"} {
+            report_start_test "DHCP : Got ACK for IP address $requestedipa from DHCP server";
+            result_ok "DHCP : Got ACK for IP address $requestedipa from DHCP server";           
+            report_end_test;               
+        } else {
+	    set msg "Did not receive ACK from DHCP server";
+	    if { $logError } {
+		report_start_test $msg
+		result_error $msg
+		report_end_test;  
+	    } else {
+		result_warning "$msg"
+	    }
+        }              
+    } else {
+	set msg "Did not receive Boot Reply from DHCP server";
+        result_debug "If this failure is on a 10G xenpak port, try resetting the IXIA Xenpak HW and re-run test";
+	if { $logError } {
+	    report_start_test $msg
+	    result_error $msg
+	    report_end_test; 
+	} else {
+	    result_warning "$msg"
+	}
+    }
+      
+    return $Dhcpframe;
+}
+
+##################################################################
+# Function : GetDHCPOption 
+#
+# Comment  : Search for dhcp optiion.  
+#          
+# Option   : 
+#            dhcpframe
+#            option
+##################################################################
+proc GetDHCPOption {dhcpframe option} {
+
+    #puts "dhcp frame: $dhcpframe";   
+    #set st 285;
+    ####EXOS
+    set st 291;
+    set maxindx [llength $dhcpframe];  
+    while {$st < $maxindx} {
+        set opcode [expr 0x[lindex $dhcpframe $st]];
+        #puts "dhcp frame: [lindex $dhcpframe $st] - $opcode";
+        if {$opcode != $option} {
+            incr st;
+            set length [expr 0x[lindex $dhcpframe $st]];
+            #puts "length: $length"
+            incr st $length;
+        } else {
+            incr st;
+            set length [expr 0x[lindex $dhcpframe $st]];                        
+            #puts "length: $length"
+            set idx $st;
+            while {$length > 0} {
+                incr idx; 
+                set x [expr 0x[lindex $dhcpframe $idx]];
+                append val $x;
+                incr length -1;
+                if {$length > 0} {                     
+                    append val ".";
+                }
+            }               
+            return $val;
+            break;
+        }
+        incr st;
+    }  
+    return -1;
+}
+
+##################################################################
+# Function : CheckPortList 
+#
+# Comment  : It will match the string first. Then get the ports and
+#            compare them with passing in ports.   
+#          
+# Option   : 
+#            command 
+#            parameter
+#            list ports 
+##################################################################
+proc CheckPortList {command parameter lports} {
+
+    set tmp "Tmp";
+    set pwd [pwd];
+    if {[regexp -nocase "clitest" $pwd]} {
+       global tmpPath;
+       set tmp $tmpPath;
+    }
+    set pid _[pid];
+   
+    set fd_in [open "$tmp/tmp_GetKeyValue$pid" "w"];
+    SendACmd "$command" NULL $fd_in;
+    close $fd_in;
+    
+    set fg 0; 
+    set fd_in [open "$tmp/tmp_GetKeyValue$pid" "r"];
+    while {[gets $fd_in line] != -1} {
+        if {[regexp -nocase -indices -- $parameter $line matchedRange] == 1} {
+           # -- found the key           
+           set keyEnd [expr [lindex $matchedRange 1] + 1];
+           set value [string range $line $keyEnd end];
+           regsub -all "," $value " " ports;
+           set tmp [lsort -dic $ports];
+           set tmp2 [lsort -dic $lports];
+           report_start_test "Checking <$command> parameters";
+           if {[string trim $tmp] == [string trim $tmp2]} {                          
+               result_ok "Check key <$tmp> with <$tmp2> pass";
+           } else {
+               result_error "Check key <$tmp> with <$tmp2> fail";
+           }   
+           report_end_test;
+           set fg 1;
+        }
+    }
+    close $fd_in;
+    file delete "$tmp/tmp_GetKeyValue$pid";
+    if {$fg == 0} {
+        report_start_test "Checking <$command> parameters";
+        result_error "Check key <$lports> fail";
+        report_end_test;
+    }
+}                

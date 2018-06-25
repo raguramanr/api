@@ -1,0 +1,514 @@
+#!/usr/bin/tclsh
+
+
+source ../Lib/mainLib.tcl
+
+proc print_usage {} {
+   puts "\r"
+   puts {Usage: maindiag.tcl -module <module> -sfilePath <diagnostics software file> -cfg <config file> [-lst <test list>] [-regPath <regression Path>]}
+   puts {   <module>: Mariner (case insensitive, nearest match accepted)}
+   puts {   <sfilePath>: Path of the diagnostic software name (e.g. /tftp/gen_test_pmon_v1064.elf)}
+   puts {   <cfg>: Path of the config file name (e.g. short/p1_mar_diag.cfg)}
+   puts {   [<test list>]: test list (all|pass|quick|userDefined). By default all, userDefined is a filename value in module)}
+   puts {   [<regPath>]: regression Path (DiagnosticsTest. By default DiagnosticsTest, case insensitive, nearest match accepted)}
+   puts "\r"
+}
+
+;# Description: Generates summary file of execution durations
+;# NOTE: calculateTestsToRuna assumes current directory contains completetests.lst
+;# If standard list type is NOT given we just display basic Setup and CheckConn
+;# times along with total run time.
+proc generateExecutionSummary { execTimeFileName listFile module \
+	{setupDur 0} {checkConnDur 0} {totalTestDur 0} \
+	{fileName "execSummary.txt"} } {
+    
+    set quickExecDuration "NA"
+    set passExecDuration "NA"
+    set allExecDuration "NA"
+
+    ;# If we use standard list type, calculate each.
+    if { ($listFile == "quick") || ($listFile == "pass") || ($listFile == "all") } {
+
+	if { ! [file exists "completetests.lst"] } {
+	    result_debug "File completetests.lst not found in directory [pwd]"
+	    return 0
+	}   
+
+	set platform "Mariner";
+	
+	;# Format the Execution Time file into a {{testcase duration} .. } format
+	set formattedExecTimeFile [parseExecTimeFile $execTimeFileName]
+	
+	;# Generate testcase arrays of each run time (quick/pass/all)
+	set testsToRunQuick [calculateTestToRun "quick" $platform]
+	array set tests_to_runQ $testsToRunQuick
+	;# Calculate duration for this list type
+	set quickExecDuration [calcExecTime \
+		$formattedExecTimeFile \
+		[combineAndStripTestList tests_to_runQ] ]
+	
+	if {($listFile == "pass") || ($listFile == "all") } {
+	    set testsToRunPass [calculateTestToRun "pass" $platform]
+	    array set tests_to_runP $testsToRunPass
+	    ;# Calculate duration for this list type
+	    set passExecDuration [calcExecTime \
+		    $formattedExecTimeFile \
+		    [combineAndStripTestList tests_to_runP] ]
+	}
+	if {$listFile == "all"} {
+	    set testsToRunAll [calculateTestToRun "all" $platform]
+	    array set tests_to_runA $testsToRunAll
+	    ;# Calculate duration for this list type
+	    set allExecDuration [calcExecTime \
+		    $formattedExecTimeFile \
+		    [combineAndStripTestList tests_to_runA] ]
+	}
+    } 
+    
+    set execSummaryFileName "[get_result_dir]/$fileName"
+    set fdout [open  $execSummaryFileName "w+"]
+
+    puts $fdout "----- Execution Time Summary For $module -----"
+    puts $fdout "   SETUP: $setupDur  \t([formatSeconds $setupDur])"
+    puts $fdout "CHK_CONN: $checkConnDur  \t([formatSeconds $checkConnDur])"
+    puts $fdout "   QUICK: $quickExecDuration  \t([formatSeconds $quickExecDuration])"
+    puts $fdout "    PASS: $passExecDuration  \t([formatSeconds $passExecDuration])"
+    puts $fdout "     ALL: $allExecDuration  \t([formatSeconds $allExecDuration])"
+    puts $fdout "\nTOTAL CURRENT RUN:  $totalTestDur  ([formatSeconds $totalTestDur])"
+
+    return 1
+}
+
+
+proc executeTestsToRun {testsToRun} {
+
+    global numMSM
+    global msmList
+    global MSMA_CONNECT
+    global MSMB_CONNECT
+    global connect
+    global script
+    global execTimeFileName
+
+    set returnFlag "testCompleted"
+
+    ;# For backward compatibility with previous eval command
+    ;# we need to handle array like eval did, rather than using foreach 
+    set pID [pid]
+    set tmpFileName "Tmp/testsToRun_$pID"
+    set fdin_ttr [open  $tmpFileName "w+"]
+
+    puts $fdin_ttr $testsToRun
+
+    set fdin_execTime [open $execTimeFileName "RDWR APPEND CREAT"]
+    ;# Dump tests to run, so we can see what we intended to run.
+    flush $fdin_execTime
+
+    flush $fdin_ttr
+    seek $fdin_ttr 0 start
+    
+    while {[gets $fdin_ttr line] != -1} {
+
+	;# Tag START time
+	set timeStart [clock seconds];
+
+	if [catch {eval $line} reason] {
+            global errorInfo
+	    puts "errorInfo: $errorInfo"
+	    puts "****ERROR REASON: $reason"
+	    ;# Write report out
+	    report_start_test "Failed to continue test - Reason: <$reason>"
+	    result_error "Failed to continue - Reason: $reason\n"
+	    result_debug "errorInfo: $errorInfo"
+	    report_end_test
+	    close_result_file
+	    fix_report_level
+	    ;# trim whitespace
+	    set line [string trim $line] 
+	    if { ! [regexp "invalid command name\ *\"$line\"" $reason] } {
+		;# Clean up DUTs in case testcase ended abruptly
+		;# But NOT for bad testcase name passed in.  Saves some unfonf time
+#		foreach msm $msmList {
+#		    global MSM${msm}_CONNECT
+#		    global MSM${msm}_SETUP
+#		    set connect [set MSM${msm}_CONNECT]
+#		    set script [set MSM${msm}_SETUP]
+#		    RunSetupScript $connect $script
+#		}
+	    }
+
+	} else {
+            # Checking reason for -1, in case init returns before full run
+            if {$reason==-1} {
+               return $reason
+            }
+	    set tc [parseTestCaseFromLine $line]
+	    if {$tc != ""} {
+
+		;# Log END time
+		set timeEnd [clock seconds];
+		set duration [expr $timeEnd - $timeStart]
+		
+		;# write to testcase and duration to execTime.txt
+		;# Write out duration to Execution Time File
+		;# Add testcase: and duration: for easier parsing
+		result_debug "testcase:$tc\tduration:$duration"
+
+		puts $fdin_execTime "testcase:$tc\tduration:$duration"
+		flush $fdin_execTime
+	    }
+	}
+    }
+
+    close $fdin_ttr
+
+    close $fdin_execTime
+    
+    catch {file delete -force "$tmpFileName"} reason
+
+    return $returnFlag
+}
+
+   
+   source ../Lib/parse_args.tcl
+
+   parse_args main $argv {
+      module "null"
+      cfg "null"
+      lst "all"
+      tcList ""
+      regPath "diagnostics"
+      sfilePath ""
+   }
+
+   # checking command parameters
+   if {$argc<3 || $sfilePath == ""} {
+      puts "Not enough parameters"
+      print_usage
+      puts stderr "Not enough parameters"
+      return
+   }
+
+   set diagFile "$sfilePath";
+
+   # Get the regression types
+   set regressions [glob -- ../*]
+   set regNames ""
+   foreach regName $regressions {
+      if {[file isdir $regName]} {
+         lappend regNames $regName
+      }
+   }
+
+   set LIB_PATH "../../Lib"
+   lappend auto_path $LIB_PATH
+
+   puts "DEBUG: Appending $LIB_PATH to autopath:$auto_path"
+
+   foreach regName $regNames {
+      set match ""
+      set str ""
+      if {[regexp -nocase "(^../$regPath.*)" $regName match str]} {
+         set regPath $str
+      }
+   }
+   ;# We append path info later, so we save raw module name for use later
+   set modName $module
+   
+   gen_index "./../Lib"
+  
+   set modules [glob -- $regPath/*]
+   set regressionModules ""
+   foreach moduleName $modules {
+      if {[file isdir $moduleName]} {
+         lappend regressionModules $moduleName
+      }
+   }
+
+   foreach regressionModule [lsort $regressionModules] {
+      set match ""
+      set str ""
+      if {[regexp -nocase "(^$regPath/$module.*)" $regressionModule match str]} {
+         set module $str
+	 break
+      }
+   }
+   set sourceFile ""
+   # backtracked path needed for other utilties outside main to work
+   if [catch {source "../main/cfg/common.cfg"} rea] {
+      puts "*** WARNING: Unable to source common.cfg:$rea............... ***"
+      puts "*** WARNING: Application level variables may not be defined. ***"
+      exit -1
+   }
+
+   if {$cfg != "null"} {
+       set sourceFile $cfg
+       if {([regexp -nocase "^short" $sourceFile]&&[regexp -nocase {/} $sourceFile]) || \
+           [regexp -nocase "^pt" $sourceFile]} {
+          puts "regPath:$regPath  module:$module  sourceFile: $sourceFile"
+          #set sourceFile [format %s/%s/%s $regPath $module $sourceFile]
+          set sourceFile [format %s/%s $module $sourceFile]
+          set sourceFile [string trim $sourceFile];
+       } elseif {![regexp -nocase "^cfg" $sourceFile] && ![regexp -nocase {/} $sourceFile]} {
+          if {[file exists $sourceFile]==0} {
+             set sourceFile [format %s/%s cfg $sourceFile]
+             set sourceFile [string trim $sourceFile];
+          }
+       }
+       puts "Using config file: ($sourceFile)"
+   }
+
+   if {[file exists $sourceFile] == 0} {
+      puts "Cannot find config file: $sourceFile\n"
+      puts stderr "Cannot find config file: $sourceFile"
+      return
+   }
+
+   puts "************** ABOUT TO source $sourceFile *****************"
+   catch {source $sourceFile} reason
+
+   if {![file isdirectory ../main/Tmp]} {
+      file mkdir ../main/Tmp
+   }
+   set optionalPath ""
+
+# ## CHANGE TO USE MSMA_CONNECT serial port IP Address as unique ID ###
+   set initFileId $MSMA_CONNECT
+
+   cd $module
+
+############################################################
+# Expect Hacks
+############################################################
+
+# This is necessary to get an absolute path for logging
+set REG_PATH [pwd]
+
+#load {expect52.dll}
+if {$tcl_platform(platform) == "windows"} {
+  load "expect52.dll"
+} else {
+  load [lindex [glob "/usr/lib/libexpect*so*"] 0]
+}
+
+log_user 0
+
+############################################################
+# NEW PARSE ARGS SECTION
+############################################################
+############################################################
+############################################################
+set returnFlag "NULL"
+
+#############################################################
+# Arg description
+#############################################################
+# -cfg smokeATM8.cfg   ;Traditional config file to be loaded in each module
+# -module null ;Module to be run a dir half name would work as the code puts wildcards
+############################################################
+# Parse Args
+############################################################
+   ## module setup
+   if {$module != "null"} {
+      puts "Setting to run regression for module $module"
+   }
+   
+############################################################
+# Create Directories
+############################################################
+
+   if {![file isdirectory Report]} {
+      file mkdir Report
+   }
+   if {![file isdirectory Result]} {
+     file mkdir Result
+   }
+   if {![file isdirectory Tmp]} {
+      file mkdir Tmp
+   }
+   if {![file isdirectory Log]} {
+      file mkdir Log
+   }
+   set initFile "Tmp/DUTINFO_$initFileId"
+   set fn [file tail $cfg]
+   set fn [string trim $fn]
+   set fn [file rootname $fn]
+   append initFile "_"
+   append initFile $fn
+   append initFile ".txt"
+   set auto_path [linsert $auto_path 0 . ]
+   gen_index .
+
+if {[file exists $initFile]} {
+   if {[catch {file delete $initFile} reason]} {
+#      puts "Failed to delete init file $initFile: $reason"
+   }
+}
+
+# generate a new initialization file
+if {(![file exists $initFile])} {
+   catch {open $initFile "w"} fast
+   if {[regexp -nocase "denied" $fast]} {
+      ;
+   }
+}
+
+############################################################
+
+set tStartTime [clock seconds]
+set tStartDate [clock format [clock seconds] -format "%Y-%m-%d %I.%M.%S%p"]
+set passCount 0
+set failCount 0
+set skipCount 0
+set testDuration 0
+set testHour 0
+set testMin 0
+set testSec 0
+set resultDir "NULL"
+
+
+puts "maindiag.tcl CUR DIR: [pwd]"
+
+set fd_res [open_result_file "main"]
+result_h1 "[file tail [pwd]] Test"
+
+#added following definition to aid per module report-mailing
+global DUTs_info
+
+set DUTs_info(current_module) $module
+
+set returnFlag [DiagSysSetup];
+
+set tSetupEnd [clock seconds]
+set tSetupDuration [expr $tSetupEnd - $tStartTime]
+
+# If tests_to_run not defined so far, try to source now
+# If this were a re-run, we would use a pt_xxx cfg file which would contain
+# tests_to_run in it.  In this case, we don't need to "figure out" which
+# tests to run.
+if {![info exists tests_to_run]} {
+   set fName ""
+#   regexp -nocase "couldn't read file (.*):" $reason match fName
+#   set fn [string trimleft $fName "\""]
+#   set fm [string trimright $fn "\""]
+#   puts "DEBUG: fm: $fm"
+#   source $fm
+  
+   set platform "Mariner";
+   set testsToRun [calculateTestToRun $lst $platform]
+   array set tests_to_run $testsToRun
+
+} else {
+    ;# Zero out so we don't try to generate execution times
+    set lst "none"
+}
+
+result_debug "tests to run [parray tests_to_run]"
+
+    set execTimeFileName "[get_result_dir]/execTime.txt"
+
+    AddTestbedInfoToDUTs_info
+
+    if {$tcList != ""} {
+	global lst
+	result_debug "Test case list defined on command line: $tcList"
+	unset tests_to_run
+	set tests_to_run [list]
+	foreach testcase $tcList {
+	    set tests_to_run "$tests_to_run\n$testcase"
+	}
+	set lst "custom"
+    }
+
+    if { [array size tests_to_run] == 0 } {
+	;# Convert old list style to array
+	set tempList $tests_to_run
+	unset tests_to_run
+	set tests_to_run(all) $tempList
+    }
+
+    set testtorunNo 1
+
+    ;# Array of tests_to_run() lists. i.e. tests_to_run(all), tests_to_run(7.0),etc.
+    set indexList [array names tests_to_run]      
+    mainSort indexList
+    
+    foreach arrayIndex $indexList {      
+	set ver [string tolower $arrayIndex]
+	
+	if { ("$ver" == "all") || ("$ver" == "null") \
+		|| [CompareRelease $ver [GetVersion DUT1 ]] <= 0 } {
+
+	    if {[regexp -nocase "clitest" $regPath]} {
+		set returnFlag [executeCLITestsToRun $tests_to_run($ver) \
+			$regPath $testtorunNo]
+
+		if {$returnFlag == "testCompleted"} {
+		    incr testtorunNo
+		}
+	    } else {		
+		set returnFlag [executeTestsToRun $tests_to_run($ver)]
+                if {$returnFlag==-1} {
+                   break
+                }
+	    }
+
+	} else {
+	    set returnFlag "testSkipped"
+	}
+    }       
+
+set tEndTime [clock seconds]
+set testDuration [expr $tEndTime-$tStartTime]
+
+result_debug "\n\n*** Time for [file tail [pwd]] Regression test = $testDuration seconds"
+result_debug "***    ( [formatSeconds $testDuration] )\n\n"
+
+;# Write all buffered data into result file.
+if {$fd_res != ""} {
+    catch {flush $fd_res} result
+    if {$result != ""} { result_error "$result" }
+}
+
+save_test_report "[get_result_dir]/report.exr"
+my_gen_text_report "[get_result_dir]/report.exr" "[get_result_dir]/report.txt" "[file tail [pwd]]" $sourceFile
+my_gen_text_report "[get_result_dir]/report.exr" "stdout" "[file tail [pwd]]" $sourceFile
+
+flush stdout
+flush stderr
+
+;# Generate a Execution Summary File only if we used "all/pass/quick" list.
+if {[file exists $execTimeFileName] } {
+
+    result_debug "Generating Execution Summary File"
+    if {[generateExecutionSummary $execTimeFileName $lst $module \
+	    "$tSetupDuration" "0" $testDuration] == 0} {
+	result_debug "...No execution summary file was generated..."
+    }
+
+} else {    
+    result_debug "Execution Summary File NOT generated"
+    result_debug "$execTimeFileName present:  [file exists $execTimeFileName]"
+    result_debug "lst file: $lst"
+}
+
+result_debug "maindiag.tcl returnFlag: $returnFlag"
+if { $returnFlag == "testCompleted" || $returnFlag == "testSkipped" } {
+    ;# Move the complete result directory to report directory
+    result_debug "Moving contents of [get_result_dir] to Report directory"
+    my_move_result_directory $optionalPath "" $execTimeFileName
+} else {
+    result_error "main.tcl error $returnFlag"
+    result_error "Report NOT moved to Report directory"
+}
+
+;# Write return code to stderr so runall_monitor.tcl can "catch" the value
+;# If main.tcl terminates abnormal somewhere else in the code without writing
+;# to stderr, we can "catch" that.
+
+puts stderr $returnFlag
+flush stderr
+
+cd ..
+
+close_result_file;

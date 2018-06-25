@@ -1,0 +1,294 @@
+
+proc CheckIpv6Forwarding {args} {
+
+   parse_args CheckIpv6Forwarding $args {
+     txPortId "1"
+     rxPortId "0"  
+     protocol "ipV6"
+     nHeader "tcp"
+     trafficClass "3"
+     flowLabel "0"
+     hopLimit "255"
+     tag      "none"
+     generateArpReq "1"
+#     inSaMac "default"
+#     inDaMac "00:00:00:00:00:01"
+
+  inSaMac "default"
+     inDaMac "FF:FF:FF:FF:FF:FF"
+     sIpAddr "3ffe:2::2"
+     dIpAddr "3ffe:1::1"
+     gIpAddr "0.0.0.0"    
+     sPort "1000"
+     dPort "2000"
+     frameSize "128"
+     icmpType "0"
+     icmpCode "0"
+     #dontFrag "true"
+     #ttl "64"
+     #ttlDecr "1"
+     checkPortList {"2 forwarded 1 exact"} 
+     numLearnFrame "1"
+     numIpV6Frame "1"
+     frameRate "default"
+     filePt "NULL"
+     ipDaMode "ipIdle"
+     ipSaMode "ipIdle"
+     ipDaCount ""
+     ethernetType "noType"
+     frameType "86 DD"
+     ipSaCount ""
+     #ipOptions ""
+     tcpSynFlag "false"
+     tcpFinFlag "false"
+     tcpRstFlag "false"
+     tcpAckFlag "false"
+     tcpPushFlag "false"
+     tcpUrgFlag "false"
+     checkMirroringTag "yes"
+     mirroringPort "0"
+     #TOS "default"
+     userPriority "0"
+     careTotalIp "no" 
+     CRC "good"
+     comment ""
+     rate "null"
+     udfEnable "false"
+     udfInitval "00"
+     udfOffset "0"
+     udfCountertype "c8"
+     udfContinuousCount "false"
+   }
+
+   set rc 0
+
+   if { $gIpAddr == "0.0.0.0" } { set gIpAddr $dIpAddr }
+
+   set pPattern "abcd"   
+
+   if {$rxPortId == $txPortId} {
+      result_error "Invalid port specification: txPortId=rxPortId"
+      return
+   }
+   foreach checkPort $checkPortList {
+      lappend portMonitorList [lindex $checkPort 0]
+   }
+   
+   if {$careTotalIp == "yes"} { set totalIpPacketReceived 0 }
+   if {[lindex $tag 0]!="none"&&$frameSize==64} {set frameSize 68}
+
+   report_start_test "Frame $protocol L2 forwarding check on \
+                    			Txport $txPortId $comment"
+
+   #turn on capturing function on all the monitor ports
+   StartPortsCapture $portMonitorList
+
+         
+   set numExpectedFrame $numIpV6Frame
+   #retrieve data
+ 
+      
+         set destMacAddrTx $inDaMac
+
+        set rxTag "none"
+         if {[llength $tag] > 1} { set rxTag [lindex $tag 1] }
+        set txTag [lindex $tag 0]
+         
+
+         # Send a single IP frame to seed the FDB, and IP FDB tables.
+
+   #      if {$rxPortId > 0 && $numIpV6Frame > 1} {
+   #          SendIpv6Frame -txPortId $txPortId -sourceIp $sIpAddr \
+   #                      -destMac $destMacAddrTx \
+   #                      -rxPortId $rxPortId -destIp $dIpAddr
+   #      }
+
+         #turn on capturing function on all the monitor ports
+         StartPortsCapture $portMonitorList
+         
+         #send packets
+
+    result_debug "\n$numIpV6Frame IPv6 Frames  sent on portId $txPortId:"
+
+   set frameSent [SendIpv6Frame -txPortId $txPortId -protocol $protocol -tag $txTag \
+                        -frameType $frameType -protocol $protocol -nHeader $nHeader \
+                        -destPort $dPort -sourcePort $sPort -trafficClass $trafficClass \
+                        -ipDaMode $ipDaMode -ipDaCount $ipDaCount -hopLimit $hopLimit \
+                        -ipSaMode $ipSaMode -ipSaCount $ipSaCount \
+                        -type $icmpType -code $icmpCode -frameRate $frameRate \
+                        -tcpSynFlag $tcpSynFlag -tcpFinFlag $tcpFinFlag \
+                        -tcpRstFlag $tcpRstFlag -tcpAckFlag $tcpAckFlag \
+                        -tcpPushFlag $tcpPushFlag -tcpUrgFlag $tcpUrgFlag \
+                        -dataPattern $pPattern -numFrames $numIpV6Frame \
+                        -frameSize $frameSize -sourceMac $inSaMac \
+                        -destMac $destMacAddrTx -sourceIp $sIpAddr \
+                        -destIp $dIpAddr -udfEnable $udfEnable  \
+                        -udfInitval $udfInitval -udfOffset $udfOffset -udfCountertype \
+                         $udfCountertype -udfContinuousCount $udfContinuousCount]
+
+
+
+
+
+        # result_debug "Ipv6 frame sent is $frameSent"
+         set numExpectedFrame $numIpV6Frame
+
+
+
+	foreach portId $portMonitorList {
+
+           set numPacketReceived($portId) 0
+           set rawPortData [GetCapturedFrames $portId]
+           foreach frameReceived $rawPortData {
+
+              set frameSizeSent [string length $frameSent]
+             set frameSizeReceived [string length $frameReceived]
+
+
+    set sourceMacRecv [GetSourceMacAddress $frameReceived]
+    set destMacRecv [GetDestMacAddress $frameReceived]
+
+    set sourceIpSent [string range $frameSent 78 125 ]
+    set destIpSent [string range $frameSent 126 173 ]
+    set sourceIpRecv [string range $frameReceived 78 125 ]
+    set destIpRecv [string range $frameReceived 126 173 ]
+    #set sourceIpRecv [GetSourceIPAddress $frameReceived] ;#
+   # set destIpRecv [GetDestIPAddress $frameReceived] ;#
+   # result_debug "Source and Dest Ip on  Portd $txPortId"
+ #   result_debug " SourceMac: $inSaMac  DestMac: $destMacSent"
+  # result_debug " SourceIP : $sourceIpSent  DestIp : $destIpSent"
+  #  result_debug "Source and Dest Ip on Portd $rxPortId"
+  #  result_debug "SourceIp: $sourceIpRecv DestIp: $destIpRecv"
+  #  result_debug " SourceMac: $sourceMacRecv  DestMac: $destMacRecv"
+
+    set typeSent [string range $frameSent 36 40]
+    set typeReceived [string range $frameReceived 36 40]
+
+    #L2 forwarding
+
+          if { ($sourceIpRecv == $sourceIpSent ) && \
+               ($destIpRecv == $destIpSent) && [CheckTag $frameReceived [lindex $tag 1] ]} {
+ 
+            incr numPacketReceived($portId) 1
+             result_debug "Source and Dest IP check pass"
+             #check data
+             }
+           }
+           result_debug "numPacketReceived($portId)= $numPacketReceived($portId)"
+           if {$careTotalIp == "yes"} {incr totalIpPacketReceived $numPacketReceived($portId)}
+        }
+
+
+
+   #now check received data against checkList to see if matched
+   set testResult "good"
+   foreach checkPort $checkPortList {
+      set portId [lindex $checkPort 0]
+      set portFlag [lindex $checkPort 1]
+      set expectedRange "exact"
+      switch -- $portFlag \
+         "forwarded" {
+            if {[lindex $checkPort 2] == ""} {
+              set expectedPacket $numExpectedFrame
+            } else {  
+              set expectedPacket [lindex $checkPort 2]
+              if { [lindex $checkPort 3] != ""} { 
+                 set expectedRange [lindex $checkPort 3] ;# could be up or down
+              }  
+            }   
+      }  "notForwarded" {
+            set expectedPacket 0
+      }  default {
+            set expectedPacket $portFlag
+      }
+                        
+      switch -- $expectedRange {
+         "up" {
+            if { ($numPacketReceived($portId) >= $expectedPacket) } {
+               result_debug "Forwarding on port $portId checked Ok  \
+                                  ($numPacketReceived($portId)). Was $portFlag"
+               set testResult "good"
+            } else {
+
+               result_error "Forwarding criteria failed on port $portId."
+               result_debug "numPacketReceived= $numPacketReceived($portId) \
+                                        BUT expectedPackets= $expectedPacket"
+               set testResult "bad"
+            }
+         } 
+         "down" {
+            if { ($numPacketReceived($portId) <= $expectedPacket) } {
+               result_debug "Forwarding on port $portId checked Ok \
+                                 ($numPacketReceived($portId)). Was $portFlag"
+            } else {
+
+               result_error "Forwarding criteria failed on port $portId."
+               result_debug "numPacketReceived= $numPacketReceived($portId) \
+                                    BUT expectedPackets= $expectedPacket"
+               set testResult "bad"
+            }
+         }
+         "exact" -
+         default {
+           if { ($numPacketReceived($portId) == $expectedPacket) } {
+
+              result_debug "Forwarding on port $portId checked Ok \
+                             ($numPacketReceived($portId)). Was $portFlag"
+
+           } else {
+
+              result_error "Forwarding criteria failed on port $portId."
+              result_debug "numPacketReceived= $numPacketReceived($portId) \
+                                          BUT expectedPackets= $expectedPacket"
+              set testResult "bad"
+
+           }
+         }
+      }    
+   }
+   if {$careTotalIp == "yes"} {
+     if {$totalIpPacketReceived == $numIpV6Frame } {
+
+        result_debug "Forwarding on total received IP packets checked Ok"
+
+    } else {
+
+        result_error "Forwarding failed on total received IP packets \
+                                                 from all forwarded ports"
+
+        result_debug "total no. Packet Received($totalIpPacketReceived) \
+                                      <> total no. IP packets sent($numIpFrame)"
+
+        set testResult "bad"        
+     }            
+   }
+   if {$testResult == "good"} {
+      result_ok "Check data forwarding passed"
+      set rc 1
+   } else {
+      result_error "Check data forwarding failed"
+      set rc 0
+   }  
+   report_end_test
+
+   return $rc
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

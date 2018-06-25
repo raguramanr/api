@@ -1,0 +1,157 @@
+#!/usr/bin/tclsh
+
+##################################################################
+# Procedure Name: CheckMSMPorts
+# Description: Checks for the aspen blade 10gx2c and skips the testcase.
+#This proc is to be used if msm operations are performed on the
+#same blade which it does not support.
+# Input args: None
+# Output args: none
+# Return value: return
+##################################################################
+
+proc CheckMSMPorts {} {
+global DUT1_CONNECT
+global bd8kChassis
+upvar time1 time1
+upvar time2 time2
+upvar testNo testNo
+
+set plat [GetPlatform DUT1]
+if { [regexp -nocase $bd8kChassis $plat] } {
+   Login $DUT1_CONNECT
+   set port ""
+   set parameterlist ""
+   set port [MapDUTPortId 1]
+   set port [split $port :]
+   set slot [lindex $port 0]
+   lappend parameterlist "Slot-$slot 1"
+   set blade [GetKeyValue "show slot" $parameterlist]
+   puts "The blade that is used : $blade"
+   if { [regexp -nocase "10G2xc" $blade"] } {
+      result_skip "Skipping this testcase as MSM operations are not supported on Tribeca Blade"
+      set time2 [clock seconds];
+      result_p "*** Time for $testNo = [expr $time2-$time1] secs\n\n"
+      close_result_file
+      report_end_test
+      return -code return 0
+   }
+}
+
+}
+
+##################################################################
+# Procedure Name: RunFailoverSupported
+# Description: If DUT does not support Run Failover
+#              exit the test.
+#
+# Input args: - (1 is default) or 2 or 3..
+# Output args: none
+# Return value: return
+# Typical usage:
+#to skip a test if DUT1 does not support Failover use:
+#       RunFailoverSupported
+# to skip a test if DUT2 does not support Failover use:
+#       RunFailoverSupported 2
+##################################################################
+proc RunFailoverSupported {{dut "1"}} {
+global  DUT[set dut]_CONNECT
+global chassis
+global cfgFile
+upvar time1 time1
+upvar time2 time2
+upvar testNo testNo
+set plat [GetPlatform DUT[set dut]]
+
+if {![regexp -nocase "$chassis" $plat]} {
+   result_skip "Run failover is only supported on Chassis"
+   set time2 [clock seconds];
+   result_p "*** Time for $testNo = [expr $time2-$time1] secs\n\n"
+   close_result_file
+   report_end_test
+   return -code return 0
+}
+Login [set DUT[set dut]_CONNECT]
+set parameterList ""
+lappend parameterList "{Slot-1} 1"
+set blade [GetKeyValue "show slot" $parameterList]
+set blade [lindex $blade 0]
+if { [regexp -nocase "empty" $blade] } {
+puts "The Blade on slot 1 was $blade"
+puts "Checking on slot 2"
+set parameterList ""
+lappend parameterList "{Slot-2} 1"
+set blade [GetKeyValue "show slot" $parameterList]
+set blade [lindex $blade 0]
+}
+puts "The blade is $blade"
+exSleep 3
+if { [regexp -nocase "8500" $blade] } {
+   set parameterlist ""
+   lappend parameterlist "{MSM-A} {8500} inLine exist"
+   set msm [CheckKeyValue "show slot" $parameterlist]
+
+   if { [regexp -nocase "ok" $msm] } {
+      result_skip "This hardware does not support MSM failover"
+      set time2 [clock seconds];
+      result_p "*** Time for $testNo = [expr $time2-$time1] secs\n\n"
+      close_result_file
+      report_end_test
+      return -code return 0
+   }
+}
+}
+
+
+
+
+################################################################## 
+# Procedure Name: SendVrrpMessage   
+# Description: Send Vrrp packet from an ixia port and the packet type
+#	       is given in dataPattern argement.		     
+# Input args: args
+# Output args: none
+# Return value: Frame sent
+# Typical usage: 
+#	set srcMac [GetDUTMac "DUT1"]
+#	set destMac [GetDUTMac "DUT2"]
+#	set graftAckData "13 09 3A EA 00 00 FF 03 C0 02 02 00 EF 01 02 04 00 00 00 00 00 00 00 00 00 00"
+#	set ipTotalLength 36 
+#	set frameSent [SendVrrpMessage -txPortId 9 -sourceIp 192.3.3.1 \
+#                 -destIp 192.3.3.2 -sourceMac $srcMac -destMac $destMac \
+#                 -ipTotalLength $ipTotalLength -dataPattern $graftAckData ]     
+# Category: SendTraffic
+##################################################################
+proc SendVrrpMessage {args} {
+   parse_args SendVrrpMessage $args {
+     txPortId "1"
+     sourceMac "default"
+	  destMac "01 00 5E 00 00 12"
+	  sourceIp "127.0.0.1"
+	  destIp "224.0.0.18"
+	  ttl "255"
+     numFrames "1"
+	  tag "none"
+	  dataPattern "21 7B FF 01 00 01 7B 80 64 00 00 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00"
+	  ipTotalLength 36
+   }
+   result_debug "Host ($sourceIp) sending a Vrrp message ([lindex $dataPattern 1]) on portId $txPortId"   
+   set numIxiaCd [GetNumIxiaCd $txPortId]
+   set rxPo [MapIxiaPortId $txPortId chasisId card port]
+   if {$tag != "none" } { set wTag "true" } else {set wTag "false" }
+   global startCardNum
+
+
+   set frameSize [expr 38 + [llength $dataPattern] ]
+   result_debug "FrameSize: $frameSize"
+   set frameSent [ixiaConf_2Ports_ip -numIxiaCd $numIxiaCd \
+              -txChas $chasisId -txCard $card -txPort $port \
+              -rxChas $chasisId -rxCard $card -rxPort $rxPo \
+              -ipProtocol "112" -sMacAddr $sourceMac -dMacAddr $destMac \
+              -sIpAddr $sourceIp -dIpAddr $destIp -ttl $ttl -TOS "0xC0" ipTotalLength $ipTotalLength \
+	           -numFrames $numFrames -wTag $wTag -tagNo $tag  -dataPattern $dataPattern -frameSize $frameSize]  
+   result_debug "VrrpFrame: $frameSent"
+
+   return $frameSent
+
+}

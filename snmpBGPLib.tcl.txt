@@ -1,0 +1,1012 @@
+#!/usr/bin/tclsh
+
+########################################################################
+#  Procedure Name: snmpCheckBgpPeerTable
+#  
+#  Description:
+#    This procedures checks the SNMP BGP Peer table 
+#    (bgpPeerTable) for the existence of given 
+#    BGP table parameters.
+#
+#  Input Variables:
+#    session         - Session identifier which identifies the connection 
+#                      with the DUT
+#    remoteaddr      - IP Address of the BGP Peer
+#
+#  Optional Args:
+#    routerid        - Peer's Router id 
+#    state           - The FSM state of the Peer.
+#                      Possible values are :-
+#                         IDLE     
+#                         CONNECT 
+#                         ACTIVE  
+#                         OPENSENT 
+#                         OPENCONFIRM
+#                         ESTABLISHED
+#    peer            - Whether the state is Established or not. 
+#                      Possible values are "yes" or "no"
+#    adminstatus     - Admin status (start or stop) of the peer.
+#    version         - Peer's Version number 
+#    localaddr       - Peer's Local address
+#    localport       - Local Port connection with the Peer
+#    remoteaddr      - Address of the neighbor
+#    remoteas        - Peer's Autonomous System number
+#    inupdates       - Total UPDATE messages received from the particular peer
+#    outupdates      - Total UPDATE messages sent to the peer.
+#    inmsgs          - Total messages (all types) received.
+#    outmsgs         - Total messages sent.
+#    lasterror       - The last encountered error.
+#                      The possible Error codes and subcodes are listed below
+#
+#                      Error Code
+#                        1        Message Header Error           
+#                                   Error Sub Code
+#                                       1  - Connection Not Synchronized. 
+#                                       2  - Bad Message Length. 
+#                                       3  - Bad Message Type.                  #  
+#                        2        OPEN Message Error
+#                                       1  - Unsupported Version Number. 
+#                                       2  - Bad Peer AS. 
+#                                       3  - Bad BGP Identifier. 
+#                                       4  - Unsupported Optional Parameter. 
+#
+#                                       5  - Authentication Failure. 
+#                                       6  - Unacceptable Hold Time
+#              
+#                        3        UPDATE Message Error             
+#                                       1 - Malformed Attribute List. 
+#                                       2 - Unrecognized Well-known Attribute. 
+#                                       3 - Missing Well-known Attribute. 
+#                                       4 - Attribute Flags Error. 
+#                                       5 - Attribute Length Error. 
+#                                       6 - Invalid ORIGIN Attribute 
+#                                       7 - AS Routing Loop. 
+#                                       8 - Invalid NEXT_HOP Attribute. 
+#                                       9 - Optional Attribute Error. 
+#                                       10 - Invalid Network Field. 
+#                                       11 - Malformed AS_PATH
+#                        4        Hold Timer Expired               
+#                        5        Finite State Machine Error       
+#                        6        Cease                            
+#
+#    fsmtrans        - Number of FSM transtions
+#    fsmtime         - Time since the last FSM transition
+#    retryint        - Retry interval
+#    holdtime        - Holdtime
+#    keepalive       - Keepalive time
+#    holdtimeconf    - Configired hold time
+#    keepaliveconf   - Configured Keepalive time
+#    minasorigint    - Minimum AS origination interval
+#    minroutadvint   - Minimum route advertisement interval
+#    updateelaptime  - Time elapses after the last UPDATE was received.
+#    fd              - File descriptor for logging the debug versionments
+#    comment         - Comment to be logged in the log file    
+#
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    0       - On failure 
+#
+#  Possible Usage:
+#    snmpCheckBgpPeerTable -session $sessionid 
+#                               -remoteaddr "10.36.11.211" \
+#                               -remoteas 100 -fd $fd_res
+#######################################################################
+proc snmpCheckBgpPeerTable {args} {
+   parse_args snmpCheckBgpPeerTable $args {
+      session        ""
+      routerid       ""
+      state          ""
+      peer           ""
+      adminstatus    ""
+      version        ""
+      localaddr      ""
+      localport      ""
+      remoteaddr     ""
+      remoteport     ""
+      remoteas       ""
+      inupdates      ""
+      outupdates     ""
+      inmsgs         ""
+      outmsgs        ""
+      lasterror      ""
+      fsmtrans       ""
+      fsmtime        ""
+      retryint       ""
+      holdtime       ""
+      keepalive      ""
+      holdtimeconf   ""
+      keepaliveconf  ""
+      minasorigint   ""
+      minroutadvtint ""
+      updateelaptime ""
+      comment        "snmpCheckBgpPeerTable"
+      fd             "NULL"
+   }
+
+   set func "snmpCheckBgpPeerTable:"
+
+   if {  $session == "" || $remoteaddr == "" } {
+       error "$func Session and Peer Address must be specified "
+       return 0
+   }
+
+   snmpDebug DEBUG "$func Session-$session Peer Address-$remoteaddr -Start" $fd
+
+
+   result_debug "\n-- Checking BGP Peer table for the Peer -$remoteaddr --"
+   report_start_test "$comment"
+
+  	
+   # --- Check Router id of the Peer 
+   if { $routerid != "" } {
+      set result [snmpGet -session $session -oid bgpPeerIdentifier.$remoteaddr]
+      snmpDebug DEBUG "$func - snmpGet- $result\n" $fd
+   
+      set checkval [snmpUtilGetVal ipaddr $result]
+      snmpDebug LOG "$func -BGP Neighbour's Router id is $checkval" $fd
+      if { $checkval == $routerid } {
+         result_ok "Bgp Peer Routerid expected $routerid, got $checkval. PASS"
+      } else {
+         result_error "Bgp Peer Routerid expected $routerid, got $checkval.FAIL"
+      }
+   }
+
+   # --- Check the FSM state of the Peer
+   if { $state != "" || $peer != "" } {
+      set result [snmpGet -session $session -oid bgpPeerState.$remoteaddr]
+      snmpDebug DEBUG "$func -snmpGet- $result\n" $fd
+
+      set checkval [snmpUtilGetVal inttext $result]
+      snmpDebug LOG "$func -BGP Neighbour's is in $checkval state" $fd
+      if { $peer == "" } {
+         if { [string compare [string tolower $checkval] \
+                      [string tolower $state]] == 0 } {
+            result_ok "Bgp Peer expected $state state, got $checkval. PASS"
+         } else {
+            result_error "Bgp Peer expected $state state, got $checkval. FAIL"
+         }
+      } elseif {[regexp -nocase $peer "yes"]} {
+         if { [string compare [string tolower $checkval] "established"] == 0 } {
+            result_ok "Bgp Peer is in ESTABLISHED state. PASS"
+         } else {
+            result_error "Bgp Peer not in ESTABLISHED State. FAIL"
+
+         }
+      } elseif {[regexp -nocase $peer "no"]} {
+         if { [string compare [string tolower $checkval] "established"] == 0 } {
+            result_error "Bgp Peer is in ESTABLISHED State. FAIL"
+         } else {
+            result_ok "Bgp Peer not in ESTABLISHED state.Pass"
+         }
+
+      }  
+   }
+
+   # --- Check the Admin status of the Peer 
+   if { $adminstatus != "" } {
+      set result [snmpGet -session $session -oid bgpPeerAdminStatus.$remoteaddr]
+      snmpDebug DEBUG "$func -snmpGet- $result\n" $fd
+
+      set checkval [snmpUtilGetVal inttext $result]
+      snmpDebug LOG "$func -BGP Neighbour's Admin Status is $checkval" $fd
+      if { [string compare [string tolower $checkval] \
+                        [string tolower $adminstatus]] == 0 } {
+         result_ok "Bgp Peer Admin Status expected $adminstatus, \
+                    got $checkval. PASS"
+      } else {
+         result_error "Bgp Peer Admin Status expected $adminstatus, \
+                       got $checkval. FAIL"
+      }
+   }
+
+   # --- Check the Negotiated Version of the Peer
+   if { $version != "" } { 
+      set result [snmpGet -session $session -oid \
+                          bgpPeerNegotiatedVersion.$remoteaddr]
+      snmpDebug DEBUG "snmpGet- $result\n" $fd
+      
+      set checkval [snmpUtilGetVal int $result]
+      snmpDebug LOG "$func -BGP Neighbour's Negotiated version is $checkval" $fd
+      if { $checkval == $version } {
+         result_ok "Bgp Peer Negotiated Version expected $version, \
+                    got $checkval. PASS"
+      } else {
+         result_error "Bgp Peer Negotiated Version expected $version, \
+                       got $checkval. FAIL"
+      }
+   }
+
+   # --- Check the Local Address of the Peer
+   if { $localaddr != "" } { 
+      set result [snmpGet -session $session -oid bgpPeerLocalAddr.$remoteaddr]
+      snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+      set checkval [snmpUtilGetVal ipaddr $result]
+      snmpDebug LOG "$func -BGP Neighbour's Local Address is $checkval" $fd
+      if { $checkval == $localaddr } {
+         result_ok "Bgp Peer Local Address expected $localaddr, \
+                    got $checkval. PASS"
+      } else {
+         result_error "Bgp Peer Local Address expected is $localaddr, \
+                       got $checkval. FAIL"
+      }
+   }
+
+   # --- Check the Local port of the Peer
+   if { $localport != "" } { 
+      set result [snmpGet -session $session -oid bgpPeerLocalPort.$remoteaddr]
+      set result1 [snmpGet -session $session -oid bgpPeerRemotePort.$remoteaddr]
+
+      snmpDebug DEBUG "snmpGet- $result\n" $fd
+      snmpDebug DEBUG "snmpGet- $result1\n" $fd
+
+      set checkval [snmpUtilGetVal int $result]
+      set checkval1 [snmpUtilGetVal int $result1]
+
+      snmpDebug LOG "$func -BGP Neighbour's Local Port is $checkval" $fd
+      snmpDebug LOG "$func -BGP Neighbour's Remote Port is $checkval1" $fd
+
+      if { $checkval == $localport } {
+          result_ok "Bgp Peer Local Port expected $localport, got \
+                     $checkval.PASS"
+      } elseif { $checkval1 == $localport } {
+          result_ok "Bgp Peer Remote Port expected $localport,got \
+                     $checkval1.PASS"
+      } else {
+         result_error "Bgp Peer Local Port expected is $localport, \
+                       got $checkval. FAIL"
+      }
+   }
+
+   # --- Check the remote Port of the Peer 
+   if { $remoteport != "" } {                                                       
+      set result [snmpGet -session $session -oid bgpPeerRemotePort.$remoteaddr]
+      snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+      set checkval [snmpUtilGetVal int $result]
+      snmpDebug LOG "$func -BGP Neighbour's Remote Port is $checkval" $fd
+      if { $checkval == $remoteport } {
+         result_ok "Bgp Peer Remote Port expected $remoteport, \
+                    got $checkval. PASS"
+      } else {
+         result_error "Bgp Peer Reomte Port expected is $remoteport, \
+                       got $checkval. FAIL"
+      }
+   }
+
+
+   # --- Check the Autonomous System of the Peer
+   if { $remoteas != "" } {                                                       
+      set result [snmpGet -session $session -oid bgpPeerRemoteAs.$remoteaddr]
+      snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+      set checkval [snmpUtilGetVal int $result]
+      snmpDebug LOG "$func -BGP Neighbour's Autonomous System is $checkval" $fd
+      if { $checkval == $remoteas } {
+         result_ok "Bgp Peer Autonomous System expected $remoteas, \
+                    got $checkval. PASS"
+      } else {
+         result_error "Bgp Peer Autonomous System expected is $remoteas, \
+                       got $checkval. FAIL"
+      }
+   }
+  
+   # --- Check the total UPDATES received by the peer 
+   if { $inupdates != "" } {                                                       
+      set result [snmpGet -session $session -oid bgpPeerInUpdates.$remoteaddr]
+      snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+      set checkval [snmpUtilGetVal counter $result]
+      snmpDebug LOG "$func -BGP Neighbour's received updates is $checkval" $fd
+      if { $checkval == $inupdates } {
+         result_ok "Bgp Peer received updates expected $inupdates, \
+                    got $checkval. PASS"
+      } else {
+         result_error "Bgp Peer received updates expected is $inupdates, \
+                       got $checkval. FAIL"
+      }
+   }
+   
+   # --- Check the total UPDATES transmitted by the Peer
+   if { $outupdates != "" } {                                                       
+      set result [snmpGet -session $session -oid bgpPeerOutUpdates.$remoteaddr]
+      snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+      set checkval [snmpUtilGetVal counter $result]
+      snmpDebug LOG "$func -BGP Neighbour's transmitted updates $checkval" $fd
+      if { $checkval == $outupdates } {
+         result_ok "Bgp Peer transmitted updates expected $outupdates, \
+                    got $checkval. PASS"
+      } else {
+         result_error "Bgp Peer transmitted updates expected is $outupdates, \
+                       got $checkval. FAIL"
+      }
+   }
+  
+   # --- Check the total messages received by the Peer
+   if { $inmsgs != "" } {                                                       
+      set result [snmpGet -session $session -oid \
+                           bgpPeerInTotalMessages.$remoteaddr]
+      snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+      set checkval [snmpUtilGetVal counter $result]
+      snmpDebug LOG "$func -BGP Neighbour's total messages \
+                            recieved is $checkval" $fd
+      if { $checkval == $inmsgs } {
+         result_ok "Bgp Peer total messages received expected $inmsgs, \
+                    got $checkval. PASS"
+      } else {
+         result_error "Bgp Peer total messages received expected is $inmsgs, \
+                       got $checkval. FAIL"
+      }
+   }
+
+   # --- Check the total messages transmitted by the Peer
+   if { $outmsgs != "" } {                                                       
+      set result [snmpGet -session $session -oid \
+                           bgpPeerOutTotalMessages.$remoteaddr]
+      snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+      set checkval [snmpUtilGetVal counter $result]
+      snmpDebug LOG "$func -BGP Neighbour's total transmitted \
+                            messages $checkval" $fd
+      if { $checkval == $outmsgs } {
+         result_ok "Bgp Peer total transmitted messages expected $outmsgs, \
+                    got $checkval. PASS"
+      } else {
+         result_error "Bgp Peer total transmitted messages expected \
+                              is $outmsgs, got $checkval. FAIL"
+      }
+   }
+
+   # --- Check the Last Tansmitted Error by the Peer
+   if { $lasterror != "" } {                                                       
+      set result [snmpGet -session $session -oid bgpPeerLastError.$remoteaddr]
+      snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+      set checkval [snmpUtilGetVal hex $result]
+      snmpDebug LOG "$func -BGP Neighbour's Last error $checkval" $fd
+      if { [string compare $lasterror [string trim $checkval]] == 0 } {
+         result_ok "Bgp Peer Last error expected $lasterror, got $checkval.PASS"
+      } else {
+         result_error "Bgp Peer last error expected is $lasterror, \
+                       got $checkval. FAIL"
+      }
+   }
+
+   # --- Check the Total FSM transitions of the Peer
+   if { $fsmtrans != "" } {                                                       
+      set result [snmpGet -session $session -oid \
+                           bgpPeerFsmEstablishedTransitions.$remoteaddr]
+      snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+      set checkval [snmpUtilGetVal counter $result]
+      snmpDebug LOG "$func -BGP Neighbour's total FSM transitions $checkval" $fd
+      if { $checkval == $fsmtrans } {
+         result_ok "Bgp Peer total FSM transitions expected $fsmtrans, \
+                    got $checkval. PASS"
+      } else {
+         result_error "Bgp Peer total FSM transitions expected is $fsmtrans, \
+                       got $checkval. FAIL"
+      }
+   }
+
+   # --- Check the Duration for which the Peer is in ESTABLISHED state
+   if { $fsmtime!= "" } {                                                       
+      set result [snmpGet -session $session -oid \
+                           bgpPeerFsmEstablishedTime.$remoteaddr]
+      snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+      set checkval [snmpUtilGetVal gauge $result]
+      snmpDebug LOG "$func -BGP Neighbour is in Established version \
+                     for $checkval duration" $fd
+      if { $fsmtime <  [expr $checkval-7] || $fsmtime > [expr $checkval+7] } {
+         result_error "Duration since the BGP Peer is in ESTABLISHED version \
+                             expected is $fsmtime, got $checkval. FAIL"
+      } else {
+         result_ok "Duration since Bgp Peer is in ESTABLISHED version \
+                             expected $fsmtime, got $checkval. PASS"
+      }
+   }
+
+   # --- Check the retry connect interval of the Peer
+   if { $retryint != "" } {                                                       
+      set result [snmpGet -session $session -oid \
+                           bgpPeerConnectRetryInterval.$remoteaddr]
+      snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+      set checkval [snmpUtilGetVal int $result]
+      snmpDebug LOG "$func -BGP Neighbour's Retry interval is $checkval" $fd
+      if { $checkval == $retryint } {
+         result_ok "Bgp Peer Retry interval expected $retryint, \
+                    got $checkval. PASS"
+      } else {
+         result_error "Bgp Peer Retry interval expected is $retryint, \
+                       got $checkval.FAIL"
+      }
+   }
+
+   # --- Check the hold time of the Peer
+   if { $holdtime != "" } {                                                       
+      set result [snmpGet -session $session -oid bgpPeerHoldTime.$remoteaddr]
+      snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+      set checkval [snmpUtilGetVal int $result]
+      snmpDebug LOG "$func -BGP Neighbour's Hold time is $checkval" $fd
+      if { $checkval == $holdtime } {
+         result_ok "Bgp Peer Hold time expected $holdtime, got $checkval. PASS"
+      } else {
+         result_error "Bgp Peer Hold time expected $holdtime,got $checkval.FAIL"
+      }
+   }
+
+   # --- Check the Keepalive time of the Peer
+   if { $keepalive != "" } {                                                       
+      set result [snmpGet -session $session -oid bgpPeerKeepAlive.$remoteaddr]
+      snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+      set checkval [snmpUtilGetVal int $result]
+      snmpDebug LOG "$func -BGP Neighbour's KeepAlive value is $checkval" $fd
+      if { $checkval == $keepalive } {
+         result_ok "Bgp Peer Keepalive value expected $keepalive, \
+                    got $checkval. PASS"
+      } else {
+         result_error "Bgp Peer Keepalive value expected $keepalive, \
+                       got $checkval. FAIL"
+      }
+   }
+
+   # --- Check the configured Hold time of the Peer
+   if { $holdtimeconf != "" } {                                                       
+      set result [snmpGet -session $session -oid \
+                           bgpPeerHoldTimeConfigured.$remoteaddr]
+      snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+      set checkval [snmpUtilGetVal int $result]
+      snmpDebug LOG "$func -BGP Neighbour's configured Hold Time \
+                            is $checkval" $fd
+      if { $checkval == $holdtimeconf } {
+         result_ok "Bgp Peer configured Hold time expected $holdtimeconf, \
+                    got $checkval. PASS"
+      } else {
+         result_error "Bgp Peer configured Hold time expected $holdtimeconf, \
+                       got $checkval. FAIL"
+      }
+   }
+
+   # --- Check the configured Keealive time of the Peer
+   if { $keepaliveconf != "" } {                                                       
+      set result [snmpGet -session $session -oid \
+                           bgpPeerKeepAliveConfigured.$remoteaddr]
+      snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+      set checkval [snmpUtilGetVal int $result]
+      snmpDebug LOG "$func -BGP Neighbour's configured KeepAlive \
+                            time is $checkval" $fd
+      if { $checkval == $keepaliveconf } {
+         result_ok "Bgp Peer configured Keepalive time expected $keepaliveconf \
+                             got $checkval. PASS"
+      } else {
+         result_error "Bgp Peer configured Keepalive time expected 
+                       $keepaliveconf got $checkval . FAIL"
+      }
+   }
+
+   # --- Check the Minimum AS origination interval of Peer
+   if { $minasorigint != "" } {                                                       
+      set result [snmpGet -session $session -oid \
+                          bgpPeerMinASOriginationInterval.$remoteaddr]
+      snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+      set checkval [snmpUtilGetVal int $result]
+      snmpDebug LOG "$func -BGP Neighbour's Min AS origination \
+                            interval is $checkval" $fd
+      if { $checkval == $minasorigint } {
+         result_ok "Bgp Peer Min AS Origination interval \
+                    expected $minasorigint got $checkval. PASS"
+      } else {
+         result_error "Bgp Peer  Min AS Origination interval \
+                       expected $minasorigint got $checkval. FAIL"
+      }
+   }
+
+   # --- Check the Minimum route advertisement interval of the Peer
+   if { $minroutadvtint != "" } {                                                       
+      set result [snmpGet -session $session \
+                    -oid bgpPeerMinRouteAdvertisementInterval.$remoteaddr]
+      snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+      set checkval [snmpUtilGetVal int $result]
+      snmpDebug LOG "$func -BGP Neighbour's Min Route Advertisement interval \
+                     is $checkval" $fd
+      if { $checkval == $minroutadvtint } {
+         result_ok "Bgp Peer Min Route Advertisement interval expected \
+                    $minroutadvtint got $checkval. PASS"
+      } else {
+         result_error "Bgp Peer Min Route Advertisement interval \
+                       expected is $minroutadvtint got $checkval. FAIL"
+      }
+   }
+
+   # --- Check the time elapsed after the last UPDATE from the Peer
+   if { $updateelaptime != "" } {                                                       
+      set result [snmpGet -session $session -oid \
+                           bgpPeerInUpdateElapsedTime.$remoteaddr]
+      snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+      set checkval [snmpUtilGetVal gauge $result]
+      snmpDebug LOG "$func -BGP Neighbour's Elapsed UPDATE time \
+                            is $checkval" $fd
+      if { $checkval == $updateelaptime } {
+         result_ok "Bgp Peer Elapsed UPDATE time expected $updateelaptime \
+                    got $checkval. PASS"
+      } else {
+         result_error "Bgp Peer Elapsed UPDATE time expected \
+                       is $updateelaptime got $checkval. FAIL"
+      }
+   }
+
+   report_end_test
+
+   snmpDebug DEBUG "$func - End\n" $fd
+   return 1
+
+}
+
+
+########################################################################
+#  Procedure Name: snmpCheckBgpScalars
+#  
+#  Description:
+#    This procedures checks the SNMP BGP scalars 
+#    BGP Version , Autonomous System Number and BGP Identifier 
+#
+#
+#  Input Variables:
+#    session     - Session identifier which identifies the connection 
+#                  with the DUT
+#
+#  Optional Args:
+#    routerid   - Configured Routerid.
+#    version    - BGP Version number 
+#    asnumber   - Autonomous System number
+#    fd         - File descriptor for logging the debug versionments
+#    comment    - Comment to be logged in the log file    
+#
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    0       - On failure 
+#
+#  Possible Usage:
+#    snmpCheckBgpScalars -session $sessionid 
+#                        -routerid "10.36.11.211" \
+#                        -asnumber 100 -fd $fd_res \
+#                        -version 4
+#######################################################################
+proc snmpCheckBgpScalars {args} {
+   parse_args snmpCheckBgpScalars $args {
+      session  ""
+      routerid ""
+      version  ""
+      asnumber ""
+      comment  "snmpCheckBgpScalars"
+      fd       "NULL"
+   }
+
+   set func "snmpCheckBgpScalars:"
+
+   if { $session == "" } {
+       error "$func Session must be specified "
+       return 0
+   }
+
+   snmpDebug DEBUG "$func Session-$session -Start" $fd
+
+
+   result_debug "\n-- Checking BGP Scalar values for session $session --"
+   report_start_test "$comment"
+
+  
+   # --- Check Router id is valid
+   if { $routerid != "" } {
+      set result [snmpGet -session $session -oid bgpIdentifier.0]
+      snmpDebug DEBUG "$func - snmpGet- $result\n" $fd
+   
+      set checkval [snmpUtilGetVal ipaddr $result]
+      snmpDebug LOG "$func - BGP Router id is $checkval" $fd
+      if { $checkval == $routerid } {
+         result_ok " BGP Routerid expected $routerid, got $checkval. PASS"
+      } else {
+         result_error "BGP Routerid expected $routerid, got $checkval. FAIL"
+      }
+   }
+
+   # --- Check the version being used is valid
+   if { $version != "" } {
+      set result [snmpGet -session $session -oid bgpVersion.0]
+      snmpDebug DEBUG "$func -snmpGet- $result\n" $fd
+
+      set checkval [snmpUtilGetVal hex $result]
+      snmpDebug LOG "$func -BGP version is $checkval" $fd
+      if { $checkval == $version } {
+         result_ok "Bgp version expected $version, got $checkval. PASS"
+      } else {
+         result_error "Bgp version expected $version, got $checkval. FAIL"
+      }
+   }  
+
+   # --- Check the Autonomous System number is valid 
+   if { $asnumber != "" } {
+      set result [snmpGet -session $session -oid bgpLocalAs.0]
+      snmpDebug DEBUG "$func -snmpGet- $result\n" $fd
+
+      set checkval [snmpUtilGetVal int $result]
+      snmpDebug LOG "$func -BGP AS number is $checkval" $fd
+      if { $checkval == $asnumber } {
+         result_ok "Bgp AS number expected $asnumber, got $checkval. PASS"
+      } else {
+         result_error "Bgp AS number expected $asnumber, got $checkval. FAIL"
+      }
+   }
+
+
+   report_end_test
+
+   snmpDebug DEBUG "$func - End\n" $fd
+   return 1;
+}
+
+
+########################################################################
+#  Procedure Name: snmpCheckBgpAttrTable
+#
+#  Description:
+#    This procedures checks the SNMP BGP scalars
+#    BGP Version , Autonomous System Number and BGP Identifier
+#
+#
+#  Input Variables:
+#    session     - Session identifier which identifies the connection
+#                  with the DUT
+#
+#  Optional Args:
+#    routerid   - Configured Routerid.
+#    version    - BGP Version number
+#    asnumber   - Autonomous System number
+#    fd         - File descriptor for logging the debug versionments
+#    comment    - Comment to be logged in the log file
+#
+#  Output Variables:
+#     None
+#
+#  Return Variables:
+#    0       - On failure
+#
+#  Possible Usage:
+#    snmpCheckBgpAttrTable - session $sessionid
+#                        -routerid "10.36.11.211" \
+#                        -asnumber 100 -fd $fd_res \
+#                        -version 4
+########################################################################
+
+proc snmpCheckBgpAttrTable {args} {
+   parse_args snmpCheckBgpAttrTable $args {
+      session        ""
+      papeer         ""
+      paprefixlen    ""
+      paprefix       ""
+      paorigin       ""
+      paaspathseg    ""
+      panexthop      ""
+      pamed          ""
+      palpref        ""
+      paatomicaggr   ""
+      paaggras       ""
+      paaggraddr     ""
+      pacalpref      ""
+      pabest         ""
+      paunknown      ""
+      status         "exist"
+      comment        "snmpCheckBgpAttrTable"
+      fd             "NULL"
+
+   }
+
+   set func "snmpCheckBgpAttrTable:"
+
+   if { $session == "" || $papeer == "" || $paprefixlen == "" || $paprefix == \
+        "" } {
+
+      error "$func Session,Peer Address,Route Prefix length and the Route \
+             prefix must be specified "
+      return 0
+   }
+
+   snmpDebug DEBUG "$func Session-$session Peer Address-$papeer Route Prefix \
+                    Length $paprefixlen and Route Prefix $paprefix -Start" $fd
+
+
+   result_debug "\n-- Checking BGP Peer Attribute table for the Peer \
+                 -$papeer and Route Prefix -$paprefix --"
+
+   report_start_test "$comment"
+
+   set status [string tolower $status]
+
+   # --- Check  the ORIGIN attribute of the Route
+   if { $paorigin != "" } {
+      set result [snmpGet -session $session -oid \
+                  bgp4PathAttrOrigin.$paprefix.$paprefixlen.$papeer]
+
+      snmpDebug DEBUG "$func - snmpGet- $result\n" $fd
+      if { [string compare $status "notexist"] == 0 } {
+         if { [regexp -nocase "No.*Such.*Instance" $result] == 1 } {
+            result_ok "The Origin attribute does not exist as expected. PASS"
+         } else {
+            result_error "The Origin attribute wanted Not-Exist got Exist.FAIL"
+         }
+      } else {
+
+          set checkval [snmpUtilGetVal inttext $result]
+
+          snmpDebug LOG "$func -BGP Route Origin for the route $paprefix \
+                            is $checkval" $fd
+
+          if { [string compare [string tolower $checkval] \
+                        [string tolower $paorigin]] == 0 } {
+            result_ok "The Route origin for the route $paprefix expected \
+                       $paorigin, got $checkval. PASS"
+          } else {
+             result_error "The Route origin for the route $paprefix expected \
+                    $paorigin, got $checkval. FAIL"
+          }
+      }
+   }
+
+   # --- Check  the AS Path Segment attribute of the Route
+   if { $paaspathseg != "" } {
+      set result [snmpGet -session $session -oid \
+                  bgp4PathAttrASPathSegment.$paprefix.$paprefixlen.$papeer]
+
+      snmpDebug DEBUG "$func - snmpGet- $result\n" $fd
+
+      set checkval [snmpUtilGetVal hex $result]
+      
+      snmpDebug LOG "$func -BGP AS Path Segment for the route $paprefix \
+                            is $checkval" $fd
+      set value "123 111 222"
+      if { [string compare $paaspathseg $value] == 0 } {
+         result_ok "The AS Path Segment of the route $paprefix expected \
+                    $paaspathseg, got $value.PASS"
+      } else {
+         result_error "The AS Path Segment of the route $paprefix expected \
+                       $paaspathseg, got $value.FAIL"
+      }
+   }
+
+   # --- Check  the Next-Hop attribute of the Route
+   if { $panexthop != "" } {
+      set result [snmpGet -session $session -oid \
+                  bgp4PathAttrNextHop.$paprefix.$paprefixlen.$papeer]
+
+      snmpDebug DEBUG "$func - snmpGet- $result\n" $fd
+      if { [string compare $status "notexist"] == 0 } {
+         if { [regexp -nocase "No.*Such.*Instance" $result] == 1 } {
+            result_ok "The route with this next-hop does not exist as \
+                       expected. PASS"
+         } else {
+            result_error "The route with this nex-hop wanted Not-Exist got \
+                          Exist.FAIL"
+         }
+      } else {
+
+          snmpDebug DEBUG "$func - snmpGet- $result\n" $fd
+
+          set checkval [snmpUtilGetVal ipaddr $result]
+
+          snmpDebug LOG "$func -BGP Next-Hop attribute for the route $paprefix \
+                         is $checkval" $fd
+
+          if { $panexthop == $checkval } {
+             result_ok "The Next-Hop attribute of the route $paprefix expected \
+                        $panexthop, got $checkval.PASS"
+          } else {
+             result_error "The Next-Hop attribute of the route $paprefix \
+                           expected $panexthop, got $checkval.FAIL"
+          }
+      }
+   }
+
+   # --- Check  the Multi-Exit Discriminator attribute of the Route
+   if { $pamed != "" } {
+      set result [snmpGet -session $session -oid \
+                  bgp4PathAttrMultiExitDisc.$paprefix.$paprefixlen.$papeer]
+
+      snmpDebug DEBUG "$func - snmpGet- $result\n" $fd
+
+      set checkval [snmpUtilGetVal int $result]
+
+      snmpDebug LOG "$func -BGP MED attribute for the route $paprefix is \
+                            $checkval" $fd
+      if { [string compare $pamed [string trim $checkval]] == 0 } {
+         result_ok "The MED attribute of the route $paprefix expected \
+                    $pamed, got $checkval.PASS"
+      } else {
+         result_error "The MED attribute of the route $paprefix expected \
+                       $pamed, got $checkval.FAIL"
+      }
+   }
+
+   # --- Check  the Local Preference attribute of the Route
+   if { $palpref != "" } {
+      set result [snmpGet -session $session -oid \
+                  bgp4PathAttrLocalPref.$paprefix.$paprefixlen.$papeer]
+
+      snmpDebug DEBUG "$func - snmpGet- $result\n" $fd
+
+      set checkval [snmpUtilGetVal int $result]
+
+      snmpDebug LOG "$func -BGP Local Preference attribute for the route \
+                            $paprefix is $checkval" $fd
+
+      if { $palpref == $checkval } {
+         result_ok "The Local Preference attribute of the route $paprefix \
+                    expected $palpref, got $checkval.PASS"
+      } else {
+         result_error "The Local Preference attribute of the route $paprefix \
+                       expected $palpref, got $checkval.FAIL"
+      }
+   }
+
+   # --- Check  the Atomic Aggregate attribute of the Route
+   if { $paatomicaggr != "" } {
+      set result [snmpGet -session $session -oid \
+                  bgp4PathAttrAtomicAggregate.$paprefix.$paprefixlen.$papeer]
+
+      snmpDebug DEBUG "$func - snmpGet- $result\n" $fd
+
+      set checkval [snmpUtilGetVal inttext $result]
+
+      snmpDebug LOG "$func -BGP Atomic Aggregate for the route $paprefix \
+                            is $checkval" $fd
+
+      if { [string compare [string tolower $checkval] \
+                        [string tolower $paatomicaggr]] == 0 } {
+         result_ok "The Atomic Aggregate for the route $paprefix expected \
+                    $paatomicaggr, got $checkval. PASS"
+      } else {
+         result_error "The Atomic Aggregate for the route $paprefix expected \
+                    $paatomicaggr, got $checkval. FAIL"
+      }
+   }
+
+   # --- Check  the Aggregator AS number attribute of the Route
+   if { $paaggras != "" } {
+      set result [snmpGet -session $session -oid \
+                  bgp4PathAttrAggregatorAS.$paprefix.$paprefixlen.$papeer]
+
+      snmpDebug DEBUG "$func - snmpGet- $result\n" $fd
+
+      set checkval [snmpUtilGetVal int $result]
+
+      snmpDebug LOG "$func -BGP Aggregator AS attribute for the route \
+                            $paaggras is $checkval" $fd
+
+      if { $paaggras == $checkval } {
+         result_ok "The Aggregator AS attribute of the route $paprefix \
+                    expected $paaggras, got $checkval.PASS"
+      } else {
+         result_error "The Aggregator AS attribute of the route $paprefix \
+                       expected $paaggras, got $checkval.FAIL"
+      }
+   }
+
+   # --- Check  the Aggregator's IP-Address attribute of the Route
+  if { $paaggraddr != "" } {
+      set result [snmpGet -session $session -oid \
+                  bgp4PathAttrAggregatorAddr.$paprefix.$paprefixlen.$papeer]
+
+      snmpDebug DEBUG "$func - snmpGet- $result\n" $fd
+
+      set checkval [snmpUtilGetVal ipaddr $result]
+
+      snmpDebug LOG "$func -BGP Aggregator's IP-Address for the route \
+                            $paaggraddr is $checkval" $fd
+
+      if { $paaggraddr == $checkval } {
+         result_ok "The Aggregator's IP-Address of the route $paprefix \
+                    expected $paaggraddr, got $checkval.PASS"
+      } else {
+         result_error "The Aggregator's IP-Address of the route $paprefix \
+                       expected $paaggraddr, got $checkval.FAIL"
+      }
+   }
+
+   # --- Check  the Calculate Local Preference attribute of the Route
+   if { $pacalpref != "" } {
+      set result [snmpGet -session $session -oid \
+                  bgp4PathAttrCalcLocalPref.$paprefix.$paprefixlen.$papeer]
+
+      snmpDebug DEBUG "$func - snmpGet- $result\n" $fd
+      if { [string compare $status "notexist"] == 0 } {
+         if { [regexp -nocase "No.*Such.*Instance" $result] == 1 } {
+            result_ok "The Calculated Local Preference attribute does not \
+                       exist as expected. PASS"
+         } else {
+            result_error "The Calculated Local prefernce wanted Not-Exist got \
+                          Exist.FAIL"
+         }
+      } else {
+
+         snmpDebug DEBUG "$func - snmpGet- $result\n" $fd
+
+         set checkval [snmpUtilGetVal int $result]
+
+         snmpDebug LOG "$func -BGP Calculated Local Preferenceattribute for \
+                        the route $pacalpref is $checkval" $fd
+
+         if { $pacalpref == $checkval } {
+            result_ok "The Calculated Local Preference attribute of the route \
+                       $paprefix expected $pacalpref, got $checkval.PASS"
+         } else {
+            result_error "The Calculated Local Preference attribute of route \
+                          $paprefix expected $pacalpref, got $checkval.FAIL"
+         }
+      }
+   }
+
+
+  # --- Check  the Best route attribute of the Route
+   if { $pabest != "" } {
+     set result [snmpGet -session $session -oid \
+                  bgp4PathAttrBest.$paprefix.$paprefixlen.$papeer]
+
+      snmpDebug DEBUG "$func - snmpGet- $result\n" $fd
+
+      set checkval [snmpUtilGetVal inttext $result]
+
+      snmpDebug LOG "$func -BGP Best route selection for the route $paprefix \
+                            is $checkval" $fd
+
+      if { [string compare [string tolower $checkval] \
+                        [string tolower $pabest]] == 0 } {
+         result_ok "The best route selected for the route $paprefix expected \
+                    $pabest, got $checkval. PASS"
+      } else {
+         result_error "The best route selected for the route $paprefix \
+                       expected $pabest, got $checkval. FAIL"
+      }
+   }
+
+   # --- Check the Unkown attribute of the Route
+   if { $paunknown != "" } {
+      set result [snmpGet -session $session -oid \
+                  bgp4PathAttrUnknown.$paprefix.$paprefixlen.$papeer]
+
+      snmpDebug DEBUG "$func - snmpGet- $result\n" $fd
+
+      set checkval [snmpUtilGetVal int $result]
+
+      snmpDebug LOG "$func -BGP unknown attribute for the route $paunknown \
+                            is $checkval" $fd
+
+      if { $paunknown == $checkval } {
+         result_ok "The unknown attribute of the route $paprefix expected \
+                    $paunknown, got $checkval.PASS"
+      } else {
+         result_error "The Calculated Local Preference attribute of the route \
+                       expected $paunknown, got $checkval.FAIL"
+      }
+   }
+
+   report_end_test
+
+   snmpDebug DEBUG "$func - End\n" $fd
+   return 1;
+
+}
+

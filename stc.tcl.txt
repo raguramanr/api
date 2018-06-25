@@ -1,0 +1,111 @@
+proc overWriteProcs.working {libdir overwritedir} {
+
+   # save cur dir
+   set retdir [pwd]
+
+   # go to spirent dir and create index (just as a means to discover all procs)
+   cd $overwritedir
+   auto_mkindex .
+   set dir spirent
+   source tclIndex
+   set proclist [array names auto_index]
+   set f [open [file join $libdir tclIndex] r]
+   set data [read $f]
+   close $f
+
+   set filestoremove {}
+   foreach line [split $data \n] {
+      if {[lindex $line 0] == "set"} {
+         set tofind [string range [lindex $line 1] 11 end-1]
+         if {[set loc [lsearch $proclist $tofind]] >= 0} {
+            lappend filestoremove [lindex $line end]
+         }
+      }
+   }
+   # source the files to be removed from the tclIndex
+   foreach f $filestoremove {
+      uplevel #0 "source [file join $libdir [string range $f 0 end-2]]"
+   }
+
+   # write the tclIndex and rewrite it without the files sourced
+   set f [open [file join $libdir tclIndex] w]
+   foreach line [split $data \n] {
+      if {[lsearch $filestoremove [lindex $line end]] < 0} {
+         puts $f $line
+      }
+   }
+   close $f
+
+   # now that all the ixia files that have shared procs with the overwrite directory ... overwrite them
+   cd $overwritedir
+   foreach f [glob -nocomplain *.tcl] {
+      source [file join $overwritedir $f]
+   }
+   cd $retdir
+
+}
+proc auto_load.spirent {cmd namespace} {
+
+   global auto_index auto_path auto_index_spirent
+   #puts "AUTOLOAD : $cmd"
+   #puts "SOURCING spirent.tcl"
+   #source /spirent/automation/Lib/spirent/spirent.tcl
+   if {$namespace eq ""} {
+      set namespace [uplevel 1 [list ::namespace current]]
+   }
+   set nameList [auto_qualify $cmd $namespace]
+   # workaround non canonical auto_index entries that might be around
+   # from older auto_mkindex versions
+   lappend nameList $cmd
+   foreach name $nameList {
+      if {[info exists auto_index_spirent($name)]} {
+         namespace eval :: $auto_index_spirent($name)
+         if {[namespace which -command $name] ne ""} {
+            return 1
+         }
+      } elseif {[info exists auto_index($name)]} {
+         namespace eval :: $auto_index($name)
+         #puts "SOURCING spirent.tcl"
+         foreach {i j} [array get ::auto_index_spirent] {set x($j) 0}
+         foreach i [array names x] { namespace eval :: $i }
+         #source /spirent/automation/Lib/spirent/spirent.tcl
+         if {[namespace which -command $name] ne ""} {
+            return 1
+         }
+      }
+   }
+   if {![info exists auto_path]} {
+      return 0
+   }
+
+   if {![auto_load_index]} {
+      return 0
+   }
+#   foreach name $nameList {
+#      if {[info exists auto_index($name)]} {
+#         namespace eval :: $auto_index($name)
+#         if {[namespace which -command $name] ne ""} {
+#            return 1
+#         }
+#      }
+#   }
+   return 0
+}
+
+proc overWriteProcs {libdir overwritedir} {
+
+   set retdir [pwd]
+
+   set ::auto_path [linsert $::auto_path end $overwritedir]
+   cd $overwritedir
+   auto_mkindex .
+   set dir [pwd]
+   source tclIndex
+   file delete tclIndex
+   source spirent.tcl
+   array set ::auto_index_spirent [array get auto_index]
+   rename auto_load auto_load.orig
+   rename auto_load.spirent auto_load
+   cd $retdir
+}
+

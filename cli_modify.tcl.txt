@@ -1,0 +1,336 @@
+#####################################################################################
+# Procedure: _modifyPlatformSendCLI 
+#
+#   Instead of modifying in individual test cases, some platforms
+#   may be easier to skip here.
+#
+#   Stick to platforms in this file.  Use _cliSubstitution in SendSwCmd.tcl for
+#     version specific CLI changes.
+#
+#   This proc is initially starting to work in the EXOS VM.  Alterations may be
+#   added then removed based on version depending on whether features are added
+#   to the platform
+#
+#####################################################################################
+proc _modifyPlatformSendCLI {args} {
+    global MAIN whichDutNow DUTs_info i386Platform VBOXINFO
+    parse_args _modifyPlatformSendCLI $args {
+        cmd       "none"
+    }
+    # - Do Not use this proc until the system variables have been configured.
+    if {![info exists DUTs_info(DUT$whichDutNow,platform)]} {
+        return $cmd
+    }
+    if {![info exists DUTs_info(DUT$whichDutNow,version)] || \
+            $DUTs_info(DUT$whichDutNow,version) == "INVALID"} {
+        return $cmd
+    }
+    # Normalize white space
+    regsub -line {[ ]+} $cmd " " cmd
+    #
+    # Version specific checking for all platforms
+    #
+    set d $whichDutNow
+
+    set platform [GetPlatform DUT$d]
+    set v [GetVersion DUT$d]
+    # ---------------------------------------------------------------------------
+    # ------    Version 30.1 CLI changes
+    # ---------------------------------------------------------------------------
+    if {[CompareRelease $v "30.1"] >= 0} {
+        #lappend SKIPPLATCLI(all,30.1)    "conf\[igure\]{0,5} ipa\[rp]{0,2} vr .*max"
+        #lappend SKIPPLATCLI(all,30.1)    "conf\[igure\]{0,5} nei\[ghbor\-discovery]{0,15} vr.*max"
+        if {[regexp -nocase {sh[ow]{0,2} ipv6 dad de[tail]{0,4}} $cmd]} {
+            _abortTestCase -cmd $cmd
+        }
+        if {[regexp -nocase {debug ipv6 dad sh[ow]{0,2} de[tail]{0,4}} $cmd]} {
+            _abortTestCase -cmd $cmd
+        }
+        #if {[regexp -nocase {(en[able]{0,4} sh[aring]{0,5} [0-9:]+ gr[ouping]{0,6} [0-9:,\- ]+) algo.* } $cmd a c]} {
+        #    puts "Sharing sub for VM $c"
+        #    return $c
+        #}
+    }
+    #
+    # Add infrastructure for multi platform support.  For now just VM
+    #
+    set p $DUTs_info(DUT$whichDutNow,platform)
+    if {[regexp -nocase $i386Platform $p]} {
+        # -----------------------------------------------------------------------
+        # ------      V M    P L A T F O R M   S U B S T I T U T I O N S   ------
+        # -----------------------------------------------------------------------
+        lappend SKIPPLATCLI(EXOS-VM,all) "en\[able\]{0,4} mirr"
+        lappend SKIPPLATCLI(EXOS-VM,all) "conf\[igure\]{0,5} mirr"
+        lappend SKIPPLATCLI(EXOS-VM,all) "conf\[igure\]{0,5} po\[rts\]{0,3} \[a-z0-9\]+ mon\[itor\]{0,4}"
+        lappend SKIPPLATCLI(EXOS-VM,all) "sh\[ow\]{0,2} vl\[an\]{0,2} \[a-z0-9\]+ stat\[istics\]{0,6}"
+        lappend SKIPPLATCLI(EXOS-VM,all) "sh\[ow\]{0,2} vl\[an\]{0,2} \[a-z0-9\]+ stat\[istics\]{0,6}"
+
+        # LACP round robin is the only mode supported.  Modify All sharing cli to
+        #     be round robin
+        # enable sharing [GetATrunkPort 2 3 1] grouping [GetATrunkPort 2 3 1],[GetATrunkPort 2 3 2] algorithm address-based
+        # L3 lacp"
+        if {[regexp -nocase {(en[able]{0,4} sh[aring]{0,5} [0-9:]+ gr[ouping]{0,6} [0-9:,\- ]+) algo.* } $cmd a c]} {
+            puts "Sharing sub for VM $c"
+            return $c
+        }
+        # Sflow is not supported on the EXOS VM.  Skip any test case the enables or
+        #    configures sflow
+        if {[regexp -nocase {^en[able]{0,4} sfl[ow]{0,2}.*|^con[figure]{0,6} sfl[ow]{0,2}.*} $cmd]} {
+            _abortTestCase -cmd $cmd
+        }
+        # Mirroring is not supported on the EXOS VM.  Skip any test case that enables or
+        #    configures mirroring.  This will hit a lot due to snooping
+        if {[regexp -nocase {^en[able]{0,4} mi[rror]{0,4}.*|^con[figure]{0,6} mi[rror]{0,4}} $cmd]} {
+            _abortTestCase -cmd $cmd
+        }
+        if {[regexp -nocase {dis[able]{0,4} po[rts]{0,3} ([0-9:,\- ]+|all)} $cmd a po]} {
+            if {$po=="all"} {
+                #_vmDisableEnablePorts -state "disable" -ports "[set VBOXINFO($whichDutNow,portall)]"
+            } else {
+                #_vmDisableEnablePorts -state "disable" -ports "$po"
+            }
+        }
+        if {[regexp -nocase {en[able]{0,4} po[rts]{0,3} ([0-9:,\- ]+|all)} $cmd a po]} {
+            if {$po=="all"} {
+                #_vmDisableEnablePorts -state "enable" -ports "[set VBOXINFO($whichDutNow,portall)]"
+            } else {
+                #_vmDisableEnablePorts -state "enable" -ports "$po"
+            }
+        }
+        return $cmd
+    } else {
+        return $cmd
+    }
+}
+##################################################################
+# Procedure Name: _checkAutoSkip
+#
+#
+# Desciption: A procedure to end a test case in the event that a
+#  cli is sent and a error is returned with a '^'.
+#
+#  Search throught the arrays defined below to see if the case
+#  should be aborted and post a test_skipped.
+#
+##################################################################
+proc _checkAutoSkip {cmd buff} {
+    global MAIN whichDutNow i386Platform
+
+    if {![regexp {\^} $buff]} {
+        return;
+    }
+
+    set d $whichDutNow
+
+    set platform [GetPlatform DUT$d]
+    set v [GetVersion DUT$d]
+    # Versions of interest we may need to use as keys.. Starting empty initially
+    set versionsOfInt ""
+    #                -- platform var, version
+    #         VM Skip       
+    lappend SKIPPLATCLI(EXOS-VM,all) "en\[able\]{0,4} mirr"
+    lappend SKIPPLATCLI(EXOS-VM,all) "conf\[igure\]{0,5} mirr"
+    lappend SKIPPLATCLI(EXOS-VM,all) "conf\[igure\]{0,5} po\[rts\]{0,3} \[a-z0-9\]+ mon\[itor\]{0,4}"
+    lappend SKIPPLATCLI(EXOS-VM,all) "sh\[ow\]{0,2} vl\[an\]{0,2} \[a-z0-9\]+ stat\[istics\]{0,6}"
+                   
+    #         EXOS Version 30.1 skip cases
+    lappend SKIPPLATCLI(all,30.1)    "conf\[igure\]{0,5} ipa\[rp]{0,2} vr .*max"
+    lappend SKIPPLATCLI(all,30.1)    "conf\[igure\]{0,5} nei\[ghbor\-discovery]{0,15} vr.*max"
+
+
+    set skipKey1 "all"
+    if {[regexp -nocase $platform $i386Platform]} {
+        lappend skipKey1 "EXOS-VM"
+    }
+    set skipKey2List "all"
+    foreach iv $versionsOfInt {
+        if {[CompareRelease $v $iv] >= 0} {
+            lappend skipKey2List $iv
+        }
+    }
+
+    regsub -all {[ ]+} $cmd " " cmd
+
+    set exitTest 0
+    foreach k1 $skipKey1 {
+        foreach k2 $skipKey2List {
+            if {[info exists SKIPPLATCLI($k1,$k2)] && [llength $SKIPPLATCLI($k1,$k2)] > 0} {
+                foreach recli $SKIPPLATCLI($k1,$k2) {
+                    if {[regexp -nocase "$recli" $cmd]} {
+                        incr exitTest;
+                    }
+                }
+            }
+        }
+    }
+
+    if {$exitTest > 0} {
+        _abortTestCase -cmd $cmd
+    }
+}
+
+###############################################################################
+# Bail on the test as not supported.. clean up the switches
+#
+#
+###############################################################################
+proc _abortTestCase {args} {
+    global MAIN
+    parse_args _abortTestCase $args {
+        cmd       "none"
+    }
+
+    if {![info exists MAIN(APPROXTIME1)]} {
+        set t1 [clock seconds]
+    } else {
+        set t1 $MAIN(APPROXTIME1)
+    }
+    if {![info exists MAIN(CURRENTTESTCASE)]} {
+        set test "skiptest"
+    } else {
+        set test $MAIN(CURRENTTESTCASE)
+    }
+ 
+    set myLevel [info level]
+    set tree [ProcEvalTree]
+    set tLen [llength $tree]
+    if {[regexp -nocase "^execute|imain_prompt" [lindex $tree 0]]} {
+        if {$tLen > 3} {
+            set lev [expr $tLen - 2]
+        } else {
+            set lev 1
+        }
+    } else {
+        set lev [expr [info level] - 1]
+    }
+
+    CleanTestBedCfgs;
+    result_debug "I am returning info level $lev"
+    result_debug "Not supported - $cmd"
+    report_start_test "Skipped - No support $cmd"
+    report_end_test
+    set time2 [clock seconds]
+    result_p "Time for $test = [expr $time2-$t1] secs\n\n"
+    close_result_file
+    report_end_test
+    fix_report_level
+    return -code return -level $lev
+
+}
+######################################################################
+# Procedure: _cliSubstitution
+#
+# Handle major CLI changes based on version
+#   
+#
+#
+#
+#
+#
+######################################################################   
+proc _cliSubstitution {args} {
+    global MAIN whichDutNow DUTs_info
+    parse_args _cliSubstitution $args {
+        cmd       "none"
+    }
+    # - Do Not use this proc until the system variables have been configured.
+    if {![info exists DUTs_info(DUT$whichDutNow,platform)]} {
+        return $cmd
+    }
+    if {![info exists DUTs_info(DUT$whichDutNow,version)] || \
+            $DUTs_info(DUT$whichDutNow,version) == "INVALID"} {
+        return $cmd
+    }
+
+    # - In 22.5 the deprecated memorycard and internal-memory commands
+    #     are being completely removed from the CLI
+    if {[CompareRelease [GetVersion DUT${whichDutNow}] 22.5.0.24]>=0} {
+        set im_re "internal\-m\[emory]\{0,5\}"
+        set mc_re "memoryc\[ard\]\{0,3\}"
+        set f_re "\[a-z0-9_\-]+|\[a-z0-9_\-]+\.\[a-z0-9_\-]+"
+        if {[regexp -nocase "^(ls|tftp|rm|cp|mv).*$mc_re" $cmd]} {
+            puts "memorycard is deprecated. Replace with /usr/local/ext"
+            if {[regexp -nocase "(cp|mv).*$mc_re\[ ]+($f_re).*$mc_re\[ ]+($f_re)" $cmd a c f1 f2]} {
+                if {[info exists f1] && $f1!="" && [info exists f2] && $f2!=""} {
+                    regsub -line {memoryc[ard]{0,3}[ ]+[a-zA-Z0-9\-_\.]+ } $cmd "/usr/local/ext/$f1 " cmd
+                    regsub -line {memoryc[ard]{0,3}[ ]+[a-zA-Z0-9\-_\.]+} $cmd "/usr/local/ext/$f2 " cmd
+                } else {
+                    puts "Memorycard substitution failed"
+                }
+            } elseif {[regexp -nocase "(ls|tftp|rm|cp|mv).*$mc_re\[ ]+($f_re)" $cmd a c f]} {
+                if {[info exists f] && $f!=""} {
+                    regsub -line {memoryc[ard]{0,3}[ ]+[a-zA-Z0-9\-_\.]+} $cmd "/usr/local/ext/$f" cmd
+                } else {
+                    regsub -line {memoryc[ard]{0,3}} $cmd "/usr/local/ext" cmd
+                }
+            } else {
+                regsub -line {memoryc[ard]{0,3}} $cmd "/usr/local/ext" cmd
+            }
+        }
+        if {[regexp -nocase "^(ls|tftp|rm|cp|mv).*$im_re" $cmd]} {
+            puts "internal-memory is deprecated. Replace with /usr/local/tmp"
+            if {[regexp -nocase "(cp|mv).*$im_re\[ ]+($f_re).*$im_re\[ ]+($f_re)" $cmd a c f1 f2]} {
+                if {[info exists f1] && $f1!="" && [info exists f2] && $f2!=""} {
+                    regsub -line {internal-m[emory]{0,5}[ ]+[a-zA-Z0-9\-_\.]+ } $cmd "/usr/local/tmp/$f1 " cmd
+                    regsub -line {internal-m[emory]{0,5}[ ]+[a-zA-Z0-9\-_\.]+} $cmd "/usr/local/tmp/$f2 " cmd
+                } else {
+                    puts "Internal-memory substitution failed"
+                }
+            } elseif {[regexp -nocase "^(ls|tftp|rm|cp|mv).*$im_re\[ ]+($f_re)" $cmd a c f]} {
+                if {[info exists f] && $f!=""} {
+                    regsub -line {internal-m[emory]{0,5}[ ]+[a-zA-Z0-9\-_\.]+} $cmd "/usr/local/tmp/$f " cmd
+                } else {
+                    regsub -line {internal-m[emory]{0,5}} $cmd "/usr/local/tmp" cmd
+                }
+            } else {
+                regsub -all {internal-m[emory]{0,5}} $cmd "/usr/local/tmp" cmd
+            }
+        }
+    }
+    # - 22.1 adds the /usr/local/* paths to replace memorycard and internal-memory
+    #     On lower versions.
+    if {[CompareRelease [GetVersion DUT${whichDutNow}] 16.1.2.1]<0} {
+        set im_re "/usr/local/tmp"
+        set mc_re "/usr/local/ext"
+        set f_re "\[a-z0-9_\-]+|\[a-z0-9_\-]+\.\[a-z0-9_\-]+"
+        if {[regexp -nocase "^(ls|tftp|rm|cp|mv).*$mc_re" $cmd]} {
+            puts "memorycard substitutes for /usr/local/ext"
+            if {[regexp -nocase "(cp|mv).*$mc_re\/($f_re).*$mc_re\/($f_re)" $cmd a c f1 f2]} {
+                if {[info exists f1] && $f1!="" && [info exists f2] && $f2!=""} {
+                    regsub -line {/usr/local/ext/[a-zA-Z0-9\-_\.]+ } $cmd "memorycard $f1 " cmd
+                    regsub -line {/usr/local/ext/[a-zA-Z0-9\-_\.]+} $cmd "memorycard $f2 " cmd
+                } else {
+                    puts "Memorycard substitution failed"
+                }
+            } elseif {[regexp -nocase "(ls|tftp|rm|cp|mv).*$mc_re\/($f_re)" $cmd a c f]} {
+                if {[info exists f] && $f!=""} {
+                    regsub -line {/usr/local/ext/[a-zA-Z0-9\-_\.]+} $cmd "memorycard $f" cmd
+                } else {
+                    regsub -line {/usr/local/ext} $cmd "memorycard" cmd
+                }
+            } else {
+                regsub -line {/usr/local/ext} $cmd "memorycard" cmd
+            }
+        }
+        if {[regexp -nocase "^(ls|tftp|rm|cp|mv).*$im_re" $cmd]} {
+            puts "internal-memory substitues /usr/local/tmp"
+            if {[regexp -nocase "(cp|mv).*$im_re\/($f_re).*$im_re\/($f_re)" $cmd a c f1 f2]} {
+                if {[info exists f1] && $f1!="" && [info exists f2] && $f2!=""} {
+                    regsub -line {/usr/local/tmp/[a-zA-Z0-9\-_\.]+ } $cmd "internal-memory $f1 " cmd
+                    regsub -line {/usr/local/tmp/[a-zA-Z0-9\-_\.]+} $cmd "internal-memory $f2 " cmd
+                } else {
+                    puts "Internal-memory substitution failed"
+                }
+            } elseif {[regexp -nocase "^(ls|tftp|rm|cp|mv).*$im_re\/($f_re)" $cmd a c f]} {
+                if {[info exists f] && $f!=""} {
+                    regsub -line {/usr/local/tmp/[a-zA-Z0-9\-_\.]+} $cmd "internal-memory $f" cmd
+                } else {
+                    regsub -line {/usr/local/tmp} $cmd "internal-memory" cmd
+                }
+            } else {
+                regsub -line {/usr/local/tmp} $cmd "internal-memory" cmd
+            }
+        }
+    }
+    return $cmd
+}

@@ -1,0 +1,431 @@
+#!/usr/bin/expect --
+
+
+proc mysqlRunRegAllLocal {args} {
+    puts "\nmysqlRunRegAllLocal args:\n$args \n"
+    parse_args mysqlRunRegAllLocal $args {
+        platform ""
+        targetpc ""
+        display ""
+        i386ImagePath ""
+        marinerImagePath ""
+        aspenImagePath ""
+        cougarImagePath ""
+        x480ImagePath ""
+        x870ImagePath ""
+        NWIImagePath ""
+        viperImagePath "" 
+        jaguarImagePath ""
+        olympicImagePath ""
+        voyagerImagePath ""
+        everestImagePath ""
+        forstats "no"
+        download "yes"
+        mailTo ""
+        obuild ""
+        build_name ""
+        subversion ""
+        pass_number "1"
+        heuristic "no"
+        efence "no"
+        saveConfigPerTest "no"
+        debugLevel "0"
+        lst "NULL"
+        incrBuilds "NULL"
+        include ""
+        exclude ""
+        rerun "no"
+        baseLine "NULL"
+        stopWithPhase "NULL"
+    }
+
+    global regplatform
+    global autoScriptPath
+    global regLogin
+    global autoPath
+    global staggerDelay
+
+    # Parameters used to build runall_monitor
+    set paramPlatformIndx "-platformIndx"
+    set paramRegType      "-regType"
+    set paramRegSubType   "-regSubType"
+    set paramPlatform     "-platform"
+    set paramBlade        "-blade"
+    set paramCfg          "-cfg"
+    set paramI386Image    "-i386ImagePath"
+    set paramMarinerImage "-marinerImagePath"
+    set paramAspenImage   "-aspenImagePath"
+    set paramCougarImage  "-cougarImagePath"
+    set paramx480Image    "-x480ImagePath"
+    set paramx870Image    "-x870ImagePath"
+    set paramNWIImage    "-NWIImagePath"
+    set paramViperImage   "-viperImagePath"
+    set paramJaguarImage  "-jaguarImagePath"
+    set paramOlympicImage "-olympicImagePath"
+    set paramVoyagerImage "-voyagerImagePath"
+    set paramInclude      "-include"
+    set paramExclude      "-exclude"
+    set paramForstats     "-forstats"
+    set paramDownload     "-download"
+    set paramMailTo       "-mailTo"
+    set paramOBuild       "-obuild"
+    set paramBuildName    "-build_name"
+    set paramSubVersion   "-subversion"
+    set paramPassNumber   "-pass_number"
+    set paramHeuristic    "-heuristic"
+    set paramEfence       "-efence"
+    set paramSaveConfigPerTest      "-saveConfigPerTest"
+    set paramDebugLevel   "-debugLevel"
+    set paramLst          "-lst"
+    set paramincrBuilds   "-incrBuilds"
+    set paramRerun        "-rerun"
+    set parambaseLine     "-baseLine"
+    set paramstopWithPhase "-stopWithPhase"
+    # Initialize Xterm Geometry
+    set xgeom 0
+    set ygeom 0
+    set harness "tcl"
+    
+    set imageList ""
+puts "Printing the parameters"
+    result_debug "platform: $platform \n\
+        targetpc: $build_name \n\
+        display: $display \n\
+        i386ImagePath: $i386ImagePath \n\
+        marinerImagePath: $marinerImagePath \n\
+        aspenImagePath: $aspenImagePath \n\
+        cougarImagePath: $cougarImagePath \n\
+        x480ImagePath: $x480ImagePath \n\
+        x870ImagePath: $x870ImagePath \n\
+        NWIImagePath: $NWIImagePath \n\
+        viperImagePath: $viperImagePath \n\
+        jaguarImagePath: $jaguarImagePath \n\
+        olympicImagePath: $olympicImagePath \n\
+        voyagerImagePath: $voyagerImagePath \n\
+        include: $include \n\
+        exclude: $exclude \n\
+        forstats: $forstats \n\
+        download: $download \n\
+        mailTo: $mailTo \n\
+        obuild: $obuild \n\
+        build_name: $build_name \n\
+        subversion: $subversion \n\
+        pass_number: $pass_number \n\
+        heuristic: $heuristic \n\
+        efence: $efence \n\
+        saveConfigPerTest: $saveConfigPerTest \n\
+        debugLevel: $debugLevel\n\
+        lst: $lst\n\
+        incrBuilds: $incrBuilds\n\
+        rerun: $rerun\n\
+        baseLine: $baseLine\n\
+        stopWithphase: $stopWithPhase"
+
+    if { $marinerImagePath != "" } {
+        append imageList "$paramMarinerImage $marinerImagePath "
+    }
+    if { $i386ImagePath != "" } {
+        append imageList "$paramI386Image $i386ImagePath "
+    }
+    if { $aspenImagePath != "" } {
+        append imageList "$paramAspenImage $aspenImagePath "
+    }
+    if { $cougarImagePath !="" } {
+        append imageList "$paramCougarImage $cougarImagePath "
+    }
+    if { $x480ImagePath !="" } {
+        append imageList "$paramx480Image $x480ImagePath "
+    }
+    if { $x870ImagePath !="" } {
+        append imageList "$paramx870Image $x870ImagePath "
+    }
+    if { $NWIImagePath !="" } {
+        append imageList "$paramNWIImage $NWIImagePath "
+    }
+    if { $viperImagePath !="" } {
+        append imageList "$paramViperImage $viperImagePath "
+    }
+    if { $jaguarImagePath !="" } {
+        append imageList "$paramJaguarImage $jaguarImagePath "
+    }
+    if { $olympicImagePath !="" } {
+        append imageList "$paramOlympicImage $olympicImagePath "
+    }
+    if { $voyagerImagePath !="" } {
+        append imageList "$paramVoyagerImage $voyagerImagePath "
+    }
+
+    if {$include == "" } { 
+	set paramInclude ""  
+    } else {
+	set include \"$include\"  ;# Make sure the list is quoted when passing
+    }
+    if {$exclude == "" }  { 
+	set paramExclude ""
+    } else {
+	set exclude \"$exclude\"  ;# Make sure the list is quoted when passing
+    }
+    if {$forstats == "" }  { 
+	set paramForstats ""
+    } else {
+	set forstats \"$forstats\"  ;# Make sure the list is quoted when passing
+    }
+
+    if {$mailTo == "" }   { set paramMailTo ""}
+    if {$download == "" } { set paramDownload ""}
+    if {$obuild == "" } { set paramOBuild ""}
+
+    set currentPlatform    [lindex $regplatform($platform) 0]
+    set currentBlade       [lindex $regplatform($platform) 1]
+    set currentCfg         [lindex $regplatform($platform) 2]
+    set currentRegType     [lindex $regplatform($platform) 3]
+    set currentRegSubType  [lindex $regplatform($platform) 4]
+
+
+#    set tag [exec cat CVS/Tag]
+#    if {[regexp -nocase ".*branch.*" $tag] && [regexp -nocase "^g" $currentCfg]} {
+#      puts "Starting from wrong location. Golden regression start from Trunk"
+#      exit
+#    }
+
+
+    # Select the virtual desktop based on the platform type
+    set vDesktop 1
+    if {[regexp -nocase "440" $currentCfg]} {
+        set vDesktop "2"
+    } elseif {[regexp -nocase "450" $currentCfg]} {
+        set vDesktop "3"
+    } elseif {[regexp -nocase "460" $currentCfg]} {
+        set vDesktop "4"
+    } elseif {[regexp -nocase "620" $currentCfg]} {
+        set vDesktop "5"
+    } elseif {[regexp -nocase "670" $currentCfg]} {
+        set vDesktop "6"
+    } elseif {[regexp -nocase "770|870" $currentCfg]} {
+        set vDesktop "7"
+    } elseif {[regexp -nocase "evere" $currentCfg]} {
+        set vDesktop "8"
+    } elseif {[regexp -nocase "man|asp|tri" $currentCfg]} {
+        set vDesktop "9"
+    } elseif {[regexp -nocase "690" $currentCfg]} {
+        set vDesktop "10"
+    } elseif {[regexp -nocase "vm" $currentCfg]} {
+        set vDesktop "11"
+    } elseif {[regexp -nocase "vpex" $currentCfg]} {
+        set vDesktop "12"
+    } else {
+        set vDesktop "1"
+    }
+
+#    switch -regexp   $currentPlatform {
+#        "OldStackables" {
+#                     switch -regexp $currentCfg {
+#                         "150" {set vDesktop "8" }
+#                         "350" {set vDesktop "9" }
+#                         "650" {set vDesktop "10" }
+#                         "250" {set vDesktop "11" }
+#                         "450" {set vDesktop "12" }
+#                         default {set vDesktop "1" }
+#                     }
+#                 }
+#        "Genesis"        {set vDesktop "2" }
+#        "ASPEN"          {set vDesktop "3" }
+#        "Aspen"          {set vDesktop "3" }
+#        #"OldStackables"  {set vDesktop "1" }
+#        "OldStack"       {set vDesktop "5" }
+#        "Voyager"        {set vDesktop "6" }
+#        "NewStackables"  {set vDesktop "7" }
+#        "NewStack"       {set vDesktop "8" }
+#        default          {set vDesktop "1" }
+#    }
+
+    # Execute FULL regression for each blade for this platform on this PC
+    # We call runall_monitor.tcl
+    
+    
+    set cmdLine "tclsh  mysqlRunall_monitor.tcl"
+    
+    
+    if {$currentRegType == "" } {
+        set currentRegType "functional"
+    }
+    if {$currentRegSubType == "" } {
+        set currentRegSubType "standard"
+    }
+    
+    
+    set xtermTitle "$currentCfg \([string toupper $currentRegType] [string toupper $currentRegSubType]\) $currentPlatform $currentBlade [exec date]"
+    
+    # Add params to cmdLine
+    set cmdLine "$cmdLine \
+            $paramPlatformIndx $platform \
+            $paramRegType $currentRegType \
+            $paramRegSubType $currentRegSubType \
+            $paramPlatform $currentPlatform \
+            $paramBlade $currentBlade \
+            $paramCfg $currentCfg \
+            $paramDownload $download \
+            $paramInclude $include \
+            $paramExclude $exclude \
+            $paramForstats $forstats \
+            $paramMailTo $mailTo \
+            $imageList \
+            $paramOBuild $obuild \
+            $paramBuildName $build_name \
+            $paramSubVersion $subversion \
+            $paramPassNumber $pass_number \
+            $paramHeuristic $heuristic \
+            $paramEfence $efence \
+            $paramSaveConfigPerTest $saveConfigPerTest \
+            $paramDebugLevel $debugLevel \
+            $paramLst $lst \
+            $paramincrBuilds $incrBuilds \
+            $paramRerun  $rerun \
+            $parambaseLine $baseLine\
+            $paramstopWithPhase $stopWithPhase"
+           
+    global XTERMTEST
+    
+    if {$XTERMTEST == 1} {
+        set cmdLine "ls -l"
+    }
+    # -----------------------------------------------------------------
+    #        S T A R T   A N   X T E R M    A N D   E X E C   C M D
+    #
+    # Start an xterm on specified display and execute $currentCmd in 
+    # xterm window
+    # Typically $currentCmd should be "tclsh runall_monitor.tcl <params>"
+    #
+    # -----------------------------------------------------------------
+    puts "STARTING: $xtermTitle"
+     
+    puts "     CMD: $cmdLine"
+    #  change to the correct main directory
+    send "cd $autoPath/main\r"	
+    
+    expect "$regLogin@"
+    # -----------------------------------------------------------------
+    #  kstart is KDE windows manager specific command.  Prior to using
+    #     the kstart command, the xterm command below was used.
+    #
+    #  send "xterm -T \"$xtermTitle\" -bg white -fg black -geometry\
+    #     +$xgeom+$ygeom -hold +wf -display $display -e $cmdLine &\r"
+    # ------------------------------------------------------------------
+    puts "the desktop is $vDesktop"
+    puts "xtermTitle : $xtermTitle"
+    puts "cmdLine : $cmdLine"
+    send "kstart --display :1 --desktop $vDesktop gnome-terminal --title \"$xtermTitle\" --command '$cmdLine' &\r"
+    expect "$regLogin@"
+    
+
+    ;# TODO: Verify that the xterm actually started!
+    
+    # Set xterm geometry so all xterms don't sit on top of each other
+    incr xgeom 150
+    incr ygeom 150
+    
+    # Sleep x seconds between runs to stagger the DUT downloads
+    sleep $staggerDelay
+} 
+
+
+# Default all platforms for a target regression PC.
+proc runRegAllLocalDoCommand { targetpc command } {
+
+    global regplatform
+    global autoScriptPath
+    global regLogin
+    global autoPath
+    global DUT1_CONNECT
+    global DUT2_CONNECT
+    global DUT3_CONNECT
+    global DUT4_CONNECT
+    global DUT5_CONNECT
+    global DUT1_IP
+    global DUT2_IP
+    global DUT3_IP
+    global DUT4_IP
+    global DUT5_IP
+    global connectionTimeout
+    global spawn_ids
+    global numDUT
+    set maxNumDUT 5
+
+    set cfgPath "./cfg"
+    puts "Running the Do Command " 
+    result_debug "runRegAllLocalDoCommand( targetpc: $targetpc $command )"
+
+    # Execute unconfig for each blade for this platform on this PC
+    foreach testBlade [array names regplatform] {
+
+	# Parse out BD1,1 from regplatform(BD1,1) {config}
+	regexp (.*),(.*) $testBlade ignore targetPlatformPC index	
+
+	# Look for this PCs config only.
+	if {! [string match $targetPlatformPC $targetpc] } {
+	    continue;
+	}
+
+	# Config parameters from runReg.cfg for this platform
+	# i.e. set regplatform(IPR,1) { Summit48si  Summit48Si ipr1s48si.cfg functional ipRoute1}
+	set currentCfg         [lindex $regplatform($testBlade) 2]
+	
+	;# Clear out old DUT settings so we get correct numDut 
+	for {set i 1} {$i <= $maxNumDUT} {incr i} {
+	    if { [info exists DUT${i}_CONNECT] } {
+		unset DUT${i}_CONNECT
+	    }
+	}
+	# Source the current cfg
+	if [file exists $cfgPath/$currentCfg] {
+	    catch {source $cfgPath/$currentCfg} reason
+	} else {
+	    result_error "ERROR: Config file:  $cfgPath/$currentCfg  does NOT exist"
+	    continue
+	}
+
+	set numDUT 0
+	# Determine number of DUTs
+	for {set i 1} {$i <= $maxNumDUT} {incr i} {
+	    if { [info exists DUT${i}_CONNECT] } {
+		incr numDUT
+	    }
+	}
+	
+	result_debug "numDuts: $numDUT"
+	# Login to each DUT and unconfigure
+	for {set i 1} {$i <= $numDUT} {incr i} {
+	    set terminalIP [set DUT${i}_CONNECT]
+	    puts "IP $terminalIP"
+	    set whichDutNow $i
+
+	    ;# Login to a DUT
+	    if {[catch {Login $terminalIP} reason]} {
+		result_error "LOGIN ERROR ($terminalIP): $reason"
+		set spawn_id $spawn_ids($terminalIP)
+		wait
+		set spawn_ids($terminalIP) "INVALID"
+		continue
+	    }
+	    after 1000
+	    switch $command {
+		"unconfig" {
+		    if {[catch {UnconfigSwAll 1} reason]} {
+			result_error "UNCONFIG ERROR ($terminalIP): $reason"
+		    }
+		}
+		"defDelete" {
+		    if {[catch {SendACmd "config default del po all"} reason]} {
+			result_error "DEFAULT DELETE ERROR ($terminalIP): $reason"
+		    }
+		}
+	    }
+	    set spawn_id $spawn_ids($terminalIP)
+	    close 
+	    wait
+	    set spawn_ids($terminalIP) "INVALID"
+	    
+	}
+
+    }
+} 

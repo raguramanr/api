@@ -1,0 +1,1511 @@
+#!/usr/bin/tclsh
+
+global MAIN IMAGEFAMILYPLATFORMS IMAGEFAMILYSYSTYPES
+source ../Lib/parse_args.tcl
+source ../Lib/mainLib.tcl
+source ../Lib/login.tcl
+source ../Lib/SendSwCmd.tcl
+source ../Lib/mysqlLib.tcl
+source ../Lib/robot.tcl
+source ../Autoweb/cgi-bin/cgiScripts/modulesToBeSummarized.cfg
+source ./runReg.cfg
+source ./iTest.cfg
+source ../main/runReg.cfg
+source ../main/cfg/robot.cfg
+source ../main/cfg/common.cfg
+# Logic to enable auto re-sourcing of important files if they are changed.
+set mainRunregTime [file mtime ../main/runReg.cfg]
+set runregTime [file mtime runReg.cfg]
+set tgen ixia
+
+if {$tcl_platform(platform) == "windows"} {
+    load "expect52.dll"
+} else {
+    load [lindex [glob "/usr/lib/libexpect*so*"] 0]
+}
+set MAIN(SWDEVXTERM) ""
+proc print_usage {} {
+   global DEVREG
+   global platformsSupported
+   global regressionTypes
+   puts "\r"
+   puts {Usage: regServer.tcl -platformType <type> -regressionType <regType> -cfg <config file> [-partnerList <partner cfgs>] [-shareId <integer>] [-help]}
+   puts "   <platformType>: $DEVREG(server,platformsSupported)"
+   puts "   <regressionType>: $DEVREG(server,regressionTypes)"
+   puts "   <partnerList>:  A list of other test beds that share this same hardware"
+   puts "   <shareId>:  An integer common to all test beds in a shared queue"
+   puts {   <cfg>: Path of the config file name (e.g. short/ptgm4x6.2.2b4.cfg)} 
+   puts {   \[help\]: Prints the help screen of this program)} 
+   puts "\r"
+}
+
+# ------   Local Variables   -------
+set userBreakInput ""
+
+parse_args regServer $argv {
+      cfg "null"
+      platformType "null"
+      regressionType "null"
+      partnerList "null"
+      shareId "null"
+      multiple "null"
+      harness  "all"
+      help "null"
+}
+
+# Check if "-help" asked, print_usage in that case
+if {$help!="null"} {
+   print_usage
+   return 1
+}
+if {[regexp -nocase "robot" $harness]} {
+    set harn robot
+    set MAIN(harness) "robot"
+    set DEVREG(server,harness) "robot"
+    set MAIN(cfg) $cfg
+    puts "sourcing the robot\n$MAIN(cfg)"
+    set runRegPlatformCode [get_robot_yaml_info]
+    set cfg $DEVREG(server,robotTestPath)/$DEVREG(server,CFG_PATH)/$MAIN(cfg)
+    puts "  big cfg $cfg"
+} else {
+    set harn $harness
+    set MAIN(harness) $harn
+}
+# checking command parameters
+if {$argc<6} {
+    puts "\n\nNot enough parameters"
+    print_usage
+    puts stderr "\n\nNot enough parameters"
+    return
+}
+# verify the directory structure is in place
+VerifyRegserverFileSystem
+if {[VerifyPlatformType $platformType]==-1} {
+    puts "\n\nError: Invalid platformType $platformType"
+    print_usage
+    return -1
+}
+if {![file exists $cfg]} {
+    puts "\n\nError: file $cfg does not exist"
+    print_usage
+    return -1
+}
+append MAIN(SWDEVXTERM) "$platformType "
+if {$multiple != "null"} {
+    append MAIN(SWDEVXTERM) "LB "
+}
+if {$partnerList != "null"} {
+    # ---------------------------------------------------------------
+    # This section defines the sharing method.  Each test bed is
+    # assigned a list of unique minutes. (1 3 5 7 9 ....59)
+    # (0 2 4 6 .... 58).  The test bed is only allowed to check
+    # for a module to run during their specified window.
+    # ---------------------------------------------------------------
+    set cleanPartnerList "";# remove the paths so just file name list
+    set myPartnerList "";# a list of my partner clean cfg files
+    lappend cleanPartnerList [file tail $cfg];#
+    set p 1;
+    foreach pcfg $partnerList {
+        if {![file exists $pcfg]} {
+           puts "Error: partner cfg file $pcfg does not exist"
+           print_usage
+           return -1
+        }
+        lappend cleanPartnerList [file tail $pcfg]
+        lappend myPartnerList [file tail $pcfg]
+        append MAIN(SWDEVXTERM) "Share [file tail $pcfg] "
+        incr p
+    }
+    set numPartners [expr [llength $partnerList] +1]
+    set oCfgList [lsort $cleanPartnerList]
+    set minVals 0
+    for {set u 0} {$u<60} {incr u} {
+        foreach partCfg $oCfgList {
+            if {$minVals == 60} {
+                break;
+            }
+            lappend minuteList($partCfg) $minVals
+            incr minVals
+        }
+    }
+    #puts "!!!!!\n!!!!!\n!!!!!\nSorted: $oCfgList\nMinutes: $myMin\nDate: $date\n!!!!!\n!!!!!\n!!!!!"
+}
+if {![file isdirectory Report]} {
+    file mkdir Report
+}
+if {![file isdirectory Result]} {
+    file mkdir Result
+}
+if {![file isdirectory Tmp]} {
+    file mkdir Tmp
+}
+if {![file isdirectory /tmp/Tmp]} {
+    file mkdir /tmp/Tmp
+}
+    if {![file isdirectory Log]} {
+    file mkdir Log
+}
+set skipMysqlAutomate 0
+set harn all
+set cfgFileTail [file tail $cfg]
+set MAIN(skipMysqlAutomate) 0
+set MAIN(tmpSpawnIds)       "";# powercycler spawnids that should be closed on each loop if still open
+set MAIN(cfg) $cfgFileTail
+set MAIN(feature_directory) "Waiting"
+set mainRet ""
+# ----------------------------------------------------------------------------------------
+#
+# ----------------------------------------------------------------------------------------
+set MAIN(TrackInit) [OpenTrackingPort -cfg "$MAIN(cfg)" -script_name "regServer" -type "daemon"]
+
+# ------------- Source the TCL cfg file ----------------
+if {$harness != "robot"} {
+    source ../main/cfg/$cfgFileTail
+}
+set fd_res [open_result_file "$cfgFileTail"]
+result_h1 "Starting regServer $cfgFileTail"
+
+# -----------------------------------------------------------------------------------------
+# mysql server cfg for posting
+# -----------------------------------------------------------------------------------------
+#source ../Lib/mysqlLib.tcl
+if {[info exists DEVREG(mysql,UseDb)] && $DEVREG(mysql,UseDb)} {
+    global mysql_handler
+    # connect to local sync database -- queuries are stored on the sync database while updating
+    #                                   the central db.  If central is successful that sync query
+    #                                   is deleted.  Else it is saved and purged once link is back
+    #                                   up.
+    puts "-----\nConnecting to SYNC database $DEVREG(mysql,localdb) at $DEVREG(mysql,localbackup)\n-----"
+    set localstatus [conn_to_db $DEVREG(mysql,localbackup) $DEVREG(mysql,localdb)]
+    set DEVREG(mysql,localhandler) $mysql_handler
+    puts "-----\nDatabase $DEVREG(mysql,localdb) at $DEVREG(mysql,localbackup) - \
+                status $localstatus handler $DEVREG(mysql,localhandler)\n-----"
+    catch {mysqlclose $DEVREG(mysql,localhandler)} myreason
+
+    puts "-----\nConnecting to CENTRAL database $DEVREG(mysql,centraldb) at $DEVREG(mysql,centralserver)\n-----"
+    set centralstatus [conn_to_db $DEVREG(mysql,centralserver) $DEVREG(mysql,centraldb)]
+    set DEVREG(mysql,centralhandler) $mysql_handler
+    puts "-----\nDatabase $DEVREG(mysql,centraldb) at $DEVREG(mysql,centralserver) - \
+                status $centralstatus handler $DEVREG(mysql,centralhandler)\n-----"
+    catch {mysqlclose $DEVREG(mysql,centralhandler)} myreason
+
+}
+# --------------------------------------------------------------------------
+# Get platformcode from main/runReg.cfg - get_platform_code 
+#                           uses a global so args are dummy
+#   NOTE: source ../main/runReg.cfg from above set global regplatform
+#         global set for cfg
+#         global set for cfgFileTail 
+#   The platform will be returned.
+# --------------------------------------------------------------------------
+if {$DEVREG(server,harness) == "robot"} {
+    set runRegPlatformCode [get_robot_yaml_info]
+} else {
+    set runRegPlatformCode [get_platform_code functional FROM_regServer FROM_regServer FROM_regServer]
+}
+set MAIN(runRegPlatform) $runRegPlatformCode
+# Check for lockfile entry for myself i.e. $cfg
+# Check for high priority queue image
+# check if my setup is requested to run a module i.e. bd-10808/pc
+# if yes, take a module and run the standard/routing regression on it.
+# else go into loop again
+set MAIN(queueId)    -1
+set MAIN(oldQueueId) -1
+set MAIN(oldResD)    -1
+set MAIN(resD)        1
+set MAIN(updRetValue) 1
+set MAIN(pollTime)    5000
+set updRetValue 1
+set alreadyOnConsole 0
+set DEVREG(active,con1pid) 0
+set DEVREG(active,ALOCK) 0
+set DEVREG(active,USERLOCK) 0
+set DEVREG(active,SHARERUNNNG) 0
+set DEVREG(active,STILLWAITING) 0
+set pollTime 5000
+set poweredOff 1
+UpdateTrackDB -text "status: Waiting" -status "green" -teefile "" -testcase ""
+while {1} {
+    set MAIN(feature_directory) "Waiting"
+    SetTerminalTitle
+    #-----------------------------------------------------------------
+    # Put logic in place to re-source important files if they change
+    #-----------------------------------------------------------------
+    if {[file mtime ../main/runReg.cfg] != $mainRunregTime} {
+        puts "!!!!!\n!!!!!\nSourcing ../main/runReg.cfg because it changed\n!!!!!\n!!!!!"
+        set tmpLS $DEVREG(mysql,localstatus)
+        set tmpLH $DEVREG(mysql,localhandler)
+        set tmpCS $DEVREG(mysql,centralstatus)
+        set tmpCH $DEVREG(mysql,centralhandler)
+        set rc [catch {source ../main/runReg.cfg} res]
+        if {$rc} {puts "Error sourcing runReg.cfg $res";}
+        set mainRunregTime [file mtime ../main/runReg.cfg]
+        set DEVREG(mysql,localstatus)    $tmpLS
+        set DEVREG(mysql,localhandler)   $tmpLH
+        set DEVREG(mysql,centralstatus)  $tmpCS
+        set DEVREG(mysql,centralhandler) $tmpCH
+    }
+    if {[file mtime runReg.cfg] != $runregTime} {
+        puts "!!!!!\n!!!!!\nSourcing runReg.cfg because it changed\n!!!!!\n!!!!!"
+        set tmpLS $DEVREG(mysql,localstatus)
+        set tmpLH $DEVREG(mysql,localhandler)
+        set tmpCS $DEVREG(mysql,centralstatus)
+        set tmpCH $DEVREG(mysql,centralhandler)
+        set rc [catch {source ./runReg.cfg} res]
+        if {$rc} {puts "Error sourcing runReg.cfg $res";}
+        set runregTime [file mtime runReg.cfg]
+        set DEVREG(mysql,localstatus)    $tmpLS
+        set DEVREG(mysql,localhandler)   $tmpLH
+        set DEVREG(mysql,centralstatus)  $tmpCS
+        set DEVREG(mysql,centralhandler) $tmpCH
+    }
+
+    flush $fd_res
+    # ----------------------------------------------------------------
+    # First check to see if I am ADMIN locked for maintenance
+    # ----------------------------------------------------------------
+    if {[locked $cfgFileTail]==1} {
+        set alreadyOnConsole 0
+        if {[autolocked $cfgFileTail]==1} {
+            if {$DEVREG(active,ALOCK) == 0} {
+                UpdateTrackDB -text "status: AutoLock" -status "red" -teefile "" -testcase "" -qid ""
+                incr DEVREG(active,ALOCK)
+            }
+            # -------------------------------------------------------------------------------
+            # If the test bed gets autolocked, we must assume that it is possible a new
+            #    image was loaded on the box.
+            # -------------------------------------------------------------------------------
+            puts "------\nDue to AUTOLOCK, software status is unknown -- user software download will repeat\n------";
+            set MAIN(oldQueueId) ""
+            puts "$cfgFileTail: HAS BEEN AUTOLOCKED!"
+        } else {
+            if {$DEVREG(active,ALOCK) == 0} {
+                UpdateTrackDB -text "status: AdminLock" -status "royalblue" -teefile "" -testcase "" -qid ""
+                incr DEVREG(active,ALOCK)
+            }
+            # -------------------------------------------------------------------------------
+            # If the test bed gets admin locked, we must assume that it is possible a new
+            #    image was loaded on the box.
+            # -------------------------------------------------------------------------------
+            puts "------\nDue to Admin LOCK, software status is unknown -- user software download will repeat\n------";
+            set MAIN(oldQueueId) ""
+            puts "$cfgFileTail: Currently locked"
+        }
+        flush stdout
+        # -----------------------------------------------------------------
+        #  Update a file with a current time stamp
+        # -----------------------------------------------------------------
+        UpdateIdle $cfgFileTail
+        after $pollTime
+        continue
+    }
+    if {$DEVREG(active,ALOCK)>0} {
+        UpdateTrackDB -text "status: Waiting" -status "green" -teefile "" -testcase "" -qid ""
+        set DEVREG(active,ALOCK) 0
+    }
+    # ---------------------------------------------------------------------
+    # Check to see if this platform is shared AND if the partner is running
+    # ---------------------------------------------------------------------
+    if {$partnerList != "null"} {
+        set myMin [string trimleft [clock format [clock seconds] -format "%M"] 0]
+#        set partnerStat [partnerInUse $partnerList]
+         set partnerStat 0
+        # -----------------------------------------------------------------
+        # Alter code to not lock consoles for shared test beds
+        # -----------------------------------------------------------------
+        if {[lsearch -exact  $minuteList($cfgFileTail) $myMin]== -1 } {
+            puts "$cfgFileTail is waiting for polling window."
+            flush stdout
+            # ----------------------------------------------------------------
+            #  Update a file with a current time stamp
+            # ----------------------------------------------------------------
+            UpdateIdle $cfgFileTail
+            after $pollTime
+            continue;
+            #$partnerStat >= 0
+        } elseif {![acquire_lock $shareId]} {
+            puts "$cfgFileTail could not lock. A shared queue is running"
+            if {$DEVREG(active,SHARERUNNNG) == 0} {
+                UpdateTrackDB -text "status: ShareRunning $myPartnerList" -status "green" \
+                    -teefile "" -testcase "" -qid ""
+                incr DEVREG(active,SHARERUNNNG)
+            }
+            set MAIN(oldQueueId) ""
+            flush stdout
+            # ----------------------------------------------------------------
+            #  Update a file with a current time stamp
+            # ----------------------------------------------------------------
+            UpdateIdle $cfgFileTail
+            after $pollTime
+            continue;
+        } elseif {0 || [lsearch -exact  $minuteList($cfgFileTail) $myMin]== -1 } {
+            puts "$cfgFileTail is waiting for polling window."
+            flush stdout
+            # ----------------------------------------------------------------
+            #  Update a file with a current time stamp
+            # ----------------------------------------------------------------
+            UpdateIdle $cfgFileTail
+            after $pollTime
+            continue;
+        } else {
+            # ----------------------------------------------------------------
+            foreach mycfg $partnerList {
+                set mycfgTail [file tail $mycfg]
+                puts "Not running $mycfgTail"
+                flush stdout
+            }
+            if {$DEVREG(active,SHARERUNNNG)>0} {
+                UpdateTrackDB -text "status: Waiting" -status "green" -teefile "" -testcase "" -qid ""
+                set DEVREG(active,SHARERUNNNG) 0
+            }
+        }
+    }
+    # ----------------------------------------------------------------
+    # Add code to keep multiple same type beds from servicing queue
+    #    at the same time
+    # ----------------------------------------------------------------
+    if {$partnerList == "null" && $multiple != "null"} {
+        set pollTime 3000
+        set currSecond [clock format [clock seconds] -format "%S"]
+        if {[regexp -nocase {.*ight.*\.cfg|.*[3-4]\.cfg} $cfgFileTail] && \
+                  ($currSecond < 40)} {
+            puts "$cfgFileTail - window = 40<->59 : $currSecond"
+            UpdateIdle $cfgFileTail
+            after $pollTime
+            continue;
+        } elseif {[regexp -nocase {.*[2]\.cfg} $cfgFileTail] && $currSecond > 20} {
+            puts "$cfgFileTail - window = 1<->20 : $currSecond"
+            UpdateIdle $cfgFileTail
+            after $pollTime
+            continue;
+        } elseif {[regexp -nocase {[a-z_\-]\.cfg|.*1\.cfg} $cfgFileTail] && \
+                  ($currSecond < 21 || $currSecond > 40) && \
+                 ![regexp -nocase {.*ight.*\.cfg} $cfgFileTail]} {
+            puts "$cfgFileTail - window = 21<->40 : $currSecond"
+            UpdateIdle $cfgFileTail
+            after $pollTime
+            continue;
+        }
+    }
+    # ----------------------------------------------------------------
+    # Init the rerun variable to 0 - set to 1 after mysqlMain (rerun)
+    # ----------------------------------------------------------------
+    set DEVREG(active,inrerun) 0
+    # ----------------------------------------------------------------
+    # Get the module from a queueid
+    # uInput is an out array arg
+    # ----------------------------------------------------------------
+    array unset uInput 
+    UpdateTimedLockFile $cfgFileTail "unlock" ;# if from prev run's server
+    # ----------------------------------------------------------------
+    # This is a critical check:
+    #     - go through the priority file to get a list of queueIds
+    #     - go through all queueIds and open the info files to pop.
+    #         the uInput array.
+    #     - check the uInput array to see if any of the info files
+    #         are supposed to run on this platform type
+    #     - If yes set the proper Mod to running in the info file
+    # ----------------------------------------------------------------
+    global platformList
+    set platformList $platformType
+    set MAIN(queueId) [GetAModule $regressionType $platformType uInput $cfgFileTail]
+    set DEVREG(active,queueId) $MAIN(queueId)
+    #result_debug "MAIN(queueId) $MAIN(queueId), uInput [parray uInput]"
+    # Update the imagesQueued and imagesRunning dir with changes
+    if {$MAIN(queueId)>0} {
+        SetTerminalTitle -add $MAIN(queueId)
+        set hitSustainingRerun 0
+        # -------------------------------------------------------------------------------
+        # Update the info file with the with the test bed being run and the status
+        # -------------------------------------------------------------------------------
+    	if {[set updRetValue [UpdateImagesRunning $MAIN(queueId) [array get uInput] $cfgFileTail]]==-1} {
+            #exit -1
+            WriteToQueueDebug "UpdateImagesRunning $MAIN(queueId)" "Returned a -1 - Don't exit like before";  
+            puts "UpdateImagesRunning $MAIN(queueId) returned a -1"
+        }
+        # If there are jobs to do then the test bed will be powered up
+        if {$poweredOff != 0} {
+            for {set i 1} {$i <= 10} {incr i} {
+                PowerOffDUT $i "on"
+            }
+            set poweredOff 0
+        }
+        # -------------------------------------------------------------------------------
+        # Initialize any variables that may be missing in jobs submitted prior to a new
+        #    code design change
+        # -------------------------------------------------------------------------------
+        if {![info exists uInput(sustaining:)]} { set uInput(sustaining:) 0;}
+        if {![info exists uInput(xmod:)]} { set uInput(xmod:) "NULL";}
+        if {![info exists uInput(faillock:)]} { set uInput(faillock:) "no";}
+        if {![info exists uInput(jenkins_url:)]} { set uInput(jenkins_url:) "NULL";}
+        if {![info exists uInput(harness:)]} { set uInput(harness:) "all";}
+        if {![info exists uInput(mode:)]} { set uInput(mode:) "auto";}
+        
+        set comment "" 
+        if {[regexp -nocase "manager" $uInput(userid:)]} {
+            set comment "no_analyzer"
+        }
+        set alreadyOnConsole 0
+        set count 0
+        # Set the runningIndex, which keys the modules, types and lsts lists
+        foreach runStatus $uInput(runStatus:) {
+            if {$runStatus == "runningOn$cfgFileTail"} {
+                set runningIndex $count  ;# There should be only one "runningOn" per call to UpdateImagesRunning
+                break
+            }
+            incr count
+        }
+        puts "$cfgFileTail: QueueId Running: $MAIN(queueId) [lindex $uInput(moduleNames:) $runningIndex]"
+        #set featureSubType [_getMysqlAutomateSubType $platformType [lindex $uInput(moduleNames:) $runningIndex]]
+        if {[info exists uInput(lockFile:)] && ![info exists uInput(platformToRunOn:)]} {
+            ### Keep on waiting until $uInput(runStatus:) is changed to done
+            # -------------------------------------------------------------------------------
+            # If the test bed gets admin locked, we must assume that it is possible a new
+            #    image was loaded on the box.
+            # -------------------------------------------------------------------------------
+            puts "\n------ SHOULD BE A USER LOCK FOR $uInput(userid:) -------\nAny previous user software \
+                download will repeat after unlocking\nIf this is NOT a user lock scenerio contact Sqaauto";
+            set MAIN(oldQueueId) ""
+            if {$DEVREG(active,USERLOCK) == 0} {
+                UpdateTrackDB -text "status: UserLock - $uInput(userid:)" -status "royalblue" \
+                    -teefile "" -testcase "" -qid "$MAIN(queueId)"
+                
+                incr DEVREG(active,USERLOCK)
+            }
+            while {[regexp -nocase "runningon" $uInput(runStatus:)]} {
+                puts "$cfgFileTail: locked for QueueId $MAIN(queueId), userId $uInput(userid:)" 
+                # Check if the runinngStatus Changed
+                if {[set retCode [ReadQueueInfoIntoArray $DEVREG(server,imagesRunningDir)/$MAIN(queueId)/info uInput]]==-1} {
+                    puts "ReadQueueInfoIntoArray $DEVREG(server,imagesRunningDir)/$MAIN(queueId)/info RETURNED a minus 1"
+                    WriteToQueueDebug "ReadQueueInfoIntoArray FAILED" "Returned a -1 - Don't exit like before";
+                    #exit $retCode
+                } else {
+                    after $pollTime
+                }
+            }
+            if {$DEVREG(active,USERLOCK)>0} {
+                UpdateTrackDB -text "status: Waiting" -status "green" -teefile "" -testcase "" -qid ""
+                set DEVREG(active,USERLOCK) 0
+            }
+            # -------------------------------------------------------------------------------
+            # Initialize any variables that may be missing in jobs submitted prior to a new
+            #    code design change - uInput is redefine above.
+            # -------------------------------------------------------------------------------
+            if {![info exists uInput(sustaining:)]} { set uInput(sustaining:) 0;}
+            if {![info exists uInput(xmod:)]} { set uInput(xmod:) "NULL";}
+            if {![info exists uInput(faillock:)]} { set uInput(faillock:) "no";}
+
+            if {[set targetDir [MoveReportToQueueFinished $MAIN(queueId) [array get uInput] $runningIndex Unknown]]==-1} {
+                set targetDir "Report dir not generated"
+            }
+            if {![regexp -nocase "manager" $uInput(userid:)]} {
+                set str ""
+                set str [append str [PrintUserQueue [array get uInput] $MAIN(queueId)]]
+                puts "Now sending mail for unlock"
+                if {[regexp -nocase "\@" $uInput(userid:)]} {
+                    set toBeSent "$uInput(userid:).extremenetworks.com"
+                } else {
+                    set toBeSent "$uInput(userid:)@extremenetworks.com"
+                }
+                if {![regexp -nocase "manager" $toBeSent]} {
+                   exec /bin/mail -s "Queueid:$MAIN(queueId)\($platformType\) ***unlocked*** testbed $uInput(lockFile:)" \
+                    "$toBeSent" -- -r "Sqaautosupport@extremenetworks.com" << "$str" &
+                }
+            }
+        } else {
+            # ---  Real run starting ---
+            set platToRunOn [string tolower $uInput(platformToRunOn:)]
+            LogRegStart $MAIN(queueId) $runningIndex $cfgFileTail [array get uInput]  ;# log the regression start to regstart.log
+            CreateQueueDebug $MAIN(queueId) $runningIndex $cfgFileTail
+            if {$DEVREG(server,harness) == "robot"} {
+                # ----------------  R O B O T    S E C T I O N  ------------------
+                if {$DEVREG(mysql,UseDb)} {
+                    set MAIN(reg_id) [getRegIdFromQId $MAIN(queueId)]
+                }
+                # ---  Information gathered from the cfg/robot.cfg files about this yaml file ---
+                # DEVREG(server,CFG_PATH) 
+                # DEVREG(server,CFG_AREA)
+                # DEVREG(server,CFG_TYPE)
+                # ----------------------------------------------------------------------------------------
+                # Create the mount report directory
+                set modName [lindex $uInput(moduleNames:) $runningIndex]
+                UpdateTrackDB -text "status: Start Regression on $modName" -status "green" \
+                             -teefile "" -testcase "" -qid "$MAIN(queueId)"
+                set MAIN(module) $modName
+                if {[info exists uInput(moduleTypes:)]} {
+                    set modType [lindex $uInput(moduleTypes:) $runningIndex]
+                    WriteToQueueDebug "Define modType" "!!!!!!!!\n!!!!!!!!\n \
+                              EXISTS uInput(moduleTypes:)\nSET to $modType\n!!!!!!!!\n!!!!!!!! "
+                } else {
+                    set modType robotunit
+                    WriteToQueueDebug "Define modType" "!!!!!!!!\n!!!!!!!!\n \
+                              DOES NOT EXIST uInput(moduleTypes:)\nSET to $modType\n!!!!!!!!\n!!!!!!!! "
+                }
+                set MAIN(robotRepDir) [_createRobotReportDir $MAIN(queueId) $MAIN(module)]
+                #if {[regexp -nocase "unit" $modType]} {
+                #    append suite " -s $modName $DEVREG(server,robotTestPath)/Unit/NetworkElements/$modName"
+                #} else {
+                #    append suite " -s $modName $DEVREG(server,robotTestPath)/Unit/NetworkElements/$modName"
+                #}
+                #set pybotCmd $DEVREG(server,pybotPath)
+                if {[info exists MAIN(oldQueueId)] && $MAIN(oldQueueId) != $MAIN(queueId)} {
+                    puts "Robot Download Enabled"
+                    _copyRobotImagesToTftp [array get uInput] -qId $MAIN(queueId)
+                    # --- check if the i386 image / DUT2+ image is included
+                    set lptr [string tolower $uInput(platformToRunOn:)]
+                    if {(![info exists $uInput(i386Image:)] || $uInput(i386Image:) == "" || \
+                         [regexp -nocase "null" $uInput(i386Image:)]) && \
+                         [info exists DEVREG(platImageType,$lptr)] } {
+                            catch {exec /usr/bin/pybot -L trace --listener $DEVREG(server,robotResultMnt)/$DEVREG(server,robotListener) \
+                               -v TestBedVariable:$DEVREG(server,CFG_PATH)/$MAIN(cfg) \
+                               -v QUEUEID:$MAIN(queueId) -v MODULE:$modName -v TFTPSERVER:10.69.5.248 \
+                               -v FAMILY:$DEVREG(platImageType,$lptr) \
+                               -d $MAIN(robotRepDir) -s $modName $DEVREG(server,robotTestPath)/Unit/NetworkElements/$modName  >@stdout | \
+                               busybox tee /tmp/Tmp/$MAIN(queueId)[pid]} mainRet
+                    }
+                } else {
+                    puts "Skipping Robot Download b/c Already downloaded"
+                    catch {exec /usr/bin/pybot -L trace --listener $DEVREG(server,robotResultMnt)/$DEVREG(server,robotListener) \
+                       -v TestBedVariable:$DEVREG(server,CFG_PATH)/$MAIN(cfg) \
+                       -v QUEUEID:$MAIN(queueId) -v MODULE:$modName \
+                       -d $MAIN(robotRepDir) -s $modName $DEVREG(server,robotTestPath)/Unit/NetworkElements/$modName  >@stdout | \
+                       busybox tee /tmp/Tmp/$MAIN(queueId)[pid]} mainRet
+                }
+                set MAIN(resultList) [getRunRegTestModuleStatus $MAIN(reg_id) $MAIN(module)]
+                if {1 || [regexp -nocase "pass" $mainRet]} {
+                    puts "PYBOT RETURNED: $mainRet"
+                    set DEVREG(active,failcount) 0
+                    WriteToQueueDebug "Robot TestCompleted" \
+                         "UpdateRobotImagesDone $MAIN(queueId) $runningIndex [lindex $MAIN(resultList) 0]";
+                    catch {UpdateRobotImagesDone $MAIN(queueId) $runningIndex [lindex $MAIN(resultList) 0]} why
+                    #set emailRet [EmailReportFilesMail $MAIN(queueId) $runningIndex $cfgFileTail robot PASS -mainReturnInfo $mainRet]
+                }
+                set MAIN(oldQueueId) $MAIN(queueId)
+                if {$partnerList != "null"} {
+                    # Release the lock on the shared queue.
+                    release_lock $shareId
+                    verify_release_lock $shareId
+                    after 5000
+                }
+                flush stdout
+                if {$uInput(sustaining:) && $hitSustainingRerun} {
+                    #Set the old queueid to garbage so that the next module will download code
+                    set MAIN(oldQueueId) 123
+                }
+                UpdateTrackDB -text "status: Waiting" -status "green" \
+                             -teefile "" -testcase "" -qid ""
+                continue;# Go check the imagesQueued/GetModule
+            }
+
+
+            WriteToQueueDebug "Regserver Pre Download" "LogRegStart: $MAIN(queueId) $runningIndex $cfgFileTail";
+            WriteToQueueDebug "Download Flags A" "oldQueueId = $MAIN(oldQueueId) MAIN(queueId) \
+                     $MAIN(queueId) oldRedD regexp [regexp -nocase "^0" $MAIN(oldResD)]";
+            set modName        [lindex $uInput(moduleNames:) $runningIndex]
+            if {[info exists uInput(moduleTypes:)]} {
+                set modType [lindex $uInput(moduleTypes:) $runningIndex]
+                WriteToQueueDebug "Define modType" "!!!!!!!!\n!!!!!!!!\n \
+                          EXISTS uInput(moduleTypes:)\nSET to $modType\n!!!!!!!!\n!!!!!!!! "
+            } else {
+                set modType functional
+                WriteToQueueDebug "Define modType" "!!!!!!!!\n!!!!!!!!\n \
+                          DOES NOT EXIST uInput(moduleTypes:)\nSET to $modType\n!!!!!!!!\n!!!!!!!! "
+            }
+            if {$DEVREG(mysql,UseDb)} {
+                set MAIN(reg_id) [getRegIdFromQId $MAIN(queueId)]
+            } 
+            set myRegPath      [GetModuleFullType $modType directory] ;# -regPath $myRegPath - Functionaltest | XML_API etc.
+            set myRegPathSmall [GetModuleFullType $modType runreg] ;#  - functional | ixscriptmate | scalability | snmp etc.
+            set featureSubType [_getMysqlAutomateSubType $platformType [lindex $uInput(moduleNames:) $runningIndex] $modType];# ipRoute1 | standard
+            # -----------------------------------------------------------------------------------------
+            # Get platformcode from main/runReg.cfg - LYNX_FUNC_IPR,1 | LYNX_SNMP_IPR,1 etc
+            #   NOTE: Now that we know what module and what modType (funct|snmp etc) we can set the correct
+            #         regserver(PLATFORMNAME)
+            #         This is important because mysqlMain uses runRegPlatform to decide what to rerun
+            # -----------------------------------------------------------------------------------------
+    ##   #     set MAIN(runRegPlatform) [get_platform_code $myRegPathSmall $featureSubType NULL NULL]
+            # ------------------------------------------------------------------------------
+            #  Case in which a differenct automation release path ie fuji,trunk2
+            #    - set the main directory path for this modules run.
+            #    - NOTE: all paths to main above can use the env base path b/c
+            #        loadcode does not need to run from the alt repository.
+            # ------------------------------------------------------------------------------
+            if {[info exists uInput(relInfo:)] && $uInput(relInfo:) != "" \
+                  && [regexp -- $uInput(relInfo:) $DEVREG(server,relInfoList)]} {
+                set mainPath "$DEVREG(relInfoPath,$uInput(relInfo:))/../main"
+                 WriteToQueueDebug "relInfo Check" "Found reInfo: $uInput(relInfo:) Path: $mainPath";
+            } else {
+                if {[info exists uInput(relInfo:)]} {
+                    WriteToQueueDebug "relInfo Check" "W H Y   D I D   T H I S   M I S S :\
+                    \n$DEVREG(server,relInfoList) \nCHECK $uInput(relInfo:) \
+                    [regexp -- $DEVREG(server,relInfoList) $uInput(relInfo:)]"
+                }
+                WriteToQueueDebug "relInfo Check" "Hit a normal run";
+                set mainPath "${env(BASE_PATH)}/../main" ;#  this leaves us at /auto/
+            }
+            puts "\n ==================================================\n\
+            Regression executed from path: $mainPath\n\
+            ==================================================\n";
+            WriteToQueueDebug "Running" "mainPath $mainPath and mainPath val $mainPath";
+            # --------------------------------------------------------------------
+            #  Make Sure There is a Valid Image to Run ::
+            #  If the platform to run is set '$uInput(platformToRunOn:)', and the
+            #  image '$uInput(${platformNameLower}Image:)' is set to NULL and 
+            #  the dut2+ images $uInput($RestOfDUTType($uInput(platformToRunOn:))Image:)
+            # are set to NULL then skip download
+            # --------------------------------------------------------------------
+            set hitAllNull 0
+            # --------------------------------------------------------------------
+            # Check for platfromToRunOn. When found, check the related
+            #   images (${platformNameVar}Image:, $RestOfDUTType($uInput(platformToRunOn:))Image:,
+            #   or RestOfIPRDUTType($uInput(platformToRunOn:)lower)Image:) to 
+            #   see if LoadImage should be skipped or downloaded.
+            # --------------------------------------------------------------------
+            if {[info exists uInput(platformToRunOn:)]} {
+                set targetPlatform $uInput(platformToRunOn:)
+                set targetPlatformLower [string tolower $targetPlatform]
+                # ----- Determine DUT2+ image type ... rtr or std
+                if {$featureSubType == "cit2node"} {
+                    set restDutLower [string tolower $citDut2ImageType($targetPlatform)]
+                    if {[info exists uInput(${restDutLower}Image:)]} {
+                        set dut2Plat $RestOfDUTType($targetPlatform)
+                        set dut2Image $uInput(${restDutLower}Image:)
+                    }
+                } elseif {$featureSubType == "standard" } {
+                    set restDutLower [string tolower $RestOfDUTType($targetPlatform)]
+                    if {[info exists uInput(${restDutLower}Image:)]} {
+                        set dut2Plat $RestOfDUTType($targetPlatform)
+                        set dut2Image $uInput(${restDutLower}Image:)
+                    }
+                } else {
+                    set restDutLower [string tolower $RestOfIPRDUTType($targetPlatform)]
+                    if {[info exists uInput(${restDutLower}Image:)]} {
+                        set dut2Plat $RestOfIPRDUTType($targetPlatform)
+                        set dut2Image $uInput(${restDutLower}Image:)
+                    }
+                }
+                # --------------------------------------------------------
+                # Check the 2 images for NULL
+                # --------------------------------------------------------
+                if {[info exists uInput(${targetPlatformLower}Image:)] && \
+                    $uInput(${targetPlatformLower}Image:)=="NULL" && \
+                    $dut2Image=="NULL"} {
+                        set hitAllNull 1; # Hit null
+                }
+                # --------------------------------------------------------
+                # COMMONIMAGE is a catch all safety in runReg.cfg
+                #    if a specific value is passed in for the device
+                #    do not take the common image.
+                #    COMMONIMAGE = platform type image I am going to download
+                # --------------------------------------------------------
+                # !!!! Note this caused issues with Stacks
+                if {[info exists uInput(${targetPlatformLower}Image:)] && \
+                    $uInput(${targetPlatformLower}Image:)!="NULL"} {
+                    #set COMMONIMAGE($targetPlatform) $targetPlatform
+                }
+                if {$dut2Image!="NULL"} {
+                    #set COMMONIMAGE($dut2Plat) $dut2Plat; # DL type of myself
+                }
+            }
+            WriteToQueueDebug "Download Flags B" "oldQueueId = $MAIN(oldQueueId) MAIN(queueId) \
+                        $MAIN(queueId) oldRedD regexp [regexp -nocase "^0" $MAIN(oldResD)]";
+            set MAIN(DownloadState) 0
+            if {$hitAllNull} {
+                set MAIN(DownloadState) 1
+                # Hit null so skip download
+                set MAIN(resD) 0
+                set MAIN(oldQueueId) $MAIN(queueId)
+                set MAIN(oldResD) $MAIN(resD)
+                WriteToQueueDebug "Regserver Download" "All Images Are NULL";
+            } else {
+                if {$MAIN(oldQueueId)!=$MAIN(queueId) || [regexp -nocase "^0" $MAIN(oldResD)]!=1} {  ;# only download first time for a given queue
+                    # --------------------------------------------------------------------
+                    #  If the platform to run  $uInput(platformToRunOn:) and the
+                    #  image $uInput(${targetPlatformLower}Image:) is set to skip 
+                    #  then skip download
+                    # --------------------------------------------------------------------
+                    set MAIN(DownloadState) 1
+                    set hitSkip 0
+                    if {[info exists uInput(${targetPlatformLower}Image:)] && \
+                        $uInput(${targetPlatformLower}Image:) == "skip" } {
+                        # ---------------------------------------------------------------
+                        # Hit skip so do not download - enforce the check above.
+                        # ---------------------------------------------------------------
+                        result_debug "Skipping download image!"
+                        WriteToQueueDebug "Regserver Download" "Skipping download image! uInput(Platform) set to skip";
+                        set MAIN(resD) 0
+                    } else {
+                        # Start the download process
+                        WriteToQueueDebug "Regserver Download" "Normal Download Start";
+                        # ----------------------------------------------------------------------
+                        #  Get the platformToRunOn and use it to get/link to the DUT1 image
+                        #     path as well as the DUT2+ paths.
+                        # ----------------------------------------------------------------------
+                        set plats ""
+                        set platImagePaths ""
+                        # --- targetPlatformLower set above
+                        if {[info exists uInput(${targetPlatformLower}Image:)] && \
+                            $uInput(${targetPlatformLower}Image:)!="NULL" && \
+                            $uInput(${targetPlatformLower}Image:)!="skip" } {
+                            # -----------------------------------------------------------
+                            # Set the image name to the oldest common name
+                            #   Sonoma -> Aspen
+                            #   Melange-> Aspen
+                            #   Torino -> Olympic
+                            #
+                            # COMMONIMAGE($targetPlatform) is initialized in runReg.cfg
+                            # -----------------------------------------------------------
+                        
+                            # -----------------------------------------------------------
+                            # Set image info for DUT1
+                            # -----------------------------------------------------------
+                            set commonImageA $COMMONIMAGE($targetPlatform); # $COMMONIMAGE(Sonoma)->Aspen
+                            set commonImageALower [string tolower $commonImageA]
+                            set uInput(${commonImageALower}Image:) $uInput(${targetPlatformLower}Image:)
+                            lappend plats "$commonImageA"; # List of platforms "Aspen"
+                            lappend platImagePaths "$uInput(${commonImageALower}Image:)"; # List of full image paths
+                            # -----------------------------------------------------------
+                            # Set image info for DUT2
+                            # -----------------------------------------------------------
+                            set commonImageB $COMMONIMAGE($dut2Plat); # $COMMONIMAGE(Sonoma)->Aspen
+                            set commonImageBLower [string tolower $commonImageB]
+                            set uInput(${commonImageBLower}Image:) $dut2Image
+                            if {[string tolower [file tail $uInput(${commonImageBLower}Image:)]] != "null"} {
+                                puts "NULL not hit: [string tolower [file tail $uInput(${commonImageBLower}Image:)]]"
+                                lappend plats "$commonImageB"; # List of platforms "Aspen Cougar"
+                                lappend platImagePaths "$uInput(${commonImageBLower}Image:)"; # List of full image paths
+                            }
+                            # -----------------------------------------------------------
+                            # Add the no diags X480 image if the flag is set for this test bed in runReg.cfg
+                            # -----------------------------------------------------------
+                            if {[info exists X480EXISTS($targetPlatform,$regressionType)] && \
+                                   $X480EXISTS($targetPlatform,$regressionType) && \
+                                   [info exists uInput(x480Image:)] && [string tolower $uInput(x480Image:)] != "null"} {
+                                puts "NULL not hit on X480: [string tolower [file tail $uInput(x480Image:)]]"
+                                lappend plats "x480"; # Add x480 no diags
+                                lappend platImagePaths "$uInput(x480Image:)"; # Add x480 no diags image path
+                            }
+                        }
+                    
+                        UpdateTrackDB -text "status: Downloading" -status "green" \
+                                     -teefile "/tmp/Tmp/$MAIN(queueId)[pid]" -testcase "" -qid "$MAIN(queueId)"
+                        GetLocalImageDir -id $MAIN(queueId) -platformList $plats -platformImageList $platImagePaths
+                        #GetLocalImageDir $MAIN(queueId) $uInput(i386Image:) $uInput(marinerImage:) $uInput(aspenImage:) \
+                        #     $uInput(aspennapaImage:) $uInput(cougarImage:) $uInput(olympicImage:) $uInput(jaguarImage:) \
+                        #     $uInput(pantherImage:) $uInput(voyagerImage:) i386Image marinerImage aspenImage aspennapaImage \
+                        #     cougarImage olympicImage jaguarImage pantherImage voyagerImage 
+                        # ----------------------------------------------------------------------
+                        # Re-create the image path lists from variables set in GetLocalImageDir
+                        # ----------------------------------------------------------------------
+                        set platImagePaths ""
+                        foreach myPlat $plats {
+                           lappend platImagePaths $DEVREG(imageDir,$myPlat)
+                        }
+                        set mydir [pwd]
+                        cd $mainPath
+                        WriteToQueueDebug "QLoadImage call" "QLoadImage.tcl -cfg $DEVREG(server,CFG_PATH)/$cfg \
+                               -platformList $plats -qId $MAIN(queueId) -platformImageList $platImagePaths \
+                               -xmod $uInput(xmod:)";
+                        puts "QLoadImage.tcl -cfg $DEVREG(server,CFG_PATH)/$cfg \
+                               -platformList $plats -qId $MAIN(queueId) -platformImageList $platImagePaths \
+                               -xmod $uInput(xmod:)";
+                        catch {exec ./QLoadImage.tcl -cfg $DEVREG(server,CFG_PATH)/$cfg -platformList $plats -qId $MAIN(queueId) \
+                                    -platformImageList $platImagePaths \
+                                    -xmod $uInput(xmod:) >@stdout | busybox tee /tmp/Tmp/$MAIN(queueId)[pid]} MAIN(resD)
+                        cd $mydir
+                        WriteToQueueDebug "AfterQLoadImage call" "Result = $MAIN(resD)";
+                        if {[catch {exec cp /tmp/Tmp/$MAIN(queueId)[pid] /tmp/Tmp/DL_$MAIN(queueId)} reason]} {
+                            puts "Error: Cannot cp /tmp/Tmp/$MAIN(queueId)[pid] to /tmp/Tmp/DL_$MAIN(queueId) ...$reason";
+                            #return -1
+                        }
+                    }
+                    set MAIN(oldQueueId) $MAIN(queueId)
+                    set MAIN(oldResD) $MAIN(resD)
+                    WriteToQueueDebug "End of Download choices" "oldResD $MAIN(oldResD) oldQueueId $MAIN(oldQueueId)";
+                    if {($MAIN(resD)==0)||([regexp -nocase "^0" $MAIN(resD)]==1&&[regexp -nocase "write error" $MAIN(resD)])} {
+                        # Download image successful, move the report dir to avoid conflict with failed ones
+                        # Since we do not want to compute the info file here but only move the
+                        # download report dir
+                        set DEVREG(active,failcount) 0
+                        WriteToQueueDebug "Download image successful" "Call MoveReportToQueueFinished";
+                        # -------------------------------------------------------------------------------
+                        # Start semaphore application which runs for 15 mins by default.  This allows
+                        #   other processes to check to see whether this queue is running a regression.
+                        #   In this case it helps avoid a race condition in the event of multiple test
+                        #   beds sharing a queue.
+                        # -------------------------------------------------------------------------------
+                        #set cmd1 "exec tclsh dyingSemaphore.tcl -cfg $cfgFileTail -qId $MAIN(queueId) -time 180 &"
+                        #set outpid1 [catch "$cmd1" reason1]
+                        #if {$outpid1} {
+                        #    result_debug "failed to spawn semaphore application: $reason1\n"
+                        #}
+                        #puts "Started Semaphore Application 2 with pid $reason1"
+                        #flush stdout
+                        file delete /tmp/Tmp/$MAIN(queueId)[pid]
+                        if {[set targetDir [MoveReportToQueueFinished $MAIN(queueId) [array get uInput] $runningIndex DownloadPassed]]==-1} {
+                            set targetDir "Report dir not generate"
+                        }
+                        puts "!!!!\nTarget Dir\n$targetDir\n!!!!!"
+                        if {$uInput([set platToRunOn]Image:)!="skip"} {
+                            if {!$skipMysqlAutomate} {
+                                WriteToQueueDebug "Download image successful" "mysqlAutomate: -platform $MAIN(runRegPlatform) -regId $MAIN(queueId) \
+                                    -reportDir $targetDir -module [lindex $uInput(moduleNames:) $runningIndex]  -qId $MAIN(queueId) \
+                                    -regType $myRegPathSmall -regSubType $featureSubType";
+                                catch {exec $mainPath/../main/mysqlAutomate.tcl -regId $MAIN(queueId) -platform $MAIN(runRegPlatform) \
+                                    -reportDir $targetDir -module [lindex $uInput(moduleNames:) $runningIndex]  -qId $MAIN(queueId) \
+                                    -regType $myRegPathSmall -regSubType $featureSubType -callLocation \
+                                    "regServer: MAIN(resD)=0 download successful $cfg">@stdout} automateRet
+                            }
+                        }
+                    }
+                }
+            }
+            UpdateIdle $cfgFileTail
+            result_debug "MAIN(resD) |$MAIN(resD)|, oldQueueId $MAIN(oldQueueId), MAIN(queueId) $MAIN(queueId)"
+            WriteToQueueDebug "Download Flags C" "oldQueueId = $MAIN(oldQueueId) MAIN(queueId) \
+                        $MAIN(queueId) oldRedD regexp [regexp -nocase "^0" $MAIN(oldResD)]";
+            flush stdout
+            if {($MAIN(resD)==0)||([regexp -nocase "^0" $MAIN(resD)]==1&&[regexp -nocase "write error" $MAIN(resD)])} {
+                #  Download Successful
+                #  UpdateImagesDone $MAIN(queueId) $runningIndex DownloadPassed targetDir
+                set mainRet "testCompleted"
+                set modName [lindex $uInput(moduleNames:) $runningIndex]
+                set MAIN(module) $modName
+                if {![info exists uInput(tcList$MAIN(module):)]} { set uInput(tcList$MAIN(module):) "all";}
+                if {[info exists uInput(moduleTypes:)]} {
+                    set modType [lindex $uInput(moduleTypes:) $runningIndex]
+                } else {
+                    set modType functional
+                }
+                set myRegPath [GetModuleFullType $modType dir] ;# -regPath $myRegPath
+    
+                if {[regexp -nocase cfg [lindex $uInput(moduleLists:) $runningIndex]]} {
+                   set lst $uInput($modName,tstList:)
+                   if {[info exists uInput(relInfo:)]} {
+                      set releaseInfo $uInput(relInfo:)
+                   } else {
+                      set releaseInfo "current"
+                   }
+                   if {$releaseInfo==""} {
+                      set releaseInfo "current"
+                   }
+                   set Path Path
+    
+                   if {$releaseInfo=="current"} {
+                      if {[catch {exec mv $DEVREG(server,imagesQueuedDir)/$MAIN(queueId)/$lst \
+                             $mainPath/../${myRegPath}/$modName/$MAIN(queueId)} reason]} {
+                         result_error "This regresson is using 'cfg' to run a list, but the lst file is not present"
+                         puts "Error: Cannot move $DEVREG(server,imagesQueuedDir)/$MAIN(queueId)/$modName ...$reason";
+                         set lst null
+                      }
+                   } else {
+                      if {[catch {exec mv $DEVREG(server,imagesQueuedDir)/$MAIN(queueId)/$lst \
+                              $mainPath/../${myRegPath}/$modName/$MAIN(queueId)} reason]} {
+                         result_error "This regresson is using 'cfg' to run a list, but the lst file is not present"
+                         puts "Error: ...$reason";
+                         set lst null
+                      }
+                   }
+                   if {$lst == "null"} {
+                       set lst [lindex $uInput(moduleLists:) $runningIndex]
+                   } else {
+                       set lst $MAIN(queueId)
+                   }
+                } else {
+                   set lst [lindex $uInput(moduleLists:) $runningIndex]
+                }
+                # Debug file mv
+                if {[info exists uInput($modName,debugChoice:)]} {
+                   if {$uInput($modName,debugChoice:)=="Yes"} {
+                      set dbgFile $uInput($modName,dbgFile:)
+                      if {[catch {exec mv $DEVREG(server,imagesQueuedDir)/$MAIN(queueId)/$dbgFile \
+                            $mainPath/../${myRegPath}/$modName/$MAIN(queueId).dbg} reason]} {
+                          puts "Error: Cannot move $DEVREG(server,imagesQueuedDir)/$MAIN(queueId)/$modName Debug File ...$reason";
+                          set dbg 0
+                      } else {
+                          set dbg $MAIN(queueId).dbg
+                      }
+                   } else {           
+                      set dbg 0
+                   }
+                } else {
+                   set dbg 0
+                }
+    
+                if {$modName=="epm"} {
+                    set platformtorunon [string tolower $uInput(platformToRunOn:)]Image:
+                    set uInput($modName,value:) "$uInput($platformtorunon)"
+                }
+    
+                ### efence code
+                global mysqlIP my_db
+                set host $mysqlIP
+                set db $my_db
+                global host mysql_handler
+                
+                
+                # find the efence processes for this feature
+                # do not activate efence for stackables
+                if {[info exists uInput(efence:)]} {
+                    set efence $uInput(efence:)
+                } else {
+                    set efence ""
+                }
+                set testModule $modName
+                set cfg $cfg
+                
+                set efenceProcessList "no"
+                if {[llength $efence] > 0} {
+                    if {[string compare [lindex $efence 0] "enable"]==0} {
+                        conn_to_db $host $db
+                        set efenceProcessList [getEfenceProcessList -module $testModule -cfg $cfg]
+                    }
+                }
+                if {$uInput(platformToRunOn:) == "i386" || $uInput(platformToRunOn:) == "exosvm"} {
+                    set tgen ixvm
+                }
+                #--------------------  Add Robot -----------------------
+                if {$MAIN(harness) == "robot"} {
+                    puts "Should I be here for robot"
+                } else {
+                    UpdateTrackDB -text "status: Running $modName" -status "green" \
+                                 -teefile "/tmp/Tmp/$MAIN(queueId)[pid]" -testcase "" -qid "$MAIN(queueId)"
+                    set tcLst $uInput(tcList$MAIN(module):);# This is set to 'all' above if not set in info file
+                    set am $uInput(mode:);# mode is set to auto above is not in the info file.
+                    if {!$MAIN(DownloadState) && $uInput(mode:) == "dev"} {
+                        set am "dev"
+                    } else {
+                        set am "auto"
+                    }
+                    if {[info exists uInput($modName,value:)]} {
+                       # --------------------------------------------------
+                       # ---  Exec main.tcl if there is a moduleArg --
+                       # --------------------------------------------------
+                       set moduleArg $uInput($modName,value:)
+                       if {[info exists uInput(relInfo:)]  && $uInput(relInfo:) != "" \
+                           && [regexp -- $uInput(relInfo:) $DEVREG(server,relInfoList)]} {
+                          # --------------------------------------------------
+                          #  Run main in a parallel dir
+                          # --------------------------------------------------
+                          set mydir [pwd]
+                          cd $mainPath
+                          WriteToQueueDebug "modNave,value exists" "main.tcl -mode $am -lst $lst -tcList $tcLst \
+                            -debugLevel $dbg -module $modName -qId $MAIN(queueId) -TrafficGen $tgen -harness $MAIN(harness) \
+                            -cfg $DEVREG(server,CFG_PATH)/$cfg -moduleArg $moduleArg -regPath $myRegPath"
+                          catch {exec ./main.tcl -mode $am -lst $lst -debugLevel $dbg -module $modName -qId $MAIN(queueId) -harness $MAIN(harness) \
+                            -cfg $DEVREG(server,CFG_PATH)/$cfg -moduleArg $moduleArg -regPath $myRegPath -TrafficGen $tgen -tcList $tcLst \
+                            >@stdout | busybox tee /tmp/Tmp/$MAIN(queueId)[pid]} mainRet
+                          cd $mydir
+                       } else {
+                          set mydir [pwd]
+                          # --------------------------------------------------
+                          # Run normal main with moduleArg
+                          # --------------------------------------------------
+                          cd $mainPath
+                          WriteToQueueDebug "Normal main with moduleArg" "main.tcl -mode $am -lst $lst -tcList $tcLst \
+                             -debugLevel $dbg -module $modName -qId $MAIN(queueId) -TrafficGen $tgen -harness $MAIN(harness) \
+                            -cfg $DEVREG(server,CFG_PATH)/$cfg -moduleArg $moduleArg -efence $efenceProcessList"
+                          catch {exec ./main.tcl -mode $am -lst $lst -debugLevel $dbg -module $modName -qId $MAIN(queueId) \
+                            -cfg $DEVREG(server,CFG_PATH)/$cfg -moduleArg $moduleArg -harness $MAIN(harness) -tcList $tcLst \
+                            -TrafficGen $tgen -efence $efenceProcessList >@stdout | \
+                            busybox tee /tmp/Tmp/$MAIN(queueId)[pid]} mainRet
+                          cd $mydir
+                       }
+                    } else {
+                       # NORMAL RUN
+                       if {[info exists uInput(relInfo:)]  && $uInput(relInfo:) != "" \
+                           && [regexp -- $uInput(relInfo:) $DEVREG(server,relInfoList)]} {
+                          # --------------------------------------------------
+                          # --- Exec main.tcl in a parallel directory ---
+                          # --------------------------------------------------
+                          set mydir [pwd]
+                          cd $mainPath
+                          WriteToQueueDebug "relInfo Exec Main" "main.tcl -mode $am -lst $lst -tcList $tcLst \
+                             -debugLevel $dbg -module $modName -qId $MAIN(queueId) -TrafficGen $tgen -harness $MAIN(harness) \
+                             -cfg $DEVREG(server,CFG_PATH)/$cfg -regPath $myRegPath"
+                          catch {exec ./main.tcl -mode $am -lst $lst -debugLevel $dbg -module $modName -qId $MAIN(queueId) -tcList $tcLst \
+                             -cfg $DEVREG(server,CFG_PATH)/$cfg -regPath $myRegPath -TrafficGen $tgen -harness $MAIN(harness) \
+                             >@stdout | busybox tee /tmp/Tmp/$MAIN(queueId)[pid]} mainRet
+                          cd $mydir
+                       } else {
+                          # --------------------------------------------------
+                          # --- Normal exec main.tcl ---
+                          # --------------------------------------------------
+                          set mydir [pwd]
+                          cd $mainPath
+                          WriteToQueueDebug "Normal Exec Main" "main.tcl -mode $am -lst $lst -tcList $tcLst \
+                             -debugLevel $dbg -module $modName -qId $MAIN(queueId) -TrafficGen $tgen -harness $MAIN(harness) \
+                             -cfg $DEVREG(server,CFG_PATH)/$cfg -regPath $myRegPath -efence $efenceProcessList"
+                          catch {exec ./main.tcl -mode $am -lst $lst -debugLevel $dbg -module $modName -qId $MAIN(queueId) \
+                             -cfg $DEVREG(server,CFG_PATH)/$cfg -regPath $myRegPath -harness $MAIN(harness) -tcList $tcLst \
+                             -TrafficGen $tgen -efence $efenceProcessList \
+                             >@stdout | busybox tee /tmp/Tmp/$MAIN(queueId)[pid]} mainRet
+                          WriteToQueueDebug "Normal Exec Main END" "Made it past normal main.tcl"
+                          cd $mydir
+                       }
+                    }
+                    #; tee in above call potentially may give write error if
+                    #  kill is called in running server. It has been seen earlier
+                    # causing following switch to follow default (instead of killed)
+                    # construct sending the whole trace to user.
+                    after 1000
+                    result_debug "the $MAIN(queueId) $modName mainRet |$mainRet|"
+                    switch -regexp -- $mainRet {
+                       "^testCompleted" -
+                       "^testSkipped" {
+                          result_debug "inside testCompleted"
+                          set DEVREG(active,failcount) 0
+                          WriteToQueueDebug "TestCompleted Or Skipped" \
+                             "UpdateImagesDone $MAIN(queueId) $runningIndex PASSedOn$cfgFileTail targetDir";
+                          catch {UpdateImagesDone $MAIN(queueId) $runningIndex PASSedOn$cfgFileTail targetDir} why
+                          set emailRet [EmailReportFilesMail $MAIN(queueId) $runningIndex $cfgFileTail $targetDir PASS -mainReturnInfo $mainRet]
+        
+                          # Check here if some tests failed, if failed some tests, rerun the failed tests separately
+                          # Rerun involves, calling standalone shell script, reporting it to web,
+                          # Moving the report to imagesFinished area
+                          if {$uInput(faillock:) == "yes" && [regexp -nocase "fail" $emailRet]} {
+                              # --- set rerun to 0 so the harness does not run again and we break out
+                              set uInput(rerun:) 0
+                              #  Create the userlock queue file $cfg
+                              set lInput(faillock:)     "yes"
+                              set lInput(priority:)     1
+                              set lInput(moduleNames:)  "none"
+                              set lInput(efence:)       "no"
+                              set lInput(moduleTypes:)  "none"
+                              set lInput(relInfo:)      ""
+                              set lInput(userid:)       "$uInput(userid:)"
+                              set lInput(runStatus:)    "queued"
+                              set lInput(lockFile:)     "$cfgFileTail"
+                              set lInput(moduleLists:)  "none"
+                              set poweredOff 1
+                              QueueAUserLock [array get lInput]
+                          }
+                          if {[regexp -nocase "fail" $emailRet] && $automatedRerun && $uInput(rerun:)} {
+                             # -------------------------------------------------------------------------------
+                             # Rerun download code if in sustaining mode
+                             # -------------------------------------------------------------------------------
+                             set goodSustaining 0
+                             if {$uInput(sustaining:)} {
+                                set hitSustainingRerun 1
+                                set newResD [QueueDownloadBaseline $modType $platformType $MAIN(queueId) [array get uInput] $runningIndex]
+                                if {($newResD==0)||([regexp -nocase "^0" $newResD]==1&&[regexp -nocase "write error" $newResD])} {
+                                    set goodSustaining 1
+                                    WriteToQueueDebug "BaseLine Download PASS" "BASELINE DL Pass $MAIN(queueId) $runningIndex $cfgFileTail"
+                                } else {
+                                    WriteToQueueDebug "Download Fail" "EmailReportFilesMail $MAIN(queueId) $runningIndex $cfgFileTail $targetDir FAIL"
+                                    EmailReportFilesMail $MAIN(queueId) $runningIndex $cfgFileTail $targetDir FAIL -mainReturnInfo $newResD
+                                    fconfigure stdin -blocking 1
+                                    UpdateTimedLockFile $cfgFileTail "lock"
+                                    set waitCount 0
+                                    # ----------------------------------------------
+                                    # Check the failure count to see if a perminant
+                                    #   lock should be made.  Use Global
+                                    #         DEVREG(server,failsforlock) to hold it
+                                    # ----------------------------------------------
+                                    incr DEVREG(active,failcount)
+                                    if {$DEVREG(active,failcount) >= $DEVREG(server,failsforlock) } {
+                                        # -----------------------------------------------------------
+                                        # Create a lock file entry
+                                        # -----------------------------------------------------------
+                                        if {[locked $cfgFileTail]} {
+                                            result_debug "The test bed: $cfgFileTail is already locked"
+                                        } else {   ;# lock it in $DEVREG(server,lockFile)
+                                            if {[set fd_out5 [FileOpen $DEVREG(server,lockFile) a+]]==-1} {
+                                                result_debug "Lock File Open Failed!"
+                                                #return $fd_out5
+                                            }
+                                            puts $fd_out5 "!$cfgFileTail"
+                                            funlock $fd_out5
+                                            close $fd_out5
+                                            set DEVREG(active,failcount) 0
+                                            EmailReportFilesMail $MAIN(queueId) $runningIndex $cfgFileTail $targetDir AUTOLOCKED -mainReturnInfo $mainRet
+                                            result_ok "Successfully locked test bed: $cfgFileTail"
+                                        }                          
+                                    }
+                                    while {1} {
+                                        incr waitCount 10
+                                        puts "$cfgFileTail server waiting $waitCount of 80s after failure"
+                                        #puts "Please enter \"restart\" for server to continue immediately"
+                                        #gets stdin userBreakInput
+                                        #puts "after gets 3"
+                                        flush stdout
+                                        #puts "after flush 3"
+                                        if {$userBreakInput!="restart" && $waitCount<80} {sleep 10} else {UpdateTimedLockFile $cfgFileTail "unlock";break}
+                                    }
+                                }
+                             } else {
+                                 WriteToQueueDebug "NOT IN SUSTAING" "MISSED SUSTAING RERUN $MAIN(queueId) $runningIndex $cfgFileTail";
+                             }
+                             # ---------------------- End  Sustaining Download Code --------------------------
+                             if {$DEVREG(mysql,UseDb)} {
+                                  updateRegTestModule -reg_id $MAIN(reg_id) -name $modName -status "reRun"
+                             }
+                             UpdateTrackDB -text "status: ReRun $modName" -status "green" \
+                                    -teefile "/tmp/Tmp/$MAIN(queueId)[pid]" -testcase "" -qid "$MAIN(queueId)"
+                             global mainRetReRun
+                             set mainRetReRun "testCompleted"
+                             WriteToQueueDebug "In Fail with Rerun Enabled" "UpdateImagesRerun $MAIN(queueId) $runningIndex $cfgFileTail";
+                             catch {UpdateImagesRerun $MAIN(queueId) $runningIndex $cfgFileTail} w
+                             set dirList [glob -nocomplain -- "$mainPath/../${myRegPath}/$modName/short/*$MAIN(queueId)*"]
+                             if {$modName=="epm"} {
+                                 set platformtorunon [string tolower $uInput(platformToRunOn:)]Image:
+                                 set uInput($modName,value:) "$uInput($platformtorunon)"
+                             }
+                             if {[info exists uInput($modName,value:)]} {
+                                set moduleArg $uInput($modName,value:)
+                                if {[info exists uInput(relInfo:)] && $uInput(relInfo:) != "" \
+                                        && [regexp -- $uInput(relInfo:) $DEVREG(server,relInfoList)]} {
+                                    if {!$skipMysqlAutomate} {
+                                       WriteToQueueDebug "MysqlMain: uInput($modName,value:) EXISTS - \
+                                         regexp releases in uInput(relInfo:)" \
+                                         "mysqlMain.tcl -regId $MAIN(queueId) -mode auto -qId $MAIN(queueId) -TrafficGen $tgen \
+                                         -debugLevel $dbg -rerun yes -module $modName -moduleArg $moduleArg -verCheck n  -harness all \
+                                         -platform $MAIN(runRegPlatform) -sustaining $goodSustaining -cfg $DEVREG(server,CFG_PATH)/$cfg"
+                                       set mydir [pwd]
+                                       cd $mainPath
+                                       catch {exec ./mysqlMain.tcl -regId $MAIN(queueId) -mode auto -qId $MAIN(queueId) -TrafficGen $tgen \
+                                         -debugLevel $dbg -rerun yes -module $modName -moduleArg $moduleArg -verCheck n \
+                                         -platform $MAIN(runRegPlatform) -sustaining $goodSustaining -harness all \
+                                         -cfg $DEVREG(server,CFG_PATH)/$cfg  >@stdout | \
+                                         busybox tee /tmp/Tmp/$MAIN(queueId)[pid]} mainRetReRun
+                                       cd $mydir
+                                   }
+                                } else {
+                                   if {!$skipMysqlAutomate} {
+                                       WriteToQueueDebug "MysqlMain: uInput($modName,value:) EXISTS - \
+                                         NOT regexp releases in uInput(relInfo:)" \
+                                         "mysqlMain.tcl -regId $MAIN(queueId) -mode auto -debugLevel $dbg -qId $MAIN(queueId) \
+                                         -rerun yes -module $modName -moduleArg $moduleArg -verCheck n -TrafficGen $tgen \
+                                         -platform $MAIN(runRegPlatform) -sustaining $goodSustaining -harness all \
+                                         -efence $efenceProcessList -cfg $DEVREG(server,CFG_PATH)/$cfg"
+        
+                                       catch {exec $env(BASE_PATH)/../main/mysqlMain.tcl -regId $MAIN(queueId) -mode auto -debugLevel $dbg \
+                                         -rerun yes -module $modName -moduleArg $moduleArg -verCheck n -qId $MAIN(queueId) \
+                                         -platform $MAIN(runRegPlatform) -sustaining $goodSustaining -TrafficGen $tgen -harness all \
+                                         -efence $efenceProcessList -cfg $DEVREG(server,CFG_PATH)/$cfg >@stdout | \
+                                         busybox tee /tmp/Tmp/$MAIN(queueId)[pid]} mainRetReRun
+                                    }
+                                }
+                            } else {
+                               if {[info exists uInput(relInfo:)] && $uInput(relInfo:) != "" \
+                                    && [regexp -- $uInput(relInfo:) $DEVREG(server,relInfoList)]} {
+                                    if {!$skipMysqlAutomate} {
+                                       WriteToQueueDebug "MysqlMain: uInput($modName,value:) NOT EXISTS - \
+                                         regexp releases in uInput(relInfo:)" \
+                                         "mysqlMain.tcl -regId $MAIN(queueId) -mode auto -qId $MAIN(queueId) -sustaining $goodSustaining \
+                                         -debugLevel $dbg -rerun yes -module $modName -verCheck n -TrafficGen $tgen \
+                                         -platform $MAIN(runRegPlatform) -harness all \
+                                         -cfg $DEVREG(server,CFG_PATH)/$cfg"
+                                       set mydir [pwd]
+                                       cd $mainPath
+                                       catch {exec ./mysqlMain.tcl -regId $MAIN(queueId) -mode auto -qId $MAIN(queueId) \
+                                         -debugLevel $dbg -rerun yes -module $modName -verCheck n -TrafficGen $tgen \
+                                         -platform $MAIN(runRegPlatform) -sustaining $goodSustaining -harness all \
+                                         -cfg $DEVREG(server,CFG_PATH)/$cfg  \
+                                         >@stdout | busybox tee /tmp/Tmp/$MAIN(queueId)[pid]} mainRetReRun
+                                       cd $mydir
+                                   }
+                               } else {
+                                   set mydir [pwd]
+                                   cd $mainPath
+                                   if {!$skipMysqlAutomate} {
+                                       WriteToQueueDebug "MysqlMain: MysqlMain: uInput($modName,value:) NOT EXISTS - NOT regexp \
+                                         releases in uInput(relInfo:)" \
+                                         "mysqlMain.tcl -regId $MAIN(queueId) -mode auto -debugLevel $dbg -qId $MAIN(queueId) \
+                                         -rerun yes -module $modName -verCheck n -efence $efenceProcessList \
+                                         -platform $MAIN(runRegPlatform) -sustaining $goodSustaining -TrafficGen $tgen -harness all \
+                                         -cfg $DEVREG(server,CFG_PATH)/$cfg"
+                                       catch {exec ./mysqlMain.tcl -regId $MAIN(queueId) -mode auto -debugLevel $dbg \
+                                         -rerun yes -module $modName -verCheck n -efence $efenceProcessList \
+                                         -platform $MAIN(runRegPlatform) -qId $MAIN(queueId) -sustaining $goodSustaining \
+                                         -cfg $DEVREG(server,CFG_PATH)/$cfg -TrafficGen $tgen -harness all \
+                                         >@stdout | busybox tee /tmp/Tmp/$MAIN(queueId)[pid]} mainRetReRun
+                                   }
+                                   cd $mydir
+                               }
+                            }
+                            result_debug "reRun $MAIN(queueId) $modName mainRetReRun |$mainRetReRun|"
+                            set DEVREG(active,inrerun) 1;
+                            file delete [lindex $dirList 0]   ;# delete the temp config file from short dir
+                            switch -regexp -- $mainRetReRun {
+                                "^testCompleted" -
+                                "^testSkipped" {
+                                   result_debug "inside reRun testCompleted"
+                                   WriteToQueueDebug "In RERUN TestCompleted or Skipped" \
+                                     "UpdateImagesDone $MAIN(queueId) $runningIndex PASSedOn$cfgFileTail targetDir";
+                                   catch {UpdateImagesDone $MAIN(queueId) $runningIndex PASSedOn$cfgFileTail targetDir} why
+                                   set emailRet [EmailReportFilesMail $MAIN(queueId) $runningIndex $cfgFileTail $targetDir PASS -mainReturnInfo $mainRet]
+                                   set DEVREG(active,failcount) 0
+                                }
+                                "child killed: software termination signal" {  ;# Killed signal
+                                   result_debug "inside reRun mainkilled"
+                                   WriteToQueueDebug "inside reRun mainkilled" \
+                                     "UpdateImagesDone $MAIN(queueId) $runningIndex MainKilledOn$cfgFileTail targetDir";
+                                   catch {UpdateImagesDone $MAIN(queueId) $runningIndex MainKilledOn$cfgFileTail targetDir} why
+                                   EmailReportFilesMail $MAIN(queueId) $runningIndex $cfgFileTail $targetDir MAINKILLED \
+                                                 -uip [array get uInput]  -mainReturnInfo $mainRet
+                                }
+                                "default" {
+                                   result_debug "inside reRun default with mainRetReRun |$mainRetReRun|"
+                                   WriteToQueueDebug "inside reRun default with mainRetReRun |$mainRetReRun|" \
+                                     "UpdateImagesDone $MAIN(queueId) $runningIndex MainFailedOn$cfgFileTail targetDir";
+                                   catch {UpdateImagesDone $MAIN(queueId) $runningIndex MainFailedOn$cfgFileTail targetDir} why
+                                   EmailReportFilesMail $MAIN(queueId) $runningIndex $cfgFileTail $targetDir MAINFAILED -mainReturnInfo $mainRet
+                                   set mydir [pwd]
+                                   cd $mainPath
+                                   if {!$skipMysqlAutomate} {
+                                       WriteToQueueDebug "inside reRun default with mainRetReRun |$mainRetReRun|" "mysqlAutomate \
+                                         -regId $MAIN(queueId) -reportDir $targetDir -module $modName -regType $myRegPathSmall \
+                                         -regSubType $featureSubType -platform $MAIN(runRegPlatform)  -qId $MAIN(queueId) ";
+                                       catch {exec ./mysqlAutomate.tcl -regId $MAIN(queueId) -reportDir $targetDir -qId $MAIN(queueId) \
+                                         -module $modName -regType $myRegPathSmall -regSubType $featureSubType -platform $MAIN(runRegPlatform) \
+                                         -callLocation "regServer: inside reRun default MainFail mainRetReRun $cfg" >@stdout} automateRet
+                                   }
+                                   cd $mydir
+                                   file delete /tmp/Tmp/$MAIN(queueId)[pid]
+                                   fconfigure stdin -blocking 1 
+                                   set waitCount 0
+                                   UpdateTimedLockFile $cfgFileTail "lock"
+                                   # ----------------------------------------------
+                                   # Check the failure count to see if a perminant
+                                   #   lock should be made.  Use Global
+                                   #         DEVREG(server,failsforlock) to hold it
+                                   # ----------------------------------------------
+                                   incr DEVREG(active,failcount)
+                                   if {$DEVREG(active,failcount) >= $DEVREG(server,failsforlock) } {
+                                       # -----------------------------------------------------------
+                                       # Create a lock file entry
+                                       # -----------------------------------------------------------
+                                       if {[locked $cfgFileTail]} {
+                                          result_debug "The test bed: $cfgFileTail is already locked"
+                                       } else {   ;# lock it in $DEVREG(server,lockFile)
+                                          if {[set fd_out5 [FileOpen $DEVREG(server,lockFile) a+]]==-1} {
+                                             result_debug "Lock File Open Failed!"
+                                             #return $fd_out5
+                                          }
+                                          puts $fd_out5 "!$cfgFileTail"
+                                          funlock $fd_out5
+                                          close $fd_out5
+                                          set DEVREG(active,failcount) 0
+                                          EmailReportFilesMail $MAIN(queueId) $runningIndex $cfgFileTail $targetDir AUTOLOCKED -mainReturnInfo $mainRet
+                                          result_ok "Successfully locked test bed: $cfgFileTail"
+                                       }                          
+                                   }
+                                   while {1} {
+                                      incr waitCount 10
+                                      puts "$cfgFileTail server waiting $waitCount of 80 sec after failure"
+                                      #puts "Please enter \"restart\" for server to continue immediately"
+                                      #gets stdin userBreakInput
+                                      #puts "After std in gets 1"
+                                      flush stdout
+                                      #puts "After flush 1"
+                                      if {$userBreakInput!="restart" && $waitCount<80} {sleep 10} else {UpdateTimedLockFile $cfgFileTail "unlock";break}
+                                   }
+                                }
+                             }
+                             unset mainRetReRun
+                          }
+                       }
+                       "child killed: software termination signal" {  ;# Killed signal
+                          result_debug "inside mainkilled"
+                          result_debug "Now calling with mainKilled"
+                          WriteToQueueDebug "inside Now calling with mainKilled" "UpdateImagesDone $MAIN(queueId) \
+                                $runningIndex MainKilledOn$cfgFileTail targetDir";
+                          catch {UpdateImagesDone $MAIN(queueId) $runningIndex MainKilledOn$cfgFileTail targetDir} why
+                          EmailReportFilesMail $MAIN(queueId) $runningIndex $cfgFileTail $targetDir \
+                                  MAINKILLED -uip [array get uInput] -mainReturnInfo $mainRet
+                       }
+                       "default" {
+                          set mydir [pwd]
+                          cd $mainPath
+                          result_debug "inside default with mainRet |$mainRet|"
+                          WriteToQueueDebug "inside default with mainRet |$mainRet|" "UpdateImagesDone $MAIN(queueId) \
+                                $runningIndex MainFailedOn$cfgFileTail targetDir";
+                          catch {UpdateImagesDone $MAIN(queueId) $runningIndex MainFailedOn$cfgFileTail targetDir} why
+                          if {!$skipMysqlAutomate} {
+                              WriteToQueueDebug "inside default with mainRet |$mainRet|" "mysqlAutomate: \
+                                    -regId $MAIN(queueId) -platform $MAIN(runRegPlatform)  -qId $MAIN(queueId) \
+                                    -reportDir $targetDir -module $modName -regType $myRegPathSmall -regSubType $featureSubType";
+                              catch {exec ./mysqlAutomate.tcl -regId $MAIN(queueId) \
+                                    -reportDir $targetDir -module $modName -regType $myRegPathSmall \
+                                    -regSubType $featureSubType -platform $MAIN(runRegPlatform)  -qId $MAIN(queueId) \
+                                    -callLocation "regServer: inside default MainFail with mainRet $cfg" >@stdout} automateRet
+                          }
+                          cd $mydir
+                          if {$mainRet!="tee: write error"} {  ;# Will cause server crash, corner case in situation of killed 
+                             WriteToQueueDebug "Crashed" "tee: write error"
+                             EmailReportFilesMail $MAIN(queueId) $runningIndex $cfgFileTail $targetDir MAINFAILED -mainReturnInfo $mainRet
+                             file delete /tmp/Tmp/$MAIN(queueId)[pid]
+                             fconfigure stdin -blocking 1
+                          }
+                          set waitCount 0
+                          UpdateTimedLockFile $cfgFileTail "lock"
+                          # ----------------------------------------------
+                          # Check the failure count to see if a perminant
+                          #   lock should be made.  Use Global
+                          #         DEVREG(server,failsforlock) to hold it
+                          # ----------------------------------------------
+                          incr DEVREG(active,failcount)
+                          if {$DEVREG(active,failcount) >= $DEVREG(server,failsforlock) } {
+                              # -----------------------------------------------------------
+                              # Create a lock file entry
+                              # -----------------------------------------------------------
+                              if {[locked $cfgFileTail]} {
+                                 result_debug "The test bed: $cfgFileTail is already locked"
+                                 WriteToQueueDebug "Test Bed Locked" "The test bed: $cfgFileTail is already locked"
+                              } else {   ;# lock it in $DEVREG(server,lockFile)
+                                 puts "Checking log file"
+                                 if {[set fd_out5 [FileOpen $DEVREG(server,lockFile) a+]]==-1} {
+                                    result_debug "Lock File Open Failed!"
+                                    #return $fd_out5
+                                 }
+                                 puts $fd_out5 "!$cfgFileTail"
+                                 funlock $fd_out5
+                                 close $fd_out5
+                                 set DEVREG(active,failcount) 0
+                                 EmailReportFilesMail $MAIN(queueId) $runningIndex $cfgFileTail $targetDir AUTOLOCKED -mainReturnInfo $mainRet
+                                 result_ok "Successfully locked test bed: $cfgFileTail"
+                                 WriteToQueueDebug "Test Bed Locked" "Successfully locked test bed: $cfgFileTail"
+                              }
+                          }
+                          while {1} {
+                             incr waitCount 10
+                             puts "$cfgFileTail server waiting $waitCount of 80s after failure"
+                             #puts "Please enter \"restart\" for server to continue immediately"
+                             flush stdout
+                             if {$userBreakInput!="restart" && $waitCount<80} {sleep 10} \
+                                   else {UpdateTimedLockFile $cfgFileTail "unlock";break}
+                          }
+                       }
+                    }
+                    if {$lst==$MAIN(queueId)} { ;# cfg specified for lst and tclist file in reg tree
+                       # Delete lst file from modName
+                       if {[file exists $mainPath/../${myRegPath}/$modName/$MAIN(queueId)]} {
+                          file delete $mainPath/../${myRegPath}/$modName/$MAIN(queueId)
+                       }
+                    }
+                    # Delete debug file from modName
+                    if {[file exists $mainPath/../${myRegPath}/$modName/$MAIN(queueId).dbg]} {
+                       file delete $mainPath/../${myRegPath}/$modName/$MAIN(queueId).dbg
+                    }
+                }
+            } else {
+                # Download Fail section
+                after 1000
+                if {$MAIN(oldQueueId)!=$MAIN(queueId) || $MAIN(oldResD)!=0} {
+                    WriteToQueueDebug "Download Fail" "oldQueueId $MAIN(oldQueueId) != MAIN(queueId) $MAIN(queueId) OR $MAIN(oldResD) != 0 CASE"
+                    if {![regexp -nocase "child killed: software termination signal" $MAIN(resD)]} {
+                        catch {UpdateImagesDone $MAIN(queueId) $runningIndex DownloadFailedOn$cfgFileTail targetDir} why
+                        set mydir [pwd]
+                        cd $mainPath
+                        if {!$skipMysqlAutomate} {
+                            catch {exec ./mysqlAutomate.tcl -regId $MAIN(queueId)  -qId $MAIN(queueId) \
+                            -reportDir $targetDir -module [lindex $uInput(moduleNames:) $runningIndex] \
+                            -regType $myRegPathSmall -regSubType $featureSubType -platform $MAIN(runRegPlatform) \
+                            -callLocation "child killed: software termination signal $cfg regServer:" } automateRet
+                        }
+                        cd $mydir
+                    }
+                }
+                if {[regexp -nocase "child killed: software termination signal" $MAIN(resD)]} {   ;# Killed signal
+                    WriteToQueueDebug "Download Fail" "child killed: software termination signal"
+                    catch {UpdateImagesDone $MAIN(queueId) $runningIndex DownloadKilledOn$cfgFileTail targetDir} why
+                    EmailReportFilesMail $MAIN(queueId) $runningIndex $cfgFileTail $targetDir DOWNLOADKILLED \
+                                         -uip [array get uInput] -mainReturnInfo $mainRet
+                } else {
+                    WriteToQueueDebug "Download Fail" "EmailReportFilesMail $MAIN(queueId) $runningIndex $cfgFileTail $targetDir FAIL"
+                    EmailReportFilesMail $MAIN(queueId) $runningIndex $cfgFileTail $targetDir FAIL -mainReturnInfo $mainRet
+                    fconfigure stdin -blocking 1
+                    UpdateTimedLockFile $cfgFileTail "lock"
+                    set waitCount 0
+                    # ----------------------------------------------
+                    # Check the failure count to see if a perminant
+                    #   lock should be made.  Use Global
+                    #         DEVREG(server,failsforlock) to hold it
+                    # ----------------------------------------------
+                    incr DEVREG(active,failcount)
+                    if {$DEVREG(active,failcount) >= $DEVREG(server,failsforlock) } {
+                        # -----------------------------------------------------------
+                        # Create a lock file entry
+                        # -----------------------------------------------------------
+                        if {[locked $cfgFileTail]} {
+                            result_debug "The test bed: $cfgFileTail is already locked"
+                        } else {   ;# lock it in $DEVREG(server,lockFile)
+                            if {[set fd_out5 [FileOpen $DEVREG(server,lockFile) a+]]==-1} {
+                                result_debug "Lock File Open Failed!"
+                                #return $fd_out5
+                            }
+                            puts $fd_out5 "!$cfgFileTail"
+                            funlock $fd_out5
+                            close $fd_out5
+                            set DEVREG(active,failcount) 0
+                            EmailReportFilesMail $MAIN(queueId) $runningIndex $cfgFileTail $targetDir AUTOLOCKED -mainReturnInfo $mainRet
+                            result_ok "Successfully locked test bed: $cfgFileTail"
+                        } 
+                    }
+                    while {1} {
+                        # Delay to allow time to take action on the daemon
+                        incr waitCount 10
+                        puts "$cfgFileTail server waiting $waitCount of 80s after failure"
+                        #puts "Please enter \"restart\" for server to continue immediately"
+                        #gets stdin userBreakInput
+                        #puts "after gets 3"
+                        flush stdout
+                        #puts "after flush 3"
+                        if {$userBreakInput!="restart" && $waitCount<80} {sleep 10} else {UpdateTimedLockFile $cfgFileTail "unlock";break}
+                    }
+                }
+             }
+         }
+         
+         if {$partnerList != "null"} {
+             # Release the lock on the shared queue.
+             release_lock $shareId 
+             verify_release_lock $shareId
+             after 5000
+         }
+         flush stdout
+         if {$uInput(sustaining:) && $hitSustainingRerun} {
+            # Set the old queueid to garbage so that the next module will download code
+            set MAIN(oldQueueId) 123
+         }
+         UpdateTrackDB -text "status: Waiting" -status "green" \
+                   -teefile "" -testcase "" -qid ""
+    } elseif {$MAIN(queueId)==0} {
+        # Didn't find a queue entry
+        UpdateIdle $cfgFileTail
+        # Release the lock on the shared queue.
+        if {$partnerList != "null"} {
+            release_lock $shareId
+            verify_release_lock $shareId
+        }
+        if {$partnerList == "null"} {
+            if {$poweredOff != 1} {
+                for {set i 1} {$i <= 10} {incr i} {
+                    PowerOffDUT $i "off"
+                }
+                set poweredOff 1
+            }
+        }
+        if {$DEVREG(active,STILLWAITING) > 60} {
+            set DEVREG(active,STILLWAITING) 0
+            UpdateTrackDB -text "status: Waiting" -status "green" \
+                   -teefile "" -testcase "" -qid ""
+        } else {
+            incr DEVREG(active,STILLWAITING)
+        }
+        set currSecond [clock format [clock seconds] -format "%S"]
+        puts "$cfgFileTail: imagesQueued empty $currSecond"
+        flush stdout
+    } elseif {$MAIN(queueId)==-1} {
+        # Checking for queue entry causing an exception
+        exit $MAIN(queueId)
+    }
+    if {$updRetValue==2} {
+        # The foll line will also forcefully delete the local image files
+        file delete -force $DEVREG(server,imagesQueuedDir)/$MAIN(queueId)
+    }
+    after [expr int(rand()*$pollTime)];
+    flush stdout
+}
+close_result_file

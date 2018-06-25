@@ -1,0 +1,104 @@
+
+proc downloadModule {TFTPServerIP filename} {
+  
+   global whichDutNow
+   SendACmd "download image $TFTPServerIP $filename vr [GetVrString $whichDutNow]"
+   SendACmd "run update"
+   CheckReboot
+}
+
+##################################################################
+# Procedure Name: getOspfModulePath
+# Description:
+#       Used to get the path for Ospf Module
+# Input args:
+#
+# Output args: return 0 if failed, return spawn_id if ok
+# Typical usage:
+#
+# Category:
+##################################################################
+
+proc getOspfModulePath { } {
+   return [getImagePath -Image ospf]
+}
+
+##################################################################
+# Procedure Name: downloadOspfModule
+# Description:
+#       Used to download OSPF module
+# Input args:
+#
+# Output args: return 0 if failed, return spawn_id if ok
+# Typical usage:
+#
+# Category:
+##################################################################
+
+proc downloadOspfModule { } {
+   global tftpServerList tftpServerLogin tftpServerPasswd tftpServerTftpboot
+   global moduleArg
+   global DUTs_info
+
+   if {$moduleArg!=""} {
+      set modulePath $moduleArg
+   } else {
+      set modulePath [getOspfModulePath]
+   }
+
+#   if {$modulePath!="release-manager"} {
+ #     return $modulePath
+ #  }
+   set moduleName [file tail $modulePath ]
+
+   foreach tftpServer $tftpServerList {
+      #if module is found in the TFTP server use it
+      #this gives the user a way to manually copy the SSH module to TFTP
+      if [tftpFileExists $tftpServer $moduleName] {
+         result_debug \
+            "Module $moduleName found on TFTP server. Download it"
+         downloadModule $tftpServer $moduleName
+         return
+      }
+   }
+
+   #module is not found on tftp server
+   #Put the module to the TFTP server, download it
+   #and then remove it.
+#   result_debug \
+#      "Module $moduleName not found on TFTP server. Copy module to TFTP server from $modulePath"
+#   if ![file exists $modulePath] {
+#      report_start_test "SSH module not found in $modulePath. Please copy $moduleName to TFTP server and rerun the test."
+#      result_error "SSH module not found in $modulePath. Please copy $moduleName to TFTP server and rerun the test."
+#      report_end_test
+#      return
+#   }
+
+   foreach tftpServer $tftpServerList {
+      set fileName [uniqueName $moduleName]
+      #put the OSPF module to the TFTP server and download it
+      result_debug \
+         "puting OSPF module $modulePath to TFTP Server as $fileName" 
+      exec \
+         echo "put $modulePath $fileName\nquit\n" | /usr/bin/tftp $tftpServer
+         
+      downloadModule $tftpServer $fileName
+
+      #remove the SSH module from TFTP server
+      global spawn_id
+      set sid $spawn_id
+      result_debug "remove SSH module from TFTP Server"
+      login_linux $tftpServer $tftpServerLogin $tftpServerPasswd
+      linuxSendACmd "/bin/rm $tftpServerTftpboot/$fileName" 
+      set spawn_id $sid
+      global whichDutNow
+
+      set output [SendACmd "show version image $DUTs_info(DUT$whichDutNow,imageSel)"]
+      if [regexp {([^ ]+ospf[^ ]+)} $output] {
+         #ospf module downloaded successfully. no need to try next tftp server
+         break
+      }
+   }
+   #sleep 2
+
+}

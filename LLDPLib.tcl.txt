@@ -1,0 +1,1027 @@
+
+proc SendLLDPFrame {args} {
+   parse_args SendLLDPFrame $args {
+      txPortId "1"
+      rxPortId "0"
+      protocol "mac"
+      sourceMac "default"
+      destMac "default"
+      numFrames "1"
+      frameSize "64"
+      frameSizeType "sizeFixed"
+      dataPattern "1234"
+      ethernetType "noType"
+      frameType "08 00"
+      streamType "stopStream"
+      fcsError "good"
+      saMode "idle"
+      daMode "idle"
+      saCount ""
+      daCount ""
+      percentage "100"
+      tag "none"
+      tagPriority "0"
+      frameRate "null"
+      tagMode "vIdle"
+      tagRepeat 1
+      udfEnable "false"
+      udfInitval "00"
+      udfOffset "0"
+      udfCountertype "c8"
+      udfContinuousCount "false"
+      dontTx "0"
+  }
+
+   global portMappingList
+
+   set portList [lindex $portMappingList [expr $txPortId-1]]
+   result_debug "INFO: DUT[lindex $portList 2] [lindex $portList 1] ingresses from portId [lindex $portList 0]"
+   MapIxiaPortId $txPortId txChasisId txCard txPort
+   if {$rxPortId == 0} {
+      set sendLearn "false"
+      set rxPort [MapIxiaPortId $txPortId rxChasisId rxCard rxPo]
+   } else {
+      set sendLearn "true"
+      MapIxiaPortId $rxPortId rxChasisId rxCard rxPort
+   }
+
+   set numIxiaCd [GetNumIxiaCd $txPortId]
+
+   if {$tag != "none" } { set wTag "true" } else {set wTag "false" }
+   global startCardNum
+   set frameSent [LLDPixiaConf_2Ports -numIxiaCd $numIxiaCd -rate $frameRate \
+                  -txChas $txChasisId -txCard $txCard -txPort $txPort -startCardNum $startCardNum \
+                  -rxChas $rxChasisId -rxCard $rxCard -rxPort $rxPort -sendLearn $sendLearn \
+ -protocol $protocol -numFrames $numFrames -frameSize $frameSize -frameSizeType $frameSizeType \
+                  -dataPattern $dataPattern -streamType $streamType -fcsError $fcsError \
+                  -frameType $frameType -ethernetType $ethernetType \
+                  -inSaMac $sourceMac -saMode $saMode -inDaMac $destMac -daMode $daMode \
+                  -percentage $percentage -wTag $wTag -tagNo $tag -tagPriority $tagPriority \
+                  -tagMode $tagMode -tagRepeat $tagRepeat -saCount $saCount -daCount $daCount \
+                  -udfEnable $udfEnable -udfInitval $udfInitval -udfOffset $udfOffset -dontTx $dontTx \
+                  -udfCountertype $udfCountertype -udfContinuousCount $udfContinuousCount]
+  if {$streamType != "contPacket" && $numFrames > 100 && $dontTx==0} {
+    ixiaCheckTxDone $txChasisId $txCard $txPort $numFrames
+  }
+  return $frameSent
+}
+
+
+proc LLDPixiaConf_2Ports {args} {
+   parse_args LLDPixiaConf_2Ports $args {
+      numIxiaCd "1"
+      startCardNum "1"
+      direction "1Way"
+      txChas "1"
+      txCard "1"
+      txPort "1"
+      rxChas "1"
+      rxCard "1"
+      rxPort "2"
+      inSaMac "default"
+      inDaMac "default"
+      numFrames "1"
+      frameSizeType "sizeFixed"
+      frameSize "64"
+      dataPattern "1234"
+      ethernetType "noType"
+      frameType "08 00"
+      streamType "stopStream"
+      patternOffset "32"
+      fcsError "good"
+      priority "0"
+      protocol "mac"
+      saMode "idle"
+      daMode "idle"
+      saCount ""
+      daCount ""
+      percentage "100"
+      sendLearn "false"
+      numLearnFrames "1"
+      wTag "false"
+      tagNo "002"
+      tagCfi "resetCFI"
+      tagMode "vIdle"
+      tagRepeat "1"
+      tagPriority "0"
+      chid "1"
+      userDefinedStat1SA "00:00:00:00:00:00"
+      userDefinedStat1DA "00:00:00:00:00:00"
+      rate               "null"
+      udfEnable "false"
+      udfInitval "00"
+      udfOffset "0"
+      udfCountertype "c8"
+      udfContinuousCount "false"
+      dontTx "0"
+   }
+
+   global spawn_id
+   global one2oneArray
+   global macBroadcast
+   global preambleSize
+   globalSetDefault
+
+   set date [clock format [clock seconds] -format "%m-%d-%Y %I.%M.%S%p"]
+   result_debug "*** date=$date for <ixiaConf_2Ports> on ($txChas $txCard $txPort)"
+   set time1 [clock seconds]
+
+   set macBroadcast     {ff ff ff ff ff ff}
+   set preambleSize     8
+
+   # Create mapping
+   map new -type        one2one
+   map config -type one2one
+   map add $txChas $txCard $txPort $rxChas $rxCard $rxPort
+   if { $direction == "2Way" } {
+      map add $rxChas $rxCard $rxPort $txChas $txCard $txPort
+   }
+   if { $sendLearn == "true" } {
+      learn config -numframes $numLearnFrames
+      send_learn_frames one2oneArray
+   }
+   #-----------------------------------------------------------------
+   # Config streams for validation traffic
+   set wkTag $wTag
+   set wkTagNo $tagNo
+   set portNo 0
+   foreach txMap [lsort [array names one2oneArray]] {
+      if { $wkTag == "true" } {
+         set wTag "true"
+         set tagNo [lindex $wkTagNo $portNo]
+         incr portNo
+         if { $tagNo == "" } {set tagNo [lindex $wkTagNo 0]}
+         if { $tagNo == 0 || $tagNo == "none" } {set wTag "false"}
+         result_debug "wTag = $wTag, tagNo = $tagNo"
+      }
+      scan $txMap                                       "%d,%d,%d" chid c p
+      port get                                          $chid $c $p
+      set txSpeed                                       [port cget -speed]
+      stream config -numFrames          $numFrames
+      stream config -name                       S_${c}_${p}
+      stream config -framesize          $frameSize
+      #random size
+      if {$frameSizeType == "sizeRandom"} {
+         stream config -frameSizeType           $frameSizeType
+         stream config -frameSizeMAX      1500
+         stream config -frameSizeMIN      64
+      }
+      decideLoopCount $numFrames $streamType
+#      set frameRate [decideFrameRate $txSpeed $frameSize $percentage]
+      if { $rate != "null" } {
+         set percentage [decidePercentage $txSpeed $frameSize $rate]
+      }
+      stream config -rateMode usePercentRate
+      stream config -percentPacketRate $percentage
+
+#      set ifg [calculateGap $frameRate $frameSize $preambleSize $txSpeed]
+      # Now we configure the stream
+      stream config -fcs                       $fcsError
+#      stream config -ifg                       $ifg
+#      stream config -isg                       $ifg
+#      stream config -ibg                       $ifg
+#      stream config -fir                       true            ;# for timestamp
+      stream config -patternType nonRepeat  ;#needed for version 3.1
+      stream config -dataPattern        userpattern -pattern $dataPattern
+      stream config -frameType $frameType
+set srcAddr                                       [port cget -MacAddress]
+      set rxMap                                         $one2oneArray($txMap)
+      scan [join $rxMap]                        "%d %d %d" rxch rxc rxp
+      port get                                          $rxch $rxc $rxp
+      set destAddr                                      [port cget -MacAddress]
+
+      stream config -saRepeatCounter $saMode
+      stream config -daRepeatCounter $daMode
+      if {$saMode != "idle"} {
+          if {$saCount == ""} {
+              stream config -numSA $numFrames
+          } else {
+              stream config -numSA $saCount
+          }
+      }
+      if {$daMode != "idle"} {
+          if {$daCount == ""} {
+              stream config -numDA $numFrames
+          } else {
+              stream config -numDA $daCount
+          }
+      }
+
+# Sending traffic, whether it's 1-way or 2-way, first port is always the src port
+# and the second port is always the dest port in an entry in the one2one array
+if { 1 } {
+      if {$direction == "2Way"} {
+          if {($chid == $rxChas) && ($c == $rxCard) && ($p == $rxPort)} {
+              if { $inSaMac == "default" } {
+                  stream config -sa $srcAddr
+              } else {
+                  stream config -sa $inDaMac
+              }
+              if { $inDaMac == "default" } {
+                  stream config -da $destAddr
+              } else {
+                  stream config -da $inSaMac
+              }
+          } else {
+              if { $inSaMac == "default" } {
+                  stream config -sa $srcAddr
+              } else {
+                  stream config -sa $inSaMac
+              }
+              if { $inDaMac == "default" } {
+                  stream config -da $destAddr
+              } else {
+                  stream config -da $inDaMac
+              }
+          }
+      } else {
+          if { $inSaMac == "default" } {
+              stream config -sa $srcAddr
+          } else {
+              stream config -sa $inSaMac
+          }
+          if { $inDaMac == "default" } {
+              stream config -da $destAddr
+          } else {
+              stream config -da $inDaMac
+          }
+      }
+} else {
+
+      if { $inSaMac == "default" } {
+              stream config -sa $srcAddr
+          } else {
+              stream config -sa $inSaMac
+          }
+          if { $inDaMac == "default" } {
+              stream config -da $destAddr
+          } else {
+              stream config -da $inDaMac
+      }
+}
+
+      protocol setDefault
+          protocol config -name                                 $protocol
+          if {[regexp -nocase "ip" $protocol]} {
+            ip setDefault
+            ip config -ipProtocol 255
+            ip set $chid $c $p
+          }
+          protocol config -ethernetType $ethernetType
+          protocol config -enable802dot1qTag    $wTag
+          #ipx
+#         if { $protocol == "ipx" } {
+#          puts "NetbiosOOOOOOOOOO"
+#          ipx config -packetType "typeNetBios"
+#          ipx config -destSocket "socketNetBios"
+#          puts [ipx cget -packetType] }
+
+      vlan config -cfi                                          $tagCfi
+      vlan config -mode                                         $tagMode
+      vlan config -repeat                                       $tagRepeat
+      vlan config -vlanID                                       $tagNo
+      vlan config -userPriority                                 $tagPriority
+      vlan set                                                  $chid $c $p
+      # Define UDF package
+      if {$udfEnable == "true"} {
+          set inter 0
+          foreach udfOffs $udfOffset {
+          udf config -enable "true"
+          udf config -continuousCount [lindex $udfContinuousCount $inter]
+          udf config -initval [lindex $udfInitval $inter]
+          udf config -offset [lindex $udfOffset $inter]
+          udf config -countertype [lindex $udfCountertype $inter]
+          incr inter
+          udf set $inter
+          }
+      }
+
+      stream set                                                $chid $c $p 1
+
+ # Define filter & capture
+
+      filterPallette config -DA1                        $destAddr
+      filterPallette config -pattern1                   $dataPattern
+      filterPallette config -patternOffset1             $patternOffset
+      filterPallette set                                $rxch $rxc $rxp
+
+      filter config -captureFilterEnable                true
+      filter config -captureTriggerEnable               true
+
+      #user defined stats settings
+      if { ( $userDefinedStat1DA != "00:00:00:00:00:00" ) || \
+           ( $userDefinedStat1SA != "00:00:00:00:00:00" ) }  {
+        filter config -userDefinedStat1Enable           true
+        if { $userDefinedStat1DA != "00:00:00:00:00:00" } {
+          filterPallette config -DA1                    $userDefinedStat1DA
+          filter config -userDefinedStat1DA             addr1
+        }
+        if { $userDefinedStat1SA != "00:00:00:00:00:00" } {
+          filterPallette config -SA1                    $userDefinedStat1SA
+          filter config -userDefinedStat1SA             addr1
+        }
+        filterPallette set                              $rxch $rxc $rxp
+      } else {
+        filter config -userDefinedStat1Enable           false
+        filter config -userDefinedStat1DA               addr1
+      }
+      filter config -captureFilterPattern               anyPattern
+      filter config -captureTriggerPattern              anyPattern
+      filter config -captureTriggerDA                   anyAddr
+      filter config -captureFilterDA                    anyAddr
+      filter set                                        $rxch $rxc $rxp
+}
+   writeConfigToHardware one2oneArray
+   zeroPortStats $txChas $txCard $txPort
+   #for {set c $startCardNum} {$c<=[expr $startCardNum + $numIxiaCd - 1]} {incr c 1} {
+   #    ixiaConf_clearStat $c
+   #    }
+
+   #just in case some previous function stop capture on these ports
+   set pList ""
+   lappend pList "$txChas $txCard $txPort"
+   lappend pList "$rxch $rxc $rxp"
+   ixStartCapture pList
+
+   if {!$dontTx} {
+      startTx one2oneArray
+      set time2 [clock seconds]
+      result_debug "*** Time for Ixia TX setup = [expr $time2-$time1] secs"
+      #get the stream so we can return it later
+      stream get $txChas $txCard $txPort 1
+      set streamSent [stream cget -packetView]
+      result_debug "Stream sent is $streamSent"
+      # Make sure TX done
+      if { $streamType == "stopStream" } {
+         if { ($saMode != "contIncrement") && ($saMode != "contDecrement") &&   \
+              ($daMode != "contIncrement") && ($daMode != "contDecrement") } {
+            ixiaCheckTxDone $txChas $txCard $txPort $numFrames
+if { $direction == "2Way" } {
+               ixiaCheckTxDone $rxChas $rxCard $rxPort $numFrames
+            }
+         }
+      }
+#   after 500
+   set time3 [clock seconds]
+   result_debug "*** Time for Ixia TX done = [expr $time3-$time2] secs\n"
+   return $streamSent
+   } else {
+      return ""
+   }
+}
+
+
+proc decideLoopCount {numFrames streamType} {
+
+      if {$numFrames > 16777215} {
+         for {set i 2} {$i < 900000} {incr i} {
+            set framesCount [mpexpr $numFrames/$i]
+            if {$framesCount < 16000000} {
+               break
+            }
+         }
+         stream config -numFrames               $framesCount
+         stream config -loopCount $i
+         stream config -dma                     firstLoopCount
+      } else {
+         stream config -dma                     $streamType
+      }
+   return
+}
+
+
+proc PortIDCheck {} {
+set parameters ""
+     lappend parameters {"Port ID    (subtype.*): " 1}
+     set portId [GetKeyValue "show lldp ports %lldpPort neighbor" $parameters]
+
+     if {$portId == $xx} {
+        result_ok "Correct portId information is sent in Port Id TLV"
+     } else {
+        result_error "Incorrect PortId information is sent in PortId TLV"
+     }
+}
+
+proc ChassisIdType {$rawFrame} {
+uplevel {
+      set chassisId1 [string range $rawFrame 42 43];
+      result_debug "chassisId1: $chassisId1"
+      set chassisId2 [string range $rawFrame 45 46];
+      result_debug  "chassisId2: $chassisId2"
+      set chassisId "0x$chassisId1$chassisId2"
+      result_debug "chassidId: $chassisId"
+      set a 47
+      set msb_mask 0xFE00
+      set lsb_mask 0x01FF
+      set id [expr "($chassisId & $msb_mask) >> 9"];
+      set len [expr "($chassisId & $lsb_mask)"];
+      result_debug "len of chassisidTLV: $len;"
+      if {$id == 1} {
+         result_ok "LLDPDU has correct chassisId";
+      } else {
+         result_error "ERROR: LLDPDU has incorrect Mandatory TLV Chassis Id";
+      }
+      if {$portIdType == 1} {
+         PortIdType $rawFrame
+      } else {
+         return
+      }
+}
+}
+proc PortIdType {$rawFrame} {
+uplevel {
+      set len [expr $len -1];
+      set x [expr "$a + 2 + ($len * 3) +2"]
+      set y [expr $x +1];
+
+      set portId1 [string range $rawFrame $x $y];
+      result_debug "portId1 = $portId1";
+      result_debug "PortId1 : $portId1"
+      set z [expr $y +2];
+      set a [expr $z +1];
+      set portId2 [string range $rawFrame $z $a];
+      result_debug "portId2 = $portId2"
+      set portId "0x$portId1$portId2";
+      result_debug "portId= $portId"
+      set pid [expr "($portId & $msb_mask) >> 9"];
+      result_debug "pid =$pid"
+      set len [expr "($portId & $lsb_mask)"];
+      result_debug "length of pidTLV = $len";
+      if { $pid == 2 } {
+         result_ok "LLDPDU has correct portId";
+      } else {
+          result_error "ERROR:LLDPDU has incorrect Mandatory TLV port Id";
+      }
+      if {$TTLType == 1} {
+         TTLTLVType $rawFrame
+      } else {
+         return
+      }
+}
+}
+proc TTLTLVType {$rawFrame} {
+uplevel {
+     set x [expr "$a  + 2 + ($len * 3) "];
+     set y [expr $x +1];
+     set ttlId1 [string range $rawFrame $x $y];
+     result_debug "ttlId1 = $ttlId1"
+     set z [expr $y +2];
+     set a [expr $z +1];
+     set ttlId2 [string range $rawFrame $z $a];
+     result_debug "ttlId2 = $ttlId2";
+     set ttlId "0x$ttlId1$ttlId2";
+     result_debug "ttlId = $ttlId"
+     set tid [expr "($ttlId & $msb_mask) >> 9"];
+     result_debug "tid = $tid";
+     if {$tid == 3} {
+        result_ok "LLDPDU has correct time-to-live TLV";
+     }
+     if {($id == 1) && ($pid == 2) & ($tid == 3)} {
+        result_ok "LLDPDU has the mandatory TLV format as per the definition of 802.1 ab"
+     } else {
+        result_error "ERROR: LLDPDU has incorrect Mandatory TLV TTL";
+     }
+
+      if {$optionalTLV == 1} {
+         CheckOptionalTLV $rawFrame
+      }
+     if {$eol ==1} {
+         End-Of-LLDPDU $rawFrame
+     }
+}
+}
+proc CheckOptionalTLV {$rawFrame} {
+uplevel {
+      set len [expr "($ttlId & $lsb_mask)"];
+      set length [string length $rawFrame];
+      for {set i $a} {$i <= [expr $length -1]} {set i $a } {
+         set x [expr "$i + 2 + ($len *3)"];
+         set y [expr $x+1];
+         set id1 [string range $rawFrame $x $y];
+         set z [expr $y +2];
+         set a [expr $z +1];
+         set id2 [string range $rawFrame $z $a];
+         set id 0x$id1$id2;
+         set oid [expr "($id & $msb_mask) >> 9"];
+         set len [expr "($id & $lsb_mask)"];
+         switch $oid {
+           "0" {result_debug "End-Of-LLDPDU";break}
+           "4" {result_debug "port description"; break}
+           "5" {result_debug "system Name" ;break}
+           "6" {result_debug "System Description" ;break}
+           "7" {result_debug "System capabilities" ;break;}
+           "8" {result_debug "Management address";break}
+           "127" {result_debug "vendor specific TLV";break}
+           "default" {result_debug "Invalid TLV"; break}
+         }
+      }
+      set len [expr "($id & $lsb_mask)"];
+      set length [string length $rawFrame];
+      for {set i $a} {$i <= [expr $length -1]} {set i $a } {
+         set x [expr "$i + 2 + ($len *3)"];
+         set y [expr $x+1];
+         set id1 [string range $rawFrame $x $y];
+         set z [expr $y +2];
+         set a [expr $z +1];
+         set id2 [string range $rawFrame $z $a];
+         set id 0x$id1$id2;
+         set oid [expr "($id & $msb_mask) >> 9"];
+         set len [expr "($id & $lsb_mask)"];
+         switch $oid {
+           "0" {result_debug "End-Of-LLDPDU";break}
+           "4" {result_debug "port description"; break}
+           "5" {result_debug "system Name" ;break}
+           "6" {result_debug "System Description" ;break}
+           "7" {result_debug "System capabilities" ;break;}
+           "8" {result_debug "Management address";break}
+           "127" {result_debug "vendor specific TLV";break}
+           "default" {result_debug "Invalid TLV"; break}
+          }
+
+      }
+      result_ok "Optional TLVs and organizationally specific TLVs follow mandatory \
+                 TLVs"
+}
+}
+proc ChassisIDVal {$rawFrame} {
+uplevel {
+      set chassisId1 [string range $rawFrame 42 43];
+      result_debug "chassisId1: $chassisId1"
+      set chassisId2 [string range $rawFrame 45 46];
+      result_debug  "chassisId2: $chassisId2"
+      set chassisId "0x$chassisId1$chassisId2"
+      puts "chassidId: $chassisId"
+      set a 47
+      set msb_mask 0xFE00
+      set lsb_mask 0x01FF
+      set id [expr "($chassisId & $msb_mask) >> 9"];
+      set len [expr "($chassisId & $lsb_mask)"];
+      result_debug "len of chassisidTLV: $len;"
+      if {$id == 1} {
+         result_ok "LLDPDU has correct chassisId";
+      } else {
+         result_error "ERROR: LLDPDU has incorrect Mandatory TLV Chassis Id";
+      }
+      set len [expr $len -1];
+      set x [expr $a + 4];
+      set y [expr $x + ($len * 2) + ($len - 2)];
+      set chassisId [string range $rawFrame $x $y];
+      result_debug "ChassisId : $chassisId"
+      for {set i 0} {$i < 6} {incr i} {
+         regsub " " $chassisId ":" cid
+         set chassisId $cid;
+      }
+      result_debug "ChassisId : $chassisId"
+      Login $DUT1_CONNECT
+      set parameters ""
+      lappend parameters {"System MAC:" 1}
+      set cid [GetKeyValue "show switch" $parameters];
+      result_debug "cid = $cid"
+      if {$chassisId == $cid} {
+         result_ok "Correct chassis information is sent in chassis Id TLV";
+      } else {
+         result_error "Incorrect chassis information sent in chassis Id TLV";
+      }
+
+      if {$PortIDVal == 1} {
+         PortIDVal $rawFrame
+      }
+
+}
+}
+proc PortIDVal {$rawFrame} {
+uplevel {
+      set x [expr "$a + 2 + ($len * 3) +2"]
+      set y [expr $x +1];
+      set portId1 [string range $rawFrame $x $y];
+      result_debug "portId1 = $portId1";
+      set z [expr $y +2];
+      set a [expr $z +1];
+      set portId2 [string range $rawFrame $z $a];
+      result_debug "portId2 = $portId2"
+      set portId "0x$portId1$portId2";
+      result_debug "portId= $portId"
+      set pid [expr "($portId & $msb_mask) >> 9"];
+      result_debug "pid =$pid"
+      set len [expr "($portId & $lsb_mask)"];
+      result_debug "length of pidTLV = $len";
+      if { $pid == 2 } {
+         result_ok "LLDPDU has correct portId";
+      } else {
+         result_error "ERROR:LLDPDU has incorrect Mandatory TLV port Id";
+      }
+      set x [expr $a+2];
+      set y [expr $x + ($len*2) + ($len -2)];
+      set portId [string range $rawFrame $x $y];
+      result_debug "The value of PortId TLV information string is $portId"
+      set ap1 ""
+      set x [expr $x + 3];
+      set l [expr $len - 1];
+      for {set i 1} {$i <= $l} {incr i 1} {
+         set x1 [expr $x + 1];
+         set p1 [string range $rawFrame $x $x1];
+         set p1 0x$p1
+         result_debug "p1 is $p1";
+         set x [expr $x1 +2];
+         lappend ap1 [format %c $p1];
+         result_debug "ap1 : $ap1"
+      }
+      set xx ""
+     # This for loop is just for removing spaces
+      for {set i 0} {$i <= $len} {incr i 1} {
+         set xx $xx[lindex $ap1 $i];
+      }
+    result_debug "The value of PortId TLV information string is $xx"
+    Login $DUT2_CONNECT
+    set parameters ""
+    lappend parameters {"Port.*ID.*:" 1}
+    set portId [GetKeyValue "show lldp ports $remPort neighbor" $parameters]
+    result_debug "The value of portId is $portId"
+
+     if {$portId == $xx} {
+        result_ok "Correct portId information is sent in Port Id TLV"
+     } else {
+        result_error "Incorrect PortId information is sent in PortId TLV"
+     }
+
+    if {$TTLTLVVal == 1} {
+       TTLIdVal $rawFrame
+    }
+}
+}
+proc TTLIdVal {$rawFrame} {
+uplevel {
+      set x [expr "$a  + 2 + ($len * 3) "];
+      set y [expr $x +1];
+      set ttlId1 [string range $rawFrame $x $y];
+      result_debug "ttlId1 = $ttlId1"
+      set z [expr $y +2];
+      set a [expr $z +1];
+      set ttlId2 [string range $rawFrame $z $a];
+      result_debug "ttlId2 = $ttlId2";
+      set ttlId "0x$ttlId1$ttlId2";
+      result_debug "ttlId = $ttlId"
+      set tid [expr "($ttlId & $msb_mask) >> 9"];
+      result_debug "tid = $tid";
+     if {$tid == 3} {
+        result_ok "LLDPDU has correct time-to-live TLV";
+     } else {
+        result_error "ERROR: LLDPDU has incorrect Mandatory TLV TTL";
+     }
+     set len [expr "($ttlId & $lsb_mask)"];
+     set x [expr $a +2];
+     set y [expr $x + ($len *2) + ($len -2)];
+     set ttlid [string range $rawFrame $x $y];
+     result_debug "The value of TTL TLV information string is $ttlid"
+     set x [expr $x +3];
+     set x1 [expr $x + 1];
+     set p1 [string range $rawFrame $x $x1];
+     set p1 0x$p1
+     result_debug "p1 is $p1";
+     set ap1 [format %d $p1];
+     result_debug "ap1 : $ap1"
+     set xx ""
+     for {set i 0} {$i <= $len} {incr i 1} {
+        set xx $xx[lindex $ap1 $i];
+     }
+     result_debug "The value of  TTL TLV information string is $xx"
+     if {$getTTL == 1} {
+        return $xx
+      } else {
+     set parameters ""
+      lappend parameters {"TTL.*:" 1}
+      set yy [GetKeyValue "show lldp ports $remPort neighbor" $parameters];
+      if {$xx == $yy} {
+         result_ok "Correct TTL information is sent in TTL TLV";
+      } else {
+         result_error "ERROR: InCorrect TTL information is sent in TTL TLV";
+      }
+     if {$portDes == 1} {
+        PortDes $rawFrame
+     }
+     if {$mgmt_addr == 1} {
+        mgmt_addr_TLV $rawFrame
+     }
+     if {$sys_cap ==1} {
+        sysCap $rawFrame
+     }
+     if {$sysName == 1} {
+        sysName $rawFrame
+     }
+ if {$sys_Desc ==1} {
+        sysDesc $rawFrame
+     }
+     if {$eol == 1} {
+        End-Of-LLDPDU $rawFrame
+     }
+   }
+
+}
+}
+
+proc End-Of-LLDPDU {$rawFrame} {
+uplevel {
+set len [expr "($ttlId & $lsb_mask)"];
+      result_debug "Length of ttlId TLV = $len";
+      set x [expr "$a + 3 + ($len * 2) +($len -1)"];
+      set y [expr $x + 1];
+      set p1 [string range $rawFrame $x $y];
+      set z [expr $y + 2];
+      set a [expr $z + 1];
+      set p2 [string range $rawFrame $z $a];
+      set pDesc 0x$p1$p2
+      result_debug "pDesc = $pDesc"
+      set PID [expr "($pDesc & $msb_mask) >> 9"];
+      set len [expr "($pDesc & $lsb_mask)"];
+      if {$PID == 0} {
+           result_ok "END-Of-LLDPDU is the last TLV";
+       } else {
+          result_error "END-Of-LLDPDU is not the last TLV"
+       }
+}
+}
+proc PortDes {$rawFrame} {
+uplevel {
+set len [expr "($ttlId & $lsb_mask)"];
+      result_debug "Length of ttlId TLV = $len";
+      set x [expr "$a + 3 + ($len * 2) +($len -1)"];
+      set y [expr $x + 1];
+      set p1 [string range $rawFrame $x $y];
+      set z [expr $y + 2];
+      set a [expr $z + 1];
+      set p2 [string range $rawFrame $z $a];
+      set pDesc 0x$p1$p2
+      result_debug "pDesc = $pDesc"
+      set PID [expr "($pDesc & $msb_mask) >> 9"];
+      set len [expr "($pDesc & $lsb_mask)"];
+      set x [expr $a + 2];
+      set y [expr "($x +($len *2) + ($len - 1) -1)"];
+      set portDesc [string range $rawFrame $x $y];
+      set ap1 ""
+      for {set i 1} {$i < $len} {incr i 1} {
+         set x1 [expr $x + 1];
+         set p1 [string range $rawFrame $x $x1];
+         result_debug "p1 : $p1"
+         set p1 0x$p1
+         lappend ap1 [format %c $p1];
+         set x [expr $x1 + 2];
+      }
+      result_debug "value of portDescription information string TLV is $ap1";
+      set len [string length $ap1];
+      for {set i 0} {$i < $len } {incr i} {
+         regsub " " $ap1 "" new_ap1;
+         set ap1 $new_ap1;
+      }
+      for {set i 0} {$i <= $len } {incr i} {
+         regsub "{}" $ap1 " " new_ap1;
+         set ap1 $new_ap1;
+      }
+     result_debug "value of portDescription information string TLV is $ap1";
+     Login $DUT2_CONNECT
+     SendACmd "show lldp ports $remPort neighbor"
+     set parameters "";
+     lappend parameters {"Port Description      :" 1}
+     set PORT_DESC [GetKeyValue "show lldp ports $remPort neighbor" $parameters]
+     set len [string length $PORT_DESC];
+     for {set i 0} {$i <= $len } {incr i} {
+        regsub " " $PORT_DESC "" new_PD;
+        set PORT_DESC $new_PD;
+     }
+ set PORT_DESC "$PORT_DESC $lldpPort"
+     result_debug "Value of key is $PORT_DESC"
+     result_debug "value of portDescription information string TLV is $ap1";
+     result_debug "Value of key is $PORT_DESC"
+     set compare [string compare $PORT_DESC $ap1]
+     if {$compare == 0} {
+        result_ok "correct port Description information is sent in PortDescription\
+                   information string";
+      } else {
+         result_error "ERROR: Incorrect port Description information is sent in \
+                        Port Description information string";
+      }
+}
+}
+
+proc mgmt_addr_TLV {$rawFrame} {
+uplevel {
+       set mgmt_addr [string range $rawFrame 114 130]
+       set mgmt_addr [string tolower $mgmt_addr]
+       result_debug "The value of management address is $mgmt_addr"
+       set length [string length $mgmt_addr]
+       for {set i 0} {$i <= $length} {incr i} {
+          regsub " " $mgmt_addr ":" new_mgmt_addr
+          set mgmt_addr $new_mgmt_addr
+      }
+      result_debug "The value of management address is $mgmt_addr"
+
+      Login $DUT2_CONNECT
+      SendACmd "show lldp ports $remPort neighbor"
+      set parameters ""
+      lappend parameters {"Management Address    :" 1}
+      set mid [GetKeyValue "show lldp ports $remPort neighbor" $parameters];
+      set mid [string tolower $mid]
+      result_debug "Management address : $mid"
+
+      if {$mgmt_addr == $mid} {
+         result_ok "correct management address is sent in management address TLV";
+      } else {
+         result_error "Incorrect management address is sent in management address TLV"
+      }
+}
+}
+proc sysCap {$rawFrame} {
+uplevel {
+
+   set sys_cap [string range $rawFrame 108 118]
+   result_debug "value of system capabilities information string TLV is $sys_cap";
+    Login $DUT2_CONNECT
+    SendACmd "show lldp ports $remPort neighbor"
+    set parameters "";
+    lappend parameters {"System Capabilities Supported:" 0 1}
+    set SYS_CAP1 [GetKeyValue "show lldp ports $remPort neighbor" $parameters]
+    set parameters "";
+    lappend parameters {"System Capabilities Supported:" 0 2}
+    set SYS_CAP2 [GetKeyValue "show lldp ports $remPort neighbor" $parameters]
+    set SYS_CAP [concat $SYS_CAP1 " " $SYS_CAP2]
+    set len [string length $SYS_CAP];
+    for {set i 0} {$i <= $len } {incr i} {
+       regsub " " $SYS_CAP "" new_PD;
+       set SYS_CAP $new_PD;
+    }
+    result_debug "Value of key System Capabilities Supported is : $SYS_CAP"
+     if {$sys_cap == "00 14 00 14"} {
+         result_ok "correct system capabilities information is sent in system capabilities\
+                  information string";
+     } else {
+           result_error "ERROR: Incorrect system capabilities information is sent in \
+                     system capabilities information string";
+     }
+
+}
+}
+proc sysName {$rawFrame} {
+uplevel {
+     set len [expr "($ttlId & $lsb_mask)"];
+     set x [expr $a +2];
+     set y [expr $x + ($len *2) + ($len -2)];
+     set ttlid [string range $rawFrame $x $y];
+     result_debug "The value of TTL TLV information string is $ttlid"
+     set x [expr $x +3];
+     set x1 [expr $x + 1];
+     set p1 [string range $rawFrame $x $x1];
+     set p1 0x$p1
+     result_debug "p1 is $p1";
+     set ap1 [format %d $p1];
+     result_debug "ap1 : $ap1"
+     set xx ""
+     for {set i 0} {$i <= $len} {incr i 1} {
+        set xx $xx[lindex $ap1 $i];
+     }
+     result_debug "The value of  TTL TLV information string is $xx"
+     set parameters ""
+     lappend parameters {"TTL.*:" 1}
+     set yy [GetKeyValue "show lldp ports $remPort neighbor" $parameters];
+     if {$xx == $yy} {
+        result_ok "Correct TTL information is sent in TTL TLV";
+     } else {
+        result_error "ERROR: InCorrect TTL information is sent in TTL TLV";
+     }
+     set len [expr "($ttlId & $lsb_mask)"];
+     result_debug "Length of ttlId TLV = $len";
+     set x [expr "$a + 3 + ($len * 2) +($len -1)"];
+     set y [expr $x + 1];
+     set s1 [string range $rawFrame $x $y];
+     set z [expr $y + 2];
+     set a [expr $z + 1];
+     set s2 [string range $rawFrame $z $a];
+     set sCap 0x$s1$s2
+     result_debug "sCap = $sCap"
+     set SCAP [expr "($sCap & $msb_mask) >> 9"];
+     set len [expr "($sCap & $lsb_mask)"];
+     set x [expr $a + 2];
+     set y [expr "($x +($len *2) + ($len - 1) -1)"];
+     set sCap [string range $rawFrame $x $y];
+     set ap1 ""
+     for {set i 1} {$i < $len} {incr i 1} {
+        set x1 [expr $x + 1];
+        set s1 [string range $rawFrame $x $x1];
+        result_debug "s1 : $s1"
+        set s1 0x$s1
+        lappend ap1 [format %c $s1];
+        set x [expr $x1 + 2];
+     }
+     result_debug "value of system name information string TLV is $ap1";
+     set len [string length $ap1];
+     for {set i 0} {$i < $len } {incr i} {
+        regsub " " $ap1 "" new_ap1;
+        set ap1 $new_ap1;
+     }
+ for {set i 0} {$i <= $len } {incr i} {
+        regsub "{}" $ap1 " " new_ap1;
+        set ap1 $new_ap1;
+     }
+     result_debug "value of system nameinformation string TLV is $ap1";
+     Login $DUT2_CONNECT
+     SendACmd "show lldp ports $remPort neighbor"
+     set parameters "";
+     lappend parameters {"System Name           :" 1}
+     set SYS_CAP [GetKeyValue "show lldp ports $remPort neighbor" $parameters]
+     result_debug "Value of key is $SYS_CAP"
+     result_debug "value of system name information string TLV is $ap1";
+     result_debug "Value of key is $SYS_CAP"
+     set compare [string compare $SYS_CAP $ap1]
+     if {$compare == 0} {
+        result_ok "correct system name information is sent in system Name\
+                  information string";
+      } else {
+         result_error "ERROR: Incorrect system name information is sent in \
+                        system Name information string";
+      }
+}
+}
+proc sysDesc {$rawFrame} {
+uplevel {
+set len [expr "($ttlId & $lsb_mask)"];
+    result_debug "Length of ttlId TLV = $len";
+    set x [expr "$a + 3 + ($len * 2) +($len -1)"];
+    set y [expr $x + 1];
+    set s1 [string range $rawFrame $x $y];
+    set z [expr $y + 2];
+    set a [expr $z + 1];
+    set s2 [string range $rawFrame $z $a];
+    set sDesc 0x$s1$s2
+    result_debug "sDesc = $sDesc"
+    set SCAP [expr "($sDesc & $msb_mask) >> 9"];
+    set len [expr "($sDesc & $lsb_mask)"];
+    set x [expr $a + 2];
+    set y [expr "($x +($len *2) + ($len - 1) -1)"];
+    set sDesc [string range $rawFrame $x $y];
+    set ap1 ""
+    for {set i 1} {$i < $len} {incr i 1} {
+       set x1 [expr $x + 1];
+       set s1 [string range $rawFrame $x $x1];
+       result_debug "s1 : $s1"
+       set s1 0x$s1
+       lappend ap1 [format %c $s1];
+       set x [expr $x1 + 2];
+    }
+    result_debug "value of system description information string TLV is $ap1";
+    set len [string length $ap1];
+    for {set i 0} {$i < $len } {incr i} {
+       regsub " " $ap1 "" new_ap1;
+       set ap1 $new_ap1;
+    }
+    for {set i 0} {$i <= $len } {incr i} {
+        regsub "{}" $ap1 " " new_ap1;
+        set ap1 $new_ap1;
+    }
+     set newap1 ""
+     result_debug "The value of ap1 is ====> $ap1"
+     for {set i 0} {$i <= $len} {incr i} {
+         set new [string index $ap1 $i]
+         if {$new == " "} {
+            break;
+         } else {
+            lappend newap1 $new
+         }
+     }
+     set length [string length $newap1]
+
+    set length [string length $newap1]
+    for {set i 0} {$i <= $length} {incr i} {
+        regsub " " $newap1 "" na
+        set newap1 $na
+    }
+    result_debug "value of system Description information string TLV is $newap1"
+    Login $DUT2_CONNECT
+SendACmd "show lldp ports $remPort neighbor"
+    set parameters "";
+    lappend parameters {"System Description    :" 1}
+    set SYS_DESC [GetKeyValue "show lldp ports $remPort neighbor" $parameters]
+    result_debug "Value of key is $SYS_DESC"
+    result_debug "value of system Descrition information string TLV is $ap1";
+    result_debug "Value of key is $SYS_DESC"
+    set compare [string compare $SYS_DESC $newap1]
+    if {$compare == 0} {
+       result_ok "correct system Description information is sent in system capabilities\
+                  information string";
+    } else {
+       result_error "ERROR: Incorrect system Description information is sent in \
+                     system capabilities information string";
+   }
+}
+}
+proc SystemMac {} {
+set parameters ""
+lappend parameters {"System MAC:" 1}
+set sys_mac [GetKeyValue "show switch" $parameters];
+result_debug "sys_mac ===> $sys_mac"
+set len [string length $sys_mac];
+for {set i 0} {$i < $len } {incr i} {
+   regsub ":" $sys_mac " " new_sys_mac
+   set sys_mac $new_sys_mac
+}
+return $sys_mac
+}
+
+

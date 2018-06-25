@@ -1,0 +1,1959 @@
+
+################################################################## 
+# Procedure Name: GetBcomSameChip   
+# Description: Determines if 2 ports are on the same broadcom switch
+#              chip.  This is important in some cases like ACL counters.      
+# Input args: port1 port2
+# Output args: none
+# Return value: 1 ports are on same chip, 0 ports are NOT on same chip
+# Typical usage: 
+#	if {[GetBcomSameChip [MapDUTPortId 1] [MapDUTPortId 4]]} {set c [expr $c*2]}      
+# Category: Utility
+# Changed 750 to 770 : vrao
+##################################################################
+proc GetBcomSameChip {portNum1 portNum2} {
+global chassis
+global DUTs_info
+global napaBlade
+global bcmJaguar
+global bcmPanther
+global bcmx650
+global bcmx670
+global bcmLynx
+global bcmx480
+global bcmx430
+global bcmx440
+global bcmx460
+global bcmxE4G
+global bcmx770
+global bcmx460_G2
+global bcmx670_G2
+global bcmNWI
+global bcmx450_G2
+global bcmx620
+
+set napaChip1 "1 2 3 4 5 6 7 8 9 10 11 12 25 26 27 28 29 30 31 32 33 34 35 36"
+set napaChip2 "13 14 15 16 17 18 19 20 21 22 23 24 37 38 39 40 41 42 43 44 45 46 47 48"
+set jagChip1 "1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24"
+set jagChip2 "25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50"
+
+
+##setting port for couger/Leaport platform
+
+set oldGenPlatform "X450-24T|X450-24X"
+
+set oldgenChip1 "1 2 3 4 5 6 7 8 9 10 11 12"
+set oldgenChip2 "13 14 15 16 17 18 19 20 21 22 23 24"
+set oldgenChip3 "25 26"
+
+##setting port for Tiger SSns
+
+set tig24XChip1_ss "1 2 3 4 5 6 7 8 9 10 11 12"
+set tig24XChip2_ss "13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28"
+
+set tig24TChip1_ss "1 3 5 7 9 11 13 15 17 19 21 23 25 26 27 28"
+set tig24TChip2_ss "2 4 6 8 10 12 14 16 18 20 22 24"
+
+##setting ports for Tiger 10G8x
+
+set tig24XChip1_10g8x "1 2 3 4 5 6 7 8 9 10 11 12"
+set tig24XChip2_10g8x "13 14 15 16 17 18 19 20 21 22 23 24"
+
+set tig24TChip1_10g8x "1 3 5 7 9 11 13 15 17 19 21 23"
+set tig24TChip2_10g8x "2 4 6 8 10 12 14 16 18 20 22 24"
+
+set tig24TXChip3_10g8x "25 26 27 28 29 30 31 32"
+
+##setting ports for Sylvester 10G4x
+
+set sylvester24Chip1_10G4x "1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26"
+set sylvester24Chip2_10G4x "27 28 29 30"
+
+set sylvester48Chip1_10G4x "1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48"
+set sylvester48Chip2_10G4x "49 50 51 52"
+
+##setting port for Ocelot 48X/T/P
+
+set ocelot48XTPChip1 "1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24"
+set ocelot48XTPChip2 "25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52 53 54"
+
+##setting port for x440 48T/P
+
+set cobra48TPChip1 "1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24"
+set cobra48TPChip2 "25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48"
+
+   result_debug "Platform Name $DUTs_info(DUT1,platform)"
+   if [regexp -nocase "$chassis|vpex" $DUTs_info(DUT1,platform)] {
+      result_debug "Hit Chassis Port1: $portNum1 Port2: $portNum2"
+      set returnvalue [GetChassisSameChip $portNum1 $portNum2]
+      result_debug "return Value from chassis check : $returnvalue"
+      return $returnvalue
+   } elseif {[regexp -nocase "$bcmx430" $DUTs_info(DUT1,platform)] } {
+      result_debug "checking for different ASIC in Cobra platform"
+      if {[regexp -nocase "48" $DUTs_info(DUT1,platform)]} {
+         if {[lsearch $cobra48TPChip1 $portNum1] != -1 && [lsearch $cobra48TPChip1 $portNum2] != -1} {
+            result_debug "\nSame Chip"
+            return 1;
+         } elseif {[lsearch $cobra48TPChip2 $portNum1] != -1 && [lsearch $cobra48TPChip2 $portNum2] != -1} {
+            result_debug "\nSame Chip"
+            return 1;
+         } else {
+            result_debug "\nNOT On the Same Chip"
+            return 0;
+         }
+      } else {
+         result_debug "24 port X430 have only one ASIC"
+         return 1
+      }
+   } elseif {[regexp -nocase "$bcmJaguar" $DUTs_info(DUT1,platform)] || \
+             [regexp -nocase "$bcmPanther" $DUTs_info(DUT1,platform)] || \
+             [regexp -nocase "$bcmLynx" $DUTs_info(DUT1,platform)]} {
+      if {[regexp -nocase "24" $DUTs_info(DUT1,platform)]} {
+          result_debug "All ports are on the same chip in $DUTs_info(DUT1,platform)"
+          return 1;
+      } else {
+            result_debug "Firebolt/Helix - Check if ports are on the same chip"
+            if {[lsearch $jagChip1 $portNum1] != -1 && [lsearch $jagChip1 $portNum2] != -1} {
+               result_debug "\nSame Chip"
+               return 1;
+            } elseif {[lsearch $jagChip2 $portNum1] != -1 && [lsearch $jagChip2 $portNum2] != -1} {
+               result_debug "\nSame Chip"
+               return 1;
+            } else {
+               result_debug "\nNOT On the Same Chip"
+               return 0;
+            }
+      }
+   } elseif {[regexp -nocase "$bcmx650" $DUTs_info(DUT1,platform)] } {
+       result_debug "checking for different ASIC in tiger platform"
+       if {[regexp -nocase "x650-24x" $DUTs_info(DUT1,platform)]} {
+           result_debug "checking for different ASIC in x650-24x tiger"
+           if {[regexp -nocase "10G8X" $DUTs_info(DUT1,platform)]} {
+              result_debug "This is 10G8x and so cheking for the third chip"
+              if {[lsearch $tig24TXChip3_10g8x $portNum1] != -1 && [lsearch $tig24TXChip3_10g8x $portNum2] != -1} {
+                 result_debug "\nSame Chip"
+                 return 1;
+              } elseif {[lsearch $tig24XChip1_10g8x $portNum1] != -1 && [lsearch $tig24XChip1_10g8x $portNum2] != -1} {
+                 result_debug "\nSame Chip"
+                 return 1;
+              } elseif {[lsearch $tig24XChip2_10g8x $portNum1] != -1 && [lsearch $tig24XChip2_10g8x $portNum2] != -1} {
+                 result_debug "\nSame Chip"
+                 return 1;
+              }  else {
+                 result_debug "\nNOT On the Same Chip"
+                 return 0;
+              }
+           } elseif {[regexp -nocase "SSnS|SS512|SS256|SS" $DUTs_info(DUT1,platform)]} {
+              result_debug "This is SSnS/SS512/SS256/SS and no need to check for the third chip"
+              if {[lsearch $tig24XChip1_ss $portNum1] != -1 && [lsearch $tig24XChip1_ss $portNum2] != -1} {
+                 result_debug "\nSame Chip"
+                 return 1;
+              } elseif {[lsearch $tig24XChip2_ss $portNum1] != -1 && [lsearch $tig24XChip2_ss $portNum2] != -1} {
+                 result_debug "\nSame Chip"
+                 return 1;
+              } else {
+                 result_debug "\nNOT On the Same Chip"
+                 return 0;
+              }  
+           } else {
+            result_debug "unrecognised module present in the switch x650-24X (SSns or 10G8X or SS256 or SS512)"
+            result_debug "\nNOT On the Same Chip"
+            return 0;
+         }             
+      } elseif {[regexp -nocase "x650-24t" $DUTs_info(DUT1,platform)]} {
+         result_debug "checking for different ASIC in x650-24T tiger"
+         if {[regexp -nocase "10G8X" $DUTs_info(DUT1,platform)]} {
+            result_debug "This is 10G8x and checking for the third chip"
+            if {[lsearch $tig24TXChip3_10g8x $portNum1] != -1 && [lsearch $tig24TXChip3_10g8x $portNum2] != -1} {
+               result_debug "\nSame Chip"
+               return 1;
+            } elseif {[lsearch $tig24TChip1_10g8x $portNum1] != -1 && [lsearch $tig24TChip1_10g8x $portNum2] != -1} {
+               result_debug "\nSame Chip"
+               return 1;
+            } elseif {[lsearch $tig24TChip2_10g8x $portNum1] != -1 && [lsearch $tig24TChip2_10g8x $portNum2] != -1} {
+               result_debug "\nSame Chip"
+               return 1;
+            } else {
+               result_debug "\nNOT On the Same Chip"
+               return 0;
+            }
+         } elseif {[regexp -nocase "SSns|SS512|SS256|SS" $DUTs_info(DUT1,platform)]} {
+            result_debug "This is SSnS/SS512/SS256/SS and no need to check for the third chip"
+            if {[lsearch $tig24TChip1_ss $portNum1] != -1 && [lsearch $tig24TChip1_ss $portNum2] != -1} {
+               result_debug "\nSame Chip"
+               return 1;
+            } elseif {[lsearch $tig24TChip2_ss $portNum1] != -1 && [lsearch $tig24TChip2_ss $portNum2] != -1} {
+               result_debug "\nSame Chip"
+               return 1;
+            } else {
+               result_debug "\nNOT On the Same Chip"
+               return 0;
+            }
+         } else {
+            result_debug "unrecognised module present in the switch x650-24t (SSns or 10G8X or SS256 or SS512)"
+            result_debug "\nNOT On the Same Chip"
+            return 0;
+         }
+      } else { 
+         result_debug "it is tiger platform but unknown chipset"
+         result_debug "\nNOT On the Same Chip"
+         return 0;
+      } 
+   } elseif {[regexp -nocase "$oldGenPlatform" $DUTs_info(DUT1,platform)] } {
+      result_debug "checking for different ASIC in Couger/Leapord platform"
+      if {[lsearch $oldgenChip1 $portNum1] != -1 && [lsearch $oldgenChip1 $portNum2] != -1} {
+         result_debug "\nSame Chip"
+         return 1;
+      } elseif {[lsearch $oldgenChip2 $portNum1] != -1 && [lsearch $oldgenChip2 $portNum2] != -1} {
+         result_debug "\nSame Chip"
+         return 1;
+      } elseif {[lsearch $oldgenChip3 $portNum1] != -1 && [lsearch $oldgenChip3 $portNum2] != -1} {
+         result_debug "\nSame Chip"
+         return 1;
+      } else {
+         result_debug "\nNOT On the Same Chip"
+         return 0;
+      }
+   } elseif {[regexp -nocase "$bcmx480" $DUTs_info(DUT1,platform)] } {
+      result_debug "checking for different ASIC in Sylvester platform"
+      if {[regexp -nocase "10G4X" $DUTs_info(DUT1,platform)]} {
+         if {[regexp -nocase "24" $DUTs_info(DUT1,platform)]} {
+            if {[lsearch $sylvester24Chip1_10G4x $portNum1] != -1 && [lsearch $sylvester24Chip1_10G4x $portNum2] != -1} {
+               result_debug "\nSame Chip"
+               return 1;
+            } elseif {[lsearch $sylvester24Chip2_10G4x $portNum1] != -1 && [lsearch $sylvester24Chip2_10G4x $portNum2] != -1} {
+               result_debug "\nSame Chip"
+               return 1;
+            } else {
+               result_debug "\nNOT On the Same Chip"
+               return 0;
+            }
+         } else {
+            if {[lsearch $sylvester48Chip1_10G4x $portNum1] != -1 && [lsearch $sylvester48Chip1_10G4x $portNum2] != -1} {
+               result_debug "\nSame Chip"
+               return 1;
+            } elseif {[lsearch $sylvester48Chip2_10G4x $portNum1] != -1 && [lsearch $sylvester48Chip2_10G4x $portNum2] != -1} {
+               result_debug "\nSame Chip"
+               return 1;
+            } else {
+               result_debug "\nNOT On the Same Chip"
+               return 0;
+            }
+         }
+      } else {
+         result_debug "This syslvester have no 10G4X -- so only one ASIC"
+         return 1
+      }
+   } elseif {[regexp -nocase "$bcmxE4G|e4g" $DUTs_info(DUT1,platform)] } {
+      result_debug "checking for different ASIC in E4G platform"
+      result_debug "E4G has only one ASIC"
+      return 1
+   } elseif {[regexp -nocase "$bcmx670|670" $DUTs_info(DUT1,platform)] } {
+      result_debug "checking for different ASIC in Wildcat platform"
+      result_debug "Wildcat has only one ASIC"
+      return 1
+   } elseif {[regexp -nocase "$bcmx670_G2" $DUTs_info(DUT1,platform)] } {
+      result_debug "checking for different ASIC in Cheetah platform"
+      result_debug "Cheetah has only one ASIC"
+      return 1
+   } elseif {[regexp -nocase "$bcmx460_G2" $DUTs_info(DUT1,platform)] } {
+      result_debug "checking for different ASIC in Apollo2 platform"
+      result_debug "Apollo2 has only one ASIC"
+      return 1
+   } elseif {[regexp -nocase "$bcmx770" $DUTs_info(DUT1,platform)] } {
+      result_debug "checking for different ASIC in Sabertooth platform"
+      result_debug "Sabertooth has only one ASIC"
+      return 1
+   } elseif {[regexp -nocase "$bcmx620" $DUTs_info(DUT1,platform)] } {
+      result_debug "checking for different ASIC in Bluefish platform"
+      result_debug "Bluefish has only one ASIC"
+      return 1
+   } elseif {[regexp -nocase "$bcmx460" $DUTs_info(DUT1,platform)] } {
+      result_debug "checking for different ASIC in Ocelot platform"
+      if {[regexp -nocase "48" $DUTs_info(DUT1,platform)]} {
+         if {[lsearch $ocelot48XTPChip1 $portNum1] != -1 && [lsearch $ocelot48XTPChip1 $portNum2] != -1} {
+            result_debug "\nSame Chip"
+            return 1;
+         } elseif {[lsearch $ocelot48XTPChip2 $portNum1] != -1 && [lsearch $ocelot48XTPChip2 $portNum2] != -1} {
+            result_debug "\nSame Chip"
+            return 1;
+         } else {
+            result_debug "\nNOT On the Same Chip"
+            return 0;
+         }
+      } else {
+         result_debug "24 port ocelot have only one ASIC"
+         return 1
+      }
+   } elseif {[regexp -nocase "$bcmx440" $DUTs_info(DUT1,platform)] } {
+      result_debug "checking for different ASIC in Cobra platform"
+      if {[regexp -nocase "48" $DUTs_info(DUT1,platform)]} {
+         if {[lsearch $cobra48TPChip1 $portNum1] != -1 && [lsearch $cobra48TPChip1 $portNum2] != -1} {
+            result_debug "\nSame Chip"
+            return 1;
+         } elseif {[lsearch $cobra48TPChip2 $portNum1] != -1 && [lsearch $cobra48TPChip2 $portNum2] != -1} {
+            result_debug "\nSame Chip"
+            return 1;
+         } else {
+            result_debug "\nNOT On the Same Chip"
+            return 0;
+         }
+      } else {
+         result_debug "24 port Cobra have only one ASIC"
+         return 1
+      }
+   } elseif {[regexp -nocase "$bcmx620" $DUTs_info(DUT1,platform)] } {
+	result_debug "checking for different ASIC in Bluefish platform"
+      	result_debug "Blue fish has only one ASIC"
+      return 1
+   } else { 
+      result_debug "\nNo Same Chip Check Necessary for unknown platform"
+      return 0;
+   }
+}
+##################################################################
+# Procedure Name: CheckNextGenSlotType
+# Description: Determines each and every slots blade type 
+# either firbolt or helix on both chassis and stackable
+# Input args: none
+# Output args: none
+# Return value: returns blade type
+# Typical usage:
+#       CheckNextGenSlotType;
+# Category: Utility
+##################################################################
+
+proc CheckNextGenSlotType {{dutNumber 1}} {
+
+global DUTs_info
+global PortID_Info
+global chassis
+global DUT1_CONNECT
+global Blade
+global HelixBlade
+global FelixBlade
+global TigerStackable
+global FireboltBlade
+global bcmJaguar
+global FireboltSlot
+global HelixSlot
+global DisabledSlot
+global bcmChassis
+global FireBoltHelix
+global bcmStackable
+global gnssPlatform
+global pioneerPlatform
+global bpeSlot
+global GlobalPostLearnDelay
+global GlobalVirtualRtrSupport
+
+set MSMIBlade "G48T|G48P|G24X|10G4X|G8X"
+set Blade "Default"
+set FireboltBlade ""
+set HelixBlade ""
+set FireboltSlot ""
+set HelixSlot ""
+set DisabledSlot ""
+set FireBoltHelix 0
+set FelixBlade 0
+set DUTs_info(DUT${dutNumber},BcomGen) OldGen
+set DUTs_info(DUT${dutNumber},mpls_capable) 0
+set GlobalVirtualRtrSupport 0
+
+    #Identify Firebolt Helix platforms
+result_debug "\n\nPlatform Name $DUTs_info(DUT${dutNumber},platform)"
+if [regexp -nocase "$chassis|vpex" $DUTs_info(DUT${dutNumber},platform)] {
+   result_debug "HWList $DUTs_info(DUT${dutNumber},hwList)"
+   
+   set slotNumber 1
+   set x 1;
+   set j 0;
+   foreach slot $DUTs_info(DUT${dutNumber},hwList) {
+      if {[regexp -nocase "vpex" $DUTs_info(DUT${dutNumber},platform)] && $j > 0} {
+          set slotNumber [lindex $DUTs_info(DUT${dutNumber},slotNums) $j]
+          puts "Setting vpex slot number to $slotNumber"
+      }
+      incr j
+      #
+      # Init new variables
+      #
+      set DUTs_info(DUT${dutNumber},mpls_slot${slotNumber}) 0
+      set DUTs_info(DUT${dutNumber},MarvellType_slot${slotNumber}) "null"
+      set DUTs_info(DUT${dutNumber},MarvellGen_slot${slotNumber}) "null"
+      #
+      # Olympic Work Around
+      #
+      if {$DUTs_info(DUT${dutNumber},platform) == "BD-12804" && \
+         $x == 3} {
+         result_debug "Hit 12804: pre slot = $slotNumber"
+         incr slotNumber; incr slotNumber;
+         result_debug "post slot = $slotNumber"
+      }
+      result_debug "Slot Type = $slot"
+      set DUTs_info(DUT${dutNumber},Type_slot${slotNumber}) $slot
+      #
+      # EY-09-30-2013: Modify elseif clause for BDX xl-series blades to match
+      #                on BDX instead of BDXA.
+      if {[regexp "e2" $slot]} {
+         result_debug "Helix2 blade"
+         set DUTs_info(DUT${dutNumber},BcomType_slot${slotNumber}) Helix2
+         set DUTs_info(DUT${dutNumber},BcomGen_slot${slotNumber}) NewGen
+         set DUTs_info(DUT${dutNumber},slotType_slot${slotNumber}) $slot
+         set HelixBlade 1;
+         set HelixSlot $slot
+         set FireBoltHelix 1
+         #return 1
+      } elseif {[regexp "xl" $slot]} {
+         result_debug "Triumph blade"
+         set DUTs_info(DUT${dutNumber},BcomType_slot${slotNumber}) Triumph
+         set DUTs_info(DUT${dutNumber},BcomGen_slot${slotNumber}) NewGen
+         set DUTs_info(DUT${dutNumber},mpls_slot${slotNumber}) 1
+         set DUTs_info(DUT${dutNumber},slotType_slot${slotNumber}) $slot
+         set GlobalPostLearnDelay 3
+         set GlobalVirtualRtrSupport 1
+         set DUTs_info(DUT${dutNumber},mpls_capable) 1
+         set FireboltBlade 1;
+         set FireboltSlot $slot
+         set FireBoltHelix 1
+         #return 1
+      } elseif {[regexp "8900-40G6X" $slot]} {
+         result_debug "Trident blade"
+         set DUTs_info(DUT${dutNumber},BcomType_slot${slotNumber}) Trident
+         set DUTs_info(DUT${dutNumber},BcomGen_slot${slotNumber}) NewGen
+         set DUTs_info(DUT${dutNumber},mpls_slot${slotNumber}) 1
+         set DUTs_info(DUT${dutNumber},slotType_slot${slotNumber}) $slot
+         set GlobalVirtualRtrSupport 1
+         set FireboltBlade 1;
+         set FireboltSlot $slot
+         set FireBoltHelix 1
+      } elseif {[regexp "650" $slot]} {
+         result_debug "Scorpion Stackable Node"
+         set DUTs_info(DUT${dutNumber},BcomType_slot${slotNumber}) Scorpion
+         set DUTs_info(DUT${dutNumber},BcomGen_slot${slotNumber}) NewGen
+         set DUTs_info(DUT${dutNumber},slotType_slot${slotNumber}) $slot
+         set FireboltBlade 1;
+         set FireboltSlot $slot
+         set FireBoltHelix 1
+     } elseif {[regexp "670-G2|670G2" $slot]} {
+         result_debug "Cheetah Stackable Node"
+         set DUTs_info(DUT${dutNumber},BcomType_slot${slotNumber}) Trident2
+         set DUTs_info(DUT${dutNumber},BcomGen_slot${slotNumber}) NewGen
+         set DUTs_info(DUT${dutNumber},slotType_slot${slotNumber}) $slot
+         set DUTs_info(DUT${dutNumber},mpls_capable) 1
+         set DUTs_info(DUT${dutNumber},mpls_slot${slotNumber}) 1
+         set GlobalPostLearnDelay 3
+         set GlobalVirtualRtrSupport 1
+         set FireboltBlade 0;
+         set FireboltSlot $slot
+         set FireBoltHelix 0
+      } elseif {[regexp "670" $slot]} {
+         result_debug "Wildcat Stackable Node"
+         set DUTs_info(DUT${dutNumber},BcomType_slot${slotNumber}) Trident
+         set DUTs_info(DUT${dutNumber},BcomGen_slot${slotNumber}) NewGen
+         set DUTs_info(DUT${dutNumber},slotType_slot${slotNumber}) $slot
+         set DUTs_info(DUT${dutNumber},mpls_capable) 1
+         set DUTs_info(DUT${dutNumber},mpls_slot${slotNumber}) 1
+         set GlobalPostLearnDelay 3
+         set GlobalVirtualRtrSupport 1
+         set FireboltBlade 0;
+         set FireboltSlot $slot
+         set FireBoltHelix 0
+      } elseif {[regexp "430" $slot]} {
+         result_debug "Cyclone L2"
+         set DUTs_info(DUT${dutNumber},BcomType_slot${slotNumber}) Cyclone
+         set DUTs_info(DUT${dutNumber},BcomGen_slot${slotNumber}) NewGen
+         set DUTs_info(DUT${dutNumber},slotType_slot${slotNumber}) $slot
+         set GlobalPostLearnDelay 3
+         set FireboltBlade 1;
+         set FireboltSlot $slot
+         set FireBoltHelix 1
+      } elseif {[regexp "870" $slot]} {
+         result_debug "Sailfish stackable"
+         set DUTs_info(DUT${dutNumber},BcomType_slot${slotNumber}) Tomahawk
+         set DUTs_info(DUT${dutNumber},BcomGen_slot${slotNumber}) NewGen
+         set DUTs_info(DUT${dutNumber},slotType_slot${slotNumber}) $slot
+         set DUTs_info(DUT${dutNumber},mpls_slot${slotNumber}) 1
+         set GlobalPostLearnDelay 3
+         set GlobalVirtualRtrSupport 1
+         set FireboltBlade 0;
+         set FireboltSlot $slot
+         set FireBoltHelix 0
+      } elseif {[regexp "770" $slot]} {
+         result_debug "Sabertooth Stackable Node"
+         set DUTs_info(DUT${dutNumber},BcomType_slot${slotNumber}) Trident2
+         set DUTs_info(DUT${dutNumber},BcomGen_slot${slotNumber}) NewGen
+         set DUTs_info(DUT${dutNumber},slotType_slot${slotNumber}) $slot
+         set DUTs_info(DUT${dutNumber},mpls_capable) 1
+         set DUTs_info(DUT${dutNumber},mpls_slot${slotNumber}) 1
+         set GlobalPostLearnDelay 3
+         set GlobalVirtualRtrSupport 1
+         set FireboltBlade 0;
+         set FireboltSlot $slot
+         set FireBoltHelix 0
+      } elseif {[regexp "690" $slot]} {
+         result_debug "Seawolf stackable"
+         set DUTs_info(DUT${dutNumber},BcomType_slot${slotNumber}) Tomahawk
+         set DUTs_info(DUT${dutNumber},BcomGen_slot${slotNumber}) NewGen
+         set DUTs_info(DUT${dutNumber},slotType_slot${slotNumber}) $slot
+         set DUTs_info(DUT${dutNumber},mpls_slot${slotNumber}) 1
+         set GlobalPostLearnDelay 3
+         set GlobalVirtualRtrSupport 1
+         set FireboltBlade 0;
+         set FireboltSlot $slot
+         set FireBoltHelix 0
+      } elseif {[regexp "590" $slot]} {
+         result_debug "Eagles stackable"
+         set DUTs_info(DUT${dutNumber},BcomType_slot${slotNumber}) Tomahawk
+         set DUTs_info(DUT${dutNumber},BcomGen_slot${slotNumber}) NewGen
+         set DUTs_info(DUT${dutNumber},slotType_slot${slotNumber}) $slot
+         set DUTs_info(DUT${dutNumber},mpls_slot${slotNumber}) 1
+         set GlobalPostLearnDelay 3
+         set GlobalVirtualRtrSupport 1
+         set FireboltBlade 0;
+         set FireboltSlot $slot
+         set FireBoltHelix 0
+      } elseif {[regexp "X440-G2|440G2" $slot]} {
+         result_debug "Hurricane2 Stackable Node"
+         set DUTs_info(DUT${dutNumber},BcomType_slot${slotNumber}) Hurricane2
+         set DUTs_info(DUT${dutNumber},BcomGen_slot${slotNumber}) NewGen
+         set DUTs_info(DUT${dutNumber},slotType_slot${slotNumber}) $slot
+         set DUTs_info(DUT${dutNumber},mpls_slot${slotNumber}) 0
+         set GlobalPostLearnDelay 3
+         set GlobalVirtualRtrSupport 0
+         set FireboltBlade 0;
+         set FireBoltHelix 0
+      } elseif {[regexp "440|620" $slot]} {
+         result_debug "Hurricane Stackable Node"
+         set DUTs_info(DUT${dutNumber},BcomType_slot${slotNumber}) Hurricane
+         set DUTs_info(DUT${dutNumber},BcomGen_slot${slotNumber}) NewGen
+         set DUTs_info(DUT${dutNumber},slotType_slot${slotNumber}) $slot
+         set GlobalPostLearnDelay 3
+         set FireboltBlade 0;
+         set FireboltSlot $slot
+         set FireBoltHelix 0
+      } elseif {[regexp "X460-G2|460G2" $slot]} {
+         result_debug "Apollo2 Stackable Node"
+         set DUTs_info(DUT${dutNumber},BcomType_slot${slotNumber}) Apollo2
+         set DUTs_info(DUT${dutNumber},BcomGen_slot${slotNumber}) NewGen
+         set DUTs_info(DUT${dutNumber},slotType_slot${slotNumber}) $slot
+         set DUTs_info(DUT${dutNumber},mpls_slot${slotNumber}) 1
+         set GlobalPostLearnDelay 3
+         set GlobalVirtualRtrSupport 1
+         set FireboltBlade 0;
+         set FireboltSlot $slot
+         set FireBoltHelix 0
+      } elseif {[regexp "X450-G2|450G2" $slot]} {
+         result_debug "Apollo2 Stackable Node"
+         set DUTs_info(DUT${dutNumber},BcomType_slot${slotNumber}) Apollo2
+         set DUTs_info(DUT${dutNumber},BcomGen_slot${slotNumber}) NewGen
+         set DUTs_info(DUT${dutNumber},slotType_slot${slotNumber}) $slot
+         set DUTs_info(DUT${dutNumber},mpls_slot${slotNumber}) 1
+         set GlobalPostLearnDelay 3
+         set GlobalVirtualRtrSupport 1
+         set FireboltBlade 0;
+         set FireboltSlot $slot
+         set FireBoltHelix 0
+      } elseif {[regexp "620" $slot]} {
+         result_debug "Ranger2 Stackable Node"
+         set DUTs_info(DUT${dutNumber},BcomType_slot${slotNumber}) Ranger2
+         set DUTs_info(DUT${dutNumber},BcomGen_slot${slotNumber}) NewGen
+         set DUTs_info(DUT${dutNumber},slotType_slot${slotNumber}) $slot
+         set GlobalPostLearnDelay 3
+         set FireboltBlade 0;
+         set FireboltSlot $slot
+         set FireBoltHelix 0
+     } elseif {[regexp -nocase "$bpeSlot" $slot]} {
+         result_debug "Marvell BPE Node as Slot $slotNumber"
+         set DUTs_info(DUT${dutNumber},MarvellType_slot${slotNumber}) "Alleycat3"
+         set DUTs_info(DUT${dutNumber},MarvellGen_slot${slotNumber})  "Gen1"
+         set DUTs_info(DUT${dutNumber},BcomType_slot${slotNumber}) Trident2
+         set DUTs_info(DUT${dutNumber},BcomGen_slot${slotNumber}) NewGen
+         set DUTs_info(DUT${dutNumber},slotType_slot${slotNumber}) $slot
+         set DUTs_info(DUT${dutNumber},mpls_slot${slotNumber}) 0
+         set GlobalPostLearnDelay 3
+         set FireboltBlade 0;
+         set FireboltSlot $slot
+         set FireBoltHelix 0
+     } elseif {[regexp "460" $slot]} {
+         result_debug "Apollo Stackable Node"
+         set DUTs_info(DUT${dutNumber},BcomType_slot${slotNumber}) Apollo
+         set DUTs_info(DUT${dutNumber},BcomGen_slot${slotNumber}) NewGen
+         set DUTs_info(DUT${dutNumber},slotType_slot${slotNumber}) $slot
+         set DUTs_info(DUT${dutNumber},mpls_slot${slotNumber}) 1
+         set GlobalPostLearnDelay 3
+         set GlobalVirtualRtrSupport 1
+         set FireboltBlade 0;
+         set FireboltSlot $slot
+         set FireBoltHelix 0
+      } elseif {[regexp "480" $slot]} {
+         result_debug "Triumph Stackable Node"
+         set DUTs_info(DUT${dutNumber},BcomType_slot${slotNumber}) Triumph
+         set DUTs_info(DUT${dutNumber},BcomGen_slot${slotNumber}) NewGen
+         set DUTs_info(DUT${dutNumber},slotType_slot${slotNumber}) $slot
+         set DUTs_info(DUT${dutNumber},mpls_slot${slotNumber}) 1
+         set GlobalPostLearnDelay 3
+         set GlobalVirtualRtrSupport 1
+         set FireboltBlade 0;
+         set FireboltSlot $slot
+         set FireBoltHelix 0
+      } elseif {[regexp "8900-G96T-c" $slot]} {
+         result_debug "Triumph blade"
+         set DUTs_info(DUT${dutNumber},BcomType_slot${slotNumber}) Triumph
+         set DUTs_info(DUT${dutNumber},BcomGen_slot${slotNumber}) NewGen
+         set DUTs_info(DUT${dutNumber},slotType_slot${slotNumber}) $slot
+         set DUTs_info(DUT${dutNumber},mpls_slot${slotNumber}) 1
+         set GlobalVirtualRtrSupport 1
+         set FireboltBlade 1;
+         set FireboltSlot $slot
+         set FireBoltHelix 1
+      } elseif {[regexp "8900-10G24X-c" $slot]} {
+         result_debug "Scorpion blade"
+         set DUTs_info(DUT${dutNumber},BcomType_slot${slotNumber}) Scorpion
+         set DUTs_info(DUT${dutNumber},BcomGen_slot${slotNumber}) NewGen
+         set DUTs_info(DUT${dutNumber},slotType_slot${slotNumber}) $slot
+         set GlobalVirtualRtrSupport 1
+         set FireboltBlade 1;
+         set FireboltSlot $slot
+         set FireBoltHelix 1
+      } elseif {[regexp "8500-G24X-e" $slot]} {
+         result_debug "Queens - Firebolt2 blade"
+         set DUTs_info(DUT${dutNumber},BcomType_slot${slotNumber}) Firebolt2
+         set DUTs_info(DUT${dutNumber},BcomGen_slot${slotNumber}) NewGen
+         set DUTs_info(DUT${dutNumber},slotType_slot${slotNumber}) $slot
+         set FireboltBlade 1;
+         set FireboltSlot $slot
+         set FireBoltHelix 1
+      } elseif {[regexp "8500-G48T-e" $slot]} {
+         result_debug "Queens - Helix2 blade"
+         set DUTs_info(DUT${dutNumber},BcomType_slot${slotNumber}) Helix2
+         set DUTs_info(DUT${dutNumber},BcomGen_slot${slotNumber}) NewGen
+         set DUTs_info(DUT${dutNumber},slotType_slot${slotNumber}) $slot
+         set FireboltBlade 1;
+         set FireboltSlot $slot
+         set FireBoltHelix 1
+      } elseif {[regexp "c" $slot] } {
+         result_debug "Firebolt2 blade"
+         set DUTs_info(DUT${dutNumber},BcomType_slot${slotNumber}) Firebolt2
+         set DUTs_info(DUT${dutNumber},BcomGen_slot${slotNumber}) NewGen
+         set DUTs_info(DUT${dutNumber},slotType_slot${slotNumber}) $slot
+         set GlobalVirtualRtrSupport 1
+         set FireboltBlade 1;
+         set FireboltSlot $slot
+         set FireBoltHelix 1
+      } elseif {[regexp "XCM" $slot]} {
+         result_debug "Firebolt2 blade"
+         set DUTs_info(DUT${dutNumber},BcomType_slot${slotNumber}) Firebolt2
+         set DUTs_info(DUT${dutNumber},BcomGen_slot${slotNumber}) NewGen
+         set DUTs_info(DUT${dutNumber},slotType_slot${slotNumber}) $slot
+         set GlobalVirtualRtrSupport 1
+         set FireboltBlade 1;
+         set FireboltSlot $slot
+         set FireBoltHelix 1
+         set Netgear 1
+      } elseif {[regexp "BDX.*XL" $slot]} {
+         result_debug "EverestXL blade"
+         set DUTs_info(DUT${dutNumber},BcomType_slot${slotNumber}) Triumph3
+         set DUTs_info(DUT${dutNumber},BcomGen_slot${slotNumber}) NewGen
+         set DUTs_info(DUT${dutNumber},slotType_slot${slotNumber}) $slot
+         set DUTs_info(DUT${dutNumber},mpls_slot${slotNumber}) 1
+         set GlobalPostLearnDelay 5
+         set GlobalVirtualRtrSupport 1
+         set FireboltBlade 1;
+         set FireboltSlot $slot
+         set FireBoltHelix 1
+      } elseif {[regexp "BDXB" $slot]} {
+         result_debug "Everest100G blade"
+         set DUTs_info(DUT${dutNumber},BcomType_slot${slotNumber}) Triumph3
+         set DUTs_info(DUT${dutNumber},BcomGen_slot${slotNumber}) NewGen
+         set DUTs_info(DUT${dutNumber},slotType_slot${slotNumber}) $slot
+         set DUTs_info(DUT${dutNumber},mpls_slot${slotNumber}) 1
+         set GlobalVirtualRtrSupport 1
+         set FireboltBlade 1;
+         set FireboltSlot $slot
+         set FireBoltHelix 1
+      } elseif {[regexp "BDXA" $slot]} {
+         result_debug "Everest blade"
+         set DUTs_info(DUT${dutNumber},BcomType_slot${slotNumber}) "Trident+"
+         set DUTs_info(DUT${dutNumber},BcomGen_slot${slotNumber}) NewGen
+         set DUTs_info(DUT${dutNumber},slotType_slot${slotNumber}) $slot
+         set DUTs_info(DUT${dutNumber},mpls_slot${slotNumber}) 1
+         set GlobalVirtualRtrSupport 1
+         set FireboltBlade 1;
+         set FireboltSlot $slot
+         set FireBoltHelix 1
+      } elseif {[regexp "e" $slot]} {
+         result_debug "Helix blade"
+         set DUTs_info(DUT${dutNumber},BcomType_slot${slotNumber}) Helix
+         set DUTs_info(DUT${dutNumber},BcomGen_slot${slotNumber}) NewGen
+         set DUTs_info(DUT${dutNumber},slotType_slot${slotNumber}) $slot
+         set HelixBlade 1;
+         set HelixSlot $slot
+         set FireBoltHelix 1
+      } elseif {[regexp "a" $slot]} {
+         result_debug "Firebolt blade"
+         set DUTs_info(DUT${dutNumber},BcomType_slot${slotNumber}) Firebolt
+         set DUTs_info(DUT${dutNumber},BcomGen_slot${slotNumber}) NewGen
+         set DUTs_info(DUT${dutNumber},slotType_slot${slotNumber}) $slot
+         set FireboltBlade 1;
+         set FireboltSlot $slot
+         set FireBoltHelix 1
+      } elseif {[regexp $MSMIBlade $slot]} {
+         lappend DisabledSlot $slotNumber
+         result_debug "Not A Firebolt or Helix Stackable"
+         set DUTs_info(DUT${dutNumber},BcomType_slot${slotNumber}) Oldgen
+         set DUTs_info(DUT${dutNumber},BcomGen_slot${slotNumber}) OldGen
+         set DUTs_info(DUT${dutNumber},slotType_slot${slotNumber}) $slot
+         set Blade Default;
+      } elseif {[regexp X450\- $slot]} {
+         result_debug "Oldgen stackable node"
+         set DUTs_info(DUT${dutNumber},BcomType_slot${slotNumber}) OldGen
+         set DUTs_info(DUT${dutNumber},slotType_slot${slotNumber}) $slot
+         set DUTs_info(DUT${dutNumber},BcomGen_slot${slotNumber}) OldGen
+         set Blade Default;
+      } elseif {[regexp "E4G-400" $slot]} {
+         result_debug "E4G-400 Stackable Node"
+         set DUTs_info(DUT${dutNumber},BcomType_slot${slotNumber}) Apollo
+         set DUTs_info(DUT${dutNumber},BcomGen_slot${slotNumber}) NewGen
+         set DUTs_info(DUT${dutNumber},slotType_slot${slotNumber}) $slot
+         set DUTs_info(DUT${dutNumber},mpls_slot${slotNumber}) 1
+         set GlobalVirtualRtrSupport 1
+         set FireboltBlade 1;
+         set FireboltSlot $slot;
+         set FireBoltHelix 1;
+      } else {
+         result_debug "Not A Broadcom Blade"
+         set DUTs_info(DUT${dutNumber},BcomType_slot${slotNumber}) Default
+         set DUTs_info(DUT${dutNumber},BcomGen_slot${slotNumber}) Default
+         set DUTs_info(DUT${dutNumber},slotType_slot${slotNumber}) $slot
+         set Blade Default;
+         if {[regexp -nocase "$gnssPlatform" $DUTs_info(DUT${dutNumber},platform)] || \
+             [regexp -nocase "$pioneerPlatform" $DUTs_info(DUT${dutNumber},platform)]} {
+             result_debug "GNSS or Pioneer MPLS/Virtual Rtr Enabled"
+             set DUTs_info(DUT${dutNumber},mpls_capable) 1
+             set DUTs_info(DUT${dutNumber},mpls_slot${slotNumber}) 1
+             set GlobalVirtualRtrSupport 1
+         }
+      }
+      incr slotNumber
+      incr x
+   }
+} elseif {[regexp -nocase "$bcmStackable" $DUTs_info(DUT${dutNumber},platform)]} {
+   if {[regexp "150" $DUTs_info(DUT${dutNumber},platform)]} {
+      result_debug "Felix stackable"
+      set DUTs_info(DUT${dutNumber},BcomType) Felix
+      set DUTs_info(DUT${dutNumber},BcomGen) NewGen
+      set FelixBlade 1;
+      set FireBoltHelix 1;
+      return 1
+   } elseif {[regexp "250" $DUTs_info(DUT${dutNumber},platform)]} {
+      result_debug "Felix stackable"
+      set DUTs_info(DUT${dutNumber},BcomType) Felix
+      set DUTs_info(DUT${dutNumber},BcomGen) NewGen
+      set FelixBlade 1;
+      set FireBoltHelix 1;
+      return 1
+  } elseif {[regexp "350" $DUTs_info(DUT${dutNumber},platform)]} {
+      result_debug "Helix stackable"
+      set DUTs_info(DUT${dutNumber},BcomType) Helix
+      set DUTs_info(DUT${dutNumber},BcomGen) NewGen
+      set FelixBlade 1;
+      set FireBoltHelix 1;
+      return 1
+  } elseif {[regexp "X450-G2|450G2" $DUTs_info(DUT${dutNumber},platform)]} {
+      result_debug "X450G2 stackable"
+      set DUTs_info(DUT${dutNumber},BcomType) Apollo2
+      set DUTs_info(DUT${dutNumber},BcomGen) NewGen
+      set DUTs_info(DUT${dutNumber},mpls_capable) 1
+      set GlobalVirtualRtrSupport 1
+      set FireboltBlade 0;
+      set FireBoltHelix 0;
+      return 1
+  } elseif {[regexp "620" $DUTs_info(DUT${dutNumber},platform)]} {
+      result_debug "X620 stackable"
+      set DUTs_info(DUT${dutNumber},BcomType) Ranger2
+      set DUTs_info(DUT${dutNumber},BcomGen) NewGen
+      set FireboltBlade 0;
+      set FireBoltHelix 0;
+      return 1
+   } elseif {[regexp "450a" $DUTs_info(DUT${dutNumber},platform)]} {
+      result_debug "Firebolt stackable"
+      set DUTs_info(DUT${dutNumber},BcomType) FireBolt
+      set DUTs_info(DUT${dutNumber},BcomGen) NewGen
+      set FireboltBlade 1;
+      set FireBoltHelix 1;
+      return 1
+  } elseif {[regexp "450e" $DUTs_info(DUT${dutNumber},platform)]} {
+      result_debug "Helix stackable"
+      set DUTs_info(DUT${dutNumber},BcomType) Helix
+      set DUTs_info(DUT${dutNumber},BcomGen) NewGen
+      set FelixBlade 1;
+      set FireBoltHelix 1;
+      return 1
+  } elseif {[regexp "E4G-200|CTR-8440" $DUTs_info(DUT${dutNumber},platform)]} {
+      result_debug "E4G-200 stackable"
+      set DUTs_info(DUT${dutNumber},BcomType) Enduro
+      set DUTs_info(DUT${dutNumber},BcomGen) NewGen
+      set DUTs_info(DUT${dutNumber},mpls_capable) 1
+      set GlobalVirtualRtrSupport 1
+      set FireboltBlade 0;
+      set FireBoltHelix 0;
+      return 1
+   } elseif {[regexp "430" $DUTs_info(DUT${dutNumber},platform)]} {
+      result_debug "X430 L2"
+      set DUTs_info(DUT${dutNumber},BcomType) Cyclone
+      set DUTs_info(DUT${dutNumber},BcomGen) NewGen
+      set GlobalVirtualRtrSupport 1
+      set FireboltBlade 0;
+      set FireBoltHelix 0;
+      return 1
+   } elseif {[regexp "X440-G2|440G2" $DUTs_info(DUT${dutNumber},platform)]} {
+      result_debug "Falcon stackable"
+      set DUTs_info(DUT${dutNumber},BcomType) Hurricane2
+      set DUTs_info(DUT${dutNumber},BcomGen) NewGen
+      set DUTs_info(DUT${dutNumber},mpls_capable) 0
+      set GlobalVirtualRtrSupport 0
+      set FireboltBlade 0;
+      set FireBoltHelix 0;
+      return 1
+   } elseif {[regexp "440" $DUTs_info(DUT${dutNumber},platform)]} {
+      result_debug "Cobra stackable"
+      set DUTs_info(DUT${dutNumber},BcomType) Hurricane
+      set DUTs_info(DUT${dutNumber},BcomGen) NewGen
+      set DUTs_info(DUT${dutNumber},mpls_capable) 1
+      set GlobalVirtualRtrSupport 1
+      set FireboltBlade 0;
+      set FireBoltHelix 0;
+      return 1
+  } elseif {[regexp "E4G-400" $DUTs_info(DUT${dutNumber},platform)]} {
+      result_debug "E4G-400 stackable"
+      set DUTs_info(DUT${dutNumber},BcomType) Apollo
+      set DUTs_info(DUT${dutNumber},BcomGen) NewGen
+      set DUTs_info(DUT${dutNumber},mpls_capable) 1
+      set GlobalVirtualRtrSupport 1
+      set FireboltBlade 0;
+      set FireBoltHelix 0;
+      return 1
+   } elseif {[regexp "650" $DUTs_info(DUT${dutNumber},platform)]} {
+      result_debug "Tiger stackable"
+      set DUTs_info(DUT${dutNumber},BcomType) Scorpion
+      set DUTs_info(DUT${dutNumber},BcomGen) NewGen
+      set GlobalVirtualRtrSupport 1
+      set TigerStackable 1;
+      set FireBoltHelix 0;
+      return 1
+   } elseif {[regexp "670-G2|670G2" $DUTs_info(DUT${dutNumber},platform)]} {
+      result_debug "Cheetah stackable"
+      set DUTs_info(DUT${dutNumber},BcomType) Trident2
+      set DUTs_info(DUT${dutNumber},BcomGen) NewGen
+      set DUTs_info(DUT${dutNumber},mpls_capable) 1
+      set GlobalVirtualRtrSupport 1
+      set FireboltBlade 0;
+      set FireBoltHelix 0;
+      return 1
+   } elseif {[regexp "670" $DUTs_info(DUT${dutNumber},platform)]} {
+      result_debug "Wildcat stackable"
+      set DUTs_info(DUT${dutNumber},BcomType) Trident
+      set DUTs_info(DUT${dutNumber},BcomGen) NewGen
+      set DUTs_info(DUT${dutNumber},mpls_capable) 1
+      set GlobalVirtualRtrSupport 1
+      set FireboltBlade 0;
+      set FireBoltHelix 0;
+      return 1
+   } elseif {[regexp "690" $DUTs_info(DUT${dutNumber},platform)]} {
+      result_debug "Seawolf stackable"
+      set DUTs_info(DUT${dutNumber},BcomType) Tomahawk
+      set DUTs_info(DUT${dutNumber},BcomGen) NewGen
+      set DUTs_info(DUT${dutNumber},mpls_capable) 1
+      set GlobalVirtualRtrSupport 1
+      set FireboltBlade 0;
+      set FireBoltHelix 0;
+      return 1
+   } elseif {[regexp "590" $DUTs_info(DUT${dutNumber},platform)]} {
+      result_debug "Seawolf stackable"
+      set DUTs_info(DUT${dutNumber},BcomType) Tomahawk
+      set DUTs_info(DUT${dutNumber},BcomGen) NewGen
+      set DUTs_info(DUT${dutNumber},mpls_capable) 1
+      set GlobalVirtualRtrSupport 1
+      set FireboltBlade 0;
+      set FireBoltHelix 0;
+      return 1
+   } elseif {[regexp "770" $DUTs_info(DUT${dutNumber},platform)]} {
+      result_debug "Sabertooth stackable"
+      set DUTs_info(DUT${dutNumber},BcomType) Trident2
+      set DUTs_info(DUT${dutNumber},BcomGen) NewGen
+      set DUTs_info(DUT${dutNumber},mpls_capable) 1
+      set GlobalVirtualRtrSupport 1
+      set FireboltBlade 0;
+      set FireBoltHelix 0;
+      return 1
+   } elseif {[regexp "870" $DUTs_info(DUT${dutNumber},platform)]} {
+      result_debug "Sailfish stackable"
+      set DUTs_info(DUT${dutNumber},BcomType) Tomahawk
+      set DUTs_info(DUT${dutNumber},BcomGen) NewGen
+      set DUTs_info(DUT${dutNumber},mpls_capable) 1
+      set GlobalVirtualRtrSupport 1
+      set FireboltBlade 0;
+      set FireBoltHelix 0;
+      return 1
+   } elseif {[regexp "NWI" $DUTs_info(DUT${dutNumber},platform)]} {
+      result_debug "NWI-E450A Ericsson X450a-24t spinoff"
+      set DUTs_info(DUT${dutNumber},BcomType) FireBolt
+      set DUTs_info(DUT${dutNumber},BcomGen) NewGen
+      set FireboltBlade 1;
+      set FireBoltHelix 1;
+      return 1
+   } elseif {[regexp "X460-G2|460G2" $DUTs_info(DUT${dutNumber},platform)]} {
+      result_debug "X460G2 stackable"
+      set DUTs_info(DUT${dutNumber},BcomType) Apollo2
+      set DUTs_info(DUT${dutNumber},BcomGen) NewGen
+      set DUTs_info(DUT${dutNumber},mpls_capable) 1
+      set GlobalVirtualRtrSupport 1
+      set FireboltBlade 0;
+      set FireBoltHelix 0;
+      return 1
+   } elseif {[regexp "460" $DUTs_info(DUT${dutNumber},platform)]} {
+      result_debug "X460 stackable"
+      set DUTs_info(DUT${dutNumber},BcomType) Apollo
+      set DUTs_info(DUT${dutNumber},BcomGen) NewGen
+      set DUTs_info(DUT${dutNumber},mpls_capable) 1
+      set GlobalVirtualRtrSupport 1
+      set FireboltBlade 0;
+      set FireBoltHelix 0;
+      return 1
+   } elseif {[regexp "480" $DUTs_info(DUT${dutNumber},platform)]} {
+      result_debug "X480 stackable"
+      set DUTs_info(DUT${dutNumber},BcomType) Triumph
+      set DUTs_info(DUT${dutNumber},BcomGen) NewGen
+      set DUTs_info(DUT${dutNumber},mpls_capable) 1
+      set GlobalVirtualRtrSupport 1
+      set FireboltBlade 0;
+      set FireBoltHelix 0;
+      return 1
+   } elseif {[regexp "e" $DUTs_info(DUT${dutNumber},platform)]} {
+      result_debug "Helix stackable"
+      set DUTs_info(DUT${dutNumber},BcomType) Helix
+      set DUTs_info(DUT${dutNumber},BcomGen) NewGen
+      set HelixBlade 1;
+      set FireBoltHelix 1;
+      return 1
+   } elseif {[regexp "a" $DUTs_info(DUT${dutNumber},platform)]} {
+      result_debug "Firebolt stackable"
+      set DUTs_info(DUT${dutNumber},BcomType) FireBolt
+      set DUTs_info(DUT${dutNumber},BcomGen) NewGen
+      set FireboltBlade 1;
+      set FireBoltHelix 1;
+      return 1
+   } else {
+      result_debug "Old Gen Stackable"
+      set DUTs_info(DUT${dutNumber},BcomType) OldGen
+      set DUTs_info(DUT${dutNumber},BcomGen) OldGen
+      set DUTs_info(DUT${dutNumber},FireboltHelix) 0
+   }
+} else {
+      result_debug "Old Gen Stackable"
+      set DUTs_info(DUT${dutNumber},BcomType) OldGen
+      set DUTs_info(DUT${dutNumber},BcomGen) OldGen
+      set DUTs_info(DUT${dutNumber},FireboltHelix) 0
+      if {[regexp -nocase "$gnssPlatform" $DUTs_info(DUT${dutNumber},platform)] || \
+          [regexp -nocase "$pioneerPlatform" $DUTs_info(DUT${dutNumber},platform)]} {
+          result_debug "GNSS or Pioneer MPLS/Virtual Rtr Enabled"
+          set DUTs_info(DUT${dutNumber},mpls_capable) 1
+          set GlobalVirtualRtrSupport 1
+      }
+}
+return $FireBoltHelix
+}
+
+##################################################################
+# Procedure Name: _getPortIdTypeInfo
+# Description: Init Globals either helix or firebolt for each 
+# portId and Trunk port on a rtr regression bed.
+#
+# Sets globals: Trunk_Info, PortID_Info in the formats
+#   Trunk_Info(Map121,BcomType) = Firebolt|Helix|Default
+#   PortID_Info(1,BcomType) = Firebolt|Helix|Default
+#   Trunk_Info(Map121,BcomGen) = NewGen|OldGen
+#   PortID_Info(1,BcomGen) = NewGen|OldGen
+#
+# Input args: none
+# Output args: none
+# Return value: none
+# Typical usage:
+#       _getPortIdTypeInfo;
+# Category: Utility
+##################################################################
+proc _getPortIdTypeInfo {{saveMode 0}} {
+global portMappingList
+global trunkPortList
+global Trunk_Info
+global DUTs_info
+global DutPort_Info
+global PortID_Info
+global chassis
+global MAIN
+global numDUT
+global portIDsUsed
+global Main_Info
+
+    if {$saveMode && [info exists MAIN(ifPipe)] && $MAIN(ifPipe) != "NULL"} {
+        flush $MAIN(ifPipe)
+    }
+    for {set dutNumber 1} {$dutNumber<=$numDUT} {incr dutNumber} {
+        set DUTs_info(DUT${dutNumber},BcomNewGen) 1
+        puts "\n~~~~~~\n~~~~~~~\nSetting Broadcom New Gen Initialization\n~~~~~~~\n~~~~~~~"; 
+        CheckNextGenSlotType $dutNumber
+    }
+    if {[info exists portMappingList] && $portMappingList != ""} {
+        set x 0
+        set portIDsUsed ""
+        set MAIN(PORTIDINFOSET) 1
+        foreach portMap $portMappingList {
+            set portId [lindex $portMap 0]
+            set thePort [lindex $portMap 1]
+            set dutNumber [lindex $portMap 2]
+            if {$numDUT > 2 && $portId == 9} {continue;};# Skip defining hub ports
+            if {[regexp -nocase "$chassis|vpex" $DUTs_info(DUT${dutNumber},platform)]} {
+                set portSlot [lindex [split [MapDUTPortId $portId ${dutNumber}] :] 0];
+                if {[regexp -nocase "KEY_NOT_FOUND" $portSlot] || [regexp -nocase "A" $portSlot]} {continue;}
+                set PortID_Info($portId,BcomType) $DUTs_info(DUT${dutNumber},BcomType_slot${portSlot})
+                if {$saveMode} {puts $MAIN(ifPipe) "set PortID_Info($portId,BcomType) \
+                    $DUTs_info(DUT${dutNumber},BcomType_slot${portSlot})";}
+                set PortID_Info($portId,BcomGen) $DUTs_info(DUT${dutNumber},BcomGen_slot${portSlot})
+                if {$PortID_Info($portId,BcomGen) != "NewGen"} {
+                    set DUTs_info(DUT${dutNumber},BcomNewGen) 0
+                }
+                if {$saveMode} {puts $MAIN(ifPipe) "set PortID_Info($portId,BcomGen) \
+                    $DUTs_info(DUT${dutNumber},BcomGen_slot${portSlot})";}
+                set PortID_Info($portId,mpls) $DUTs_info(DUT${dutNumber},mpls_slot${portSlot})
+                if {$saveMode} {puts $MAIN(ifPipe) "set PortID_Info($portId,mpls) \
+                    $DUTs_info(DUT${dutNumber},mpls_slot${portSlot})";}
+                set PortID_Info($portId,sysType) $DUTs_info(DUT${dutNumber},slotType_slot${portSlot})
+                if {$saveMode} {puts $MAIN(ifPipe) "set PortID_Info($portId,sysType) \
+                    $DUTs_info(DUT${dutNumber},slotType_slot${portSlot})";}
+                # DutPort_Info section
+                set DutPort_Info(${dutNumber},${thePort},BcomType) $DUTs_info(DUT${dutNumber},BcomType_slot${portSlot})
+                set DutPort_Info(${dutNumber},${thePort},mpls)     $DUTs_info(DUT${dutNumber},mpls_slot${portSlot})
+                set DutPort_Info(${dutNumber},${thePort},BcomGen)  $DUTs_info(DUT${dutNumber},BcomGen_slot${portSlot})
+                set DutPort_Info(${dutNumber},${thePort},sysType)  $DUTs_info(DUT${dutNumber},slotType_slot${portSlot})
+            } else {
+                set PortID_Info($portId,BcomType) $DUTs_info(DUT${dutNumber},BcomType)
+                if {$saveMode} {puts $MAIN(ifPipe) "set PortID_Info($portId,BcomType) \
+                    $DUTs_info(DUT${dutNumber},BcomType)";}
+                set PortID_Info($portId,BcomGen) $DUTs_info(DUT${dutNumber},BcomGen)
+                if {$PortID_Info($portId,BcomGen) != "NewGen"} {
+                    set DUTs_info(DUT${dutNumber},BcomNewGen) 0
+                }
+                if {$saveMode} {puts $MAIN(ifPipe) "set PortID_Info($portId,BcomGen) \
+                    $DUTs_info(DUT${dutNumber},BcomGen)";}
+                set PortID_Info($portId,mpls)    $DUTs_info(DUT${dutNumber},mpls_capable)
+                if {$saveMode} {puts $MAIN(ifPipe) "set PortID_Info($portId,mpls) \
+                    $DUTs_info(DUT${dutNumber},mpls_capable)";}
+                set PortID_Info($portId,sysType) $DUTs_info(DUT${dutNumber},sysType);
+                if {$saveMode} {puts $MAIN(ifPipe) "set PortID_Info($portId,sysType) \
+                    $DUTs_info(DUT${dutNumber},sysType)";}
+                # DutPort_Info section
+                set DutPort_Info(${dutNumber},${thePort},BcomType) $DUTs_info(DUT${dutNumber},BcomType)
+                set DutPort_Info(${dutNumber},${thePort},mpls)     $DUTs_info(DUT${dutNumber},mpls_capable)
+                set DutPort_Info(${dutNumber},${thePort},BcomGen)  $DUTs_info(DUT${dutNumber},BcomGen)
+                set DutPort_Info(${dutNumber},${thePort},sysType)  $DUTs_info(DUT${dutNumber},sysType)
+            }
+            incr x;
+            lappend portIDsUsed $portId
+        }
+        set stdType $x;
+        set Main_Info(stdIdCount) $x
+        if {$saveMode} {puts $MAIN(ifPipe) "set Main_Info(stdIdCount) $x"}
+    }
+    if {[info exists trunkPortList] && $trunkPortList != ""} {
+        foreach trunkMap $trunkPortList {
+            set fromDUT [lindex $trunkMap 0]
+            set dutNumber $fromDUT
+            set toDUT [lindex $trunkMap 1]
+            set thePort [lindex $trunkMap 2]
+            if {[info exists trunkLinkCount($fromDUT,$toDUT)]} {
+                set trunkLinkCount($fromDUT,$toDUT) [expr $trunkLinkCount($fromDUT,$toDUT) + 1]
+            } else {
+                set trunkLinkCount($fromDUT,$toDUT) 1
+            }
+            if {[regexp -nocase "$chassis|vpex" $DUTs_info(DUT${dutNumber},platform)]} {
+                set portSlot [lindex [split [GetATrunkPort $fromDUT $toDUT $trunkLinkCount($fromDUT,$toDUT)] :] 0];
+                set Trunk_Info(Map${fromDUT}${toDUT}$trunkLinkCount($fromDUT,$toDUT),BcomType) $DUTs_info(DUT${dutNumber},BcomType_slot${portSlot})
+                if {$saveMode} {puts $MAIN(ifPipe) "set Trunk_Info(Map${fromDUT}${toDUT}$trunkLinkCount($fromDUT,$toDUT),BcomType) \
+                           $DUTs_info(DUT${dutNumber},BcomType_slot${portSlot})";}
+                set Trunk_Info(Map${fromDUT}${toDUT}$trunkLinkCount($fromDUT,$toDUT),BcomGen) $DUTs_info(DUT${dutNumber},BcomGen_slot${portSlot})
+                if {$Trunk_Info(Map${fromDUT}${toDUT}$trunkLinkCount($fromDUT,$toDUT),BcomGen) != "NewGen"} {
+                    set DUTs_info(DUT${dutNumber},BcomNewGen) 0
+                }
+                if {$saveMode} {puts $MAIN(ifPipe) "set Trunk_Info(Map${fromDUT}${toDUT}$trunkLinkCount($fromDUT,$toDUT),BcomGen) \
+                           $DUTs_info(DUT${dutNumber},BcomGen_slot${portSlot})";}
+                set Trunk_Info(Map${fromDUT}${toDUT}$trunkLinkCount($fromDUT,$toDUT),sysType) $DUTs_info(DUT${dutNumber},slotType_slot${portSlot})
+                if {$saveMode} {puts $MAIN(ifPipe) "set Trunk_Info(Map${fromDUT}${toDUT}$trunkLinkCount($fromDUT,$toDUT),sysType) \
+                            $DUTs_info(DUT${dutNumber},slotType_slot${portSlot})";}
+                #
+                set DutPort_Info(${dutNumber},${thePort},BcomType) $DUTs_info(DUT${dutNumber},BcomType_slot${portSlot})
+                set DutPort_Info(${dutNumber},${thePort},mpls)     $DUTs_info(DUT${dutNumber},mpls_slot${portSlot})
+                set DutPort_Info(${dutNumber},${thePort},BcomGen)  $DUTs_info(DUT${dutNumber},BcomGen_slot${portSlot})
+                set DutPort_Info(${dutNumber},${thePort},sysType)  $DUTs_info(DUT${dutNumber},slotType_slot${portSlot})
+            } else {
+                set Trunk_Info(Map${fromDUT}${toDUT}$trunkLinkCount($fromDUT,$toDUT),BcomType) $DUTs_info(DUT${dutNumber},BcomType)
+                if {$saveMode} {puts $MAIN(ifPipe) "set Trunk_Info(Map${fromDUT}${toDUT}$trunkLinkCount($fromDUT,$toDUT),BcomType) \
+                           $DUTs_info(DUT${dutNumber},BcomType)";}
+                set Trunk_Info(Map${fromDUT}${toDUT}$trunkLinkCount($fromDUT,$toDUT),BcomGen) $DUTs_info(DUT${dutNumber},BcomGen)
+                if {$Trunk_Info(Map${fromDUT}${toDUT}$trunkLinkCount($fromDUT,$toDUT),BcomGen) != "NewGen"} {
+                    set DUTs_info(DUT${dutNumber},BcomNewGen) 0
+                }
+                if {$saveMode} {puts $MAIN(ifPipe) "set Trunk_Info(Map${fromDUT}${toDUT}$trunkLinkCount($fromDUT,$toDUT),BcomGen) \
+                           $DUTs_info(DUT${dutNumber},BcomGen)";}
+                set Trunk_Info(Map${fromDUT}${toDUT}$trunkLinkCount($fromDUT,$toDUT),sysType) $DUTs_info(DUT${dutNumber},sysType)
+                if {$saveMode} {puts $MAIN(ifPipe) "set Trunk_Info(Map${fromDUT}${toDUT}$trunkLinkCount($fromDUT,$toDUT),sysType) \
+                           $DUTs_info(DUT${dutNumber},sysType)";}
+                #
+                set DutPort_Info(${dutNumber},${thePort},BcomType) $DUTs_info(DUT${dutNumber},BcomType)
+                set DutPort_Info(${dutNumber},${thePort},mpls)     $DUTs_info(DUT${dutNumber},mpls_capable)
+                set DutPort_Info(${dutNumber},${thePort},BcomGen)  $DUTs_info(DUT${dutNumber},BcomGen)
+                set DutPort_Info(${dutNumber},${thePort},sysType)  $DUTs_info(DUT${dutNumber},sysType)
+            }
+        }
+    }
+}
+
+
+##################################################################
+# Procedure Name: CheckPortIdsBComOldGen
+# Description: Return a 0 if all port IDs are Firebolt or Helix.
+#
+# 
+# Input args: - delimited portID range
+# Output args: none
+# Return value: 0 if all Firebolt Helix 1 if not
+# Typical usage:
+#       CheckPortIdsBComOldGen 1-2;
+# Category: Utility
+##################################################################
+proc CheckPortIdsBComOldGen {{idList "1"}} {
+   global PortID_Info
+   global Trunk_Info
+
+   set ok 1
+   set idRange [split $idList -];
+   set rangeLow [lindex $idRange 0];
+   
+   if {[llength $idRange] > 1} {
+      set rangeHigh [lindex $idRange 1]
+      for {set x $rangeLow} {$x<=$rangeHigh} {incr x} {
+         if {![CheckPortId5Thru8] && $x > 4 && $x < 9} {
+            continue;
+         }
+         if {$PortID_Info($x,BcomGen) != "OldGen"} {
+            #result_debug "PortID_Info $x = $PortID_Info($x,BcomGen)"
+            set ok 0;
+         }
+      }
+   } else {
+      foreach id $idList {
+         if {![CheckPortId5Thru8] && $id > 4 && $id < 9} {
+            continue;
+         }
+         if {$PortID_Info($id,BcomGen) != "OldGen"} {
+            #result_debug "PortID_Info $id = $PortID_Info($id,BcomGen)"
+            set ok 0;
+         }
+      }
+   }
+
+   if {$ok} {
+      result_debug "All Ports OldGen Broadcom Passed"
+   }  else {
+      result_debug "Some Ports are NOT OldGen"
+   }
+   return $ok
+}
+##################################################################
+# Procedure Name: CheckPortIdsBComNewGen
+# Description: Return a 1 if all port IDs are Firebolt or Helix.
+#
+#
+# Input args: - delimited portID range
+# Output args: none
+# Return value: 1 if all Firebolt Helix 0 if not
+# Typical usage:
+#       CheckPortIdsBComNewGen 1-2;
+# Category: Utility
+##################################################################
+proc CheckPortIdsBComNewGen {{idList "1"}} {
+   global PortID_Info
+   global Trunk_Info
+
+   set ok 1
+   set idRange [split $idList -];
+   set rangeLow [lindex $idRange 0];
+   
+   if {[llength $idRange] > 1} {
+      set rangeHigh [lindex $idRange 1]
+      for {set x $rangeLow} {$x<=$rangeHigh} {incr x} {
+         if {![CheckPortId5Thru8] && $x > 4 && $x < 9} {
+            continue;
+         }
+         if {$PortID_Info($x,BcomGen) != "NewGen"} {
+            #result_debug "PortID_Info $x = $PortID_Info($x,BcomGen)"
+            set ok 0;
+         }
+      }
+   } else {
+      foreach id $idList {
+         if {![CheckPortId5Thru8] && $id > 4 && $id < 9} {
+            continue;
+         }
+         if {$PortID_Info($id,BcomGen) != "NewGen"} {
+            #result_debug "PortID_Info $id = $PortID_Info($id,BcomGen)"
+            set ok 0;
+         }
+      }
+   }
+
+   if {$ok} {
+      result_debug "All Ports NewGen Broadcom Passed"
+   }  else {
+      result_debug "Some Ports are NOT NewGen"
+   }
+   return $ok
+}
+##################################################################
+# Procedure Name: CheckTrunkPortBComNewGen
+# Description: Return a 1 if the trunk is Firebolt or Helix.
+#
+#
+# Input args: - trunk string "1 2 1"
+# Output args: none
+# Return value: 1 if Firebolt Helix 0 if not
+# Typical usage:
+#       CheckTrunkPortBComNewGen "1 2 1";
+# Category: Utility
+##################################################################
+proc CheckTrunkPortBComNewGen {{trunkList {"1 2 1"}}} {
+   global PortID_Info
+   global Trunk_Info
+
+   set ok 1
+   foreach trunk $trunkList {
+      set tMap Map[join $trunk ""];
+      if {$Trunk_Info($tMap,BcomGen) != "NewGen"} {
+         result_debug "Trunk_Info $tMap = $Trunk_Info($tMap,BcomGen)"
+         set ok 0;
+      }
+   }
+   if {$ok} {
+      result_debug "All Ports NewGen Broadcom Passed"
+   }
+   return $ok
+}
+##################################################################
+# Procedure Name: CheckNewGenBcomTestOK
+# Description: If ports are broadcom, but not newgen broadcom
+#              exit the test.
+#
+#
+# Input args: - type, dut, portId trunkList testno time1
+# Output args: none
+# Return value: return
+# Typical usage:
+#       CheckNewGenBcomTestOK -type port -dut 1 -portID 1-2 \
+#                             -testNo $testNo -time1 $time1
+#                      OR
+#       CheckNewGenBcomTestOK -type trunk -trunkList {"1 2 1" "1 2 2"} \
+#                             -testNo $testNo -time1 $time1
+#                      OR
+#       CheckNewGenBcomTestOK -type both -dut 1 -portID 1-2 \
+#                             -trunkList {"1 2 1" "1 2 2"} \
+#                             -testNo $testNo -time1 $time1
+# Category: Utility
+##################################################################
+proc CheckNewGenBcomTestOK {args} {
+   parse_args CheckNewGenBcomTestOK $args {
+     type         "both"
+     dut          "1"
+     portID       "1"
+     trunkList    "{1 2 1}"
+     testNo       ""
+     time1        ""
+     checkVersion "1"
+     versionStart "11.7.0.0"
+   }
+global bcmPlatform
+global DUTs_info
+
+set exitTests 0;
+if {![regexp -nocase "$bcmPlatform" $DUTs_info(DUT${dut},platform)]} {
+   result_debug "\nThis is NOT a Broadcom TestBed\n"
+   return 0;
+} else {
+   result_debug "\nThis IS a Broadcom TestBed\n"
+   if {$checkVersion && [CompareRelease [GetVersion DUT1] $versionStart]<0} {
+      result_debug "Version Not Supported"
+      set exitTests 1;
+   } elseif {$type == "port"} {
+      if {![CheckPortIdsBComNewGen $portID]} {
+         result_debug "PORTID Not Supported"
+         set exitTests 1;
+      }
+   } elseif {$type == "trunk"} {
+      if {![CheckTrunkPortBComNewGen $trunkList]} {
+         result_debug "TRUNK PORT Not Supported"
+         set exitTests 1;
+      }
+   } else {
+      if {![CheckPortIdsBComNewGen $portID] || ![CheckTrunkPortBComNewGen $trunkList]} {
+         set exitTests 1;
+      }
+   }
+   if {$exitTests} {
+            result_debug "Skipped Test: DUT Hardware Does Not Support This Test"
+            report_start_test "Skipped Test: DUT $dut Hardware Does Not Support This Test"
+            result_skip "Skipped Test: DUT $dut Hardware Does Not Support This Test"
+            report_end_test
+            set time2 [clock seconds]
+            result_p "Time for $testNo = [expr $time2-$time1] secs\n\n"
+            close_result_file
+            report_end_test
+            return -code return
+   } else {
+      result_debug "NEW GEN Broadcom Test Case"
+      return 1;
+   }
+}
+}
+
+
+
+##################################################################
+# Procedure Name: CheckNewGenBcomFeatureOK
+# Description: If ports are not newgen broadcom
+#              exit the test.
+#
+#
+# Input args: - type, dut, portId trunkList testno time1
+# Output args: none
+# Return value: return
+# Typical usage:
+#       CheckNewGenBcomFeatureOK -type port -dut 1 -portID 1-2 \
+#                             -testNo $testNo -time1 $time1
+#                      OR
+#       CheckNewGenBcomFeatureOK -type trunk -trunkList {"1 2 1" "1 2 2"} \
+#                             -testNo $testNo -time1 $time1
+#                      OR
+#       CheckNewGenBcomFeatureOK -type both -dut 1 -portID 1-2 \
+#                             -trunkList {"1 2 1" "1 2 2"} \
+#                             -testNo $testNo -time1 $time1
+# Category: Utility
+##################################################################
+proc CheckNewGenBcomFeatureOK {args} {
+   parse_args CheckNewGenBcomFeatureOK $args {
+     type         "both"
+     dut          "1"
+     portID       "1"
+     trunkList    "{1 2 1}"
+     testNo       ""
+     time1        ""
+   }
+   global bcmPlatform
+   global DUTs_info
+   
+   set exitTests 0;
+   if {![regexp -nocase "$bcmPlatform" $DUTs_info(DUT${dut},platform)]} {
+      result_debug "\nThis is NOT a Broadcom TestBed Skip This Module\n"
+      set exitTests 1;
+   } elseif {$type == "port"} {
+      if {![CheckPortIdsBComNewGen $portID]} {
+         set exitTests 1;
+      }
+   } elseif {$type == "trunk"} {
+      if {![CheckTrunkPortBComNewGen $trunkList]} {
+         set exitTests 1;
+      }
+   } else {
+      if {![CheckPortIdsBComNewGen $portID] || ![CheckTrunkPortBComNewGen $trunkList]} {
+         set exitTests 1;
+      }
+   }
+   if {$exitTests} {
+            result_debug "Skipped Test: DUT $dut Hardware Does Not Support This Test"
+            report_start_test "Skipped Test: DUT $dut Hardware Does Not Support This Test"
+            result_skip "Skipped Test: DUT $dut Hardware Does Not Support This Test"
+            report_end_test
+            set time2 [clock seconds]
+            result_p "Time for $testNo = [expr $time2-$time1] secs\n\n"
+            close_result_file
+            report_end_test
+            return -code return testSkipped
+   } else {
+      result_debug "NEW GEN Broadcom Hardware.  Continue with Test"
+      return 1;
+   }
+
+}
+
+
+
+##################################################################
+# Procedure Name: CheckBcomExit
+# Description: If the dut is a broadcom, exit the test 
+#
+#
+#
+# Input args: - dut testno time1
+# Output args: none
+# Return value: return
+# Typical usage:
+#       CheckBcomExit 1 $testNo $time1
+# Category: Utility
+##################################################################
+proc CheckBcomExit {{dut 1} testNo time1} {
+global bcmPlatform
+global DUTs_info
+
+if {[regexp -nocase "$bcmPlatform" $DUTs_info(DUT${dut},platform)]} {
+   result_debug "Skipped Test: This Test Is Not Valid For Broadcom Test Beds"
+   report_start_test "Skipped Test: This Test Is Not Valid For Broadcom Test Beds"
+   result_skip "Skipped Test: This Test Is Not Valid For Broadcom Test Beds"
+   report_end_test
+   set time2 [clock seconds]
+   result_p "Time for $testNo = [expr $time2-$time1] secs\n\n"
+   close_result_file
+   report_end_test
+   return -code return
+}
+   
+}
+
+#####################################################################
+#procedure Name: GetChassisSameChip   
+# Description: Determines if 2 ports are on the same aspen slot
+#              chip.  This is important in some cases like ACL counters.      
+# Input args: port1 port2
+# Output args: none
+# Return value: 1 ports are on same chip, 0 ports are NOT on same chip
+# Typical usage: 
+#	if {[GetChassisSameChip [MapDUTPortId 1] [MapDUTPortId 4]]} {set c [expr $c*2]}      
+# Category: Utility
+##################################################################
+proc GetChassisSameChip {portNum1 portNum2} {
+global bcmChassis
+global DUTs_info
+global stacking
+global bcmJaguar
+global bcmPanther
+global bcmx650
+global bcmLynx
+global bcmx480
+global bcmx670
+global bcmx440
+global bcmx460
+global bcmxE4G
+global bcmx770
+
+################### ASPEN PLATFORM #########################
+
+set NoAsicCheckNeededPlatforms "10G1Xc 8900-G48X-xl 8900-G48T-xl G8Xc G24Xc 8500-G24X-e 10G4x XCM888F XCM8824F 8900-40G6X-xm"
+set twoAsicPlatform_Type1 "10G4Xa 10G4Ca 10G4Xc"
+set twoAsicPlatform_Type2 "G48Ta G48Xa G48Xc G48Tc G48Te2 G48Te G48Te 8500-G48T-e XCM8848T BDXA-10G48X-0 BDXA-10G48X BDXA-10G48T"
+set twoAsicPlatform_Type3 "BDXA-40G12X"
+set fourAsicPlatform "G48P G48T"
+set fourAsicPlatform_Type2 "BDXA-40G24X"
+set fourAsicPlatform_Type3 "BDXC-40G12X-XL"
+set fourAsicPlatform_Type4 "BDXB-100G4X BDXB-100G4X-XL BDXC-100G4X-XL"
+set diffAsicsPlatforms "10G8Xc 8900-G96T-c 8900-10G8X-xl 8900-10G24X-c G24x XCM8808X"
+
+## Ports for twoAsicPlatform_Type1
+
+set twoAsicPlatform_Type1_Asic1 "1 2"
+set twoAsicPlatform_Type1_Asic2 "3 4"
+
+## Ports for twoAsicPlatform_Type2 (BDX8 10G48X will use this too)
+set twoAsicPlatform_Type2_Asic1 "1 2 3 4 5 6 7 8 9 10 11 12 25 26 27 28 29 30 31 32 33 34 35 36"
+set twoAsicPlatform_Type2_Asic2 "13 14 15 16 17 18 19 20 21 22 23 24 37 38 39 40 41 42 43 44 45 46 47 48"
+
+## Ports for twoAsicPlatform_Type3 (Added for BDX8 40G12X)
+set twoAsicPlatform_Type3_Asic1 "1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24"
+set twoAsicPlatform_Type3_Asic2 "25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48"
+
+## Ports for fourAsicPlatform
+
+set fourAsicPlatform_Asic1 "1 2 3 4 5 6 25 26 27 28 29 30"
+set fourAsicPlatform_Asic2 "7 8 9 10 11 12 31 32 33 34 35 36"
+set fourAsicPlatform_Asic3 "13 14 15 16 17 18 37 38 39 40 41 42"
+set fourAsicPlatform_Asic4 "19 20 21 22 23 24 43 44 45 46 47 48"
+
+## Ports for fourAsicPlatform Type2 (defined for BDX8 40G24X)
+set fourAsicPlatform_Type2_Asic1 "49 50 51 52 53 54 55 56 57 58 59 60 61 62 63 64 65 66 67 68 69 70 71 72"
+set fourAsicPlatform_Type2_Asic2 "73 74 75 76 77 78 79 80 81 82 83 84 85 86 87 88 89 90 91 92 93 94 95 96"
+set fourAsicPlatform_Type2_Asic3 "1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24"
+set fourAsicPlatform_Type2_Asic4 "25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48"
+
+## Port for fourAsicPlatform Type3
+set fourAsicPlatform_Type3_Asic1 "1 2 3 4 5 6 7 8 9 10 11 12"
+set fourAsicPlatform_Type3_Asic2 "13 14 15 16 17 18 19 20 21 22 23 24"
+set fourAsicPlatform_Type3_Asic3 "25 26 27 28 29 30 31 32 33 34 35 36"
+set fourAsicPlatform_Type3_Asic4 "37 38 39 40 41 42 43 44 45 46 47 48"
+
+## Ports for fourAsicPlatform Type4
+set fourAsicPlatform_Type4_Asic1 "1 2 3 4 5 6 7 8 9 10"
+set fourAsicPlatform_Type4_Asic2 "11 12 13 14 15 16 17 18 19 20"
+set fourAsicPlatform_Type4_Asic3 "21 22 23 24 25 26 27 28 29 30"
+set fourAsicPlatform_Type4_Asic4 "31 32 33 34 35 36 37 38 39 40"
+
+## Ports for diffAsicsPlatform
+
+set firebolt2_10G8xc_Asic1 "1 2"
+set firebolt2_10G8xc_Asic2 "3 4"
+set firebolt2_10G8xc_Asic3 "5 6"
+set firebolt2_10G8xc_Asic4 "7 8"
+
+set Triumph_G96tc_Asic1 "1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48"
+set Triumph_G96tc_Asic2 "49 50 51 52 53 54 55 56 57 58 59 60 61 62 63 64 65 66 67 68 69 70 71 72 73 74 75 76 77 78 79 80 81 82 83 84 85 86 87 88 89 90 91 92 93 94 95 96"
+
+set Triumph_8900_10G8X_Asic1 "1 2 3 4"
+set Triumph_8900_10G8X_Asic2 "5 6 7 8"
+
+set Scorpion_10G24X_Asic1 "1 2 3 4 5 6 7 8 9 10 11 12"
+set Scorpion_10G24X_Asic2 "13 14 15 16 17 18 19 20 21 22 23 24"
+
+set oldgen_G24x_Asic1 "1 2 3 4 5 6 13 14 15 16 17 18"
+set oldgen_G24x_Asic2 "7 8 9 10 11 12 19 20 21 22 23 24"
+
+
+######################### Stacking platform #########################
+
+set napaChip1 "1 2 3 4 5 6 7 8 9 10 11 12 25 26 27 28 29 30 31 32 33 34 35 36"
+set napaChip2 "13 14 15 16 17 18 19 20 21 22 23 24 37 38 39 40 41 42 43 44 45 46 47 48"
+set jagChip1 "1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24"
+set jagChip2 "25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50"
+
+
+##setting port for couger/Leaport platform
+
+set oldGenPlatform "X450-24T|X450-24X"
+
+set oldgenChip1 "1 2 3 4 5 6 7 8 9 10 11 12"
+set oldgenChip2 "13 14 15 16 17 18 19 20 21 22 23 24"
+set oldgenChip3 "25 26"
+
+##setting port for Tiger SSns
+
+set tig24XChip1_ss "1 2 3 4 5 6 7 8 9 10 11 12"
+set tig24XChip2_ss "13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28"
+
+set tig24TChip1_ss "1 3 5 7 9 11 13 15 17 19 21 23 25 26 27 28"
+set tig24TChip2_ss "2 4 6 8 10 12 14 16 18 20 22 24"
+
+##setting ports for Tiger 10G8x
+
+set tig24XChip1_10g8x "1 2 3 4 5 6 7 8 9 10 11 12"
+set tig24XChip2_10g8x "13 14 15 16 17 18 19 20 21 22 23 24"
+
+set tig24TChip1_10g8x "1 3 5 7 9 11 13 15 17 19 21 23"
+set tig24TChip2_10g8x "2 4 6 8 10 12 14 16 18 20 22 24"
+
+set tig24TXChip3_10g8x "25 26 27 28 29 30 31 32"
+
+##setting ports for Sylvester 10G4x
+
+set sylvester24Chip1_10G4x "1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26"
+set sylvester24Chip2_10G4x "27 28 29 30"
+
+set sylvester48Chip1_10G4x "1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48"
+set sylvester48Chip2_10G4x "49 50 51 52"
+
+##setting port for Ocelot 48X/T/P
+
+set ocelot48XTPChip1 "1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24"
+set ocelot48XTPChip2 "25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52 53 54"
+
+result_debug "Platform Name $DUTs_info(DUT1,platform)"
+if [regexp -nocase "$bcmChassis" $DUTs_info(DUT1,platform)] {
+   result_debug "Hit Chassis Port1: $portNum1 Port2: $portNum2"
+   set portSlot1 [lindex [split $portNum1 :] 0]
+   set portDigit1 [lindex [split $portNum1 :] 1]
+   set portSlot2 [lindex [split $portNum2 :] 0]
+   set portDigit2 [lindex [split $portNum2 :] 1]
+   result_debug "Port1 Slot: $portSlot1  port1: $portDigit1 verses Port2 Slot: $portSlot2  port1: $portDigit2"
+   if {($portSlot1 == $portSlot2) && ($portDigit1 != $portDigit2) } {  ;#skip if slots Nos are not same or ports nos same
+      set slotType [lindex $DUTs_info(DUT1,hwList) [expr $portSlot1 - 1]]
+      result_debug "HWList $DUTs_info(DUT1,hwList)"
+      result_debug "Slot Type = $slotType"
+      if {[regexp -nocase "$stacking" $DUTs_info(DUT1,platform)]} {	
+	 result_debug "now checking in Stacking Platform"      
+         if {[regexp -nocase "$bcmJaguar" $slotType] || \
+             [regexp -nocase "$bcmPanther" $slotType] || \
+             [regexp -nocase "$bcmLynx" $slotType)]} {
+            if {[regexp -nocase "24" $slotType]} {
+               result_debug "All ports are on the same chip in $DUTs_info(DUT1,platform)"
+               return 1
+            } else {
+               result_debug "Firebolt/Helix - Check if ports are on the same chip"
+               if {[lsearch $jagChip1 $portDigit1] != -1 && [lsearch $jagChip1 $portDigit2] != -1} {
+                  result_debug "\nSame Chip"
+                  return 1
+               } elseif {[lsearch $jagChip2 $portDigit1] != -1 && [lsearch $jagChip2 $portDigit2] != -1} {
+                  result_debug "\nSame Chip"
+                  return 1;
+               } else {
+                  result_debug "\nNOT On the Same Chip"
+                  return 0;
+               }
+            }
+         } elseif {[regexp -nocase "440" $slotType] ||\
+                   [regexp -nocase "430" $slotType] } {
+            result_debug "\n Cobra has only one chip"
+            return 1; 
+         } elseif {[regexp -nocase "430" $slotType] } {
+            result_debug "\n Viper has only one chip"
+            return 1;  
+         } elseif {[regexp -nocase "$bcmx650" $slotType] } {
+            result_debug "checking for different ASIC in tiger platform"
+            if {[regexp -nocase "x650-24x" $slotType]} {
+               result_debug "checking for different ASIC in x650-24x tiger"
+               if {[regexp -nocase "10G8X" $slotType]} {
+                  result_debug "This is 10G8x and so cheking for the third chip"
+                  if {[lsearch $tig24TXChip3_10g8x $portDigit1] != -1 && [lsearch $tig24TXChip3_10g8x $portDigit2] != -1} {
+                     result_debug "\nSame Chip"
+                     return 1;
+                  } elseif {[lsearch $tig24XChip1_10g8x $portDigit1] != -1 && [lsearch $tig24XChip1_10g8x $portDigit2] != -1} {
+                     result_debug "\nSame Chip"
+                     return 1;
+                  } elseif {[lsearch $tig24XChip2_10g8x $portDigit1] != -1 && [lsearch $tig24XChip2_10g8x $portDigit2] != -1} {
+                     result_debug "\nSame Chip"
+                     return 1;
+                  }  else {
+                     result_debug "\nNOT On the Same Chip"
+                     return 0;
+                  }
+               } elseif {[regexp -nocase "SS|SS512|SS256" $slotType]} {
+                  result_debug "This is SS/SS512/SS256 and no need to check for the third chip"
+                  if {[lsearch $tig24XChip1_ss $portDigit1] != -1 && [lsearch $tig24XChip1_ss $portDigit2] != -1} {
+                     result_debug "\nSame Chip"
+                     return 1;
+                  } elseif {[lsearch $tig24XChip2_ss $portDigit1] != -1 && [lsearch $tig24XChip2_ss $portDigit2] != -1} {
+                     result_debug "\nSame Chip"
+                     return 1;
+                  } else {
+                     result_debug "\nNOT On the Same Chip"
+                     return 0;
+                  }
+               } else {
+                  result_debug "unrecognised module present in the switch x650-24X (SSns or 10G8X or SS256 or SS512)"
+                  result_debug "\nNOT On the Same Chip"
+                  return 0;
+               }   
+            } elseif {[regexp -nocase "x650-24t" $slotType]} {
+               result_debug "checking for different ASIC in x650-24T tiger"
+               if {[regexp -nocase "10G8X" $slotType]} {
+                  result_debug "This is 10G8x and checking for the third chip"
+                  if {[lsearch $tig24TXChip3_10g8x $portDigit1] != -1 && [lsearch $tig24TXChip3_10g8x $portDigit2] != -1} {
+                     result_debug "\nSame Chip"
+                     return 1;
+                  } elseif {[lsearch $tig24TChip1_10g8x $portDigit1] != -1 && [lsearch $tig24TChip1_10g8x $portDigit2] != -1} {
+                     result_debug "\nSame Chip"
+                     return 1;
+                  } elseif {[lsearch $tig24TChip2_10g8x $portDigit1] != -1 && [lsearch $tig24TChip2_10g8x $portDigit2] != -1} {
+                     result_debug "\nSame Chip"
+                     return 1;
+                  } else {
+                     result_debug "\nNOT On the Same Chip"
+                     return 0;
+                  }
+	       } elseif {[regexp -nocase "SS|SS512|SS256" $slotType]} {
+                  result_debug "This is SS/SS512/SS256 and no need to check for the third chip"
+                  if {[lsearch $tig24TChip1_ss $portDigit1] != -1 && [lsearch $tig24TChip1_ss $portDigit2] != -1} {
+	             result_debug "\nSame Chip"
+	             return 1;
+                  } elseif {[lsearch $tig24TChip2_ss $portDigit1] != -1 && [lsearch $tig24TChip2_ss $portDigit2] != -1} {
+	             result_debug "\nSame Chip"
+                     return 1;
+                  } else {
+                     result_debug "\nNOT On the Same Chip"
+	             return 0;
+        	  }
+	       } else {
+       	          result_debug "unrecognised module present in the switch x650-24t (SSns or 10G8X or SS256 or SS512)"
+	          result_debug "\nNOT On the Same Chip"
+        	  return 0;
+	       }
+	    } else {
+	       result_debug "it is tiger platform but unknown chipset"
+               result_debug "\nNOT On the Same Chip"
+               return 0;
+  	    }
+         } elseif {[regexp -nocase "$oldGenPlatform" $slotType] } {
+	    result_debug "checking for different ASIC in Couger/Leapord platform"
+	    if {[lsearch $oldgenChip1 $portDigit1] != -1 && [lsearch $oldgenChip1 $portDigit2] != -1} {
+               result_debug "\nSame Chip"
+	       return 1;
+	    } elseif {[lsearch $oldgenChip2 $portDigit1] != -1 && [lsearch $oldgenChip2 $portDigit2] != -1} {
+	       result_debug "\nSame Chip"
+	       return 1;
+	    } elseif {[lsearch $oldgenChip3 $portDigit1] != -1 && [lsearch $oldgenChip3 $portDigit2] != -1} {
+	       result_debug "\nSame Chip"
+	       return 1;
+	    } else {
+	       result_debug "\nNOT On the Same Chip"
+	       return 0;
+	    }
+         } elseif {[regexp -nocase "$bcmx480" $slotType] } {
+	    result_debug "checking for different ASIC in Sylvester platform"
+	    if {[regexp -nocase "10G4X" $slotType]} {
+	       if {[regexp -nocase "24" $slotType]} {
+                  if {[lsearch $sylvester24Chip1_10G4x $portDigit1] != -1 && [lsearch $sylvester24Chip1_10G4x $portDigit2] != -1} {
+                     result_debug "\nSame Chip"
+            	     return 1;
+	          } elseif {[lsearch $sylvester24Chip2_10G4x $portDigit1] != -1 && [lsearch $sylvester24Chip2_10G4x $portDigit2] != -1} {
+                     result_debug "\nSame Chip"
+                     return 1;
+                  } else {
+                     result_debug "\nNOT On the Same Chip"
+                     return 0;
+                  }
+               } else {
+            	 if {[lsearch $sylvester48Chip1_10G4x $portDigit1] != -1 && [lsearch $sylvester48Chip1_10G4x $portDigit2] != -1} {
+                    result_debug "\nSame Chip"
+                    return 1;
+                  } elseif {[lsearch $sylvester48Chip2_10G4x $portDigit1] != -1 && [lsearch $sylvester48Chip2_10G4x $portDigit2] != -1} {
+                     result_debug "\nSame Chip"
+                     return 1;
+                   } else {
+                     result_debug "\nNOT On the Same Chip"
+                     return 0;
+                   }
+               }
+            } else {
+               result_debug "This syslvester have no 10G4X -- so only one ASIC"
+               return 1
+            }
+         } elseif {[regexp -nocase "$bcmx460" $slotType] } {
+            result_debug "checking for different ASIC in Ocelot platform"
+            if {[regexp -nocase "48" $DUTs_info(DUT1,platform)]} {
+               if {[lsearch $ocelot48XTPChip1 $portDigit1] != -1 && [lsearch $ocelot48XTPChip1 $portDigit2] != -1} {
+                  result_debug "\nSame Chip"
+                  return 1;
+                } elseif {[lsearch $ocelot48XTPChip2 $portDigit1] != -1 && [lsearch $ocelot48XTPChip2 $portDigit2] != -1} {
+                  result_debug "\nSame Chip"
+                  return 1;
+                } else {
+                  result_debug "\nNOT On the Same Chip"
+                  return 0;
+                }
+             } else {
+                result_debug "24 port ocelot have only one ASIC"
+                return 1
+             }
+	 } else {
+	    result_debug "\nNo Same Chip Check Necessary for unknown platform"
+	    return 0;
+	 }
+      } else {	      
+	 result_debug "now checking in Aspen & Everest platform"     
+     
+         ##to remove any strings after "(" in slotType variable since we are using lsearch (eg). poe
+         set ws 0
+         set ws [string first "\(" $slotType 0 ]
+         if { $ws > 0 } {
+            set ws [expr $ws-1]
+            set slotType [string range $slotType 0 $ws]
+          }
+
+         if {([lsearch -exact $NoAsicCheckNeededPlatforms $slotType] != -1)} {
+            result_debug "This Slot $slotType has only one ASIC (exception : 10G4x has \
+   	                        4 ASICs, one port in each ASIC)"
+   	    return 1
+         } elseif {([lsearch -exact $twoAsicPlatform_Type1 $slotType] != -1)} {
+            result_debug "This slot $slotType has two asics(twoAsicPlatform_Type1)"
+ 	    if {[lsearch $twoAsicPlatform_Type1_Asic1 $portDigit1] != -1 && [lsearch $twoAsicPlatform_Type1_Asic1 $portDigit2] != -1} {
+               result_debug "\nSame Chip"
+               return 1
+            } elseif {[lsearch $twoAsicPlatform_Type1_Asic2 $portDigit1] != -1 && [lsearch $twoAsicPlatform_Type1_Asic2 $portDigit2] != -1} {
+               result_debug "\nSame Chip"
+               return 1
+            } else {
+               result_debug "\nNOT On the Same Chip--$slotType"
+               return 0
+            }
+         } elseif {([lsearch -exact $twoAsicPlatform_Type2 $slotType] != -1)} {
+      	    result_debug "This slot $slotType has two asics (twoAsicPlatform_Type2)"
+	    if {[lsearch $twoAsicPlatform_Type2_Asic1 $portDigit1] != -1 && [lsearch $twoAsicPlatform_Type2_Asic1 $portDigit2] != -1} {
+               result_debug "\nSame Chip"
+               return 1
+            } elseif {[lsearch $twoAsicPlatform_Type2_Asic2 $portDigit1] != -1 && [lsearch $twoAsicPlatform_Type2_Asic2 $portDigit2] != -1} {
+               result_debug "\nSame Chip"
+               return 1
+            } else {
+               result_debug "\nNOT On the Same Chip--$slotType"
+               return 0
+            }
+         } elseif {([lsearch -exact $twoAsicPlatform_Type3 $slotType] != -1)} {
+             result_debug "This slot $slotType has two asics (twoAsicPlatform_Type3)"
+       if {[lsearch $twoAsicPlatform_Type3_Asic1 $portDigit1] != -1 && [lsearch $twoAsicPlatform_Type3_Asic1 $portDigit2] != -1} {
+               result_debug "\nSame Chip"
+               return 1
+            } elseif {[lsearch $twoAsicPlatform_Type3_Asic2 $portDigit1] != -1 && [lsearch $twoAsicPlatform_Type3_Asic2 $portDigit2] != -1} {
+               result_debug "\nSame Chip"
+               return 1
+            } else {
+               result_debug "\nNOT On the Same Chip--$slotType"
+               return 0
+            }
+         } elseif {([lsearch -exact $fourAsicPlatform $slotType] != -1)} {
+      	    result_debug "This slot $slotType has four asics (fourAsicPlatform) "
+	    if {[lsearch $fourAsicPlatform_Asic1 $portDigit1] != -1 && [lsearch $fourAsicPlatform_Asic1 $portDigit2] != -1} {
+               result_debug "\nSame Chip"
+               return 1
+            } elseif {[lsearch $fourAsicPlatform_Asic2 $portDigit1] != -1 && [lsearch $fourAsicPlatform_Asic2 $portDigit2] != -1} {
+               result_debug "\nSame Chip"
+               return 1
+            } elseif {[lsearch $fourAsicPlatform_Asic3 $portDigit1] != -1 && [lsearch $fourAsicPlatform_Asic3 $portDigit2] != -1} {
+               result_debug "\nSame Chip"
+               return 1
+            } elseif {[lsearch $fourAsicPlatform_Asic4 $portDigit1] != -1 && [lsearch $fourAsicPlatform_Asic4 $portDigit2] != -1} {
+               result_debug "\nSame Chip"
+               return 1
+            } else {
+               result_debug "\nNOT On the Same Chip--$slotType"
+               return 0
+            }
+         } elseif {([lsearch -exact $fourAsicPlatform_Type2 $slotType] != -1)} {
+             result_debug "This slot $slotType has four asics (fourAsicPlatform_Type2) "
+       if {[lsearch $fourAsicPlatform_Type2_Asic1 $portDigit1] != -1 && [lsearch $fourAsicPlatform_Type2_Asic1 $portDigit2] != -1} {
+               result_debug "\nSame Chip"
+               return 1
+            } elseif {[lsearch $fourAsicPlatform_Type2_Asic2 $portDigit1] != -1 && [lsearch $fourAsicPlatform_Type2_Asic2 $portDigit2] != -1} {
+               result_debug "\nSame Chip"
+               return 1
+            } elseif {[lsearch $fourAsicPlatform_Type2_Asic3 $portDigit1] != -1 && [lsearch $fourAsicPlatform_Type2_Asic3 $portDigit2] != -1} {
+               result_debug "\nSame Chip"
+               return 1
+            } elseif {[lsearch $fourAsicPlatform_Type2_Asic4 $portDigit1] != -1 && [lsearch $fourAsicPlatform_Type2_Asic4 $portDigit2] != -1} {
+               result_debug "\nSame Chip"
+               return 1
+            } else {
+               result_debug "\nNOT On the Same Chip--$slotType"
+               return 0
+            }
+         } elseif {([lsearch -exact $fourAsicPlatform_Type3 $slotType] != -1)} {
+      	    result_debug "This slot $slotType has four asics (fourAsicPlatform_Type3) "
+	    if {[lsearch $fourAsicPlatform_Type3_Asic1 $portDigit1] != -1 && [lsearch $fourAsicPlatform_Type3_Asic1 $portDigit2] != -1} {
+               result_debug "\nSame Chip"
+               return 1
+            } elseif {[lsearch $fourAsicPlatform_Type3_Asic2 $portDigit1] != -1 && [lsearch $fourAsicPlatform_Type3_Asic2 $portDigit2] != -1} {
+               result_debug "\nSame Chip"
+               return 1
+            } elseif {[lsearch $fourAsicPlatform_Type3_Asic3 $portDigit1] != -1 && [lsearch $fourAsicPlatform_Type3_Asic3 $portDigit2] != -1} {
+               result_debug "\nSame Chip"
+               return 1
+            } elseif {[lsearch $fourAsicPlatform_Type3_Asic4 $portDigit1] != -1 && [lsearch $fourAsicPlatform_Type3_Asic4 $portDigit2] != -1} {
+               result_debug "\nSame Chip"
+               return 1
+            } else {
+               result_debug "\nNOT On the Same Chip--$slotType"
+               return 0
+            }
+         } elseif {([lsearch -exact $fourAsicPlatform_Type4 $slotType] != -1)} {
+            result_debug "This slot $slotType has four asics (fourAsicPlatform_Type4) "
+            if {[lsearch $fourAsicPlatform_Type4_Asic1 $portDigit1] != -1 && [lsearch $fourAsicPlatform_Type4_Asic1 $portDigit2] != -1} {
+               result_debug "\nSame Chip"
+               return 1
+            } elseif {[lsearch $fourAsicPlatform_Type4_Asic2 $portDigit1] != -1 && [lsearch $fourAsicPlatform_Type4_Asic2 $portDigit2] != -1} {
+               result_debug "\nSame Chip"
+               return 1
+            } elseif {[lsearch $fourAsicPlatform_Type4_Asic3 $portDigit1] != -1 && [lsearch $fourAsicPlatform_Type4_Asic3 $portDigit2] != -1} {
+               result_debug "\nSame Chip"
+               return 1
+            } elseif {[lsearch $fourAsicPlatform_Type4_Asic4 $portDigit1] != -1 && [lsearch $fourAsicPlatform_Type4_Asic4 $portDigit2] != -1} {
+               result_debug "\nSame Chip"
+               return 1
+            } else {
+               result_debug "\nNOT On the Same Chip--$slotType"
+               return 0
+            }
+         } elseif {([lsearch -exact $diffAsicsPlatforms $slotType] != -1)} {
+   	     if {$slotType == "10G8Xc" || $slotType == "XCM8808X"} {	
+	        result_debug "This slot $slotType has four asics (diffAsicsPlatforms)"
+	        if {[lsearch $firebolt2_10G8xc_Asic1 $portDigit1] != -1 && [lsearch $firebolt2_10G8xc_Asic1 $portDigit2] != -1} {
+                   result_debug "\nSame Chip"
+                   return 1
+                } elseif {[lsearch $firebolt2_10G8xc_Asic2 $portDigit1] != -1 && [lsearch $firebolt2_10G8xc_Asic2 $portDigit2] != -1} {
+                   result_debug "\nSame Chip"
+                   return 1
+                } elseif {[lsearch $firebolt2_10G8xc_Asic3 $portDigit1] != -1 && [lsearch $firebolt2_10G8xc_Asic3 $portDigit2] != -1} {
+                   result_debug "\nSame Chip"
+                   return 1
+                } elseif {[lsearch $firebolt2_10G8xc_Asic4 $portDigit1] != -1 && [lsearch $firebolt2_10G8xc_Asic4 $portDigit2] != -1} {
+                   result_debug "\nSame Chip"
+                   return 1
+                } else {
+                   result_debug "\nNOT On the Same Chip--$slotType"
+                   return 0
+                }
+    	     } elseif {$slotType == "8900-G96T-c" } {
+                result_debug "This slot $slotType has two asics (diffAsicsPlatforms)"
+	        if {[lsearch $Triumph_G96tc_Asic1 $portDigit1] != -1 && [lsearch $Triumph_G96tc_Asic1 $portDigit2] != -1} {
+                   result_debug "\nSame Chip"
+                   return 1
+                } elseif {[lsearch $Triumph_G96tc_Asic2 $portDigit1] != -1 && [lsearch $Triumph_G96tc_Asic2 $portDigit2] != -1} {
+                   result_debug "\nSame Chip"
+                   return 1
+                } else {
+                   result_debug "\nNOT On the Same Chip--$slotType"
+                   return 0
+                }
+   	     } elseif {$slotType == "8900-10G8X-xl" } {
+                result_debug "This slot $slotType has two asics (diffAsicsPlatforms)"
+	        if {[lsearch $Triumph_8900_10G8X_Asic1 $portDigit1] != -1 && [lsearch $Triumph_8900_10G8X_Asic1 $portDigit2] != -1} {
+                   result_debug "\nSame Chip"
+                   return 1
+                } elseif {[lsearch $Triumph_8900_10G8X_Asic2 $portDigit1] != -1 && [lsearch $Triumph_8900_10G8X_Asic2 $portDigit2] != -1} {
+                   result_debug "\nSame Chip"
+                   return 1
+                } else {
+                   result_debug "\nNOT On the Same Chip--$slotType"
+                   return 0
+                }		  
+  	     } elseif {$slotType == "8900-10G24X-c" } {	 
+                result_debug "This slot $slotType has two asics (diffAsicsPlatforms)"
+   	        if {[lsearch $Scorpion_10G24X_Asic1 $portDigit1] != -1 && [lsearch $Scorpion_10G24X_Asic1 $portDigit2] != -1} {
+                   result_debug "\nSame Chip"
+                   return 1
+                } elseif {[lsearch $Scorpion_10G24X_Asic2 $portDigit1] != -1 && [lsearch $Scorpion_10G24X_Asic2 $portDigit2] != -1} {
+                   result_debug "\nSame Chip"
+                   return 1
+                } else {
+                   result_debug "\nNOT On the Same Chip--$slotType"
+                   return 0
+                }			  
+   	     } elseif {$slotType == "G24x" } {	
+                result_debug "This slot $slotType has two asics (diffAsicsPlatforms)"
+	        if {[lsearch $oldgen_G24x_Asic1 $portDigit1] != -1 && [lsearch $oldgen_G24x_Asic1 $portDigit2] != -1} {
+                   result_debug "\nSame Chip"
+                } elseif {[lsearch $oldgen_G24x_Asic2 $portDigit1] != -1 && [lsearch $oldgen_G24x_Asic2 $portDigit2] != -1} {
+                   result_debug "\nSame Chip"
+                   return 1
+                } else {
+                   result_debug "\nNOT On the Same Chip--$slotType"
+                   return 0
+                }		  
+             } else {
+                result_debug "This slot $slotType found in diffAsicsPlatforms-but not able to find the asic info"
+                return 0
+             }	     
+         } else {
+            result_debug "Unknown blade type.Please check the slot type"
+            return 0
+         }
+      }	 
+   } else {
+      result_debug "ports supplied are in different slots or both ports are same: no ASIC check necessary"
+      return 0
+   }
+} else {
+   result_debug "This is not a Chassis platform : check with the checkbcomsamechip proc"
+   return 0
+}
+
+}

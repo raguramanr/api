@@ -1,0 +1,221 @@
+
+################################################################## 
+# Procedure Name: check_auto_lock
+#   
+# Description:  Verify the contents of the autolock file.
+#               Linux only
+#     
+#
+# Input args: none
+# Output args: none
+# Typical usage: release_auto_lock
+# 
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc check_auto_lock {} {
+	global tcl_platform
+
+	if {$tcl_platform(platform) == "windows"} {
+		return 0
+	}
+
+	set pid 0
+	
+	if [file exists /tmp/sqa_automation_lock] {
+		set fid [open /tmp/sqa_automation_lock "r"]
+		set pid [read $fid]
+		close $fid
+		if {![file exists "/proc/$pid"]} {
+			return 0
+		}
+	}
+
+	return $pid
+}
+
+################################################################## 
+# Procedure Name: grab_auto_lock
+#   
+# Description:  Set file locks at the beginning of an automation module.
+#               Linux only
+#     
+#
+# Input args: none
+# Output args: none
+# Typical usage: release_auto_lock
+# 
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc grab_auto_lock {} {
+	global tcl_platform
+
+	if {$tcl_platform(platform) == "windows"} {
+		return
+	}
+
+	set fid [open /tmp/sqa_automation_lock "w"]
+	puts -nonewline $fid [pid]
+	close $fid
+	file attributes /tmp/sqa_automation_lock -permissions 0666
+}
+
+################################################################## 
+# Procedure Name: release_auto_lock
+#   
+# Description:  Release file locks at the end of an automation module.
+#               Linux only
+#     
+#
+# Input args: none
+# Output args: none
+# Typical usage: release_auto_lock
+# 
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc release_auto_lock {} {
+	global tcl_platform
+
+	if {$tcl_platform(platform) == "windows"} {
+		return
+	}
+
+	if [file exists /tmp/sqa_automation_lock] {
+		file delete /tmp/sqa_automation_lock
+	}
+}
+################################################################## 
+# Procedure Name: acquire_lock
+#   
+# Description:  Create a lockid.  If the lockid is already created
+#               return 0
+#
+# Input args: none
+# Output args: none
+# Typical usage: if [acquire_lock 231] 
+# 
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc acquire_lock {LOCKID} {
+    
+    global LOCK_SOCKET
+    
+    set PORT [_lockPortMap "$LOCKID"]
+    
+    # 'socket already in use' error will be our lock detection mechanism
+    if { [catch {socket -server _dummy_accept $PORT} SOCKET] } {
+        puts "Could not aquire lock port $PORT Socket $SOCKET lockID $LOCKID"
+        return 0
+    }
+    puts "\n~~~~~~~~~~~\n~~~~~~~~~~~\n~~~~~~~~~~~\n\
+          Successfully Got a SOCKET $SOCKET \n\
+          ~~~~~~~~~~~\n~~~~~~~~~~~\n~~~~~~~~~~~" 
+    set LOCK_SOCKET("$LOCKID") "$SOCKET"
+    return 1
+}
+
+################################################################## 
+# Procedure Name: release_lock
+#   
+# Description:  Delete a lockid.  If it fails
+#               return 0
+#   Release a lock (assumes you actually hold the lock):
+# Input args: none
+# Output args: none
+# Typical usage: if [release_lock 231] 
+# 
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc release_lock {LOCKID} {
+    global LOCK_SOCKET
+    if { ($LOCKID != "null") && [catch {close $LOCK_SOCKET("$LOCKID")} ERRORMSG] } {
+        puts "Error '$ERRORMSG' on closing socket for lock '$LOCKID'"
+        return 0
+    } elseif {$LOCKID != "null"} {
+        puts "\n~~~~~~~~~~~\n~~~~~~~~~~~\n~~~~~~~~~~~\n\
+          Successfully Released SOCKET $LOCK_SOCKET("$LOCKID") with LOCKID $LOCKID\n\
+          ~~~~~~~~~~~\n~~~~~~~~~~~\n~~~~~~~~~~~"
+        unset LOCK_SOCKET("$LOCKID")
+        return 1
+    } else {
+        return 1        
+    }
+}
+##################################################################
+#  Procedure Name: verify_release_lock
+#  - Check to see if this release lock worked
+#
+# Input args: list of partner cfgs
+# Output args: none
+# Typical usage:
+#           verify_release_lock LOCKID
+# Category: Setup
+##################################################################
+proc verify_release_lock {{LOCKID}} {
+    global LOCK_SOCKET
+
+    set nsLine [catch {exec netstat -an | egrep -e "$LOCKID" | grep -v grep} psout]
+    if {[regexp -nocase "tcp" [lindex $psout 0]]} {
+        puts "\n!!!!!!!!\n!!!!!!!!!\n THE LOCK IS STILL IN PLACE FOR ID $LOCKID\n!!!!!!!!\n!!!!!!!!!"
+        return 0;
+    }
+    return 1;
+}
+################################################################## 
+# Procedure Name: _lockPortMap
+#   
+# Description:  
+#   #Map LOCKID to an O/S socket:
+#
+# Input args: none
+# Output args: none
+# Typical usage:  
+# 
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Internal
+##################################################################
+proc _lockPortMap {LOCKID} {
+    # calculate our 'unique' port number using a hash function.
+    # this mapping function comes from dr. KNUTH's art of programming volume 3.
+    set LEN [string length $LOCKID]
+    set HASH $LEN
+    
+    for {set IDX 0} {$IDX < $LEN} {incr IDX} {
+        scan [string index "$LOCKID" $IDX] "%c" ASC
+        set HASH [expr (($HASH<<5)^($HASH>>27))^$ASC];
+    }
+    # always use a prime for remainder
+    # note that the prime number used here will basicly determine the maximum
+    # number of simultaneous locks
+    return [expr (65535 - ($HASH % 101))]
+}
+
+################################################################## 
+# Procedure Name: _dummy_accept
+#   
+# Description:  
+# Server call-back function (that does nothing at all):
+#
+# Input args: none
+# Output args: none
+# Typical usage:  
+# 
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Internal
+##################################################################
+proc _dummy_accept {newsock addr port} {
+}

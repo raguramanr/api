@@ -1,0 +1,161 @@
+#!/usr/bin/tclsh
+
+
+source ../Lib/parse_args.tcl
+source ../Lib/mysqlLib.tcl
+set cfgFile ../main/runReg.cfg
+
+# Source config file that has Regression PC information
+if [file exists $cfgFile] {
+    puts "Sourcing $cfgFile now"
+    catch {source $cfgFile} reason
+} else {
+    puts "!!! Configuration file $cfgFile not found !!!"
+    return 0
+}
+
+
+global mysqlIP my_db
+set host $mysqlIP
+set db $my_db
+global host mysql_handler
+
+conn_to_db $host $db
+
+parse_args mysqlAutomateAll $argv {
+    regId "null"
+    qId "null"
+    module "no"
+    forstats "no"
+    type "normal"
+    runNumber "-1"
+    manual  "null"
+}
+
+if {$manual != "null"} {
+    puts "Using manual qId to get the regId"
+    set qId $manual
+    set regId [mysqlsel $mysql_handler "SELECT regression_id from regression_table WHERE queue_id = '$qId' " -flatlist]
+    if {[llength $regId] > 1} {
+        catch {flush stdin}
+        set pId 0
+        set uChoice "abc.cfg"
+        puts " "
+        puts -nonewline "You gots to enter a cfg file too.  There are more than on test beds sharing this queueid. \[$uChoice]? "
+        flush stdout;
+        set uChoice [gets stdin];
+        set pId [mysqlsel $mysql_handler "SELECT platform_id from platform_table WHERE platform_cfg_file_name = '$uChoice' AND status = 'Active'" -flatlist]
+        set pId [lindex $pId 0]
+        if {[regexp -nocase "\[0-9]+" $pId]} {
+            set regId [mysqlsel $mysql_handler "SELECT regression_id from regression_table WHERE queue_id = '$qId' AND platform_id = '$pId'" -flatlist]
+        } else {
+            puts "Did not get the platform_id and there was more than 1 regid";
+            exit;
+        }
+        if {[llength $regId] == 1} {
+            puts "Looking good"
+        } else {
+            puts "Still getting more than 1 regid";
+            exit;
+        }
+    }
+    if {$regId == ""} {
+        puts "No regression_id matching for queue_id:$qId"
+        return 0
+    }
+}
+if {$regId == "null" && $qId != "null"} {
+    puts "Using manual qId to get the regId"
+    set regId [mysqlsel $mysql_handler "SELECT regression_id from regression_table WHERE queue_id = '$qId' " -flatlist]
+    if {[llength $regId] > 1} {
+        catch {flush stdin}
+        set pId 0
+        set uChoice "abc.cfg"
+        puts " "
+        puts -nonewline "You gots to enter a cfg file too.  There are more than on test beds sharing this queueid. \[$uChoice]? "
+        flush stdout;
+        set uChoice [gets stdin];
+        set pId [mysqlsel $mysql_handler "SELECT platform_id from platform_table WHERE platform_cfg_file_name = '$uChoice' AND status = 'Active'" -flatlist]
+        set pId [lindex $pId 0]
+        if {[regexp -nocase "\[0-9]+" $pId]} {
+            set regId [mysqlsel $mysql_handler "SELECT regression_id from regression_table WHERE queue_id = '$qId' AND platform_id = '$pId'" -flatlist]
+        } else {
+            puts "Did not get the platform_id and there was more than 1 regid";
+            exit;
+        }
+        if {[llength $regId] == 1} {
+            puts "Looking good"
+        } else {
+            puts "Still getting more than 1 regid";
+            exit;
+        }
+    }
+    if {$regId == ""} {
+        puts "No regression_id matching for queue_id:$qId"
+        return 0
+    }    
+}
+puts "regId $regId"
+set regression_id $regId
+
+
+set regType [mysqlsel $mysql_handler "SELECT feature_type from regression_table WHERE regression_id = '$regression_id' " -flatlist]
+if {$regType == ""} {
+    puts "No regType for regression_id:$regression_id"
+    return 0
+}
+puts "regType: $regType"
+
+set regSubType [mysqlsel $mysql_handler "SELECT feature_sub_type from regression_table WHERE regression_id = '$regression_id' " -flatlist]
+if {$regSubType == ""} {
+    puts "No regSubType for regression_id:$regression_id"
+    return 0
+}
+puts "regSubType: $regSubType"
+if {$type != "web"} {
+    puts "Normal run"
+    set regressionModules [mysqlsel $mysql_handler \
+            "SELECT feature_directory FROM feature_table WHERE feature_type = '$regType' \
+            AND feature_sub_type = '$regSubType' AND status = 'Active' ORDER BY feature_name" -flatlist]
+
+
+    if {$regressionModules == ""} {
+        puts "No modules list for regression_id: $regression_id"
+        return 0
+    }
+    puts "regressionModules: \n$regressionModules\n"
+
+    foreach testModule $regressionModules {
+        if {$module != "no" && $testModule != "$module"} {
+            continue;
+        }
+        puts "\n ==== Uploading testModule $testModule for regId $regression_id ===="
+        if {[catch { exec {tclsh} mysqlAutomate.tcl -regId $regression_id -runNumber $runNumber -manual $manual -qId $qId \
+                                 -module $testModule -forstats $forstats } \
+                                 result]} {
+            puts "mysqlAutomate.tcl returned an error"
+        }
+        
+        puts "RESULTS OF mysqlAutomate: $result"
+    }
+} else {
+    puts "Web update with failAnalysis"
+    if {$module != "no"} {
+        set inFId [mysqlsel $mysql_handler "SELECT feature_id from feature_table WHERE feature_directory = '$module' " -flatlist]
+    }
+    set feature_ids [mysqlsel $mysql_handler \
+      "SELECT feature_id FROM report_table WHERE regression_id = '$regId'" -flatlist]
+    puts "SELECT feature_id FROM report_table WHERE regression_id = '$regId'"
+    puts "Found [llength $feature_ids] features"
+    foreach feature_id $feature_ids {
+        if {$module != "no" && $feature_id != $inFId} {
+            puts "Skipping feature not passed in $feature_id"
+            continue;
+        }
+        set regression_id_url [http_formatQuery regression_id $regId feature_id \
+                               $feature_id run_number 1 forstats $forstats]
+        puts "\n ==== failAnalysis $regression_id_url ===="
+        catch { exec {tclsh} mysqlFailAnalysis.tcl -regression_id $regId -feature_id $feature_id \
+        -run_number 1 -forstats $forstats &} result
+    }
+}

@@ -1,0 +1,503 @@
+
+
+
+##################################################################
+# Procedure Name: GetCFMType
+#
+# Description: Verify the Received Frame is a CFM frame, and get the
+#              Frame type.
+# Note       : This proc is written based on  Draft version 4.1 of
+#               IEEE802.1ag frame structure, This does not support
+#               other draft versions (5.x or 6.0)
+# Input args:
+#              CFM raw Frame
+#
+# Output args:
+#              None
+#
+# Typical usage:
+#              [GetCFMFrame $frame]
+#
+# Category: Utility
+##################################################################
+proc GetCFMType { Frame } {
+set type [string range $Frame 36 40]
+    # -- if tagged, get rid of type and tag field from 36 to 47
+if {$type == "81 00" || $type == "88 A8"} {
+   set type  [string range $Frame 48 52]
+}
+if {$type == "88 B6"} {
+   result_debug "Valid CFM frame Type"
+   return $type
+} elseif {$type == "89 02"} {
+   result_debug "Valid CFM frame Draft 8 Type"
+   return $type
+}
+
+}
+
+
+##################################################################
+# Procedure Name: SendCFMFrame
+#
+# Description: Send A CFM frame to form a single/multiple remote
+#              hosts(remote end points) with the DUT having cfm domain.
+#              The remote host can be formed based on the CFM domain
+#               created in the DUT, after creating cfm domain on DUT
+#               capture CFM frames on ixia and pass on the frame to this 
+#               procedure.
+# Note       : This proc is written based on  Draft version 4.1 of
+#               IEEE802.1ag frame structure, This does not support
+#               other draft versions (5.x or 6.0)
+#
+#
+# Input args: 
+#         txportId -- ixia port Id for transmitting CFM frames
+#		      Note: this port should be part of vlan associated with
+#                           CFM domain in the DUT
+#         srcMac   -- Any 48 bit mac address
+#         Frame    -- CfM frame captured on the ixia port, should be given
+#		      as input, else a default frame is used 
+#        destMac   -- argument "default", CFM frame use multicast addresss
+#                     01:E0:2B:02:00:0x (x is the ma level) as dest address
+#		      Destination address other than the multicast address
+#                     to test CFM can be given as the argument
+#        RemMep   --  Argument to simulate single or multiple(64 rem hosts)
+#		      remote hosts default: single (other arg:multiple)	
+#        saCount "" -- numnber of unique source address for remote hosts 
+#        saMode  "idle" -  use option increment for RemMep=multiple to simulate
+#			   64 remote hosts
+#        UdfContCount -- default is true for RemMep=multiple, arg not needed
+#			 if RemMep=single
+#        UdfEnable -- default is true for RemMep=multiple, arg not needed
+#                        if RemMep=single
+#        UdfInitVal "00"
+#        Opcode "00" -- Default value is 00 for Draft version 4.1 of 802.1ag
+#                       frame, Use this arg to test  values other than 00 
+#                       to verify the behaviour of  cfm 
+#
+#              
+#
+# Output args:
+#              None
+#
+# Typical usage:
+#              SendCFMFrame -txportId 1 -srcMac $sourceMac -Frame $Frame\
+#                           -RemMep "single"
+#              SendCFMFrame -txportId 1 -srcMac $sourceMac -Frame $Frame\
+#                           -RemMep "multiple" -saMode "increment" 
+#			    -saCount "64"
+# Category: Utility
+##################################################################
+
+
+proc SendCFMFrame {args} {
+
+ parse_args SendCFMFrame $args {
+         txportId "1"
+         srcMac   "00 0a 00 00 00 01"
+         Frame    "01 E0 2B 02 00 00 00 04 96 10 C7 00 88 B6 00 00 00 14 00 00\
+                   00 00 44 34 8F F2 06 8F F6 50 00 00 00 00 01 00 23 03 0F 45 \
+                   78 74 72 65 6D 65 4E 65 74 77 6F 72 6B 73 01 00 0F 45 78 74 \
+                   72 65 6D 65 4E 65 74 77 6F 72 6B 73 03 00 04 1F FF 0D AC 05 \
+                   00 01 01 00 1B 84 B4 F4"
+        destMac  "default" 
+        saCount ""
+        saMode  "idle"
+        RemMep "single"
+        UdfContCount "true"
+        saCount ""
+        saMode  "idle"
+        UdfEnable  "true"
+        UdfInitVal "00"
+        Opcode "00"
+        frameRate "null"
+       }
+
+set rawFrame $Frame
+if { $destMac == "default"} {
+   set DestAddr [string range $rawFrame 0 16]
+} else {
+   set DestAddr $destMac
+}
+set FrameLen  [string length $rawFrame]
+set type [string range $rawFrame 36 40]
+set FrameType [GetCFMType $rawFrame]
+set FrameSize [expr $FrameLen/3 +1]
+
+
+if {(($type == "81 00") && ($FrameType == "88 B6"))} {
+   #----- Get the Tagid for the received frame
+   set Tag       [string range $rawFrame 42 46]
+   set Tag       [hextodec [string replace $Tag 2 2 ""]]
+   #----- Get the TLV length in decimal
+   set Tlvlen1   [string range $rawFrame 117 122]
+   set Tlvlen    [string replace $Tlvlen1 2 2 ""]
+   #----Replace CFM  Frame with a value of opcode other than 00  
+   if {$Opcode != "00"} {
+   set rawFrame [ string replace $rawFrame 57 58 $Opcode]
+   } 
+   set tmp1 [hextodec $Tlvlen]
+   #----- Obtain Offset for MEPID from raw frame
+   #      to simulate remote host
+   set tmp2 [expr 123 + $tmp1 * 3 + 9]
+   if {$RemMep == "single"} { 
+      set MepId [hextodec [string range $Frame [expr $tmp2 + 3] [expr $tmp2 + 4]]]
+      incr MepId 2
+      set MepId [dectohex $MepId]
+      if {[string length $MepId] < 2} {
+         set MepIdnew [format "0%x" $MepId]
+      }
+      set rawFrame [string replace $rawFrame [expr $tmp2 + 3] [expr $tmp2 + 4] \
+                 $MepIdnew]
+      #----- Obtain the Datapattern to simulte a CFM MEP
+      set DataPat   [string range $rawFrame 54 $FrameLen]
+   
+      SendFrame  -txPortId $txportId  -sourceMac $srcMac \
+                 -destMac $DestAddr -frameType $FrameType \
+                 -ethernetType "ethernetII" -streamType "contPacket" \
+                 -saCount $saCount -saMode $saMode \
+                 -dataPattern $DataPat -frameSize $FrameSize -tag $Tag \
+                 -frameRate $frameRate
+   } else {
+
+      set Offset [expr [expr $tmp2+4]/3 ];
+      #----- Obtain the Datapattern to simulte a CFM MEP
+      set DataPat   [string range $rawFrame 54 $FrameLen]
+
+      SendFrame   -txPortId $txportId  -sourceMac $srcMac \
+                  -destMac $DestAddr -frameType $FrameType \
+                  -ethernetType "ethernetII" -saMode $saMode \
+                  -saCount $saCount -udfEnable $UdfEnable \
+                  -udfInitval $UdfInitVal \
+                  -udfOffset $Offset -udfContinuousCount $UdfContCount \
+                  -streamType "contPacket" -dataPattern $DataPat \
+                  -frameSize $FrameSize -tag $Tag -frameRate $frameRate
+   }
+
+} elseif {$type == "88 B6"} {
+
+   #----- Get the TLV length in decimal
+   set Tlvlen1   [string range $rawFrame 105 110]
+   set Tlvlen    [string replace $Tlvlen1 2 2 ""]
+
+   #----Replace CFM  Frame with a value of opcode other than 00
+   if {$Opcode != "00"} {
+   set rawFrame [string replace $rawFrame 45 46 $Opcode]
+   }
+   set tmp1 [hextodec $Tlvlen]
+   #----- Obtain Offset for MEPID from raw frame
+   #      to simulate remote host
+   set tmp2 [expr 111 + $tmp1 * 3 + 9]
+   if {$RemMep == "single" } {
+      set MepId [hextodec [string range $Frame [expr $tmp2 + 3] [expr $tmp2 + 4]]]
+      incr MepId 2 
+      set MepId [dectohex $MepId]
+      if {[string length $MepId] < 2} {
+         set MepIdnew [format "0%x" $MepId]
+      }
+      set rawFrame [string replace $rawFrame [expr $tmp2 + 3] [expr $tmp2 + 4] \
+                    $MepIdnew]
+
+   #----- Obtain the Datapattern to simulte a CFM MEP
+      set DataPat   [string range $rawFrame 42 $FrameLen]
+
+      SendFrame  -txPortId $txportId  -sourceMac $srcMac \
+                -destMac $DestAddr -frameType $FrameType \
+                -ethernetType "ethernetII" -streamType "contPacket" \
+                -saCount $saCount -saMode $saMode \
+                -dataPattern $DataPat -frameSize $FrameSize -frameRate $frameRate
+   } else { 
+         
+      set Offset [expr [expr $tmp2+4]/3 ];
+      #----- Obtain the Datapattern to simulte a CFM MEP
+      set DataPat   [string range $rawFrame 42 $FrameLen]
+
+      SendFrame   -txPortId $txportId  -sourceMac $srcMac \
+                  -destMac $DestAddr -frameType $FrameType \
+                  -ethernetType "ethernetII" -saMode $saMode \
+                  -saCount $saCount -udfEnable $UdfEnable \
+                   -udfInitval $UdfInitVal \
+                  -udfOffset $Offset -udfContinuousCount $UdfContCount \
+                  -streamType "contPacket" -dataPattern $DataPat \
+                  -frameSize $FrameSize -frameRate $frameRate
+   }
+  
+}
+}
+
+
+
+##################################################################
+# Procedure Name: SendCFMFrame with draft 8 CFM frame format
+#
+# Description: Send A CFM frame to form a single/multiple remote
+#              hosts(remote end points) with the DUT having cfm domain.
+#              The remote host can be formed based on the CFM domain
+#               created in the DUT, after creating cfm domain on DUT
+#               capture CFM frames on ixia and pass on the frame to this 
+#               procedure.
+# Note       : This proc is written based on  Draft version 4.1 of
+#               IEEE802.1ag frame structure, This does not support
+#               other draft versions (5.x or 6.0)
+#
+#
+# Input args: 
+#         txportId -- ixia port Id for transmitting CFM frames
+#		      Note: this port should be part of vlan associated with
+#                           CFM domain in the DUT
+#         srcMac   -- Any 48 bit mac address
+#         Frame    -- CfM frame captured on the ixia port, should be given
+#		      as input, else a default frame is used 
+#        destMac   -- argument "default", CFM frame use multicast addresss
+#                     01:80:C2:00:00:3x (x is the md level) as dest address
+#		      Destination address other than the multicast address
+#                     to test CFM can be given as the argument
+#        RemMep   --  Argument to simulate single or multiple(64 rem hosts)
+#		      remote hosts default: single (other arg:multiple)	
+#        saCount "" -- numnber of unique source address for remote hosts 
+#        saMode  "idle" -  use option increment for RemMep=multiple to simulate
+#			   64 remote hosts
+#        UdfContCount -- default is true for RemMep=multiple, arg not needed
+#			 if RemMep=single
+#        UdfEnable -- default is true for RemMep=multiple, arg not needed
+#                        if RemMep=single
+#        UdfInitVal "00"
+#        Opcode "01" -- Default value is 01 for Draft version 8 of 802.1ag
+#                       frame, Use this arg to test  values other than 00 
+#                       to verify the behaviour of  cfm 
+#
+#              
+#
+# Output args:
+#              None
+#
+# Typical usage:
+#              SendCFMFrame -txportId 1 -srcMac $sourceMac -Frame $Frame\
+#                           -RemMep "single"
+#              SendCFMFrame -txportId 1 -srcMac $sourceMac -Frame $Frame\
+#                           -RemMep "multiple" -saMode "increment" 
+#			    -saCount "64"
+# Category: Utility
+##################################################################
+
+
+proc SendCFMFrame_D8 {args} {
+
+ parse_args SendCFMFrame_D8 $args {
+         txportId "1"
+         srcMac   "00 0a 00 00 00 01"
+	 Frame 	 "01 80 C2 00 00 36 00 04 96 1E 33 30 89 02 C0 01 04 46 00 00 \
+                  00 02 00 01 02 2B 45 78 74 72 65 6D 65 4E 65 74 77 6F 72 6B \
+		  73 45 78 74 72 65 6D 65 4E 65 74 77 6F 72 6B 73 45 78 74 72 \
+		  65 6D 65 4E 65 74 77 6F 72 02 01 45 00 00 00 00 00 00 00 00 \
+		  00 00 00 00 00 00 00 00 02 00 01 02 04 00 01 01 00 60 DC 98 \
+		  CD"
+
+        destMac  "default" 
+        saCount ""
+        saMode  "idle"
+        RemMep "single"
+        UdfContCount "true"
+        saCount ""
+        saMode  "idle"
+        UdfEnable  "true"
+        UdfInitVal "00"
+        udfRepeat "64"
+        udfCountertype "c16"
+        Opcode "01"
+        frameRate "null"
+       }
+
+set rawFrame $Frame
+if { $destMac == "default"} {
+   set DestAddr [string range $rawFrame 0 16]
+} else {
+   set DestAddr $destMac
+}
+set FrameLen  [string length $rawFrame]
+set type [string range $rawFrame 36 40]
+set FrameType [GetCFMType $rawFrame]
+set FrameSize [expr $FrameLen/3 +1]
+
+puts "type = $type frametype = $FrameType\n"
+
+if {(($type == "81 00") && ($FrameType == "89 02"))} {
+   #----Replace CFM  Frame with a value of opcode other than 01
+   if {$Opcode != "01"} {
+   set rawFrame [ string replace $rawFrame 57 58 $Opcode]
+   }
+
+   #----- Get the Tagid for the received frame
+#Removed # as it was giving errors
+   set Tag       [string range $rawFrame 42 46]
+   set Tag       [hextodec [string replace $Tag 2 2 ""]]
+   if {$RemMep == "single"} { 
+      set mepInit [string range $Frame 78 82]
+      set tmp1 [string replace $mepInit 2 2 ""]
+      result_debug "value of mepid before processing is $tmp1"
+      set tmp2 [hextodec $tmp1]
+      result_debug "Value of mepid in decimal is $tmp2"
+      incr tmp2 
+      set MepId [dectohex $tmp2]
+      result_debug "value of mepid in hex is $MepId"
+      set MepIdnew [conv2Byte $MepId] 
+      result_debug "value of mepid after conversion is $MepIdnew" 
+      set rawFrame [string replace $rawFrame 78 82 $MepIdnew]
+
+      #----- Obtain the Datapattern to simulte a CFM MEP
+#Changed hardcoded tag vlaue and added mode/count after FA
+      set DataPat   [string range $rawFrame 54 $FrameLen]
+      set Offset 27  
+      SendFrame  -txPortId $txportId  -sourceMac $srcMac \
+                 -destMac $DestAddr -frameType $FrameType \
+                 -ethernetType "ethernetII" -streamType "contPacket" \
+                 -saMode $saMode -saCount $saCount\
+                 -dataPattern $DataPat -frameSize $FrameSize -tag $Tag\
+                 -frameRate $frameRate -udfInitval $UdfInitVal \
+                    -udfOffset $Offset -udfContinuousCount $UdfContCount
+   } else {
+#Fix for FA
+
+      set Offset 26 
+      #----- Obtain the Datapattern to simulte a CFM MEP
+      set DataPat   [string range $rawFrame 54 $FrameLen]
+
+      SendFrame   -txPortId $txportId  -sourceMac $srcMac \
+                  -destMac $DestAddr -frameType $FrameType \
+                  -ethernetType "ethernetII" -saMode $saMode \
+                  -saCount $saCount -udfEnable $UdfEnable \
+                  -udfInitval $UdfInitVal -udfRepeat $udfRepeat \
+                  -udfCountertype $udfCountertype \
+                  -udfOffset $Offset -udfContinuousCount $UdfContCount \
+                  -streamType "contPacket" -dataPattern $DataPat \
+                  -frameSize $FrameSize -tag $Tag -frameRate $frameRate
+   }
+} elseif {(($type == "88 A8") && ($FrameType == "89 02"))} {
+   #----Replace CFM  Frame with a value of opcode other than 01
+   if {$Opcode != "01"} {
+   set rawFrame [ string replace $rawFrame 57 58 $Opcode]
+   }
+
+   #----- Get the Tagid for the received frame
+   set Tag       [string range $rawFrame 42 46]
+   set Tag       [hextodec [string replace $Tag 2 2 ""]]
+   if {$RemMep == "single"} {
+      set mepInit [string range $Frame 78 82]
+      set tmp1 [string replace $mepInit 2 2 ""]
+      result_debug "value of mepid before processing is $tmp1"
+      set tmp2 [hextodec $tmp1]
+      result_debug "Value of mepid in decimal is $tmp2"
+      incr tmp2
+      set MepId [dectohex $tmp2]
+      result_debug "value of mepid in hex is $MepId"
+      set MepIdnew [conv2Byte $MepId]
+      result_debug "value of mepid after conversion is $MepIdnew"
+      set rawFrame [string replace $rawFrame 78 82 $MepIdnew]
+
+      #----- Obtain the Datapattern to simulte a CFM MEP
+      set DataPat   [string range $rawFrame 54 $FrameLen]
+
+      SendFrame  -txPortId $txportId  -sourceMac $srcMac \
+                 -destMac $DestAddr -frameType $FrameType \
+                 -ethernetType "ethernetII" -streamType "contPacket" \
+                 -saCount $saCount -saMode $saMode \
+                 -dataPattern $DataPat -frameSize $FrameSize -tag $Tag \
+                 -frameRate $frameRate
+   } else {
+
+      set Offset 27
+      #----- Obtain the Datapattern to simulte a CFM MEP
+      set DataPat   [string range $rawFrame 54 $FrameLen]
+
+      SendFrame   -txPortId $txportId  -sourceMac $srcMac \
+                  -destMac $DestAddr -frameType $FrameType \
+                  -ethernetType "ethernetII" -saMode $saMode \
+                  -saCount $saCount -udfEnable $UdfEnable \
+                  -udfInitval $UdfInitVal \
+                  -udfOffset $Offset -udfContinuousCount $UdfContCount \
+                  -streamType "contPacket" -dataPattern $DataPat \
+                  -frameSize $FrameSize -tag $Tag -frameRate $frameRate
+   }
+
+} elseif {$type == "89 02"} {
+   #----Replace CFM  Frame with a value of opcode other than 00
+   if {$Opcode != "01"} {
+   set rawFrame [string replace $rawFrame 45 46 $Opcode]
+   }
+   if {$RemMep == "single" } {
+
+      set mepInit [string range $Frame 66 70]
+      result_debug "mepid obtained from the frame $mepInit"
+      set tmp1 [string replace $mepInit 2 2 ""]
+      result_debug "value of mepid before processing is $tmp1"
+      set tmp2 [hextodec $tmp1]
+      result_debug "Value of mepid in decimal is $tmp2"
+      incr tmp2
+      set MepId [dectohex $tmp2]
+      result_debug "value of mepid in hex is $MepId"
+      set MepIdnew [conv2Byte $MepId]
+      result_debug "value of mepid after conversion is $MepIdnew"
+      set rawFrame [string replace $rawFrame 66 70 $MepIdnew]
+
+   #----- Obtain the Datapattern to simulte a CFM MEP
+      set DataPat   [string range $rawFrame 42 $FrameLen]
+
+      SendFrame  -txPortId $txportId  -sourceMac $srcMac \
+                -destMac $DestAddr -frameType $FrameType \
+                -ethernetType "ethernetII" -streamType "contPacket" \
+                -saCount $saCount -saMode $saMode \
+                -dataPattern $DataPat -frameSize $FrameSize -frameRate $frameRate
+   } else { 
+         
+      set Offset 23;
+      #----- Obtain the Datapattern to simulte a CFM MEP
+      set DataPat   [string range $rawFrame 42 $FrameLen]
+
+      SendFrame   -txPortId $txportId  -sourceMac $srcMac \
+                  -destMac $DestAddr -frameType $FrameType \
+                  -ethernetType "ethernetII" -saMode $saMode \
+                  -saCount $saCount -udfEnable $UdfEnable \
+                   -udfInitval $UdfInitVal \
+                  -udfOffset $Offset -udfContinuousCount $UdfContCount \
+                  -streamType "contPacket" -dataPattern $DataPat \
+                  -frameSize $FrameSize -frameRate $frameRate
+   }
+  
+}
+}
+
+
+proc conv2Byte {a} {
+set x 2
+
+set c [expr [string length $a] % 2]
+set b [expr $x - [expr [string length $a] /2]-$c]
+
+puts $b
+for {set i 1} {$i <=$b} {incr i} {
+lappend value "00"
+}
+if {$c} {
+lappend value "0[string range $a 0 0]"
+for {set i 1} {$i < [string length $a]} {incr i 2} {
+   lappend value [string range $a $i [expr $i +1]]
+}
+} else {
+
+for {set i 0} {$i < [string length $a]} {incr i 2} {
+   lappend value [string range $a $i [expr $i +1]]
+}
+}
+return $value
+}
+
+proc Hex2Ascii {hexStr} {
+
+   set result ""
+   foreach hex $hexStr {
+        set result "$result[format %c 0x$hex]"
+   }
+   return $result
+}
+

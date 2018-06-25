@@ -1,0 +1,1408 @@
+
+#################################################################
+#  Procedure Name: snmpConvertStrToOid
+#  
+#  Description:
+#    This procedure converts the given string to SNMP OID format
+#      (VLAN1  is converted to 5.86.76.65.78.49)
+#
+#  Input Variables:
+#    str  - String for which the corresponding OID to be found out
+#
+#  Optional Args:
+#    None
+#
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#     SNMP OID 
+#
+#  Possible Usage:
+#     snmpConvertStrToOid "VLAN1"
+################################################################
+proc snmpConvertStrToOid {str} {
+  set res [split $str ""]
+  lappend oid "[string length $str]."
+  foreach char $res {
+     lappend oid "[scan $char %c]."
+  }
+  return "[string trim $oid "."]"
+
+}
+
+#################################################################
+#  Procedure Name: snmpConvertIpAddrFormat
+#  
+#  Description:
+#    This procedure converts the given IP address in dotted 
+#    notation to SNMP compatible format.
+#      (10.10.0.1  is converted to "a a 0 1"
+#
+#  Input Variables:
+#    ipaddr  - IP address in the dotted notation
+#
+#  Optional Args:
+#    None
+#
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#     Formatted IP address
+#
+#  Possible Usage:
+#     snmpConvertIpAddrFormat "10.10.0.1"
+################################################################
+proc snmpConvertIpAddrFormat {ipaddr} {
+   regexp {([0-9]+)\.([0-9]+)\.([0-9]+)\.([0-9]+)} $ipaddr r(0) r(1) r(2) r(3) r(4)
+   foreach i { 1 2 3 4 } {
+      set r($i) [dectohex $r($i)]
+      if { [string length $r($i)] == 1 } {
+         set r($i) "0$r($i)"
+      }
+   } 
+   return [string toupper "$r(1) $r(2) $r(3) $r(4)"]
+}
+
+
+####################################################################
+#  Procedure Name: snmpMacToEdpNeighbourId
+#  
+#  Description:
+#    This procedure converts the given MAC address to EDP 
+#    neighbour ID 
+#     (0A:1A:1A:FE:DF:AA is converted to "0.0.10.26.26.254.223.170"
+#     Two zeros are prepended to the converted MAC address.
+#
+#  Input Variables:
+#    mac - MAC address
+#
+#  Optional Args:
+#    None
+#
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#     Formatted EDP neighbour ID
+#
+#  Possible Usage:
+#     snmpMacToEdpNeighbourId "0A:1A:1A:FE:DF:AA"
+##################################################################
+proc snmpMacToEdpNeighbourId {mac} {
+
+   regexp -nocase {([0-9|A-F]+):([0-9|A-F]+):([0-9|A-F]+):([0-9|A-F]+):([0-9|A-F]+):([0-9|A-F]+)} $mac r(0) r(1) r(2) r(3) r(4) r(5) r(6)
+   foreach i { 1 2 3 4 5 6 } {
+      set r($i) [hextodec $r($i)]
+   }
+ 
+   # --- Prepend two zeros to the converted MAC address
+   return "0.0.$r(1).$r(2).$r(3).$r(4).$r(5).$r(6)"
+}
+
+####################################################################
+#  Procedure Name: snmpMacToEsrpNeighbourId
+#  
+#  Description:
+#    This procedure converts the given MAC address to ESRP
+#    neighbour ID 
+#     (0A:1A:1A:FE:DF:AA is converted to "10.26.26.254.223.170"
+#
+#  Input Variables:
+#    mac - MAC address
+#
+#  Optional Args:
+#    None
+#
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#     Formatted ESRP neighbour ID
+#
+#  Possible Usage:
+#     snmpMacToEsrpNeighbourId "0A:1A:1A:FE:DF:AA"
+##################################################################
+
+proc snmpMacToEsrpNeighbourId {mac} {
+   regexp -nocase {([0-9|A-F]+):([0-9|A-F]+):([0-9|A-F]+):([0-9|A-F]+):([0-9|A-F]+):([0-9|A-F]+)} $mac r(0) r(1) r(2) r(3) r(4) r(5) r(6)
+
+   foreach i { 1 2 3 4 5 6 } {
+      set r($i) [hextodec $r($i)]
+   }
+
+   return "$r(1).$r(2).$r(3).$r(4).$r(5).$r(6)"
+}
+
+########################################################################
+#  Procedure Name: snmpGetEsrpTransitions
+#  
+#  Description:
+#    This procedures gets the no.of ESRP transitions to MASTER or SLAVE
+#    state 
+#
+#  Input Variables:
+#    session     - Session identifier which identifies the connection 
+#                  with the DUT
+#    group       - ESRP group value
+#    vlanid      - VLAN identifier to retrieve the ESRP table for a VLAN 
+#    state       - Transitions to Master or Slave. Possible values are
+#                  "master" or "slave"
+#
+#  Optional Args:
+#    fd         - File descriptor for logging the debug statements
+#
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    0       - On failure 
+#
+#  Possible Usage:
+#    snmpGetEsrpTransitions -session $sessionid -vlanid $vlan_id \
+#                       -state "slave" -fd $fd_res
+#######################################################################
+
+proc snmpGetEsrpTransitions {args} {
+   parse_args snmpGetEsrpTransitions $args {
+      session ""
+      state ""
+      vlanid ""
+      group "1"
+      fd "NULL"
+   }
+
+   set func "snmpGetEsrpTransitions:"
+
+   if { $vlanid == "" || $session == ""} {
+       error "$func vlan id and session must be specified"
+       return 0
+   }
+
+   set state [string tolower $state]
+   if { !([string compare $state "master"] == 0 ||
+          [string compare $state "slave"] == 0) } {
+       error "$func possible value for state is master or slave"
+       return 0
+   }
+
+   snmpDebug DEBUG "$func state-$state vlanid-$vlanid group-$group -Start" $fd
+
+   result_debug "\n-- Checking ESRP table for number of transitions of \
+                      the VLAN $vlanid --"
+
+   if { $state == "master" } {
+      set request "extremeEsrpNumTransitionsToMaster.$vlanid.$group"
+   } else {
+      set request "extremeEsrpNumTransitionsToSlave.$vlanid.$group"
+   }
+
+   set result [snmpGet -session $session -oid $request]
+   snmpDebug DEBUG "$func - snmpGet for ESRP transition is $result" $fd
+
+   set noTrans [snmpUtilGetVal int $result]
+
+   snmpDebug LOG "$func ESRP transition to $state for VLAN $vlanid is \
+                  $noTrans" $fd
+   
+   snmpDebug DEBUG "$func - End" $fd
+   return $noTrans
+}
+
+
+########################################################################
+#  Procedure Name: snmpCheckEsrpTable
+#  
+#  Description:
+#    This procedures checks the SNMP ESRP table (extremeEsrpTable) 
+#    for the existence of given ESRP table parameters.
+#
+#  Input Variables:
+#    session     - Session identifier which identifies the connection 
+#                  with the DUT
+#    vlanid      - VLAN identifier to retrieve the ESRP table for a VLAN 
+#
+#  Optional Args:
+#    status     - Status of the ESRP table entry (active or not exist)
+#    group      - ESRP group value
+#    ports      - No. of active ports in this ESRP enabled VLAN
+#    trackports - No. of tracked ports in this VLAN
+#    trackroute - No. of IP routes tracked by this VLAN
+#    trackping  - No. of pings to a destination address, tracked by this
+#                 VLAN
+#    state      - ESRP state (master / slave / neutral )
+#    timer      - ESRP hello timer value
+#    priority   - ESRP priority for this VLAN
+#    intports   - No. of active internal ports in the ESRP neighbour
+#    ipaddr     - IP address assigned to this VLAN
+#    algorithm  - ESRP election algorithm configured for this VLAN
+#                 Possible values are
+#                    * ports-track-priority-mac
+#                    * track-ports-priority-mac
+#                    * priority-ports-track-mac
+#                    * priority-track-ports-mac
+#                    * priority-mac-only
+#    tomaster   - Number of ESRP state transitions to master
+#    toslave    - Number of ESRP state transitions to slave
+#    fd         - File descriptor for logging the debug statements
+#    comment    - Comment to be logged in the log file    
+#
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    0       - On failure 
+#
+#  Possible Usage:
+#    snmpCheckEsrpTable -session $sessionid -vlanid $vlan_id \
+#                       -ipaddr 10.0.0.5 -ports 2 \
+#                       -trackping 10 -state "master" -fd $fd_res
+#######################################################################
+
+proc snmpCheckEsrpTable {args} {
+   parse_args snmpCheckEsrpTable $args {
+      session ""
+      status "enabled"
+      vlanid ""
+      group "1"
+      ports ""
+      trackports ""
+      trackroute ""
+      trackping ""
+      state ""
+      timer ""
+      priority ""
+      ipaddr ""
+      algorithm ""
+      tomaster ""
+      toslave ""
+      intports ""
+      comment "snmpCheckEsrpTable"
+      fd "NULL"
+   }
+
+   set func "snmpCheckEsrpTable:"
+
+   if { $vlanid == "" || $session == ""} {
+       error "$func vlan id and session must be specified"
+       return 0
+   }
+
+   snmpDebug DEBUG "$func status-$status vlanid-$vlanid group-$group \
+                    -Start" $fd
+
+   result_debug "\n-- Checking ESRP table for the VLAN $vlanid --"
+
+   report_start_test "$comment"
+
+   set result [snmpGet -session $session \
+                       -oid extremeEsrpRowStatus.$vlanid.$group]
+   snmpDebug DEBUG "$func - snmpGet for row status is $result" $fd
+
+   set retStatus [snmpUtilGetVal inttext $result]
+
+   snmpDebug LOG "$func ESRP status for VLAN $vlanid is $retStatus" $fd
+  
+   if { $status == "enabled" } {
+      set needVal "active"
+   } else {
+      set needVal "notexist"
+   }
+
+   if { $retStatus == "" } {
+      set retStatus "notexist"
+   }
+
+   snmpDebug LOG "$func Given ESRP status is $status, got $retStatus" $fd
+
+   if { $retStatus == $needVal } {
+      result_ok "ESRP status is $retStatus. Wanted $needVal. PASS"     
+   } else {
+      result_error "ESRP status is $retStatus. Wanted $needVal. FAIL"     
+   }  
+
+   # --- Check the ESRP hello timer value
+   if {$timer != "" } {
+      set result [snmpGet -session $session \
+                       -oid extremeEsrpHelloTimer.$vlanid.$group]
+      snmpDebug DEBUG "$func snmpGet - $result" $fd
+ 
+      set retVal [snmpUtilGetVal int $result]
+      snmpDebug LOG "$func ESRP hello timer for VLAN $vlanid is $retVal" $fd
+      if { $retVal == $timer } {
+          result_ok "ESRP hello timer value $retVal, expected $timer. PASS"
+      } else {
+          result_error "ESRP hello timer value $retVal, expected $timer. FAIL"
+      }
+   }
+
+   # --- Check the ESRP states
+   if { $state != "" } {
+      set result [snmpGet -session $session \
+                       -oid extremeEsrpState.$vlanid.$group]
+      snmpDebug DEBUG "$func snmpGet - $result" $fd
+
+      set retVal [snmpUtilGetVal inttext $result]
+      snmpDebug LOG "$func ESRP state for VLAN $vlanid is $retVal" $fd
+      if { [regexp -nocase $retVal $state] } {
+          result_ok "ESRP state is $retVal, expected $state. PASS"
+      } else {
+          result_error "ESRP state is $retVal, expected $state. FAIL"
+      }
+
+   }
+
+   # --- Check the ESRP election algorithm
+   if { $algorithm != "" } {
+      set result [snmpGet -session $session \
+                       -oid extremeEsrpElectionAlgorithm.$vlanid.$group]
+      snmpDebug DEBUG "$func snmpGet - $result" $fd
+
+      set retVal [snmpUtilGetVal inttext $result]
+      snmpDebug LOG "$func ESRP master election algorithm for VLAN \
+                     $vlanid is $retVal" $fd
+      if { [string compare [string tolower $retVal] \
+                           [string tolower $algorithm]] == 0 } {
+          result_ok "ESRP master election algorithm is $retVal, \
+                     expected $algorithm. PASS"
+      } else {
+          result_error "ESRP master election algorithm is $retVal, \
+                        expected $algorithm. FAIL"
+      }
+   }
+
+   # --- Check the ESRP enabled active ports
+   if { $ports != "" } {
+      set result [snmpGet -session $session \
+                       -oid extremeEsrpActivePorts.$vlanid.$group]
+      snmpDebug DEBUG "$func snmpGet - $result" $fd
+
+      set retVal [snmpUtilGetVal int $result]
+      snmpDebug LOG "$func number of active ports in ESRP for VLAN \
+                     $vlanid is $retVal" $fd
+      if { $ports == $retVal } {
+          result_ok "No.of active ports is $retVal, expected $ports. PASS"
+      } else {
+          result_error "No.of active ports is $retVal, expected $ports. FAIL"
+      }
+   }
+
+   # --- Check the ESRP priority
+   if { $priority != "" } {
+      set result [snmpGet -session $session \
+                       -oid extremeEsrpPriority.$vlanid.$group]
+      snmpDebug DEBUG "$func snmpGet - $result" $fd
+
+      set retVal [snmpUtilGetVal int $result]
+      snmpDebug LOG "$func ESRP priority for VLAN $vlanid is $retVal" $fd
+      if { $priority == $retVal } {
+          result_ok "ESRP priority is $retVal, expected $priority. PASS"
+      } else {
+          result_error "ESRP priority is $retVal, expected $priority. FAIL"
+      }
+   }
+
+   # --- Check no.of ports tracked by this vlan
+   if { $trackports != "" } {
+      set result [snmpGet -session $session \
+                       -oid extremeEsrpTrackedActivePorts.$vlanid.$group]
+      snmpDebug DEBUG "$func - snmpGet - $result" $fd
+
+      set retVal [snmpUtilGetVal int $result]
+      snmpDebug LOG "$func number of tracked active ports for VLAN \
+                     $vlanid is $retVal" $fd
+      if { $trackports == $retVal } {
+          result_ok "No.of tracked active ports is $retVal, \
+                     expected $trackports. PASS"
+      } else {
+          result_error "No.of tracked active ports is $retVal, \
+                        expected $trackports. FAIL"
+      }
+   }
+
+   # --- Check no.of IP routes tracked by this vlan
+   if { $trackroute != "" } {
+      set result [snmpGet -session $session \
+                       -oid extremeEsrpTrackedIpRoutes.$vlanid.$group]
+      snmpDebug DEBUG "$func - snmpGet - $result" $fd
+
+      set retVal [snmpUtilGetVal int $result]
+      snmpDebug LOG "$func number of tracked IP routes for VLAN \
+                     $vlanid is $retVal" $fd
+      if { $trackroute == $retVal } {
+          result_ok "No.of tracked IP route is $retVal, expected \
+                     $trackroute. PASS"
+      } else {
+          result_error "No.of tracked IP route is $retVal, \
+                        expected $trackroute. FAIL"
+      }
+   }
+
+   # --- Check no.of pings to destination, tracked by this vlan
+   if { $trackping != "" } {
+      set result [snmpGet -session $session \
+                       -oid extremeEsrpTrackedPings.$vlanid.$group]
+      snmpDebug DEBUG "$func - snmpGet - $result" $fd
+
+      set retVal [snmpUtilGetVal int $result]
+      snmpDebug LOG "$func number of tracked pings for VLAN \
+                     $vlanid is $retVal" $fd
+      if { $trackping == $retVal } {
+          result_ok "No.of tracked ping is $retVal, \
+                     expected $trackping. PASS"
+      } else {
+          result_error "No.of tracked ping is $retVal, expected \
+                        $trackping. FAIL"
+      }
+   }
+
+   # --- Check no.of ESRP state transitions as master
+   if { $tomaster != "" } {
+      set result [snmpGet -session $session \
+                       -oid extremeEsrpNumTransitionsToMaster.$vlanid.$group]
+      snmpDebug DEBUG "$func - snmpGet - $result" $fd
+
+      set retVal [snmpUtilGetVal int $result]
+      snmpDebug LOG "$func number of ESRP state transition to \
+                      master is $retVal" $fd
+      if { $tomaster == $retVal } {
+          result_ok "No.of ESRP state transition to MASTER is $retVal, \
+                     expected $tomaster. PASS"
+      } else {
+          result_error "No.of ESRP state transition to MASTER is \
+                        $retVal, expected $tomaster. FAIL"
+      }
+   }
+
+   # --- Check no.of ESRP state transitions as slave
+   if { $toslave != "" } {
+      set result [snmpGet -session $session \
+                       -oid extremeEsrpNumTransitionsToSlave.$vlanid.$group]
+      snmpDebug DEBUG "$func - snmpGet - $result" $fd
+
+      set retVal [snmpUtilGetVal int $result]
+      snmpDebug LOG "$func number of ESRP state transition to SLAVE is \
+                     $retVal" $fd
+      if { $toslave == $retVal } {
+          result_ok "No.of ESRP state transition to SLAVE is $retVal, \
+                     expected $toslave. PASS"
+      } else {
+          result_error "No.of ESRP state transition to master is \
+                        $retVal, expected $toslave. FAIL"
+      }
+   }
+
+
+
+   # --- Check IP address configured for this vlan
+   if { $ipaddr != "" } {
+     
+      # ---- Convert the given IP address to SNMP output format
+      #      30.0.0.1 --> 1E 00 00 01
+      set cookedIpAddr [snmpConvertIpAddrFormat $ipaddr]  
+      snmpDebug LOG "$func given IP address is $ipaddr, cooked is \
+                     $cookedIpAddr" $fd
+      
+      set result [snmpGet -session $session \
+                       -oid extremeEsrpNetAddress.$vlanid.$group]
+      snmpDebug LOG "$func snmpGet - $result" $fd
+      set retVal [snmpUtilGetVal hex $result]
+      snmpDebug LOG "$func retrieved IP address is $retVal" $fd
+      if { [regexp -nocase $cookedIpAddr $retVal] } {
+          result_ok "IP address for ESRP enabled VLAN is $retVal, \
+                     expected $cookedIpAddr. PASS"
+      } else {
+          result_error "IP address for ESRP enabled VLAN is $retVal, \
+                        expected $cookedIpAddr. FAIL"
+      }
+   }
+
+   # --- Check the ESRP neighbour internal active ports
+   if { $intports != "" } {
+      set result [snmpGet -session $session \
+                       -oid extremeEsrpInternalActivePorts.$vlanid.$group]
+      snmpDebug DEBUG "$func - snmpGet - $result" $fd
+      set retVal [snmpUtilGetVal int $result]
+      snmpDebug LOG "$func number of active internal ports in ESRP for \
+                      VLAN $vlanid is $retVal" $fd
+      if { $intports == $retVal } {
+          result_ok "No.of active internal ports is $retVal, expected \
+                     $intports. PASS"
+      } else {
+          result_error "No.of active internal ports is $retVal, \
+                        expected $intports. FAIL"
+      }
+   }
+
+   report_end_test
+
+   snmpDebug DEBUG "$func - End\n" $fd
+}
+
+########################################################################
+#  Procedure Name: snmpCheckEsrpNeighborTable
+#  
+#  Description:
+#    This procedures checks the SNMP ESRP neighbour table 
+#    (extremeEsrpNeighborTable) for the existence of given 
+#    ESRP table parameters.
+#
+#  Input Variables:
+#    session     - Session identifier which identifies the connection 
+#                  with the DUT
+#    vlanid      - VLAN identifier to retrieve the ESRP table for a VLAN 
+#    neighid     - ESRP neighbour identifier
+#
+#  Optional Args:
+#    group      - ESRP group value
+#    timer      - ESRP neighbour hello timer value
+#    trackports - No. of tracked ports in the ESRP neighbour
+#    trackroute - No. of IP routes tracked by the ESRP neighbour
+#    state      - ESRP neighbour state (master / slave / neutral )
+#    priority   - ESRP neighbour priority for this VLAN
+#    intports   - No. of active internal ports in the ESRP neighbour
+#    ports      - No. of active ports in the ESRP neighbour
+#    ipaddr     - ESRP neighbour IP address
+#    algorithm  - ESRP neighbour election algorithm
+#                 Possible values are
+#                    * ports-track-priority-mac
+#                    * track-ports-priority-mac
+#                    * priority-ports-track-mac
+#                    * priority-track-ports-mac
+#                    * priority-mac-only
+#
+#    fd         - File descriptor for logging the debug statements
+#    comment    - Comment to be logged in the log file    
+#
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    0       - On failure 
+#
+#  Possible Usage:
+#    snmpCheckEsrpNeighborTable -session $sessionid -vlanid $vlan_id \
+#                               -neighid "00:01:02:AE:FF:DE" \
+#                               -timer 10 -fd $fd_res
+#######################################################################
+proc snmpCheckEsrpNeighborTable {args} {
+   parse_args snmpCheckEsrpNeighborTable $args {
+      session ""
+      vlanid ""
+      group "1"
+      neighid ""
+      timer ""
+      state ""
+      algorithm ""
+      priority ""
+      trackports ""
+      trackroute ""
+      ports ""
+      intports ""
+      ipaddr ""
+      comment "snmpCheckEsrpNeighborTable"
+      fd "NULL"
+   }
+
+   set func "snmpCheckEsrpNeighborTable:"
+
+   if { $vlanid == "" || $session == "" || $neighid == ""} {
+       error "$func vlanid, session and neighbour ID must be specified"
+       return 0
+   }
+
+   snmpDebug DEBUG "$func vlanid-$vlanid group-$group neighid-$neighid -Start" $fd
+
+   result_debug "\n-- Checking ESRP neighbor table for the VLAN $vlanid ID \
+                      $neighid --"
+
+   report_start_test "$comment"
+
+   set neighbourId [snmpMacToEsrpNeighbourId $neighid]
+   snmpDebug LOG "$func neighbour ID is $neighid --> $neighbourId"
+  
+   if {$timer != "" } {
+      set result [snmpGet -session $session \
+                       -oid extremeEsrpNeighborHelloTimer.$vlanid.$group.$neighbourId]
+      snmpDebug LOG "$func snmpGet - $result" $fd
+      set retVal [snmpUtilGetVal int $result]
+      if { $retVal == $timer } {
+          result_ok "ESRP neighbour hello timer value $retVal, \
+                     expected $timer. PASS"
+      } else {
+          result_error "ESRP neighbour hello timer value $retVal, \
+                        expected $timer. FAIL"
+      }
+   }
+
+   # --- Check the ESRP neighbour states
+   if { $state != "" } {
+      set result [snmpGet -session $session \
+                    -oid extremeEsrpNeighborState.$vlanid.$group.$neighbourId]
+      snmpDebug DEBUG "$func - snmpGet - $result" $fd
+
+      set retVal [snmpUtilGetVal inttext $result]
+      snmpDebug LOG "$func ESRP neighbour state for VLAN $vlanid is \
+                     $retVal" $fd
+      if { [regexp -nocase $retVal $state] } {
+          result_ok "ESRP neighbour state is $retVal, expected $state. PASS"
+      } else {
+          result_error "ESRP neighbour state is $retVal, expected $state. FAIL"
+      }
+
+   }
+
+   # --- Check no.of ports tracked by this vlan
+   if { $trackports != "" } {
+      set result [snmpGet -session $session \
+                       -oid extremeEsrpNeighborTrackedActivePorts.$vlanid.$group.$neighbourId]
+      snmpDebug DEBUG "$func - snmpGet - $result" $fd
+      set retVal [snmpUtilGetVal int $result]
+      snmpDebug LOG "$func number of tracked active ports for VLAN \
+                     $vlanid is $retVal" $fd
+      if { $trackports == $retVal } {
+          result_ok "No.of tracked active ports is $retVal, \
+                     expected $trackports. PASS"
+      } else {
+          result_error "No.of tracked active ports is $retVal, \
+                        expected $trackports. FAIL"
+      }
+   }
+
+   # --- Check the ESRP neighbour priority
+   if { $priority != "" } {
+      set result [snmpGet -session $session \
+                       -oid extremeEsrpNeighborPriority.$vlanid.$group.$neighbourId]
+      snmpDebug DEBUG "$func - snmpGet - $result" $fd
+
+      set retVal [snmpUtilGetVal int $result]
+      snmpDebug LOG "$func ESRP neighbour priority for VLAN \
+                     $vlanid is $retVal" $fd
+      if { $priority == $retVal } {
+          result_ok "ESRP neighbour priority is $retVal, \
+                     expected $priority. PASS"
+      } else {
+          result_error "ESRP neighbour priority is $retVal, \
+                        expected $priority. FAIL"
+      }
+   }
+
+   # --- Check no.of IP routes tracked by neighbour of thie ESRP vlan
+   if { $trackroute != "" } {
+      set result [snmpGet -session $session \
+                       -oid extremeEsrpNeighborTrackedIpRoutes.$vlanid.$group.$neighbourId]
+     
+      snmpDebug DEBUG "$func - snmpGet - $result" $fd
+      set retVal [snmpUtilGetVal int $result]
+      snmpDebug LOG "$func number of tracked IP routes for VLAN \
+                     $vlanid is $retVal" $fd
+      if { $trackroute == $retVal } {
+          result_ok "No.of tracked IP route is $retVal, \
+                     expected $trackroute. PASS"
+      } else {
+          result_error "No.of tracked IP route is $retVal, \
+                        expected $trackroute. FAIL"
+      }
+   }
+
+   # --- Check the ESRP neighbour election algorithm
+   if { $algorithm != "" } {
+      set result [snmpGet -session $session \
+                       -oid extremeEsrpNeighborElectionAlgorithm.$vlanid.$group.$neighbourId]
+      snmpDebug DEBUG "$func - snmpGet - $result" $fd
+      set retVal [snmpUtilGetVal inttext $result]
+      snmpDebug LOG "$func ESRP neighbour master election \
+                     algorithm for VLAN $vlanid is $retVal" $fd
+      if { [string compare [string tolower $retVal] \
+                           [string tolower $algorithm]] == 0 } {
+          result_ok "ESRP neighbour master election algorithm is $retVal, \
+                     expected $algorithm. PASS"
+      } else {
+          result_error "ESRP neighbour master election algorithm is $retVal, \
+                        expected $algorithm. FAIL"
+      }
+   }
+
+   # --- Check the ESRP neighbour enabled active ports
+   if { $ports != "" } {
+      set result [snmpGet -session $session \
+                       -oid extremeEsrpNeighborActivePorts.$vlanid.$group.$neighbourId]
+      set retVal [snmpUtilGetVal int $result]
+      snmpDebug LOG "$func number of active ports in ESRP for VLAN $vlanid \
+                     is $retVal" $fd
+      if { $ports == $retVal } {
+          result_ok "No.of active ports is $retVal, expected $ports. PASS"
+      } else {
+          result_error "No.of active ports is $retVal, expected $ports. FAIL"
+      }
+   }
+
+   # --- Check the ESRP neighbour internal active ports
+   if { $intports != "" } {
+      set result [snmpGet -session $session \
+                       -oid extremeEsrpNeighborInternalActivePorts.$vlanid.$group.$neighbourId]
+      snmpDebug DEBUG "$func - snmpGet - $result" $fd
+      set retVal [snmpUtilGetVal int $result]
+      snmpDebug LOG "$func number of active internal ports in ESRP for \
+                     VLAN $vlanid is $retVal" $fd
+      if { $intports == $retVal } {
+          result_ok "No.of active internal ports is $retVal, \
+                     expected $intports. PASS"
+      } else {
+          result_error "No.of active internal ports is $retVal, \
+                        expected $intports. FAIL"
+      }
+   }
+
+   # --- Check IP address configured for the ESRP neighbour
+   if { $ipaddr != "" } {
+     
+      # ---- Convert the given IP address to SNMP output format
+      #      30.0.0.1 --> 1E 00 00 01
+      set cookedIpAddr [snmpConvertIpAddrFormat $ipaddr]  
+      snmpDebug LOG "$func given IP address is $ipaddr, \
+                      cooked is $cookedIpAddr" $fd
+      
+      set result [snmpGet -session $session \
+                          -oid extremeEsrpNeighborNetAddress.$vlanid.$group.$neighbourId]
+      snmpDebug DEBUG "$func - snmpGet - $result" $fd
+      set retVal [snmpUtilGetVal hex $result]
+      snmpDebug LOG "$func retrieved IP address is $retVal" $fd
+      if { [regexp -nocase $cookedIpAddr $retVal] } {
+          result_ok "IP address for ESRP neighbour is $retVal, \
+                     expected $cookedIpAddr. PASS"
+      } else {
+          result_error "IP address for ESRP neighbour is $retVal, \
+                        expected $cookedIpAddr. FAIL"
+      }
+   }
+
+   report_end_test
+
+   snmpDebug DEBUG "$func - End\n" $fd
+}
+
+########################################################################
+#  Procedure Name: snmpCheckEsrpTrackVlanTable
+#  
+#  Description:
+#    This procedures checks whether the VLAN track table exists for the
+#    given VLAN identifier or not. This proecdure checks the
+#    row status of the SNMP table extremeEsrpTrackVlanTable
+#
+#  Input Variables:
+#    session     - Session identifier which identifies the connection 
+#                  with the DUT
+#    vlanid      - VLAN identifier to retrieve the ESRP track vlan table
+#                  for a VLAN 
+#    trackvlan   - VLAN identifier of the tracked vlan
+#
+#  Optional Args:
+#    group      - ESRP group value
+#    state      - Whether the track vlan table exists or not
+#    fd         - File descriptor for logging the debug statements
+#    comment    - Comment to be logged in the log file    
+#
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    0       - On failure 
+#
+#  Possible Usage:
+#    snmpCheckEsrpTrackVlanTable -session $sessionid -vlanid $vlan_id \
+#                                -trackvlan $track_vlan_id \
+#                                -state "notexist" -fd $fd_res
+#######################################################################
+proc snmpCheckEsrpTrackVlanTable {args} {
+   parse_args snmpCheckEsrpTrackVlanTable $args {
+      session ""
+      vlanid ""
+      trackvlan ""
+      group "1"
+      state "active"
+      comment "snmpCheckEsrpTrackVlanTable"
+      fd "NULL"
+   }
+
+   set func "snmpCheckEsrpTrackVlanTable:"
+
+   if { $vlanid == "" || $session == "" || $trackvlan == ""} {
+       error "$func vlanid, session and trackvlan must be specified"
+       return 0
+   }
+
+   snmpDebug DEBUG "$func vlanid-$vlanid group-$group trackvlan-$trackvlan \
+                    state-$state -Start" $fd
+
+   result_debug "\n-- Checking ESRP tracked vlan table for the VLAN \
+                      $trackvlan in the VLAN $vlanid --"
+
+   report_start_test "$comment"
+
+   set result [snmpGet -session $session \
+                       -oid extremeEsrpTrackVlanRowStatus.$vlanid.$group.$trackvlan]
+   snmpDebug DEBUG "$func - snmpGet -$result" $fd
+  
+   # ---- Check whether the entry exists. If not exists, then say notexist
+
+   if { [regexp -nocase ".*No Such Instance.*" $result] } {
+      set retVal "notexist"
+   } else {    
+      set retVal [snmpUtilGetVal inttext $result]
+   }
+   snmpDebug LOG "$func ESRP track vlan row status for vlan \
+                  $trackvlan is $retVal"
+   if { [regexp -nocase $retVal $state]} {
+        result_ok "ESRP track vlan ($trackvlan) status is $retVal, \
+                   expected $state. PASS"
+   } else {
+        result_ok "ESRP track vlan ($trackvlan) status is $retVal, \
+                   expected $state. FAIL"
+   }
+
+   report_end_test
+
+   snmpDebug DEBUG "$func - End\n" $fd
+}
+
+########################################################################
+#  Procedure Name: snmpCheckEsrpTrackIpRouteTable
+#  
+#  Description:
+#    This procedures checks whether the track IP route table exists for the
+#    given VLAN identifier or not. This proecdure checks the
+#    row status of the SNMP table extremeEsrpTrackIpRouteTable
+#
+#  Input Variables:
+#    session     - Session identifier which identifies the connection 
+#                  with the DUT
+#    vlanid      - VLAN identifier to retrieve the ESRP track IP route table
+#                  for a VLAN 
+#    ipaddr      - Tracked IP address
+#    mask        - Tracked IP address mask
+#
+#  Optional Args:
+#    group      - ESRP group value
+#    state      - Whether the track IP route table exists or not
+#    fd         - File descriptor for logging the debug statements
+#    comment    - Comment to be logged in the log file    
+#
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    0       - On failure 
+#
+#  Possible Usage:
+#    snmpCheckEsrpTrackIpRouteTable -session $sessionid -vlanid $vlan_id \
+#                                   -ipaddr "10.10.0.1" -mask "255.255.0.0"\
+#                                   -state "notexist" -fd $fd_res
+#######################################################################
+proc snmpCheckEsrpTrackIpRouteTable {args} {
+   parse_args snmpCheckEsrpTrackIpRouteTable $args {
+      session ""
+      vlanid ""
+      group "1"
+      ipaddr ""
+      mask ""
+      state "active"
+      comment "snmpCheckEsrpTrackIpRouteTable"
+      fd "NULL"
+   }
+
+   set func "snmpCheckEsrpTrackIpRouteTable:"
+
+   if { $vlanid == "" || $session == "" || $ipaddr == "" || $mask == ""} {
+       error "$func vlanid, session, IP address and mask must be specified"
+       return 0
+   }
+
+   snmpDebug DEBUG "$func vlanid-$vlanid group-$group ipaddr-$ipaddr \
+                    mask-$mask state-$state -Start" $fd
+
+   result_debug "\n-- Checking ESRP tracked IP route table for IP address \
+                      $ipaddr/$mask in the VLAN $vlanid --"
+
+   report_start_test "$comment"
+
+   set result [snmpGet -session $session \
+                       -oid extremeEsrpTrackIpRouteRowStatus.$vlanid.$group.$ipaddr.$mask]
+   snmpDebug DEBUG "$func - snmpGet -$result" $fd
+  
+   # ---- Check whether the entry exists. If not exists, then say notexist
+
+   if { [regexp -nocase ".*No Such Instance.*" $result] } {
+      set retVal "notexist"
+   } else {    
+      set retVal [snmpUtilGetVal inttext $result]
+   }
+   snmpDebug LOG "$func ESRP track IP route table row status for IP addr \
+                  $ipaddr/$mask is $retVal"
+   if { [regexp -nocase $retVal $state]} {
+        result_ok "ESRP track IP route ($ipaddr/$mask) status is $retVal, \
+                   expected $state. PASS"
+   } else {
+        result_ok "ESRP track IP route ($ipaddr/$mask) status is $retVal, \
+                   expected $state. FAIL"
+   }
+
+   report_end_test
+
+   snmpDebug DEBUG "$func - End\n" $fd
+}
+
+########################################################################
+#  Procedure Name: snmpCheckEdpTable
+#  
+#  Description:
+#    This procedures checks the SNMP EDP table (extremeEdpTable) 
+#    for the existence of given EDP table parameters.
+#
+#  Input Variables:
+#    session     - Session identifier which identifies the connection 
+#                  with the DUT
+#    port        - EDP port on which EDP neighbor exists
+#    neighid     - EDP neighbour identifier (MAC address)
+#
+#  Optional Args:
+#    neighname  - Device name of the EDP neighbor
+#    neighver   - Software version of the EDP neighbor
+#    neighslot  - Number of slot in the EDP neighbor device
+#    neighport  - Port number on which the EDP neighbor connected
+#    age        - Time since EDP neighbor entry created (in sec)
+#    fd         - File descriptor for logging the debug statements
+#    comment    - Comment to be logged in the log file    
+#
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    0       - On failure 
+#
+#  Possible Usage:
+#    snmpCheckEdpTable -session $sessionid -port [GetATrunkPort 2 1] \
+#                       -neighid "00:AA:BB:CC:DD:EE"  \
+#                       -neighname "Summit48i" \
+#                       -neighslot 1 \
+#                       -neighport 5 \
+#                       -age 10 -fd $fd_res
+#######################################################################
+
+proc snmpCheckEdpTable {args} {
+   parse_args snmpCheckEdpTable $args {
+      session ""
+      port "" 
+      neighid ""
+      neighname ""
+      neighver ""
+      neighslot ""
+      neighport ""
+      age ""
+      comment "snmpCheckEdpTable"
+      fd "NULL"
+   }
+
+   set func "snmpCheckEdpTable:"
+
+   if { $port == "" || $session == "" || $neighid == ""} {
+       error "$func port, session, neighbor ID must be specified"
+       return 0
+   }
+
+   snmpDebug DEBUG "$func port-$port neighid-$neighid -Start" $fd
+
+   result_debug "\n-- Checking EDP table in the port $port --"
+
+   report_start_test "$comment"
+
+   # --- Convert MAC address to EDP neighbour ID
+   set neighId [snmpMacToEdpNeighbourId $neighid]
+   snmpDebug LOG "$func EDP neighbour ID is $neighId" $fd
+
+   # --- Convert the port number to SNMP compatible port number,
+   #     if the switch is multi slot switch
+
+   set portNo [snmpUtilParsePortList $port]
+   snmpDebug DEBUG "$func parsed port is $portNo" $fd
+
+   # --- Check the EDP neighbour port number
+   if {$neighport != "" } {
+      set result [snmpGet -session $session \
+                       -oid extremeEdpNeighborPort.$portNo.$neighId]
+      snmpDebug DEBUG "$func - snmpGet - $result" $fd
+
+      set retVal [snmpUtilGetVal int $result]
+      snmpDebug LOG "$func EDP neighbour port no is $retVal" $fd
+
+      if { $retVal == $neighport } {
+          result_ok "EDP neighbour port no is $retVal, expected $neighport. PASS"
+      } else {
+          result_error "EDP neighbour port no is $retVal, \
+                        expected $neighport. FAIL"
+      }
+   }
+
+   # --- Check the EDP neighbour system name
+   if {$neighname != "" } {
+      set result [snmpGet -session $session \
+                       -oid extremeEdpNeighborName.$portNo.$neighId]
+      snmpDebug DEBUG "$func - snmpGet - $result" $fd
+
+      set retVal [snmpUtilGetVal str $result]
+      snmpDebug LOG "$func EDP neighbour system name is $retVal" $fd
+
+      if { [string compare [string tolower $retVal] \
+                           [string tolower $neighname]] == 0} {
+          result_ok "EDP neighbour system name is $retVal, \
+                     expected $neighname. PASS"
+      } else {
+          result_error "EDP neighbour system name is $retVal, \
+                        expected $neighname. FAIL"
+      }
+   }
+
+   # --- Check the EDP neighbour software version 
+   if {$neighver != "" } {
+      set result [snmpGet -session $session \
+                      -oid extremeEdpNeighborSoftwareVersion.$portNo.$neighId]
+      snmpDebug DEBUG "$func - snmpGet - $result" $fd
+
+      set retVal [snmpUtilGetVal str $result]
+      snmpDebug LOG "$func EDP neighbour software version is $retVal" $fd
+
+      if { [string compare [string tolower $retVal] \
+                           [string tolower $neighver]] == 0} {
+          result_ok "EDP neighbour software version is $retVal, \
+                     expected $neighver. PASS"
+      } else {
+          result_error "EDP neighbour software version is $retVal, \
+                        expected $neighver. FAIL"
+      }
+   }
+
+   if {$neighslot != "" } {
+      set result [snmpGet -session $session \
+                       -oid extremeEdpNeighborSlot.$portNo.$neighId]
+      snmpDebug DEBUG "$func - snmpGet - $result" $fd
+
+      set retVal [snmpUtilGetVal int $result]
+      snmpDebug LOG "$func EDP neighbour no.of slot is $retVal" $fd
+
+      if { $neighslot == $retVal } {
+          result_ok "EDP neighbour no.of slot is $retVal, \
+                     expected $neighslot. PASS"
+      } else {
+          result_error "EDP neighbour no.of slot is $retVal, \
+                        expected $neighslot. FAIL"
+      }
+   }
+
+
+   if { $age != ""} {
+      set result [snmpGet -session $session \
+                       -oid extremeEdpEntryAge.$portNo.$neighId]
+      snmpDebug DEBUG "$func - snmpGet - $result" $fd
+
+      set retVal [snmpUtilGetVal int $result]
+      snmpDebug LOG "$func EDP entry age is $retVal" $fd
+      # ---- Age can be given as range. For example, 50 sec to 60 sec
+      #      can be given as 50-60. Determine, whether age is given as
+      #      range or not
+      if {[regexp -nocase {([0-9]+)\-([0-9]+)} $age res age1 age2] == 1 } {
+         if { $retVal >= $age1 && $retVal <= $age2 } {
+            result_ok "EDP age is $retVal, expected is between \
+                       $age1 to $age2 seconds. PASS"
+         } else {
+            result_error "EDP age is $retVal, expected is between \
+                          $age1 to $age2 seconds. FAIL"
+         }
+      } else {
+         if { $retVal == $age } {
+            result_ok "EDP age is $retVal, expected is $age seconds. PASS"
+         } else {
+            result_error "EDP age is $retVal, expected is $age seconds. FAIL"
+         }
+      }
+   }
+
+   report_end_test
+
+   snmpDebug DEBUG "$func - End\n" $fd
+}
+
+########################################################################
+#  Procedure Name: snmpCheckEdpNeighborTable
+#  
+#  Description:
+#    This procedures checks the SNMP EDP table (extremeEdpNeighborTable) 
+#    for the existence of given EDP table parameters.
+#
+#  Input Variables:
+#    session     - Session identifier which identifies the connection 
+#                  with the DUT
+#    port        - EDP port on which this neighbor exists
+#    neighid     - EDP neighbour identifier (MAC address)
+#    vlanname    - Name of the VLAN on which this neighbor exists
+#
+#  Optional Args:
+#    vlanid     - EDP neighbor VLAN identifier
+#    ipaddr     - IP address assigned to the EDP neighbor
+#    fd         - File descriptor for logging the debug statements
+#    comment    - Comment to be logged in the log file    
+#
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    0       - On failure 
+#
+#  Possible Usage:
+#    snmpCheckEdpNeighborTable -session $sessionid -port [GetATrunkPort 1 2] \
+#                       -neighid "10:AA:BB:CC:DD:EE" -vlanname "VLAN1" \
+#                       -ipaddr "10.0.0.1" -vlanid 23 -fd $fd_res
+#######################################################################
+
+proc snmpCheckEdpNeighborTable {args} {
+   parse_args snmpCheckEdpNeighborTable $args {
+      session ""
+      port "" 
+      neighid ""
+      vlanname ""
+      vlanid ""
+      ipaddr ""
+      comment "snmpCheckEdpNeighborTable"
+      fd "NULL"
+   }
+
+   set func "snmpCheckEdpNeighborTable:"
+
+   if { $port == "" || $session == "" || $neighid == "" || $vlanname == ""} {
+       error "$func port, session, neighbor ID, vlan name must be specified"
+       return 0
+   }
+
+   snmpDebug DEBUG "$func port-$port neighid-$neighid vlanname-$vlanname \
+                    -Start" $fd
+
+   result_debug "\n-- Checking EDP neighbour table in the port $port for \
+                      neighbor $neighid and vlan $vlanname --"
+
+   report_start_test "$comment"
+
+   # --- Convert MAC address to EDP neighbour ID
+   set neighId [snmpMacToEdpNeighbourId $neighid]
+   snmpDebug LOG "$func EDP neighbour ID is $neighId" $fd
+
+   # --- Convert the port number to SNMP compatible port number,
+   #     if the switch is multi slot switch
+
+   set portNo [snmpUtilParsePortList $port]
+
+   set vlanOid [snmpConvertStrToOid $vlanname]
+   snmpDebug LOG "$func $vlanname is converted as oid $vlanOid"
+
+   # --- Check the EDP neighbour vlan identifier 
+   if {$vlanid != "" } {
+
+      set result [snmpGet -session $session \
+                       -oid extremeEdpNeighborVlanId.$portNo.$neighId.$vlanOid]
+      snmpDebug DEBUG "$func - snmpGet - $result" $fd
+
+      set retVal [snmpUtilGetVal int $result]
+      snmpDebug LOG "$func EDP neighbour vlan id is $retVal" $fd
+
+      if { $retVal == $vlanid } {
+          result_ok "EDP neighbour vlan id is $retVal, expected $vlanid. PASS"
+      } else {
+          result_error "EDP neighbour vlan id is $retVal, expected \
+                        $vlanid. FAIL"
+      }
+   }
+
+   # --- Check the EDP neighbour vlan identifier 
+   if {$ipaddr != "" } {
+      set result [snmpGet -session $session \
+                       -oid extremeEdpNeighborVlanIpAddress.$portNo.$neighId.$vlanOid]
+      snmpDebug DEBUG "$func - snmpGet - $result" $fd
+
+      set retVal [snmpUtilGetVal ipaddr $result]
+      snmpDebug LOG "$func EDP neighbour vlan IP address is $retVal" $fd
+
+      if { $retVal == $ipaddr } {
+          result_ok "EDP neighbour vlan IP address is $retVal, \
+                     expected $ipaddr. PASS"
+      } else {
+          result_error "EDP neighbour vlan IP address is $retVal, \
+                        expected $ipaddr. FAIL"
+      }
+   }
+
+   report_end_test
+
+   snmpDebug DEBUG "$func - End\n" $fd
+}
+
+#################################################################
+#  Procedure Name: snmpChangeEdpPortStatus
+#  
+#  Description:
+#    This procedures enables or disables EDP on a port
+#
+#  Input Variables:
+#    session   - Session identifier which identifies the connection 
+#                with the DUT
+#    port      - Port number on which EDP to be enbaled or disabled
+#    status    - Status indicating whether the EDP is to
+#                be enabled or disabled. 
+#
+#  Optional Args:
+#    fd - File descriptor of open log file
+#
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    0 - On failure 
+#    1 - On success
+#
+#  Possible Usage:
+#    snmpChangeEdpPortStatus -session $session -port 5 -state "disable"
+################################################################
+
+proc snmpChangeEdpPortStatus {args} {
+   parse_args snmpChangeEdpPortStatus $args {
+      session ""
+      status ""
+      port ""
+      fd "NULL"
+   }
+
+   set func "snmpChangeEdpPortStatus"
+
+   if { $session == "" || $status == "" || $port == ""} {
+       error "$func SNMP session id, status and port number must be specified"
+       return 0
+   }
+
+   set status [string tolower $status]
+
+   result_debug "\n-- Changing EDP status to $status --"
+
+   if { $status == "enable" } {
+      set state 1
+   } elseif { $status == "disable" } {
+      set state 2
+   } else {
+      error "$func - status value should be either enable or disable"
+      return 0
+   }
+
+   # --- Convert the port number, if the switch has multiple blades
+   set portNo [snmpUtilParsePortList $port]
+   snmpDebug LOG "$func Parsed port is $portNo" $fd
+
+   snmpDebug DEBUG "$func session-$session status-$status \
+                     port-$port - Start" $fd 
+   # ----- Change the IP forwarding state of the switch instead
+   set result [snmpSet -session $session -oid extremeEdpPortState.$portNo \
+                         -type i -val $state]
+   snmpDebug LOG "$func - snmpSet - $result" $fd
+
+   snmpDebug DEBUG "$func - End\n" $fd
+
+   return 1
+}
+
+#################################################################
+#  Procedure Name: snmpCheckEdpPortStatus
+#  
+#  Description:
+#    This procedures checks whether EDP is enabled or disabled
+#    on a port
+#
+#  Input Variables:
+#    session   - Session identifier which identifies the connection 
+#                with the DUT
+#    port      - Port number on which EDP to be enbaled or disabled
+#    status    - Status indicating whether the EDP status is to
+#                be checked for enabled or disabled. 
+#
+#  Optional Args:
+#    fd - File descriptor of open log file
+#
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    0 - On failure 
+#    1 - On success
+#
+#  Possible Usage:
+#    snmpCheckEdpPortStatus -session $session -port 5 -state "disable"
+################################################################
+
+proc snmpCheckEdpPortStatus {args} {
+   parse_args snmpCheckEdpPortStatus $args {
+      session ""
+      status ""
+      port ""
+      comment "snmpCheckEdpPortStatus"
+      fd "NULL"
+   }
+
+   set func "snmpCheckEdpPortStatus"
+
+   if { $session == "" || $status == "" || $port == ""} {
+       error "$func SNMP session id, status and port number must be specified"
+       return 0
+   }
+
+   report_start_test "$comment"
+
+   snmpDebug DEBUG "$func session-$session status-$status port-$port \
+                    - Start" $fd 
+   set status [string tolower $status]
+
+   result_debug "\n-- Checking EDP status $status on port $port --"
+
+   # --- If EDP is enabled on a port, the value returned in SNMP is
+   #     true, else it is false. So manipulate the incoming status
+   #     value
+
+   if { $status == "enabled" } {
+      set edpStatus "true"
+   } elseif { $status == "disabled" } {
+      set edpStatus "false"
+   } else {
+      error "$func - status value should be either enabled or disabled"
+      report_end_test
+      return 0
+   }
+
+   # --- Convert the port number, if the switch has multiple blades
+   set portNo [snmpUtilParsePortList $port]
+   snmpDebug LOG "$func Parsed port is $portNo" $fd
+
+   # --- Get the EDP status for the given port number
+   set result [snmpGet -session $session \
+                       -oid extremeEdpPortState.$portNo]
+   snmpDebug DEBUG "$func - snmpGet - $result" $fd
+   
+   set retVal [snmpUtilGetVal boolean $result]
+   snmpDebug LOG "$func - EDP state in port $portNo is $retVal" $fd
+ 
+   if { $edpStatus == $retVal } {
+      result_ok "EDP status on port $portNo is $retVal, \
+                 expected $edpStatus. PASS"
+   } else {
+      result_error "EDP status on port $portNo is $retVal, \
+                    expected $edpStatus. FAIL"
+   }
+
+   snmpDebug DEBUG "$func - End\n" $fd
+   report_end_test
+
+   return 1
+}

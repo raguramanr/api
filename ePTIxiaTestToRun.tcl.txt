@@ -1,0 +1,66 @@
+proc SeperateEptIxiaTestcases {testcaseList  TG} {
+
+global ePTNotSupportedList
+
+set ePTModulePath [pwd]
+set pID [pid]
+set ePTtmpFileName "Tmp/ePTtestsToRun_$pID"
+set ePTTmpOpen [open  $ePTtmpFileName "w+"]
+puts $ePTTmpOpen $testcaseList
+flush $ePTTmpOpen
+seek $ePTTmpOpen 0 start
+
+
+set ePTtestsToRun ""
+set IxiatestsToRun ""
+while {[gets $ePTTmpOpen ePTset] != -1} {
+
+if {$ePTset != ""} {
+        if {[regexp {(.*) *;.*} $ePTset match ePTmatch]} {
+                set  ePTset $ePTmatch
+        } else {
+                set ePTset $ePTset
+        }
+
+set ePTset [string trim $ePTset]
+        set ePTflag 0
+        set ePTcase "$ePTModulePath/$ePTset.tcl"
+        if {[catch {set ePTOpenTc [open "$ePTcase" "r"]} ePTerr]} {
+                continue;
+        }
+        while {[gets $ePTOpenTc line] >=0} {
+        foreach ePTIxiaAPI $ePTNotSupportedList {
+
+                if {[regexp $ePTIxiaAPI $line]} {
+                        set ePTflag 1
+                        break
+                }
+        }
+        if {$ePTflag == 1} {
+                append IxiatestsToRun "$ePTset\n"
+                break;
+        }
+        }
+        if {$ePTflag == 0} {
+
+                append ePTtestsToRun "$ePTset\n"
+        }
+
+close $ePTOpenTc
+
+}
+}
+close $ePTTmpOpen
+catch {file delete -force "$ePTTmpOpen"} reason
+
+        if {$TG == "ept"} {
+                set testsToRun $ePTtestsToRun
+        } else {
+
+                set testsToRun $IxiatestsToRun
+        }
+
+
+return $testsToRun
+
+}

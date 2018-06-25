@@ -1,0 +1,299 @@
+#!/usr/bin/expect --
+
+load [lindex [glob "/usr/lib/libexpect*so*"] 0]
+
+set cliPcIpaddr "10.210.1.218"
+set routingPcIpaddr "10.210.1.217"
+set rootDir "/auto/automation"
+set utilDir "$rootDir/Util"
+set reportDir "$rootDir/TestReport"
+set totalCount 0
+#List of file names generated from initial run.
+set fnameList [ list "Functionaltest.txt" "CLItest.txt" "Routing.txt" \
+               "PerformanceTest.txt" "Benchmarktest.txt" "Scalabilitytest.txt" \
+               "Stresstest.txt" ]
+
+#***************************************************************
+# This procedure will login to the specified machine, run the
+# initialRun.tcl script on that machine and  then copy the report
+# file (CLI or Routing) from the remote machine to local machine.
+# Input : ipaddr IP address of the remote machine
+#         module (CLItest for CLI and Functionaltest for Routing)
+# Output : None 
+#****************************************************************
+
+proc runRemoteReport { ipaddr module } {
+     global  buildName
+     global  utilDir
+     global  reportDir
+
+     set login  "autotest-sc"
+     set passwd "glitterpen1"
+
+     set localIp [ getLocalIpaddr ]
+     if { $localIp == 0 } {
+        puts "ERROR : Can't find local IP address"
+        exit
+     }
+     spawn telnet $ipaddr
+     expect -nocase "login:"
+     send   "$login\r"
+     expect -nocase "password:"
+     send   "$passwd\r"
+     expect {
+        -re "Login incorrect" {
+            puts "!!! Failed to login to $ipaddr"
+        }
+        -re "$login@" {
+            puts "Login successful"
+        }
+     }
+     send "cd $utilDir\r" 
+     expect "$login@"
+     send "tclsh initialRun.tcl $buildName\r"
+     expect "$login@"
+     send "chmod 777 $reportDir/$module.txt\r"
+     expect "$login@"
+     if { $module == "CLItest" } {
+        send "scp $reportDir/$module.txt $localIp:$reportDir/$module.txt \r"
+     } else {
+        send "scp $reportDir/$module.txt $localIp:$reportDir/Routing.txt \r"
+     }
+     expect {
+        -re ".* password" { send "$passwd\r" }
+        -re "yes" {
+                   send "yes\r"
+                   expect -re ".* password" { send "$passwd\r" }
+         }
+     }
+    expect "$login@"
+    send "logout\r"
+}
+#********************************************************
+# Procedure used to print the title of the report 
+#********************************************************
+proc printTitle { fd } {
+  global buildName
+  puts $fd "<html>"
+  puts $fd "<head>"
+  puts $fd "<meta http-equiv=\"content-type\""
+  puts $fd "content=\"text/html; charset=ISO-8859-1\">"
+  puts $fd "<title></title>"
+  puts $fd "</head>"
+  puts $fd "<div style=\"margin-left:\"><span style=\"font-weight: bold;\
+           font-size:15.0pt;mso-bidi-font-size:16.0pt; font-family:Courier;\
+           text-decoration: underline;\">"
+
+  puts $fd "TEST CASE COUNTING REPORT </span> <br>"
+  puts $fd "</div>"
+  puts $fd "<br>"
+  puts $fd "<span style=\"font-size:10.0pt;mso-bidi-font-size:11.0pt;\
+            font-family:Courier;\">Build : $buildName </span><br>"
+  puts $fd "<span style=\"font-size:9.0pt;mso-bidi-font-size:10.0pt;\
+            font-family:Courier;\">Date: [exec date] </span><br>"
+  puts $fd "<br>"
+  puts $fd "<br>"
+}
+
+#****************************************************************
+# Procedure used to print the trailer html information of the report 
+#****************************************************************
+proc printTrailor { fd } {
+  puts $fd "</div>"
+  puts $fd "</body>"
+  puts $fd "</html>"
+}
+
+#*******************************************************************
+# This procedure will fetch the number of test cases from the report
+# file of the specific regression type. The count will be used to 
+# calculate grand tolal.
+#
+# Input : fname - report file name (Ex. Functionaltest.txt)
+# Output : number of test cases run
+#*******************************************************************
+
+proc getTestcaseCount { fname } {
+    if { [catch { set line [exec grep "TOTAL NUMBER" $fname] }] } {
+        puts "ERROR: Can't fetch total# of test cases from: $fname"
+        return 0
+    }
+    set ch " = "
+    set length [string length $line]
+    set index [string first $ch $line]
+    incr index 2
+    set number [string range $line $index $length]
+    set number [string trim $number]
+    if { ![string is integer $number] } {
+        puts "$fname: Can't fetch total number of test cases."
+        return 0
+    }
+    return $number
+}
+#*************************************************************
+# This function will correct the header infromation for the
+# routing test cases. Since the routing test cases are also
+# stored in 'Functionaltest' directory, the header name which
+# is generated based on direcroty name is not correct for
+# routing. This function will process that file and correct
+# the header information.
+# Input : Routing.txt
+# Output : Routing.txt
+#*************************************************************
+proc processRoutingFile {} {
+    global reportDir
+
+    if { [ catch { set tfd [ open "$reportDir/temp.txt" w+ ] } ] } {
+        puts "ERROR: Can't open the file temp.txt"
+        return;
+    }
+    if { [catch {set fd [ open "$reportDir/Routing.txt" r+ ]} ] } {
+        puts "ERROR: Can't open the file Routing.txt"
+        return;
+    }
+
+    while { [ gets $fd line ] != -1 } {  
+       if { [ regsub "FUNCTIONAL" $line "ROUTING" tline ] == 1 } {
+           puts $tfd $tline
+       } else {
+           puts $tfd $line
+       }
+    }
+    close $tfd
+    close $fd
+    if { [catch { exec cp "$reportDir/temp.txt" "$reportDir/Routing.txt"} ] } {
+        puts "ERROR: Unable to copy temp.txt to Routing.txt"
+        return;
+    }
+    if { [catch { exec rm "$reportDir/temp.txt" } ] } {
+        puts "ERROR: Unable to delete the file temp.txt"
+        return;
+    }
+}
+
+#********************************************************
+# This procedure is used to find the IP address of  the
+# local machine.
+#
+# Input : None
+# Output: ipaddr
+#*********************************************************
+
+proc getLocalIpaddr { } {
+    set buff [ exec ifconfig eth0 ]
+    set ret [ regexp {[0-9]+(.)[0-9]+(.)[0-9]+(.)[0-9]+} $buff ip]
+    if { $ret == 1 } {
+        puts "IP of local machine = $ip"
+        return $ip
+    } else {
+        puts "ERROR: Can't find ip address of local machine"
+        return 0
+   }
+}
+
+proc updateAutoweb { } {
+   global reportDir
+   set targetDir "/autoweb/Http/html/wwwroot/stats/data/"
+   set curTime [clock seconds]
+   set year  [clock format $curTime -format %Y]
+   set month [clock format $curTime -format %B]
+   cd $targetDir
+   if { ![file isdirectory $year] }  {
+      exec mkdir $year
+      cd $year
+      exec mkdir $month
+   } else {
+     cd $year
+     if { ![file isdirectory $month] } {
+        exec mkdir $month
+     } else {
+        if { ![file isdirectory "$month/backup"] } {
+             exec mkdir "$month/backup"
+         }
+        exec cp -f "$month/TestReport.html" "$month/backup/."
+     }
+  }
+  append targetDir "$year"
+  append targetDir "/"
+  append targetDir "$month"
+  cd $targetDir
+  exec rm -rf *
+  exec cp "$reportDir/TestReport.html" "$targetDir/."
+}
+
+proc printUsage {} {
+     puts "\r"
+     puts "Usage: finalRun.tcl  <buildNumber>"
+     puts "buildNumber: format xxxbzz Ex. 711b36"
+}
+#************************************************************
+# Main code segment
+#***********************************************************
+source ../main/mainLib.tcl
+
+gen_index "./../Lib"
+
+set LIB_PATH ../Lib
+lappend auto_path $LIB_PATH
+
+if { $argc<1 } {
+      printUsage
+      exit
+}
+if { [lsearch $argv "-help"] > -1} {
+      printUsage
+      exit
+}
+if { [lsearch $argv "?"] > -1} {
+      printUsage
+      exit
+}
+set build [lindex $argv 0]
+set buildName [getBuildNumber $build]
+if { $buildName == 0 } {
+    puts "ERROR: Wrong build name. Build name Ex.711b16 is required!!"
+    exit
+}
+
+set module "CLItest"
+runRemoteReport $cliPcIpaddr $module
+
+set module "Functionaltest"
+runRemoteReport $routingPcIpaddr $module
+
+processRoutingFile
+
+cd $reportDir
+if { [catch { set rfd [ open "TestReport.html" w ] } ] } {
+    puts "ERROR: Can't open the file: TestReport.html"
+    exit
+}
+printTitle $rfd;
+foreach fname $fnameList {
+       if { [catch { set fd [ open $fname r ] } ] } {
+            puts "ERROR: Can't open the file: $fname"
+            exit
+       }
+       set count [ getTestcaseCount $fname ]
+       puts "Test Cases for $fname = $count"
+       incr totalCount $count
+       while { [ gets $fd line ] != -1 } {  
+             puts $rfd $line
+       }
+       close $fd
+}
+printTrailor $rfd
+
+puts $rfd "<br><br>"
+puts $rfd "<div style=\"margin-left:\"><span style=\"font-weight: bold;font-size:12.0pt;mso-bidi-font-size:13.0pt; font-family:Courier;\">"
+puts $rfd "GRAND TOTAL =  $totalCount </span> <br>"
+puts $rfd "</div>"
+close $rfd
+
+updateAutoweb
+
+exec clear
+puts "\n**********************************\n"
+puts "GRAND TOTAL = $totalCount"
+puts "\n**********************************"
+

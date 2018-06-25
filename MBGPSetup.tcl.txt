@@ -1,0 +1,309 @@
+
+##################################################################
+# Procedure Name: VerifyCorrectMBGPRoutesLearned
+#
+# Description:  Verify that specific BGP routes are learned on the
+#               switch.
+#               It uses route attributes in a list along with network ip
+#               to verify the learning
+#
+#
+# Input args: args
+# Output args: none
+# Typical usage:
+#
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: VerifySwitchOutput
+##################################################################
+proc VerifyCorrectMBGPRoutesLearned {args} {
+   parse_args VerifyCorrectBGPRoutesLearned $args {
+      peerIp ""
+      peerAsPath ""
+      ipNwList ""
+      originList "0"
+      routesList ""
+      nextHopList ""
+      fromPrefixList ""
+      bestRouteList ""
+      fromPrefixList ""
+      thruPrefixList ""
+      localPrefList ""
+      asTypeList ""
+      asPathList ""
+      medList ""
+      peerType ""
+   }
+
+for {set index 0} {$index<[llength $peerIp]} {incr index} {
+   set peerIpValue [lindex $peerIp $index]
+   set peerAsPathVal [lindex $peerAsPath $index]
+   set ipNwListValue [lindex $ipNwList $index]
+   set fromPrefixListValue [lindex $fromPrefixList $index]
+   set thruPrefixListValue [lindex $thruPrefixList $index]
+   set originListValue [lindex $originList $index]
+   set nextHopListValue [lindex $nextHopList $index]
+   set routesListValue [lindex $routesList $index]
+   set medListValue [lindex $medList $index]
+   set asPathListValue [lindex $asPathList $index]
+   set asTypeListValue [lindex $asTypeList $index]
+   set localPrefListValue [lindex $localPrefList $index]
+   set bestRouteListValue [lindex $bestRouteList $index]
+   set peerTypeValue [lindex $peerType $index]
+   set length [llength $ipNwListValue]
+   set incompleteRoutesList ""
+   set incompleteRoutesList1 ""
+   result_debug "length=$length and asPathListValue $asPathListValue";
+
+   ################################################
+   set subTest "Verify correct routes learned from peer $peerIpValue"
+   ################################################
+   result_h2 "$subTest"
+   report_start_test "$subTest"
+
+   if {[llength $fromPrefixListValue]!=$length || [llength $thruPrefixListValue]!=$length || [llength $routesListValue]!=$length || \
+       [llength $nextHopListValue]!=$length} {
+      result_error "Error in input args:fromPrefixList,thruPrefixList,routesList,ipNwList,nextHopList should be same length"
+      report_end_test
+      return -1
+   }
+
+   for {set i 0} {$i<$length} {incr i} {
+      set ipNetwork [lindex $ipNwListValue $i]
+      set fromPrefix [lindex $fromPrefixListValue $i]
+      set thruPrefix [lindex $thruPrefixListValue $i]
+      set originType [lindex $originListValue $i]
+      set nextHop [lindex $nextHopListValue $i]
+      set localPref [lindex $localPrefListValue $i]
+      set numRoutes [lindex $routesListValue $i]
+      set med [lindex $medListValue $i]
+      set bestRoute [lindex $bestRouteListValue $i]
+      set peerTypeVal [lindex $peerTypeValue $i]
+
+      switch -- $originType \
+         "1" {
+             set originCode EGP
+         } "0" {
+             set originCode IGP
+         } "2" {
+             set originCode Incomplete
+         } default {
+             set originCode IGP
+         }
+
+      if {$peerTypeVal=="i"} {
+         set peerAsPathList ""
+      } else {
+         set peerAsPathList $peerAsPathVal
+      }
+  if {[llength $asPathListValue]!=0} {
+         set aslist [lindex $asPathListValue $i]
+         set asSegmentTypes [lindex $asTypeListValue $i]
+         if {$aslist!=""} {
+            set indice 0
+            foreach asType $asSegmentTypes {
+               if {[llength $asSegmentTypes]>1} {
+                  lappend peerAsPathList [lindex $aslist $indice]
+               } else {
+                  if {$asType==1} {
+                     set aslist [list $aslist]   ;# in order to properly check the set of AS_SET
+                  }
+                  foreach asl $aslist {
+                     lappend peerAsPathList $asl
+                  }
+               }
+               incr indice
+            }
+         }
+      }
+      for {set j 0} {$j<$numRoutes} {incr j} {
+         set myIP [incrIpField $ipNetwork 3 $j]
+         scan $myIP %d.%d.%d.%d a b c d
+         set myIP [format %d.%d.%d.%d $a $b $c 0]
+         if {$localPref!=""} {
+            if {$med!=""} {
+               lappend incompleteRoutesList "{Route: $myIP/$fromPrefix} {Origin $originCode, Next-Hop $nextHop, LPref $localPref, MED $med} inLine exist 1"
+            } else {
+               lappend incompleteRoutesList "{Route: $myIP/$fromPrefix} {Origin $originCode, Next-Hop $nextHop, LPref $localPref} inLine exist 1"
+            }
+         } else {
+            if {$med!=""} {
+               lappend incompleteRoutesList "{Route: $myIP/$fromPrefix} {Origin $originCode, Next-Hop $nextHop.* MED $med} inLine exist 1"
+            } else {
+#               lappend incompleteRoutesList "{Route: $myIP/$fromPrefix} {Origin $originCode, Next-Hop $nextHop.*} inLine exist 1"
+               lappend incompleteRoutesList "{Route: $myIP/$fromPrefix} {Origin $originCode, Next-Hop $nextHop} inLine exist 1"
+            }
+         }
+         if {$bestRoute==1} {
+            lappend incompleteRoutesList1 "{Route: $myIP/$fromPrefix, *Peer $peerIpValue, *BEST} {AS-PATH: $peerAsPathList} inLine exist 2"
+         } else {
+            lappend incompleteRoutesList1 "{Route: $myIP/$fromPrefix, *Peer $peerIpValue} {AS-PATH: $peerAsPathList} inLine exist 2"
+         }
+      }
+   }
+   CheckKeyValue "show bgp neighbor $peerIpValue address-family ipv4-multicast received-routes detail all" $incompleteRoutesList \
+                 -comment "BGP neighbor incomplete routes";
+   CheckKeyValue "show bgp neighbor $peerIpValue address-family ipv4-multicast received-routes detail all" $incompleteRoutesList1 \
+                  -comment "BGP neighbor incomplete routes correct AS-PATH";
+   unset incompleteRoutesList
+   unset incompleteRoutesList1
+
+   report_end_test
+}
+}
+
+
+##################################################################
+# Procedure Name: VerifyCorrectMBGPRoutesLearned_12_5
+#
+# Description:  Verify that specific BGP routes are learned on the
+#               switch.
+#               It uses route attributes in a list along with network ip
+#               to verify the learning
+#
+#
+# Input args: args
+# Output args: none
+# Typical usage:
+#
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: VerifySwitchOutput
+##################################################################
+proc VerifyCorrectMBGPRoutesLearned_12_5 {args} {
+   parse_args VerifyCorrectBGPRoutesLearned_12_5 $args {
+      peerIp ""
+      peerAsPath ""
+      ipNwList ""
+      originList "0"
+      routesList ""
+      nextHopList ""
+      fromPrefixList ""
+      bestRouteList ""
+      fromPrefixList ""
+      thruPrefixList ""
+      localPrefList ""
+      asTypeList ""
+      asPathList ""
+      medList ""
+      peerType ""
+   }
+
+for {set index 0} {$index<[llength $peerIp]} {incr index} {
+   set peerIpValue [lindex $peerIp $index]
+   set peerAsPathVal [lindex $peerAsPath $index]
+   set ipNwListValue [lindex $ipNwList $index]
+   set fromPrefixListValue [lindex $fromPrefixList $index]
+   set thruPrefixListValue [lindex $thruPrefixList $index]
+   set originListValue [lindex $originList $index]
+   set nextHopListValue [lindex $nextHopList $index]
+   set routesListValue [lindex $routesList $index]
+   set medListValue [lindex $medList $index]
+   set asPathListValue [lindex $asPathList $index]
+   set asTypeListValue [lindex $asTypeList $index]
+   set localPrefListValue [lindex $localPrefList $index]
+   set bestRouteListValue [lindex $bestRouteList $index]
+   set peerTypeValue [lindex $peerType $index]
+   set length [llength $ipNwListValue]
+   set incompleteRoutesList ""
+   set incompleteRoutesList1 ""
+   result_debug "length=$length and asPathListValue $asPathListValue";
+
+   ################################################
+   set subTest "Verify correct routes learned from peer $peerIpValue"
+   ################################################
+   result_h2 "$subTest"
+   report_start_test "$subTest"
+
+   if {[llength $fromPrefixListValue]!=$length || [llength $thruPrefixListValue]!=$length || [llength $routesListValue]!=$length || \
+       [llength $nextHopListValue]!=$length} {
+      result_error "Error in input args:fromPrefixList,thruPrefixList,routesList,ipNwList,nextHopList should be same length"
+      report_end_test
+      return -1
+   }
+
+   for {set i 0} {$i<$length} {incr i} {
+      set ipNetwork [lindex $ipNwListValue $i]
+      set fromPrefix [lindex $fromPrefixListValue $i]
+      set thruPrefix [lindex $thruPrefixListValue $i]
+      set originType [lindex $originListValue $i]
+      set nextHop [lindex $nextHopListValue $i]
+      set localPref [lindex $localPrefListValue $i]
+      set numRoutes [lindex $routesListValue $i]
+      set med [lindex $medListValue $i]
+      set bestRoute [lindex $bestRouteListValue $i]
+      set peerTypeVal [lindex $peerTypeValue $i]
+
+      switch -- $originType \
+         "1" {
+             set originCode EGP
+         } "0" {
+             set originCode IGP
+         } "2" {
+             set originCode Incomplete
+         } default {
+             set originCode IGP
+         }
+
+      if {$peerTypeVal=="i"} {
+         set peerAsPathList ""
+      } else {
+         set peerAsPathList $peerAsPathVal
+      }
+  if {[llength $asPathListValue]!=0} {
+         set aslist [lindex $asPathListValue $i]
+         set asSegmentTypes [lindex $asTypeListValue $i]
+         if {$aslist!=""} {
+            set indice 0
+            foreach asType $asSegmentTypes {
+               if {[llength $asSegmentTypes]>1} {
+                  lappend peerAsPathList [lindex $aslist $indice]
+               } else {
+                  if {$asType==1} {
+                     set aslist [list $aslist]   ;# in order to properly check the set of AS_SET
+                  }
+                  foreach asl $aslist {
+                     lappend peerAsPathList $asl
+                  }
+               }
+               incr indice
+            }
+         }
+      }
+      for {set j 0} {$j<$numRoutes} {incr j} {
+         set myIP [incrIpField $ipNetwork 3 $j]
+         scan $myIP %d.%d.%d.%d a b c d
+         set myIP [format %d.%d.%d.%d $a $b $c 0]
+         if {$localPref!=""} {
+            if {$med!=""} {
+               lappend incompleteRoutesList "{Route: $myIP/$fromPrefix} {Origin $originCode, Next-Hop $nextHop, LPref $localPref, MED $med} inLine exist 1"
+            } else {
+               lappend incompleteRoutesList "{Route: $myIP/$fromPrefix} {Origin $originCode, Next-Hop $nextHop, LPref $localPref} inLine exist 1"
+            }
+         } else {
+            if {$med!=""} {
+               lappend incompleteRoutesList "{Route: $myIP/$fromPrefix} {Origin $originCode, Next-Hop $nextHop.* MED $med} inLine exist 1"
+            } else {
+#               lappend incompleteRoutesList "{Route: $myIP/$fromPrefix} {Origin $originCode, Next-Hop $nextHop.*} inLine exist 1"
+               lappend incompleteRoutesList "{Route: $myIP/$fromPrefix} {Origin $originCode, Next-Hop $nextHop} inLine exist 1"
+            }
+         }
+         if {$bestRoute==1} {
+            lappend incompleteRoutesList1 "{Route: $myIP/$fromPrefix, *Peer $peerIpValue, *BEST} {AS-PATH: $peerAsPathList} inLine exist 3"
+         } else {
+            lappend incompleteRoutesList1 "{Route: $myIP/$fromPrefix, *Peer $peerIpValue} {AS-PATH: $peerAsPathList} inLine exist 3"
+         }
+      }
+   }
+   CheckKeyValue "show bgp neighbor $peerIpValue address-family ipv4-multicast received-routes detail all" $incompleteRoutesList \
+                 -comment "BGP neighbor incomplete routes";
+   CheckKeyValue "show bgp neighbor $peerIpValue address-family ipv4-multicast received-routes detail all" $incompleteRoutesList1 \
+                  -comment "BGP neighbor incomplete routes correct AS-PATH";
+   unset incompleteRoutesList
+   unset incompleteRoutesList1
+
+   report_end_test
+}
+}

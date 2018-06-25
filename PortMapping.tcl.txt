@@ -1,0 +1,656 @@
+
+##################################################################    
+# Procedure Name: MapIxiaPortId
+# Description:
+#     	Map user-defined ixis portId to the ixia scheme of 
+#	"chassisNo cardNo portNo"
+# Input args: {portId}
+# Output args: {chasisIdName} {cardName} {portName} 
+# Return value: integer
+# Typical usage: 
+#	MapIxiaPortId $txPortId txChasisId txCard txPort
+# Category: Utility
+##################################################################
+proc MapIxiaPortId {  {portId 1} 
+                      {chasisIdName  1}
+                      {cardName  1}
+                      {portName  1} } {
+			  upvar $chasisIdName chasisId $cardName card $portName port
+
+   global ixiaPortMappingArray
+   global startPortNum
+   global startCardNum
+   global TrafficGen
+
+
+   if {$TrafficGen == "stc"} {
+       # NOT required for Spirent implementation
+       set chasisId 1
+       set card 1
+       set port 1
+       return
+   }
+   if {$portId <=0 } {
+      result_error "GetIxiaPortMapping: Invalid portId $portId"
+      error "GetIxiaPortMapping: Invalid portId $portId"
+   }
+
+   if { ![info exist startCardNum] } {
+       result_error "startCardNum not defined " 
+       return -1
+   } 
+   if { [llength [split $startCardNum :]] == 2 }  {
+          set startPortNum [lindex [split $startCardNum :] 1]
+          set startCardNum [lindex [split $startCardNum :] 0]
+	  if { ($startPortNum < 1) || ($startCardNum < 1) } {
+              result_error "startCardNum not defined properly $startCardNum" 
+              return -1
+          }        
+   } elseif { [llength [split $startCardNum :]] == 1 }  {
+	if { ![info exist startPortNum] } {
+	     set startPortNum 1
+	}
+   } else {
+       result_error "startCardNum not defined properly $startCardNum" 
+       return -1
+   } 
+
+   if {[info exists ixiaPortMappingArray($portId)] == 1 } {
+      set portMap $ixiaPortMappingArray($portId)
+      set port [lindex $portMap 2]
+      set card [lindex $portMap 1]
+      set chasisId [lindex $portMap 0]
+      card get $chasisId $card
+      set portNum [card cget -portCount]
+      #return this annoying pair receive port
+      if {($port == 1) && ($portNum > 1)} {set rxPort 2} else {set rxPort 1}
+      return $rxPort
+   } else {
+      result_error "GetIxiaPortMapping: Invalid portId $portId - no mapping found"
+      error "GetIxiaPortMapping: Invalid portId $portId"
+   }
+}
+
+##################################################################    
+# Procedure Name: GetDUTPort
+# Description:
+#     	This function returns the DUT port number by the given ixia
+#	portId and DUT no.
+# Input args: {portId} {DUTId}
+# Output args: none 
+# Return value: integer or : separated integer values
+# Typical usage: 
+#	SendACmd "enable port [GetDUTPort $switchPort2DefaultRouter 2]"
+# Category: Utility
+##################################################################
+proc GetDUTPort { {portId 1}
+                  {DUTId  1} } {
+   global DUTs_info
+
+      if {[regexp -nocase "mgmt" $portId]} {
+         return $portId
+      }
+
+      switch -regexp $DUTs_info(DUT$DUTId,platform) {
+	   NG -
+	   BD\* -
+           Stack\* -
+	   Aspen\* {
+              global DUT${DUTId}_DefaultBlade
+              set dutBlade [set DUT${DUTId}_DefaultBlade]
+              if {$dutBlade==""} {
+                 return "$portId" 
+      	      } else {
+      	         return "$dutBlade:$portId" 
+              }
+      } Summit\* {
+			return $portId
+      } ENET\* {
+			return $portId
+      } default {
+			return $portId
+		}
+   }
+}
+##################################################################
+# Procedure Name: GetDUTPort_FP
+# Description:
+#        This function returns the DUT front panel port number by the given ixia
+#  portId and DUT no with default blade type.
+# Input args: {portId} {DUTId_DefaultBlade_FP}
+# Output args: none
+# Return value: integer or : separated integer values
+# Typical usage:
+#  SendACmd "enable port [GetDUTPort $switchPort2DefaultRouter 2]"
+#SendACmd "enable port [GetDUTPort_FP $frontPanelPortToGw 1]"
+# Category: Utility
+##################################################################
+proc GetDUTPort_FP { {portId 1}
+                  {DUTId  1} } {
+   global DUTs_info
+
+      if {[regexp -nocase "mgmt" $portId]} {
+         return $portId
+      }
+
+      switch -regexp $DUTs_info(DUT$DUTId,platform) {
+           NG -
+           BD\* -
+           Stack\* -
+           Aspen\* {
+              global DUT${DUTId}_DefaultBlade_FP
+              set dutBlade [set DUT${DUTId}_DefaultBlade_FP]
+              if {$dutBlade==""} {
+                 return "$portId"
+              } else {
+                 return "$dutBlade:$portId"
+              }
+      } Summit\* {
+                        return $portId
+      } ENET\* {
+                        return $portId
+      } default {
+                        return $portId
+                }
+   }
+}
+##################################################################    
+# Procedure Name: MapDUTPortId
+# Description:
+#     	This function converts the specified list of ixia portIds to
+#	to the list of corresponding DUT port numbers.
+# Input args: {portIdString} {DUTId}
+# Output args: none 
+# Return value: integer or : separated list of integers
+# Typical usage: 
+#	SendACmd  "config vlan1 add port [MapDUTPortId 1,3-5 1]"
+# Category: Utility
+##################################################################
+proc MapDUTPortId { {portIdString 1}
+                  {DUTId  1} } {
+   
+   set portString ""
+   global DUTs_info MAIN
+   global ixiaPortMappingArray
+   #first filter the comma
+	regsub -all {,} $portIdString { } portRangeList
+	foreach portRange $portRangeList {
+	   if { [regexp {[0-9]-[0-9]} $portRange] == 1} {
+	      #if in range format
+	      #puts "Range: $portRange"
+	      set temp [split $portRange "-"]
+	      set startRange [lindex $temp 0]
+	      set endRange [lindex $temp 1]
+	      #puts "RangeProcessed: |$temp|$startRange|$endRange|"
+	      for {set i $startRange} {$i <= $endRange} {incr i} {
+	         set DUTPort [GetDUTPortMapping $DUTId $i]
+                  if {[info exists MAIN(PRINTTopoInfo)]} {
+                    if {$MAIN(PRINTTopoInfo)} {
+                       if {[info exists ixiaPortMappingArray($i)] == 1} {
+                          MapIxiaPortId $i chas card port
+                          result_debug "INFO: DUT$DUTId $DUTPort goes to portId $i -> \[$chas, $card, $port\]"
+                       } else {
+                          result_debug "INFO: DUT$DUTId $DUTPort goes to portId $i"
+                       }  
+                    }
+                 }
+	         append portString ", $DUTPort"
+	      }
+	   } elseif {[regexp {[0-9]} $portRange] == 1 } {
+	      #or just a single number
+	      #puts "Single: $portRange DUTId:$DUTId"
+	      set DUTPort [GetDUTPortMapping $DUTId $portRange]
+              if {[info exists MAIN(PRINTTopoInfo)]} {
+                 if {$MAIN(PRINTTopoInfo)} {
+                    if {[info exists ixiaPortMappingArray($portRange)] == 1} {
+                        MapIxiaPortId $portRange chas card port
+                        result_debug "INFO: DUT$DUTId $DUTPort goes to portId $portRange -> \[$chas, $card, $port\]"
+                    } else {                 
+                        result_debug "INFO: DUT$DUTId $DUTPort goes to portId $portRange"
+                    }
+                 }
+              }
+	      append portString ", $DUTPort"
+	   } else {
+	      result_error "MapDUTPortId: Unknown portId format $portRange"
+	      error "MapDUTPortId: Unknown portId format $portRange"
+	   }
+	}
+	#remove the first comma
+	regsub {, } $portString {} newString
+   return $newString
+}
+
+##################################################################    
+# Procedure Name: GetDUTPortMapping
+# Description:
+#     	Similar with GetDUTPort, this function returns the DUT port 
+#	number by the given ixia portId and DUT no.
+# Input args: {DUT} {portId} 
+# Output args: none 
+# Return value: list of port mapping array
+# Typical usage: 
+#	 set DUTPort [GetDUTPortMapping $dutNo $portId]
+# Category: Utility
+##################################################################
+proc GetDUTPortMapping {{DUT 1} {portId 1}} {
+   global DUTPortMappingArray
+
+   
+   if {$portId <=0 } {
+      result_error "GetDUTPortMapping: Invalid portId $portId"
+      error "GetDUTPortMapping: Invalid portId $portId"
+   }
+#   return $DUTPortMappingArray($DUT,$portId)
+   
+   if {[info exists DUTPortMappingArray($DUT,$portId)] == 1 } {
+      return $DUTPortMappingArray($DUT,$portId)
+   } else {
+      result_error "wrong port mapping called"
+      return [GetDUTPort $portId $DUT]
+   }
+}
+
+##################################################################    
+# Procedure Name: GenerateDUTPortMapping
+# Description:
+#     	This function will generate an array to map portId to DUT port;
+#	only physical connection between Ixia and DUT will be mapped here.
+# Input args: none 
+# Output args: none 
+# Return value: none
+# Typical usage: 
+#	 GenerateDUTPortMapping
+# Category: SetupSwitch
+##################################################################
+proc GenerateDUTPortMapping { } {
+   global DUTPortMappingArray
+   global portMappingList
+   global DUTINITSTORED
+   global MAIN
+   
+   foreach portMap $portMappingList {
+      set portId [lindex $portMap 0]
+      set portDUT [lindex $portMap 1]
+      set DUT [lindex $portMap 2]
+      if {$DUT == ""} {set DUT 1}
+      if {[regexp -nocase {[5-8]} $portId]&&$DUT==2} {
+          result_debug "\n!!!!!!!!!!!!!!!!!!!!!!!!!!!\n\
+                STANDARD Regression Test Beds Required PortId 9-12 as DUT2 Connections\n\
+                You Are Configured for a Non-Standard Modified Test Bed\n\
+                !!!!!!!!!!!!!!!!!!!!!!!!!!!"
+      }
+      lappend tmpPMList "$portId $portDUT $DUT"
+   }
+   set portMappingList $tmpPMList
+   foreach portMap $portMappingList {
+      set portId [lindex $portMap 0]
+      set portDUT [lindex $portMap 1]
+      set DUT [lindex $portMap 2]
+      if {$DUT == ""} {set DUT 1}
+      #puts "GenerateDUTPortMapping: $portId $portDUT $DUT"
+      if {[regexp -nocase {[5-8]} $portId]&&$DUT==2} {
+          result_debug "\n!!!!!!!!!!!!!!!!!!!!!!!!!!!\n\
+                STANDARD Regression Test Beds Required PortId 9-12 as DUT2 Connections\n\
+                You Are Configured for a Non-Standard Modified Test Bed\n\
+                !!!!!!!!!!!!!!!!!!!!!!!!!!!"
+      }
+      set DUTPortMappingArray($DUT,$portId) $portDUT
+      #RTP-SQA added for fast test init file
+      if {[info exist MAIN(ifPipe)] && ($MAIN(ifPipe) != "NULL")} {
+          if {![info exists DUTINITSTORED($DUT,$portId)] && $portDUT != "A"} {
+              set DUTINITSTORED($DUT,$portId) $portDUT
+              puts $MAIN(ifPipe) "set DUTPortMappingArray($DUT,$portId) $portDUT"
+          }
+      }
+   }
+}
+
+##################################################################    
+# Procedure Name: GenerateIxiaPortMapping
+# Description:
+#     	This function will generate an array to map every portId to 
+#	ixia port scheme "chassis card port".
+# Input args: none 
+# Output args: none 
+# Return value: none
+# Typical usage: 
+#	 GenerateIxiaPortMapping
+# Category: SetupSwitch
+##################################################################
+proc GenerateIxiaPortMapping { } {
+   global ixiaPortMappingArray
+   global ixiaMappingList
+   global MAIN
+   
+   foreach portMap $ixiaMappingList {
+      set portId [lindex $portMap 0]
+      set card [lindex $portMap 1]
+      set port [lindex $portMap 2]
+      set ixiaPortMappingArray($portId) "1 $card $port" 
+      #RTP-SQA added for fast test init file
+      if {[info exist MAIN(ifPipe)] && ($MAIN(ifPipe) != "NULL")} {
+          puts $MAIN(ifPipe) "set ixiaPortMappingArray($portId) \"1 $card $port\""
+      }
+      
+   }
+}
+
+proc GetExpDir {} {
+
+   return "Exp"
+}
+
+##################################################################    
+# Procedure Name: CheckPortId5Thru8
+# Description:
+#     	Check the existence of logical portId5 thru 8 in case using optimized 2-node topology
+# Input args:
+# Output args:
+# Return value: integer (0 or 1)
+# Typical usage: 
+#	CheckPortId5Thru8
+# Category: Utility
+##################################################################    
+proc CheckPortId5Thru8 { } {
+   global portMappingList
+   set returnFlag 0
+   if {[info exists portMappingList]==0} {
+      return $returnFlag
+   }
+
+   foreach portMap $portMappingList {
+      set portId [lindex $portMap 0]
+      if {[lsearch "5 6 7 8" $portId]!=-1} {
+         set returnFlag 1
+         break
+      }
+   }
+   return $returnFlag
+}
+
+##################################################################    
+# Procedure Name: MapIxiaCardnPort
+# Description:
+#     	Map ixia scheme of "chassisNo cardNo portNo" to 
+#       user-defined ixis portId
+# Input args: {chasisIdName} {cardName} {portName} 
+# Output args: {portId}
+# Return value: integer
+# Typical usage: 
+#	MapIxiaPortId $txPortId txChasisId txCard txPort
+# Category: Utility
+##################################################################
+proc MapIxiaCardnPort { {chasisIdName  1}
+                      {cardName  1}
+                      {portName  1} } {
+
+   global ixiaPortMappingArray
+   global startPortNum
+		  
+   if {! [info exist startPortNum]} {
+       set startPortNum 1
+   }
+   
+   set portInfo "$chasisIdName $cardName $portName"
+
+   foreach {key value} [array get ixiaPortMappingArray] {
+      if {$value == $portInfo} {
+         set portId $key
+         break
+      }
+   }
+
+   if {[info exists portId] != 1 } {
+      #result_error "GetIxiaPortMapping: Invalid chasis $chasisIdName card \
+      #              $cardName and port $portName - no mapping found"
+      return 0
+   }
+   return $portId
+}
+
+
+##################################################################
+# Procedure Name: GetIxiaDUTPortList
+# Description:
+#       Return the list of all ixia port numbers on DUT 
+# Input args: dut 
+# Output args: none
+# Return value: list of integers or list of : separated integer set
+# Typical usage:
+#         set portList [GetIxiaDUTPortList 1]
+# Category: Utility
+##################################################################
+proc GetIxiaDUTPortList {DUTId} {
+    global portMappingList
+    set portList ""
+    
+    if {![info exists portMappingList]} {
+        return $portList
+    }
+    foreach portPair $portMappingList {
+           if {$DUTId == [lindex $portPair 2]} {
+               if {$portList != ""} {
+                   append portList ","
+               }
+               append portList [lindex $portPair 1]
+           }
+     }
+     return $portList
+}
+
+##################################################################
+# Procedure Name: GetAIxiaDUTPort
+# Description:
+#       Return the index-th port number on DUTId that links to ixia.
+# Input args: DUTId {index}
+# Output args: none
+# Return value: integer or a : separated integer set
+# Typical usage:
+#         SendACmd  "conf ebgp add port [GetAIxiaDUTPort 1 3]"
+# Category: Utility
+##################################################################
+proc GetAIxiaDUTPort {DUTId {index 1} } {
+
+    set portList [GetIxiaDUTPortList $DUTId]
+    #use the first switch id to get the default blade
+    if {$index > [llength [split $portList ","] ]} { return "PORT_NOT_FOUND" }
+    if {$index < 1} { return "PORT_NOT_FOUND" }
+    return [lindex [split $portList ","] [expr $index -1]]
+}
+##################################################################
+# Procedure Name: GetAIxiaPortId
+# Description:
+#       Return the real Ixia Id for the ixia port which connects to DUTId's index'th port to ixia 
+# Input args: DUTId {index}
+# Output args: none
+# Return value: integer or a : separated integer set
+# Typical usage:
+#         SendACmd  "conf ebgp add port [GetAIxiaDUTPort 1 3]"
+# Category: Utility
+##################################################################
+proc GetAIxiaPortId {DUTId {index 1} } {
+
+    global portMappingList
+    global numDUT
+    set ixiaPortIdList ""
+
+    if { $DUTId == 0 } { 
+         set numPortIdNeeded [GetHighestPortId]
+         if {($numPortIdNeeded >= 11) && ( $numDUT > 2 )} {
+           return 9 ;
+         }
+    }
+    
+    if {![info exists portMappingList]} {
+        return $ixiaPortIdList
+    }
+    foreach portPair $portMappingList {
+           if {$DUTId == [lindex $portPair 2]} {
+               if {$ixiaPortIdList != ""} {
+                   append ixiaPortIdList ","
+               }
+               append ixiaPortIdList [lindex $portPair 0]
+           }
+     }
+    if {$index > [llength [split $ixiaPortIdList ","] ]} { return "PORT_NOT_FOUND" }
+    if {$index < 1} { return "PORT_NOT_FOUND" }
+    return [lindex [split $ixiaPortIdList ","] [expr $index -1]]
+ 
+}
+##################################################################    
+# Procedure Name: GetDUT_FP_Port
+# Description:
+#     	This function returns the DUT port number by the given FP
+#	    DUT no.
+# Input args: {port} {DUTId}
+# Output args: none 
+# Return value: integer or : separated integer values
+# Typical usage: 
+#	SendACmd "enable port [GetDUT_FP_Port $switchPort2DefaultRouter 2]"
+# Category: Utility
+##################################################################
+proc GetDUT_FP_Port { {port 1}
+                  {DUTId  1} } {
+    global DUTs_info
+    
+    switch -regexp $DUTs_info(DUT$DUTId,platform) {
+        NG -
+        BD\* -
+        Stack\* -
+        Aspen\* {
+            global DUT${DUTId}_DefaultBlade_FP
+            set dutBlade [set DUT${DUTId}_DefaultBlade_FP]
+            if {$dutBlade==""} {
+                return "$port" 
+            } else {
+                return "$dutBlade:$portId" 
+            }
+        } Summit\* {
+            return $port
+        } ENET\* {
+            return $port
+        } default {
+            return $port
+        }
+    }
+}
+##################################################################
+# Procedure Name: _getDutPorts
+#
+# Return a comma delimited list of all ports used in the cfg file
+#
+#
+#
+##################################################################
+proc _getDutPorts {args} {
+    global portMappingList trunkPortList 
+    global frontPanelPortToGw
+
+    parse_args _getDutPorts $args {
+        dut "1"
+    }
+
+    global DUT${dut}_DefaultBlade_FP
+    
+    set dutPoList ""
+    foreach elem $portMappingList {
+        if {[lindex $elem 2] == $dut && ![regexp -nocase "not|a" [lindex $elem 1]]} {
+            lappend dutPoList [lindex $elem 1]
+        }
+    }
+    foreach elem $trunkPortList {
+        if {[lindex $elem 0] == $dut} {
+            lappend dutPoList [lindex $elem 2]
+        }
+    }
+    if {[info exists frontPanelPortToGw] && $frontPanelPortToGw > 0} {
+        if {[info exists DUT${dut}_DefaultBlade_FP] && [set DUT${dut}_DefaultBlade_FP] > 0} {
+            lappend dutPoList [set DUT${dut}_DefaultBlade_FP]:$frontPanelPortToGw
+        } else {
+            lappend dutPoList $frontPanelPortToGw
+        }
+    }
+    if {[llength $dutPoList] > 0} {
+        set pos [lsort -dictionary $dutPoList]
+        return [join $pos ","]
+    }
+    return ""
+}
+##################################################################
+# Procedure Name: GetPortSysTypes
+#
+# input args -portIdList 
+#            -dutPortString
+#            -dut
+#            -returnFormat    return a list or a regexp format string
+#
+# returns a list of unique sysTypes for ports passed
+#
+# Example:  GetPortSysTypes -portIdList "1 2 10 11"
+#           returns -> V400-48p-10GE4 X460G2-24t-24ht
+#
+#    GetPortSysTypes -portIdList "1 2 10 11" -returnFormat regex
+#    returns -> V400-48p-10GE4|X460G2-24t-24ht
+#
+#    GetPortSysTypes -dut 1 -dutPortString  "[MapDUTPortId 1,2,3,4],[GetATrunkPort 1 2]"
+#    returns -> V400-48p-10GE4 X670G2-72x
+#
+#    set slotType [GetPortSysTypes -dut $whichDutNow \
+#             -dutPortString $portno -returnFormat regex]
+#
+##################################################################
+proc GetPortSysTypes {args} {
+    global DutPort_Info Trunk_Info PortID_Info MAIN
+    global frontPanelPortToGw
+
+    parse_args _getDutPorts $args {
+        dut "null"
+        dutPortString "null"
+        portIdList "1"
+        returnFormat "list"
+    }
+
+    # local
+    set sysTList ""
+
+    if {![info exists MAIN(PORTIDINFOSET)] || ([info exists MAIN(PORTIDINFOSET)] && !$MAIN(PORTIDINFOSET))} {
+        _getPortIdTypeInfo
+    }
+
+    if {$dut == "null" && $dutPortString != "null"} {
+        result_error "You must specify a DUT # if using DUT port list"
+        result_error "Use portIdList for passing in 1-4,9-10 port ids"
+        return;
+    }
+    if {$dut != "null" && $dutPortString != "null"} {
+        # switch port mode
+        regsub {[ ]+} $dutPortString  "" dutPortString
+        set dpL1 [split $dutPortString ","]
+        foreach p $dpL1 {
+            set p [string trim $p]
+            if {![info exists DutPort_Info($dut,$p,sysType)]} {
+                result_warning "DUT $dut, Port $p is not defined.  Correct DUT?"
+                continue;
+            }
+            set s $DutPort_Info($dut,$p,sysType)
+            if {[lsearch $sysTList $s] < 0 && [string trim $s] != ""} {
+                lappend sysTList $s
+            }
+        }
+    } else {
+        # portid mode
+        foreach i $portIdList {
+            set s $PortID_Info($i,sysType)
+            if {[lsearch $sysTList $s] < 0 && [string trim $s] != ""} {
+                lappend sysTList $s
+            }
+        }
+    }
+    if {$returnFormat == "regex"} {
+        return [join $sysTList "|"]
+    } else {
+        return $sysTList
+    }
+}
+

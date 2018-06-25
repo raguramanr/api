@@ -1,0 +1,172 @@
+
+################################################################## 
+# Procedure Name: GetAccessListInfo
+#   
+# Description: Called by CheckAccessListInfo - 
+#              An internal procedure to gather information about an ACL for hitcount, flags etc.
+#     
+#     
+#
+# Input args: accessList fd_res testNo
+# Output args: accessListInfoName as array
+# Typical usage:
+#           GetAccessListInfo accessListInfo $accessList $fd_res $testNo
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifySwitchOutput
+##################################################################
+
+proc GetAccessListInfo {accessListInfoName accessList fd_res testNo} {
+   global spawn_id
+   upvar $accessListInfoName accessListInfo
+   
+   # -- called by CheckAccessListInfo
+   # -- show access-list and save it to tmp file
+   set fd_in [open "Tmp/tmp_$testNo[pid]" "w"]
+   SendACmd "show access-list $accessList" $fd_res $fd_in
+   close $fd_in
+   
+   # -- set default values
+   set accessListInfo(HitCount) "notFound"
+   set accessListInfo(Flags) "notFound"
+
+   # -- open tmp file and get hit/flow and flags values
+   # -- then store them in array and return to the caller
+   set fd_in [open "Tmp/tmp_$testNo[pid]" "r"]
+   while {[gets $fd_in line] != -1} {
+      set key [lindex $line 0]
+      switch -- $key {
+         "Hit" {
+            set accessListInfo(HitCount) [lindex $line 2]
+            if {  [lindex $line 3] == "Flags:" } {
+               set accessListInfo(Flags) [lindex $line 4]
+            }
+            break
+        } "Flow:" {
+            if {  [lindex $line 3] == "Count:" } {
+               set accessListInfo(HitCount) [lindex $line 4]
+            }
+            if {  [lindex $line 5] == "Flags:" } {
+               set accessListInfo(Flags) [lindex $line 6]
+            }
+            break
+        }
+      }
+   }      
+   close $fd_in
+   file delete "Tmp/tmp_$testNo[pid]"
+   puts "HitCount: $accessListInfo(HitCount) Flag: $accessListInfo(Flags)"
+}
+
+################################################################## 
+# Procedure Name: CheckAccessListInfo
+#   
+# Description: proc that is used to check the acl info with sh accesslist command
+#              for hitCountThreshold, flagsWanted values.
+#              Also, performs logs in report.txt with report_start_test/report_end_test
+#     
+#     
+#
+# Input args: accessList hitCountThreshold flagsWanted fd_res testNo
+# Output args: none
+# Typical usage:
+#        CheckAccessListInfo "permitList" 2 "ac" $fd_res $testNo
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifySwitchOutput
+##################################################################
+
+proc CheckAccessListInfo {accessList hitCountThreshold flagsWanted fd_res testNo } {
+   
+   report_start_test "Checking access list $accessList hit count and flags"
+   # -- call GetAccessListInfo to get hitcount and flags values  
+   GetAccessListInfo accessListInfo $accessList $fd_res $testNo
+   
+   # -- get the hitcount and flags values, then compare with input values
+   set hitCountFound $accessListInfo(HitCount)
+   set flagsFound $accessListInfo(Flags)
+   
+   # -- check for minimum value if any 
+   set mode [lindex $hitCountThreshold 1]
+   if {$mode == "minimum"} {
+      set minimumHit [lindex $hitCountThreshold 0]
+      if { $hitCountFound < $minimumHit } {
+         result_error "Hit count check failed minimum check. Wanted $hitCountThreshold BUTGOT $hitCountFound"
+      } else {
+         result_ok "Hit count check passed minimum check."
+      }
+   } else {
+      if { $hitCountFound != $hitCountThreshold } {
+         result_error "Hit count check failed exactMode check. Wanted $hitCountThreshold BUTGOT $hitCountFound"
+      } else {
+         result_ok "Hit count check passed exactMode check."
+      }
+   }
+   if {($flagsWanted != "ignore") && ($flagsFound != $flagsWanted) } {
+      result_error "Flags check failed check. Wanted $flagsWanted BUTGOT $flagsFound"
+   } else {
+      result_ok "Flags check passed check."
+   }
+   report_end_test
+}
+################################################################## 
+# Procedure Name: 
+#   GetACLUsageRulePort
+# Description: proc that is used to check the acl info with sh accesslist command
+#     
+#                   Created to abstract new platforms (870)
+# Input args: port
+# Output args: none
+#                   Returns the INGRESS hit count.
+#
+#                   Note: 870 has 4 pipes that can hit
+#
+# Typical usage:
+#        set ingressVal2 [GetACLUsageRulePort [MapDUTPortId 1]]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifySwitchOutput
+##################################################################
+proc GetACLUsageRulePort {port} {
+    global bcmx870 whichDutNow DUTs_info bpeSlot
+    if [regexp -nocase "$bcmx870" $DUTs_info(DUT$whichDutNow,platform)] {
+        # Note: several script locations have needed delays prior to exectuting
+        #    this command, so just adding a delay here
+        exSleep 2
+        set parameterList ""
+        lappend parameterList "INGRESS 1 2"
+        lappend parameterList "INGRESS 1 4"
+        lappend parameterList "INGRESS 1 6"
+        lappend parameterList "INGRESS 1 8"
+        set ingressValList [GetKeyValue "show access-list usage acl-rule port $port" $parameterList]
+
+        set x 0;
+        foreach n [lindex $ingressValList 0] {
+            if {[string is integer $n]} {
+                puts "value - $n"
+                set x [expr $n + $x];
+            }
+        }
+        unset parameterList
+        result_debug "Ingress Counter match value $x";
+        return $x
+    } elseif {[CheckForBpePorts -dut {$whichDutNow} -portIdList "1"]} {
+        set port [GetCascadePortNumber -portId 1 -native 1]
+        set parameterList ""
+        lappend parameterList "INGRESS 1 1"
+        set ingressVal [GetKeyValue "show access-list usage acl-rule port $port" $parameterList]
+        unset parameterList
+        result_debug "Ingress Counter match value $ingressVal";
+        return $ingressVal
+    } else {
+        set parameterList ""
+        lappend parameterList "INGRESS 1 1"
+        set ingressVal [GetKeyValue "show access-list usage acl-rule port $port" $parameterList]
+        unset parameterList
+        result_debug "Ingress Counter match value $ingressVal";
+        return $ingressVal
+    }
+}

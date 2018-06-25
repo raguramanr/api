@@ -1,0 +1,627 @@
+
+proc createEsrpVpnDut1 {noEsrp noVpn testNo} {
+if [file exists "Tmp/tmp_createEsrpVpnDut1_$testNo.xsf"] {
+    file delete "Tmp/tmp_createEsrpVpnDut1_$testNo.xsf"
+}
+set fd_res [open "Tmp/tmp_createEsrpVpnDut1_$testNo.xsf" a+]
+
+puts $fd_res "disable esrp"
+if {$noEsrp > 1} {
+   for {set j 2} {$j <= $noEsrp} {incr j} {
+      puts $fd_res "create vlan protect_$j"
+      puts $fd_res "configure vlan protect_$j tag [expr 300 + $j]"
+      puts $fd_res "configure vlan protect_$j add ports [GetATrunkPort 1 9] \
+                   [GetATrunkPort 1 2] tag"
+      puts $fd_res "create esrp esrpn$j type vpls-redundancy"
+      puts $fd_res "configure esrp esrpn$j domain-id [expr 5000 + $j]"
+      puts $fd_res "configure esrp esrpn$j add master protect_$j"
+      puts $fd_res "configure esrp esrpn$j priority 100"
+      puts $fd_res "configure eaps f2_ring add protected vlan protect_$j"
+#      puts $fd_res "enable esrp esrpn$j"
+   }
+}
+set start 1
+set end  [expr $noVpn/$noEsrp]
+for {set i 1} {$i < $noVpn} {incr i} {
+   puts $fd_res "create vlan east$i"
+   puts $fd_res "configure east$i tag [expr 500 +$i]"
+   puts $fd_res "configure east$i add ports [GetATrunkPort 1 2] \
+             [GetATrunkPort 1 9] tag"
+   puts $fd_res "configure eaps f2_ring add protected east$i"
+   puts $fd_res "create vpls extreme$i fec-id-type pseudo-wire [expr 500 + $i]"
+   puts $fd_res "disable igmp snooping vlan east$i"
+   puts $fd_res "configure vpls extreme$i add service vlan east$i"
+   puts $fd_res "configure vpls extreme$i add peer 100.0.0.3"
+   puts $fd_res "configure vpls extreme$i add peer 100.0.0.4"
+}
+puts $fd_res "disable vpls all"
+set startloop 1
+set incrRate  [expr $noVpn/$noEsrp]
+set endloop $incrRate
+if {$noEsrp > 1} {
+for {set j 2} {$j <= $noEsrp} {incr j} {
+   for {set k $startloop} {$k<=$endloop} {incr k} {
+      puts $fd_res "configure vpls extreme$k redundancy esrp esrpn$j"
+   }
+incr startloop $incrRate
+incr endloop  $incrRate
+}
+}
+for {set k $startloop} {$k<$endloop} {incr k} {
+      puts $fd_res "configure vpls extreme$k redundancy esrp esrp2"
+}
+puts $fd_res "enable vpls all"
+
+close $fd_res
+}
+
+
+proc createEsrpVpnDut2 {noEsrp noVpn testNo} {
+if [file exists "Tmp/tmp_createEsrpVpnDut2_$testNo.xsf"] {
+    file delete "Tmp/tmp_createEsrpVpnDut2_$testNo.xsf"
+}
+
+set fd_res [open "Tmp/tmp_createEsrpVpnDut2_$testNo.xsf" a+]
+puts $fd_res "disable esrp"
+if {$noEsrp > 1} {
+   for {set j 2} {$j <= $noEsrp} {incr j} {
+      puts $fd_res "create vlan protect_$j"
+      puts $fd_res "configure vlan protect_$j tag [expr 300 + $j]"
+      puts $fd_res "configure vlan protect_$j add ports [GetATrunkPort 2 1] \
+                   [GetATrunkPort 2 10] tag"
+      puts $fd_res "create esrp esrpn$j type vpls-redundancy"
+      puts $fd_res "configure esrp esrpn$j domain-id [expr 5000 + $j]"
+      puts $fd_res "configure esrp esrpn$j add master protect_$j"
+      puts $fd_res "configure esrp esrpn$j priority 50"
+      puts $fd_res "configure eaps f2_ring add protected vlan protect_$j"
+#      puts $fd_res "enable esrp esrpn$j"
+   }
+}
+
+set start 1
+set end  [expr $noVpn/$noEsrp]
+
+for {set i 1} {$i < $noVpn} {incr i} {
+   puts $fd_res "create vlan east$i"
+   puts $fd_res "configure east$i tag [expr 500 +$i]"
+   puts $fd_res "configure east$i add ports [GetATrunkPort 2 1] \
+             [GetATrunkPort 2 10] tag"
+   puts $fd_res "configure eaps f2_ring add protected east$i"
+   puts $fd_res "create vpls extreme$i fec-id-type pseudo-wire [expr 500 + $i]"
+   puts $fd_res "disable igmp snooping vlan east$i"
+   puts $fd_res "configure vpls extreme$i add service vlan east$i"
+   puts $fd_res "configure vpls extreme$i add peer 100.0.0.3"
+   puts $fd_res "configure vpls extreme$i add peer 100.0.0.4"
+}
+puts $fd_res "disable vpls all"
+set startloop 1
+set incrRate  [expr $noVpn/$noEsrp]
+set endloop $incrRate
+if {$noEsrp > 1} {
+for {set j 2} {$j <= $noEsrp} {incr j} {
+   for {set k $startloop} {$k<=$endloop} {incr k} {
+      puts $fd_res "configure vpls extreme$k redundancy esrp esrpn$j"
+   }
+incr startloop $incrRate
+incr endloop  $incrRate
+}
+}
+for {set k $startloop} {$k<$endloop} {incr k} {
+      puts $fd_res "configure vpls extreme$k redundancy esrp esrp2"
+}
+puts $fd_res "enable vpls all"
+close $fd_res
+
+}
+
+proc createEsrpVpnDut3 {noEsrp noVpn testNo} {
+if [file exists "Tmp/tmp_createEsrpVpnDut3_$testNo.xsf"] {
+    file delete "Tmp/tmp_createEsrpVpnDut3_$testNo.xsf"
+}
+
+set fd_res [open "Tmp/tmp_createEsrpVpnDut3_$testNo.xsf" a+]
+puts $fd_res "disable esrp"
+if {$noEsrp > 1} {
+   for {set j 2} {$j <= $noEsrp} {incr j} {
+      puts $fd_res "create vlan protect_$j"
+      puts $fd_res "configure vlan protect_$j tag [expr 300 + $j]"
+      puts $fd_res "configure vlan protect_$j add ports [GetATrunkPort 3 7] \
+                   [GetATrunkPort 3 4] tag"
+      puts $fd_res "create esrp esrpn$j type vpls-redundancy"
+      puts $fd_res "configure esrp esrpn$j domain-id [expr 6000 + $j]"
+      puts $fd_res "configure esrp esrpn$j add master protect_$j"
+      puts $fd_res "configure esrp esrpn$j priority 100"
+      puts $fd_res "configure eaps f1_ring add protected vlan protect_$j"
+#      puts $fd_res "enable esrp esrpn$j"
+   }
+}
+set start 1
+set end  [expr $noVpn/$noEsrp]
+
+for {set i 1} {$i < $noVpn} {incr i} {
+   puts $fd_res "create vlan east$i"
+   puts $fd_res "configure east$i tag [expr 500 +$i]"
+   puts $fd_res "configure east$i add ports [GetATrunkPort 3 7] \
+             [GetATrunkPort 3 4] tag"
+   puts $fd_res "configure eaps f1_ring add protected east$i"
+   puts $fd_res "create vpls extreme$i fec-id-type pseudo-wire [expr 500 + $i]"
+   puts $fd_res "disable igmp snooping vlan east$i"
+   puts $fd_res "configure vpls extreme$i add service vlan east$i"
+   puts $fd_res "configure vpls extreme$i add peer 100.0.0.1"
+   puts $fd_res "configure vpls extreme$i add peer 100.0.0.2"
+}
+puts $fd_res "disable vpls all"
+set startloop 1
+set incrRate  [expr $noVpn/$noEsrp]
+set endloop $incrRate
+if {$noEsrp > 1} {
+   for {set j 2} {$j <= $noEsrp} {incr j} {
+   for {set k $startloop} {$k<=$endloop} {incr k} {
+
+      puts $fd_res "configure vpls extreme$k redundancy esrp esrpn$j"
+   }
+incr startloop $incrRate
+incr endloop  $incrRate
+}
+}
+for {set k $startloop} {$k<$endloop} {incr k} {
+      puts $fd_res "configure vpls extreme$k redundancy esrp esrp1"
+}
+puts $fd_res "enable vpls all"
+close $fd_res
+
+}
+
+
+proc createEsrpVpnDut4 {noEsrp noVpn testNo} {
+if [file exists "Tmp/tmp_createEsrpVpnDut4_$testNo.xsf"] {
+    file delete "Tmp/tmp_createEsrpVpnDut4_$testNo.xsf"
+}
+
+set fd_res [open "Tmp/tmp_createEsrpVpnDut4_$testNo.xsf" a+]
+
+puts $fd_res "disable esrp"
+if {$noEsrp > 1} {
+   for {set j 2} {$j <= $noEsrp} {incr j} {
+      puts $fd_res "create vlan protect_$j"
+      puts $fd_res "configure vlan protect_$j tag [expr 300 + $j]"
+      puts $fd_res "configure vlan protect_$j add ports [GetATrunkPort 4 8] \
+                   [GetATrunkPort 4 3] tag"
+      puts $fd_res "create esrp esrpn$j type vpls-redundancy"
+      puts $fd_res "configure esrp esrpn$j domain-id [expr 6000 + $j]"
+      puts $fd_res "configure esrp esrpn$j add master protect_$j"
+      puts $fd_res "configure esrp esrpn$j priority 50"
+      puts $fd_res "configure eaps f1_ring add protected vlan protect_$j"
+#      puts $fd_res "enable esrp esrpn$j"
+   }
+}
+set start 1
+set end  [expr $noVpn/$noEsrp]
+
+for {set i 1} {$i < $noVpn} {incr i} {
+   puts $fd_res "create vlan east$i"
+   puts $fd_res "configure east$i tag [expr 500 +$i]"
+   puts $fd_res "configure east$i add ports [GetATrunkPort 4 8] \
+             [GetATrunkPort 4 3] tag"
+   puts $fd_res "configure eaps f1_ring add protected east$i"
+   puts $fd_res "create vpls extreme$i fec-id-type pseudo-wire [expr 500 + $i]"
+   puts $fd_res "disable igmp snooping vlan east$i"
+   puts $fd_res "configure vpls extreme$i add service vlan east$i"
+   puts $fd_res "configure vpls extreme$i add peer 100.0.0.1"
+   puts $fd_res "configure vpls extreme$i add peer 100.0.0.2"
+}
+puts $fd_res "disable vpls all"
+set startloop 1
+set incrRate  [expr $noVpn/$noEsrp]
+set endloop $incrRate
+if {$noEsrp > 1} {
+   for {set j 2} {$j <= $noEsrp} {incr j} {
+   for {set k $startloop} {$k<=$endloop} {incr k} {
+      puts $fd_res "configure vpls extreme$k redundancy esrp esrpn$j"
+   }
+incr startloop $incrRate
+incr endloop  $incrRate
+}
+}
+for {set k $startloop} {$k<$endloop} {incr k} {
+      puts $fd_res "configure vpls extreme$k redundancy esrp esrp1"
+}
+puts $fd_res "enable vpls all"
+close $fd_res
+}
+
+proc createEsrpVpnEndDUT7 {noEsrp noVpn testNo}  {
+if [file exists "Tmp/tmp_createEsrpVpnDut7_$testNo.xsf"] {
+    file delete "Tmp/tmp_createEsrpVpnDut7_$testNo.xsf"
+}
+
+set fd_res [open "Tmp/tmp_createEsrpVpnDut7_$testNo.xsf" a+]
+if {$noEsrp > 1} {
+   for {set j 2} {$j <= $noEsrp} {incr j} {
+      puts $fd_res "create vlan protect_$j"
+      puts $fd_res "configure vlan protect_$j tag [expr 300 +$j]"
+      puts $fd_res "configure vlan protect_$j add ports [GetATrunkPort 7 3], \
+                [GetATrunkPort 7 8] tag"
+      puts $fd_res "create esrp esrp_$j"
+      puts $fd_res "configure esrp esrp_$j domain-id [expr 6000 + $j]"
+      puts $fd_res "configure esrp esrp_$j add master protect_$j"
+      puts $fd_res "configure eaps f1_ring add protected vlan protect_$j"
+   }
+}
+
+      for {set i 1} {$i < $noVpn} {incr i} {
+         puts $fd_res "create vlan service_$i"
+         puts $fd_res "configure service_$i tag [expr 500 +$i]"
+         puts $fd_res "configure service_$i add ports [MapDUTPortId 14 7], \
+         [GetATrunkPort 7 3],[GetATrunkPort 7 8] tagged"
+         puts $fd_res "configure eaps f1_ring add protected vlan service_$i"
+    }
+close $fd_res
+}
+
+proc createEsrpVpnEndDUT8 {noEsrp noVpn testNo}  {
+if [file exists "Tmp/tmp_createEsrpVpnDut8_$testNo.xsf"] {
+    file delete "Tmp/tmp_createEsrpVpnDut8_$testNo.xsf"
+}
+
+set fd_res [open "Tmp/tmp_createEsrpVpnDut8_$testNo.xsf" a+]
+if {$noEsrp > 1} {
+   for {set j 2} {$j <= $noEsrp} {incr j} {
+      puts $fd_res "create vlan protect_$j"
+      puts $fd_res "configure vlan protect_$j tag [expr 300 +$j]"
+      puts $fd_res "configure vlan protect_$j add ports [GetATrunkPort 8 4], \
+                [GetATrunkPort 8 7] tag"
+      puts $fd_res "create esrp esrp_$j"
+      puts $fd_res "configure esrp esrp_$j domain-id [expr 6000 + $j]"
+      puts $fd_res "configure esrp esrp_$j add master protect_$j"
+      puts $fd_res "configure eaps f1_ring add protected vlan protect_$j"
+   }
+}
+for {set i 1} {$i < $noVpn} {incr i} {
+   puts $fd_res "create vlan service_$i"
+   puts $fd_res "configure service_$i tag [expr 500 +$i]"
+   puts $fd_res "configure service_$i add ports [MapDUTPortId 16 8], \
+             [GetATrunkPort 8 4],[GetATrunkPort 8 7] tagged"
+   puts $fd_res "configure eaps f1_ring add protected vlan service_$i"
+}
+close $fd_res
+}
+
+proc createEsrpVpnEndDUT9 {noEsrp noVpn testNo}  {
+if [file exists "Tmp/tmp_createEsrpVpnDut9_$testNo.xsf"] {
+    file delete "Tmp/tmp_createEsrpVpnDut9_$testNo.xsf"
+}
+
+set fd_res [open "Tmp/tmp_createEsrpVpnDut9_$testNo.xsf" a+]
+if {$noEsrp > 1} {
+   for {set j 2} {$j <= $noEsrp} {incr j} {
+      puts $fd_res "create vlan protect_$j"
+      puts $fd_res "configure vlan protect_$j tag [expr 300 +$j]"
+      puts $fd_res "configure vlan protect_$j add ports [GetATrunkPort 9 1], \
+                [GetATrunkPort 9 10] tag"
+      puts $fd_res "create esrp esrp_$j"
+      puts $fd_res "configure esrp esrp_$j domain-id [expr 5000 + $j]"
+      puts $fd_res "configure esrp esrp_$j add master protect_$j"
+      puts $fd_res "configure eaps f2_ring add protected vlan protect_$j"
+   }
+}
+
+      for {set i 1} {$i < $noVpn} {incr i} {
+         puts $fd_res "create vlan service_$i"
+         puts $fd_res "configure service_$i tag [expr 500 +$i]"
+         puts $fd_res "configure service_$i add ports [MapDUTPortId 18 9], \
+                   [GetATrunkPort 9 1],[GetATrunkPort 9 10] tagged"
+         puts $fd_res "configure eaps f2_ring add protected vlan service_$i"
+    }
+close $fd_res
+}
+
+proc createEsrpVpnEndDUT10 {noEsrp noVpn testNo}  {
+if [file exists "Tmp/tmp_createEsrpVpnDut10_$testNo.xsf"] {
+    file delete "Tmp/tmp_createEsrpVpnDut10_$testNo.xsf"
+}
+set fd_res [open "Tmp/tmp_createEsrpVpnDut10_$testNo.xsf" a+]
+if {$noEsrp > 1} {
+   for {set j 2} {$j <= $noEsrp} {incr j} {
+      puts $fd_res "create vlan protect_$j"
+      puts $fd_res "configure vlan protect_$j tag [expr 300 +$j]"
+      puts $fd_res "configure vlan protect_$j add ports [GetATrunkPort 10 2], \
+                [GetATrunkPort 10 9] tag"
+      puts $fd_res "create esrp esrp_$j"
+      puts $fd_res "configure esrp esrp_$j domain-id [expr 5000 + $j]"
+      puts $fd_res "configure esrp esrp_$j add master protect_$j"
+      puts $fd_res "configure eaps f2_ring add protected vlan protect_$j"
+   }
+}
+
+      for {set i 1} {$i < $noVpn} {incr i} {
+         puts $fd_res "create vlan service_$i"
+         puts $fd_res "configure service_$i tag [expr 500 +$i]"
+         puts $fd_res "configure service_$i add ports [MapDUTPortId 20 10], \
+                   [GetATrunkPort 10 2],[GetATrunkPort 10 9] tagged"
+         puts $fd_res "configure eaps f2_ring add protected vlan service_$i"
+    }
+close $fd_res
+}
+
+
+proc InitEsrpVpnDut {dut} {
+global DUT[set dut]_CONNECT
+Login [set DUT[set dut]_CONNECT]
+SendACmd "use config init_config"
+CheckReboot $dut -save no -maxWait 60
+copyRes
+}
+
+
+
+proc runtest_3.5.6.6 {args} {
+     parse_args runtest_3.5.6.6 $args {
+     mode "RSVP"
+     noEsrp "1"
+     noVpn "1"
+}
+
+  # ----- Environment variables setup
+  global DUT1_CONNECT
+  global DUT2_CONNECT
+  global DUT3_CONNECT
+  global DUT4_CONNECT
+  global DUT7_CONNECT
+  global DUT8_CONNECT
+  global DUT9_CONNECT
+  global DUT10_CONNECT
+  global DUTs_info
+
+  set mercedes_mac $DUTs_info(DUT7,sysMAC)
+  set ferrari_mac $DUTs_info(DUT8,sysMAC)
+  set honda_mac $DUTs_info(DUT9,sysMAC)
+  set toyota_mac $DUTs_info(DUT10,sysMAC)
+  set delhi_mac $DUTs_info(DUT1,sysMAC)
+  set chennai_mac $DUTs_info(DUT2,sysMAC)
+  set frankfurt_mac $DUTs_info(DUT3,sysMAC)
+  set milan_mac $DUTs_info(DUT4,sysMAC)
+  set core_macs "$delhi_mac $chennai_mac $frankfurt_mac $milan_mac"
+  set edge_macs "$mercedes_mac $ferrari_mac $honda_mac $toyota_mac"
+ #####################################################################################
+  set Subtest "Active Pseudowire failure - Transport LSP - $mode"
+ ####################################################################################
+
+ result_h2 "$Subtest"
+ report_start_test "$Subtest"
+
+  #---- Checking for expected esrp state in MPLS core DUT's
+
+
+      Login $DUT4_CONNECT
+      SendACmd "conf esrp esrp1 priority 50"
+ if {$noEsrp >1} {
+    for {set i 2} {$i <= $noEsrp} {incr i} {
+       SendACmd "configure esrp esrpn$i priority 50"
+    }
+ }
+      Login $DUT2_CONNECT
+      SendACmd "conf esrp esrp2 priority 50"
+ if {$noEsrp >1} {
+    for {set i 2} {$i <= $noEsrp} {incr i} {
+       SendACmd "configure esrp esrpn$i priority 50"
+    }
+ }
+
+  result_debug "wait for i60 sec for the convergence"
+  exSleep 60
+
+  ClearPortsStats "14 16 18 20"
+
+  #---- send bidirectional traffic across 4 ports
+
+  biSendFrame  -txPortId 14 -rxPortId 20 -frameRate 1000 -tag "500" -tagMode "vIncrement" \
+               -sourceMac $mercedes_mac -destMac $toyota_mac -streamType "contPacket" -tagRepeat $noVpn
+
+  biSendFrame  -txPortId 16 -rxPortId 18 -frameRate 1000 -tag "500" -tagMode "vIncrement" \
+               -sourceMac $ferrari_mac -destMac $honda_mac -streamType "contPacket" -tagRepeat $noVpn
+
+  exSleep 5
+
+  #####################################################################################
+  set Subtest "$mode Checking esrp state on frankfurt and milan after
+               disabling active pseudowire on Frankfurt - Transport LSP $mode \
+               verify the Fail over time "
+  ####################################################################################
+
+  result_h3 "$Subtest"
+  report_start_test "$Subtest"
+
+  result_debug "disabling active pseudowire on Frankfurt"
+
+  Login $DUT3_CONNECT
+
+  SendACmd "disable vpls all"
+
+  exSleep 15
+
+ #---- Checking for expected esrp state in MPLS core DUT's
+
+ CheckEsrpStatusScal 1 $noEsrp Master
+ CheckEsrpStatusScal 2 $noEsrp Slave
+ CheckEsrpStatusScal 3 $noEsrp Slave
+ CheckEsrpStatusScal 4 $noEsrp Master
+
+  set percentageList "";
+  lappend percentageList "20 100";
+  CheckRates 14 $percentageList "" 10;
+  unset percentageList;
+
+  set percentageList "";
+  lappend percentageList "14 100";
+  CheckRates 20 $percentageList "" 10;
+  unset percentageList;
+
+  set percentageList "";
+  lappend percentageList "18 100";
+  CheckRates 16 $percentageList "" 10;
+  unset percentageList;
+
+  set percentageList "";
+  lappend percentageList "16 100";
+  CheckRates 18 $percentageList "" 10;
+  unset percentageList;
+
+  StopPortsTransmit "14 16 18 20"
+
+
+  for {set i 14} {$i <=20} {incr i 2} {
+     set numFrameSentD$i [GetNumFramesSent $i]
+     set numFrameRcvdD$i [GetNumFramesReceived $i]
+  }
+
+  set pktLossD7-10 [expr  ([format "%f" [expr $numFrameSentD14 - $numFrameRcvdD20]])/1000]
+  set pktLossD10-7 [expr  ([format "%f" [expr $numFrameSentD20 - $numFrameRcvdD14]])/1000]
+  set pktLossD8-9 [expr  ([format "%f" [expr $numFrameSentD16 - $numFrameRcvdD18]])/1000]
+  set pktLossD9-8 [expr  ([format "%f" [expr $numFrameSentD18 - $numFrameRcvdD16]])/1000]
+
+  set pktLossLst "pktLossD7-10 pktLossD10-7 pktLossD8-9 pktLossD9-8"
+
+  foreach pktLoss $pktLossLst {
+  report_start_test "fail over  time for $pktLoss are in accepted limits"
+     result_debug "fail over time calculated $pktLoss is [set $pktLoss]"
+     if {[set $pktLoss] > 10.0 } {
+        result_error "fail over time for $pktLoss beyond the expected limits"
+     } else {
+        result_ok "fail over loss time for $pktLoss within the accepted limits"
+     }
+  report_end_test
+  }
+
+  report_end_test
+
+  report_end_test
+
+}
+
+proc downloadconfig {dut testNo} {
+global tftpServerList
+global DUT${dut}_CONNECT
+global DUT${dut}_IP
+Login [set DUT[set dut]_CONNECT]
+ConfigGatewayNetwork
+set cfgfile "tmp_createEsrpVpnDut${dut}_$testNo"
+CheckDownloadConfig $tftpServerList $cfgfile 0 -wait 600 -nameFormat "static"
+}
+
+
+proc CheckVplsStatusScal {args} {
+
+     parse_args CheckVplsStatus $args {
+      dutConnect ""
+      ipList ""
+      state ""
+      flag "C---V-"
+      dutName ""
+      vplsNo "1"
+}
+      global DUT[set dutConnect]_CONNECT
+      Login [set DUT[set dutConnect]_CONNECT]
+
+      set parameterList ""
+      for {set i 1} {$i< $vplsNo} {incr i 50} {
+         lappend parameterList "{extreme$i.*east$i} {[lindex $ipList 0].*\
+                                [lindex $state 0].*$flag} inLine exist 1"
+         lappend parameterList "{extreme$i.*east$i} {[lindex $ipList 1].*\
+                                [lindex $state 1].*$flag} inLine exist"
+
+      }
+      if {(($dutConnect==1)||($dutConnect==2))} {
+         lappend parameterList "{extreme.*500.*east} {[lindex $ipList 0].*\
+                                [lindex $state 0].*$flag} inLine exist 1"
+         lappend parameterList "{extreme.*500.*east} {[lindex $ipList 1].*\
+                                [lindex $state 1].*$flag} inLine exist"
+      } else {
+         lappend parameterList "{extreme.*500.*west} {[lindex $ipList 0].*\
+                                [lindex $state 0].*$flag} inLine exist 1"
+         lappend parameterList "{extreme.*500.*west} {[lindex $ipList 1].*\
+                                [lindex $state 1].*$flag} inLine exist"
+      }
+
+      set return_type [CheckKeyValue "sh vpls" $parameterList \
+                  -comment "verify VPLS is UP on $dutName"]
+      return $return_type
+      unset parameterList
+
+}
+
+proc CheckEsrpStatusScal {dut noEsrp esrpState} {
+global DUT[set dut]_CONNECT
+Login [set DUT[set dut]_CONNECT]
+set parameter ""
+   if {$noEsrp > 1} {
+      for {set i 2} {$i <= $noEsrp} {incr i} {
+         lappend parameter "{esrpn$i.*E.*protect_$i.*$esrpState} exist"
+      }
+   }
+   if {(($dut==1)||($dut==2))} {
+      lappend parameter "{esrp2.*E.*f2_protect.*$esrpState} exist"
+   } else {
+      lappend parameter "{esrp1.*E.*f1_protect.*$esrpState} exist"
+   }
+
+  CheckKeyValue "show esrp" $parameter \
+           -comment "verify the esrp status for DUT$dut" \
+           -time {s: 1 i: 10 d: 40 f: 40 r}
+  unset parameter
+}
+
+proc CheckFdbVplsExistScal {args} {
+      parse_args CheckFdbVplsExistScal $args {
+       dut ""
+       macList ""
+       ip ""
+       vplsNo ""
+       dutName ""
+}
+        global DUT[set dut]_CONNECT
+        Login [set DUT[set dut]_CONNECT]
+
+        set parameterList ""
+        if {(($dut==1)|| ($dut==2))} {
+        for {set i 0} {$i < [llength $macList]} {incr i} {
+             set mac [lindex $macList $i]
+             lappend parameterList "{$mac.*east.*extreme:$ip} exist"
+        }
+        } else {
+           for {set i 0} {$i < [llength $macList]} {incr i} {
+             set mac [lindex $macList $i]
+             lappend parameterList "{$mac.*west.*extreme:$ip} exist"
+        }
+        }
+        for {set vp 1} {$vp < $vplsNo} {incr vp 50} {
+           for {set i 0} {$i < [llength $macList]} {incr i} {
+             set mac [lindex $macList $i]
+             lappend parameterList "{$mac.*east$vp.*extreme$vp:$ip} exist"
+           }
+        }
+        CheckKeyValue "show fdb vpls" $parameterList \
+            -comment "Checking fdb vpls on $dutName"
+        unset parameterList
+}
+
+proc CheckActVplsScal {dut noActL2VPN} {
+global DUT${dut}_CONNECT
+Login [set DUT[set dut]_CONNECT]
+set parameter ""
+lappend parameter "{Total number of configured VPLS:} \
+                   {$noActL2VPN} inLine exist"
+lappend parameter "{Total number of active VPLS:} \
+                   {$noActL2VPN} inLine exist"
+lappend parameter "{Total number of configured PWs:} \
+                   {[expr 2 * $noActL2VPN]} inLine exist"
+lappend parameter "{Total number of active PWs:} \
+                   {[expr 2 * $noActL2VPN]} inLine exist"
+CheckKeyValue "show vpls summary" $parameter \
+           -time {s: 1 i: 10 d: 80 f: 80 r} \
+           -comment "Checking Eaps Status"
+        unset parameter
+}
+
+
+

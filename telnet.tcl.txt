@@ -1,0 +1,139 @@
+
+##################################################################
+# Procedure Name: result_debug_expect
+# Description:
+#       print expect_out(buffer) in the log
+# Input args: None 
+# Output args: None
+# Typical usage:
+#       result_debug_expect
+# Category: Failsafe
+##################################################################
+proc result_debug_expect { } {
+   #eval expect_out at the caller's level
+   uplevel {
+      if [info exist expect_out(buffer)] {
+         result_debug $expect_out(buffer)
+      }
+   }
+} 
+
+##################################################################
+# Procedure Name: createAccount
+# Description:
+#       This proc is used to create a user acount on the switch
+# Input args:  user
+#              password
+# Output args: None
+# Typical usage:
+#       createAccount user local123 local123
+# Category: Failsafe
+##################################################################
+proc createAccount { type user password } {
+   global whichDutNow
+   set ver [GetVersion DUT${whichDutNow}]
+   if { [CompareRelease $ver 11.1] >=0 } {
+      exp_send "\r"
+      exp_send "create account $type $user\r"
+      expect "password:"
+      result_debug_expect
+      exp_send "$password\r"
+      expect "Reenter password:"
+      exp_send "$password\r"
+      result_debug_expect
+   } else {
+      SendACmd "create account $type $user $password"
+   }
+}
+##################################################################
+# Procedure Name: GetVirtualRouter
+# Description:
+#       return the vr to be used based on switchPort2DefaultRouter
+# Input args:  mode - keyWord - include the vr keyword
+#                     noKeyWord - don't include the vr keyword
+# Output args: return the vr to be used
+# Typical usage:
+#       SendACmd  "enable bootprelay [GetVirtualRouter]"
+# Category: Failsafe
+##################################################################
+proc GetVirtualRouter { {mode keyWord}} {
+   global switchPort2DefaultRouter
+   global whichDutNow
+   global DUT${whichDutNow}_IP_FP
+   global USE_FP_PORT
+   if {$mode == "noKeyWord" } {
+      set vr ""
+   } else {
+      set vr "vr "
+   }
+   if {[info exists USE_FP_PORT] && $USE_FP_PORT} {
+      return "${vr}VR-Default"
+   } elseif {[regexp -nocase $switchPort2DefaultRouter "mgmt"]} {
+      return "${vr}VR-mgmt"
+   } else {
+      return "${vr}VR-Default"
+   }
+}
+
+##################################################################
+# Procedure Name: spawnTelnet
+# Description:
+#       This proc is used to spawn a telnet session
+# Input args:  ip  - ip to telnet to
+#              user
+#              password
+# Output args: return 0 if failed, return spawn_id if ok
+# Typical usage:
+#       spawnTelnet $DUT1_IP admin ""
+# Category: Telnet
+##################################################################
+proc spawnTelnet { ip {user admin } {password "" } } {
+   result_debug "telneting to $ip as $user"
+   set timeout 10
+   if [catch "spawn telnet $ip" reason] {
+      return 0
+   }
+   expect {
+      "Connection refused" {
+         result_debug_expect
+         return 0
+      }
+      "Connection closed" {
+         result_debug_expect
+         return 0
+      }
+      "Unable to connect" {
+         result_debug_expect
+         return 0
+      }
+      "login:" {
+         result_debug_expect
+         send "$user\r"
+      }
+      timeout {
+         result_debug_expect
+         return 0
+      }
+   }
+   expect {
+      "assword:" {
+         result_debug_expect
+         send "$password\r"
+      }
+      timeout {
+         result_debug_expect
+         return 0
+      }
+   }
+   expect {
+      -re "\[0-9] \[#>]" {
+         result_debug_expect
+         return $spawn_id
+      }
+      timeout {
+         result_debug_expect
+         return 0
+      }
+   }
+}
+

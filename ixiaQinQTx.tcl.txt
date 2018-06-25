@@ -1,0 +1,397 @@
+
+################################################################## 
+# Procedure Name: SendDoubleTagFrame
+#   
+# Description: Used to send Q-in-Q mac packets
+#     
+# Input args: args
+# Output args: none
+# Return value: Retruns the packet sent
+# Typical usage:
+#               set frameSent [SendDoubleTagFrame -txPortId 1 -destMac $destmac\
+#                   -ctag 10 -ctagPriority 2 -stag 12 -stagPriority 3];
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: SendTraffic
+##################################################################
+proc SendDoubleTagFrame {args} {
+   parse_args SendDoubleTagFrame $args {
+      txPortId "1"
+      rxPortId "0"
+      protocol "mac"
+      sourceMac "default"
+      destMac "default"
+      numFrames "1"
+      frameSize "64"
+      frameSizeType "sizeFixed"
+      dataPattern "1234"
+      ethernetType "noType"
+      frameType "08 00"
+      streamType "stopStream"
+      fcsError "good"
+      saMode "idle"
+      daMode "idle"
+      saCount ""
+      daCount ""
+      percentage "100"
+      ctag "none"
+      ctagPriority "0"	      
+      stagEncap "88A8"
+      stag "none"
+      stagPriority "0"     
+      frameRate "null"
+      tagMode "vIdle"
+      tagRepeat 1
+      udfEnable "false"
+      udfInitval "00"
+      udfOffset "0"
+      udfCountertype "c8"
+      udfContinuousCount "false"
+      dontTx "0"
+   }
+
+   if {($stag == "none") && ($ctag == "none")} {
+       result_debug "ctag and stag parameter is required"
+       return -1
+   } elseif {($stag == "none")} {
+       result_debug "stag parameter is required"
+       return -1
+   }
+   
+   if {$ctag == "none"} {
+      set ctagHex ""
+   } else {
+      set cEncap "8100"
+      set cEncapCan "0"
+      set ctagBin [int2bits $ctag 12]
+      set ctagPrioBin [int2bits $ctagPriority 3]
+      set ctagBinStr "$ctagPrioBin$cEncapCan$ctagBin"
+
+      set ctagHexStr ""
+
+# --- Get the Hex value of each bytes in 0xAA form
+      for {set i 0} {$i < 2} {incr i} {
+         set stOffset [expr $i*8]
+         set endOffset [expr ($i+1)*8 -1]
+         set ctagBinVal [string range $ctagBinStr $stOffset $endOffset]
+         set ctagHexVal [bits2hex $ctagBinVal 2]
+         set ctagHexStr $ctagHexStr$ctagHexVal
+      }
+      set ctagHex "$cEncap$ctagHexStr"
+   }
+
+   set sEncapCan "0"
+   set stagBin [int2bits $stag 12]
+   set stagPrioBin [int2bits $stagPriority 3]
+   set stagBinStr "$stagPrioBin$sEncapCan$stagBin"
+
+   set stagHexStr ""
+   for {set i 0} {$i < 2} {incr i} {
+      set stOffset [expr $i*8]
+      set endOffset [expr ($i+1)*8 -1]
+      set stagBinVal [string range $stagBinStr $stOffset $endOffset]
+      set stagHexVal [bits2hex $stagBinVal 2]
+      set stagHexStr $stagHexStr$stagHexVal
+   }
+   set stagHex "$stagEncap$stagHexStr"
+
+   set userDefTag "$stagHex$ctagHex"
+   result_debug "userDefTag $userDefTag binStr is $stagBinStr ctaghex $ctagHex"
+   
+   set framesent [SendFrame -txPortId $txPortId -rxPortId $rxPortId \
+          -protocol $protocol -sourceMac $sourceMac -destMac $destMac \
+          -numFrames $numFrames -frameSize $frameSize \
+          -frameSizeType $frameSizeType -dataPattern $dataPattern \
+          -ethernetType $ethernetType -frameType $frameType \
+          -streamType $streamType -fcsError $fcsError -saMode $saMode \
+          -daMode $daMode -saCount $saCount -daCount $daCount \
+          -percentage $percentage -tag "none" -tagPriority "0" \
+          -frameRate $frameRate -tagMode $tagMode -tagRepeat $tagRepeat \
+          -udfEnable $udfEnable -udfInitval $udfInitval -udfOffset $udfOffset \
+          -udfCountertype $udfCountertype \
+          -udfContinuousCount $udfContinuousCount -dontTx $dontTx \
+          -protoOffsetEnable "true" -protoOffset "22" -userDefTag $userDefTag]
+
+    return $framesent
+}
+
+################################################################## 
+# Procedure Name: SendDoubleTagIpFrame
+#   
+# Description: Used to send Q-in-Q ip packets
+#     
+# Input args: args
+# Output args: none
+# Return value: Retruns the packet sent
+# Typical usage:
+#               set frameSent [SendDoubleTagIpFrame -txPortId 1 -destMac \
+#                           $destmac -sourceIp $srcIp -destIp $destaddr \
+#                 -ttl $ttl -ctag 10 -ctagPriority 2 -stag 12 -stagPriority 3];
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 VerifySwitchOutput,VerifyTraffic)
+# Category: SendTraffic
+##################################################################
+proc SendDoubleTagIpFrame {args} {
+   parse_args SendDoubleTagIpFrame $args {
+     protocol "ip"
+     txPortId "1"
+     rxPortId "0"
+     sourceMac "default"
+     destMac "00 e0 2b 00 00 01"
+     sourceIp "127.0.0.1"
+     destIp "127.0.0.1"
+     gatewayIp "127.0.0.1"
+     dIpMask "255.255.255.0"
+     sIpMask "255.255.255.0"
+     dClass "classC"
+     sourcePort "0"
+     destPort "0"
+     ttl "64"
+     goodChecksum "true"
+     numFrames "1"
+     frameSize "64"
+     frameSizeType "sizeFixed"
+     ipOptions ""
+     frameRate "default"
+     frameType "08 00"
+     dataPattern "0000"
+     streamType "stopStream"
+     fcsError "good"
+     ctag "none"
+     ctagPriority "0"	      
+     stagEncap "none"
+     stag "none"
+     stagPriority "0"     
+     TOS "default"
+     userPriority "0"
+     percentage "100"
+     priority "0"
+     saMode "idle"
+     daMode "idle"
+     saCount ""
+     daCount ""
+     ipSaMode "ipIdle"
+     ipDaMode "ipIdle"
+     ipSaCount ""
+     ipDaCount ""
+     dontFrag "true"
+     tcpSynFlag "false"
+     tcpFinFlag "false"
+     tcpRstFlag "false"
+     tcpAckFlag "false"
+     tcpPushFlag "false"
+     tcpUrgFlag "false"
+     tcpSeqNum "0"
+     type "8"
+     code "0"
+     id "0"
+     sequence "0"
+     direction "1Way"
+     maxResponseTime "100"
+     groupAddr "224.0.0.1"
+     applyFilter "0"
+     udfEnable "false"
+     udfInitval "00"
+     udfOffset "0"
+     udfCountertype "c8"
+     udfContinuousCount "false"
+     clearStats "yes"
+     dontTx "0"
+}
+
+   if {($ctag == "none") && ($stag == "none")} {
+       result_debug "ctag and stag parameter is required"
+       return -1
+   } elseif {($stag == "none")} {
+       result_debug "stag parameter is required"
+   }
+   
+   if {$ctag == "none"} {
+      set ctagHex ""
+   } else {
+      set cEncap "8100"
+      set cEncapCan "0"
+      set ctagBin [int2bits $ctag 12]
+      set ctagPrioBin [int2bits $ctagPriority 3]
+      set ctagBinStr "$ctagPrioBin$cEncapCan$ctagBin"
+# --- Get the Hex value of each bytes in 0xAA form
+      set ctagHexStr ""
+
+      for {set i 0} {$i < 2} {incr i} {
+         set stOffset [expr $i*8]
+         set endOffset [expr ($i+1)*8 -1]
+         set ctagBinVal [string range $ctagBinStr $stOffset $endOffset]
+         set ctagHexVal [bits2hex $ctagBinVal 2]
+         set ctagHexStr $ctagHexStr$ctagHexVal
+      }
+      set ctagHex "$cEncap$ctagHexStr"
+   }
+
+   set sEncapCan "0"
+   set stagBin [int2bits $stag 12]
+   set stagPrioBin [int2bits $stagPriority 3]
+   set stagBinStr "$stagPrioBin$sEncapCan$stagBin"
+
+   set stagHexStr ""
+   for {set i 0} {$i < 2} {incr i} {
+      set stOffset [expr $i*8]
+      set endOffset [expr ($i+1)*8 -1]
+      set stagBinVal [string range $stagBinStr $stOffset $endOffset]
+      set stagHexVal [bits2hex $stagBinVal 2]
+      set stagHexStr $stagHexStr$stagHexVal
+   }
+
+   set stagHex "$stagEncap$stagHexStr"
+
+   set userDefTag "$stagHex$ctagHex"
+   
+   set framesent [SendIpFrame -txPortId $txPortId -rxPortId $rxPortId \
+       -protocol $protocol \
+       -sourceMac $sourceMac -destMac $destMac -numFrames $numFrames \
+       -frameSize $frameSize -frameSizeType $frameSizeType \
+       -dataPattern $dataPattern -tag "none" -frameRate $frameRate \
+       -frameType $frameType -sourceIp $sourceIp -destIp $destIp \
+       -gatewayIp $gatewayIp -dIpMask $dIpMask \
+       -sIpMask $sIpMask -dClass $dClass -sourcePort $sourcePort \
+       -destPort $destPort -ttl $ttl -goodChecksum $goodChecksum \
+       -ipOptions $ipOptions -streamType $streamType -fcsError $fcsError \
+       -TOS $TOS -percentage $percentage -priority $priority -saMode $saMode \
+       -daMode $daMode -saCount $saCount -daCount $daCount -ipSaMode $ipSaMode \
+       -ipDaMode $ipDaMode -ipSaCount $ipSaCount -dontFrag $dontFrag \
+       -tcpSynFlag $tcpSynFlag -tcpFinFlag $tcpFinFlag -tcpRstFlag $tcpRstFlag \
+       -tcpAckFlag $tcpAckFlag -tcpPushFlag $tcpPushFlag \
+       -tcpUrgFlag $tcpUrgFlag -tcpSeqNum $tcpSeqNum -type $type -code $code \
+       -id $id -sequence $sequence -direction $direction \
+       -maxResponseTime $maxResponseTime -groupAddr $groupAddr \
+       -applyFilter $applyFilter -udfEnable $udfEnable -udfInitval $udfInitval \
+       -udfOffset $udfOffset -udfCountertype $udfCountertype \
+       -udfContinuousCount $udfContinuousCount -clearStats $clearStats \
+       -udfContinuousCount $udfContinuousCount -protoOffsetEnable "true" \
+       -protoOffset "22" -userDefTag $userDefTag -dontTx $dontTx]
+
+    return $framesent
+}
+
+################################################################## 
+# Procedure Name: int2bits
+#   
+# Description: converts integer to binary and returns with 
+#              specifed number of bits
+#     
+# Input args: intVal - The interger Value
+#             desiredLen - The number of bits desired after 
+#                          binary conversion
+# Output args: None 
+# Return value: Retruns the binary equivalent of decVal with
+#                       desiredLen number of bits
+# Typical usage:
+#             int2bits 10 12
+#
+# Category: Utility
+##################################################################
+
+proc int2bits {intVal {desiredLen 0}} {
+	global TrafficGen
+	
+	switch -exact -- $TrafficGen {
+		stc {
+			#binary scan [binary format I1 $intVal] B* binVal
+			set binVal [exec echo "obase=2; $intVal" | bc]
+			}
+		ixia -
+                ixvm {
+   set binVal [exec echo "obase=2; $intVal" | bc]
+		}
+	}
+   
+   
+   set len [string length $binVal]
+ 
+   if {$desiredLen == 0} {
+      set diffLen 0
+   } else {
+      set diffLen [expr $desiredLen - $len]
+   }
+
+   for {set i 0} {$i<$diffLen} {incr i} {
+      set binVal "0$binVal"
+   }
+   return $binVal
+}
+
+################################################################## 
+# Procedure Name: bits2int
+#   
+# Description: converts binary to decimal 
+#     
+# Input args: binVal - The binary Value
+# Output args: None 
+# Return value: Retruns the decimal equivalent of binVal
+# Typical usage:
+#             bits2int 10
+#
+# Category: Utility
+##################################################################
+
+proc bits2int {binVal} {
+	global TrafficGen
+	switch -exact -- $TrafficGen {
+		stc {
+			   #binary scan [binary format B* [format %032s $binVal]] I1 decVal
+   set decVal [exec echo "ibase=2; $binVal" | bc]
+			}
+		ixia -
+                ixvm {
+			set decVal [exec echo "ibase=2; $binVal" | bc]
+		}
+	}
+   
+   return $decVal
+}
+
+################################################################## 
+# Procedure Name: bits2hex
+#   
+# Description: converts binary to hex
+#     
+# Input args: binVal - The binary Value
+# Output args: None 
+# Return value: Retruns the hex equivalent of binVal
+# Typical usage:
+#             bits2hex 10
+#
+# Category: Utility
+##################################################################
+proc bits2hex {binVal desiredLen} {
+   
+   global TrafficGen
+	switch -exact -- $TrafficGen {
+		stc {
+			   #binary scan [binary format B32 [format %032s $binVal]] H8 hexVal
+			   set decVal [bits2int $binVal]
+			   set hexVal [exec echo "obase=16; $decVal" | bc]
+			}
+		ixia -
+                ixvm {
+   set decVal [bits2int $binVal]
+   set hexVal [exec echo "obase=16; $decVal" | bc]
+		}
+	}
+   
+
+   set len [string length $hexVal]
+ 
+   if {$desiredLen == 0} {
+      set diffLen 0
+   } else {
+      set diffLen [expr $desiredLen - $len]
+   }
+
+   for {set i 0} {$i<$diffLen} {incr i} {
+      set hexVal "0$hexVal"
+   }
+
+   return $hexVal
+}

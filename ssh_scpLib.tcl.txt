@@ -1,0 +1,810 @@
+
+# abortIfSshModuleError are implemented as script
+# rather than proc because return needs to be eval at the caller's scope
+# usage:
+#  eval skipTestIfSshNotLoaded
+set abortIfSshModuleError {
+   global AbortSSH_SCP
+   global DUT1_CONNECT
+   global DUTs_info
+   global whichDutNow
+set AbortSSH_SCP 1
+   Login $DUT1_CONNECT
+   if {$AbortSSH_SCP == 1 } {
+      #We already try to load and enable ssh unsuccessfully. Abort
+      report_start_test "test aborted"
+      result_error "test aborted"
+      report_end_test
+      close_result_file
+      report_end_test
+      return
+   } 
+#   set output [SendACmd "show management"]
+    set shMgmtList ""
+    lappend shMgmtList "{Key valid} exist"
+    if {[regexp -nocase "error" [CheckKeyValue "show management" $shMgmtList -reportResults 0]]} {
+      #if module not downloaded try to download it
+      set output [SendACmd "show version image $DUTs_info(DUT$whichDutNow,imageSel)"]
+      if ![regexp {([^ ]+ssh[^ ]+)} $output] {
+         downloadSshModule
+      }
+      set version $DUTs_info(DUT$whichDutNow,version)
+      if {$version>="11.2.0.18"} {
+         SendACmd "start process thttpd"
+         SendACmd "start process snmpmaster"
+      }
+      SendACmd "start process exsshd"
+      exSleep 5
+      #if ssh not enabled. enable it.
+      if ![enableSsh] {
+         set AbortSSH_SCP 1
+         report_start_test "test aborted"
+         result_error "test aborted"
+         report_end_test
+         close_result_file
+         report_end_test
+         return
+      } 
+      #double check the key is now valid
+#      set output [SendACmd "show management"]
+      set shMgmtList ""
+      lappend shMgmtList "{Key valid} exist"
+      if {[regexp -nocase "error" [CheckKeyValue "show management" $shMgmtList -reportResults 0]]} {
+         set AbortSSH_SCP 1
+         report_start_test "error enabling ssh, test aborted"
+         result_error "error enabling ssh, test aborted"
+         report_end_test
+         close_result_file
+         report_end_test
+         return
+      }
+   }
+}
+##################################################################
+# Procedure Name: enableSsh
+# Description:
+#       enable ssh on the current DUT
+# Input args:  command can be "enable ssh" or "config ssh" etc.
+# Output args: return 0 if failed, 1 if success
+# Typical usage:
+#       enableSsh
+#       enableSsh "config ssh key"
+# Category: SSH_SCP
+##################################################################
+proc enableSsh { {command "enable ssh"} } {
+   global DUTs_info
+   global whichDutNow
+   global DUT${whichDutNow}_IP;
+   global connectionTimeout
+
+   ConfigGatewayNetwork
+   set tm1 [clock seconds]
+   set origCTimeout $connectionTimeout
+   set extraCTimeout 1200
+   set connectionTimeout $extraCTimeout
+   SendACmd "configure sys-recovery-level all"
+   if {[catch {SendACmd $command} reason]} {
+     result_error "$command failed: $reason"
+   }
+   set connectionTimeout $origCTimeout 
+   set tm2 [clock seconds]
+   set tmDelta [expr $tm2 - $tm1]
+   result_debug "it took $tmDelta seconds"
+   if {$tmDelta > [expr $extraCTimeout - 50]} {
+     result_debug "enableSsh in a loop"
+     set ipAddr [set DUT${whichDutNow}_IP]
+     Login $ipAddr
+     EnableDebugMode
+     set exsshdProcess ""
+     lappend exsshdProcess "root -1"
+     set pidList [GetKeyValue "!ps -ef | grep exsshd" $exsshdProcess]
+     set pidListLn [llength $pidList]
+     if {$pidListLn > 2} {
+       set lnWant [expr $pidListLn - 3]
+       set pidList [lrange $pidList 0 $lnWant]
+       result_debug "enableSsh pidList $pidList"
+       result_debug "dumping exsshd cores"
+       SendACmd "!kill -11 $pidList\r"
+       exSleep 120
+       Login $DUTs_info(DUT$whichDutNow,connect)
+       SendACmd "start process exsshd"
+       ConfigGatewayNetwork
+     }
+     Login $DUTs_info(DUT$whichDutNow,connect)
+     unset exsshdProcess
+     return 0
+   }
+   return 1
+}
+
+##################################################################
+# Procedure Name: checkScpGet
+# Description:
+#       verify scp of file from DUT to the linux machine. 
+#       the file copied to the linux machine will be under a different name
+# Input args:  user       ssh user name
+#              password   ssh password
+#              dutIp      IP of the DUT
+#              dutFileName full path of file at the DUT
+# Output args: return the filename of the file copied in the linux machine
+# Typical usage:
+#       checkScpGet test123 test123 10.212.37.137 /config/primary.cfg
+# Category: SSH_SCP
+##################################################################
+proc checkScpGet { user password dutIp dutFileName } {
+   global SSHClient
+   global SSHUser
+   global SSHPassword
+
+
+   report_start_test "scp2 file $dutFileName from $dutIp"
+   set linuxFileName "/tmp/[uniqueName $dutFileName]"
+
+   login_linux $SSHClient $SSHUser $SSHPassword $SSHPassword
+   exp_send \
+      "/usr/local/bin/scp2 $user@$dutIp:$dutFileName $linuxFileName\r"
+   #there could be a few yes/no prompt before password prompt, depends 
+   #whether the client has the correct public key
+   set passwordPromptSeen 0
+   for {set try 1} {$try <= 5} { incr try } {
+      expect {
+         "yes/no)?"  {
+            result_debug_expect
+            exp_send "yes\r"
+         } 
+         # EY-06-14-2006: Changed expect pattern to match both types of
+         # password prompts.
+         -re "password for $user|$user@$dutIp's password:" {
+            result_debug_expect
+            exp_send "$password\r"
+            set passwordPromptSeen 1
+            break
+         }
+      }
+   }
+   if { $passwordPromptSeen != 1 } {
+      result_debug_expect
+      result_error "not seeing password prompt from scp2" 
+      report_end_test
+      return 0
+   }
+   linuxSendACmd "\r"
+   if ![regexp -nocase "No such" [linuxSendACmd "ls $linuxFileName"]] {
+      result_debug_expect
+      result_ok "scp2 get file $dutFileName pass"
+      report_end_test
+      return $linuxFileName
+   } else {
+      result_debug_expect
+      result_error "scp2 get file $dutFileName failed"
+      report_end_test
+      return 0
+   }
+}
+
+##################################################################
+# Procedure Name: checkScpPut
+# Description:
+#       verify scp of file from the linux machine to the DUT. 
+# Input args:  user       ssh user name
+#              password   ssh password
+#              dut        IP for the DUT console 
+#              dutIp      IP of the DUT
+#              linuxFileName full path of the file at the linux machine
+#              dutFileName full path of file at the DUT
+# Output args: return 1 if success, 0 if failure
+# Typical usage:
+#       checkScpPut test123 test123 $DUT1_CONNECT $DUT1_IP /tmp/fileabc.cfg
+#       /config/primary.cfg
+# Category: SSH_SCP
+##################################################################
+proc checkScpPut { user password dut dutIp linuxFileName dutFileName args} {
+   global SSHClient
+   global SSHUser
+   global SSHPassword
+
+   parse_args checkScpPut $args {
+      checkUploaded "yes"
+   }
+
+   report_start_test "scp2 file $linuxFileName to $dutIp"
+
+   Login $dut
+   #make sure the file doesn't exist in DUT
+   EnableDebugMode
+
+   set dirLst [split $dutFileName /]
+   set lng [llength $dirLst]
+   set fnam [lindex $dirLst [expr $lng -1]]
+   set checkList "{{.*$fnam.*} exist}"
+   set result [CheckKeyValue "ls" $checkList -reportResults 0]
+   if {$result == "ok"} {
+     SendACmd "rm $fnam"
+   }
+
+   login_linux $SSHClient $SSHUser $SSHPassword $SSHPassword
+   exp_send \
+      "/usr/local/bin/scp2 $linuxFileName $user@$dutIp:$dutFileName\r"
+   #there could be a few yes/no prompt before password prompt, depends 
+   #whether the client has the correct public key
+exSleep 5
+   set passwordPromptSeen 0
+   for {set try 1} {$try <= 5} { incr try } {
+      expect {
+         "Connection closed by remote host" {
+            exp_send \
+               "/usr/local/bin/scp2 $linuxFileName $user@$dutIp:$dutFileName\r"
+            continue
+         }
+         "yes/no)?"  {
+            result_debug_expect
+            exp_send "yes\r"
+         } 
+         # EY-06-14-2006: Changed expect pattern to match both types of
+         # password prompts.
+         -re "password for $user|$user@$dutIp's password:" {
+            result_debug_expect
+            exp_send "$password\r"
+            set passwordPromptSeen 1
+            break
+         }
+      }
+   }
+   if { $passwordPromptSeen != 1 } {
+      result_debug_expect
+      result_error "not seeing password prompt from scp2" 
+      report_end_test
+      return 0
+   }
+   linuxSendACmd "\r"
+   Login $dut
+   if {$checkUploaded == "yes"} {
+     set output [SendACmd "!ls $dutFileName"]
+     DisableDebugMode
+     if ![regexp -nocase "No such" $output] {
+        result_debug_expect
+        result_ok "scp2 put file $dutFileName pass"
+        report_end_test
+        return 1
+     } else {
+        result_debug_expect
+        result_error "scp2 put file $dutFileName failed"
+        report_end_test
+        return 0
+     }
+   } else {
+     DisableDebugMode
+     report_end_test
+     return 1
+   }
+}
+##################################################################
+# Procedure Name: checkSsh
+# Description:
+#       verify successful ssh session from linux to DUT
+#       This proc telnet to the SSHClient and start ssh2 from there
+#       to dutIp. ssh2 is installed only on SSHClient in the lab.
+# Input args:  user       ssh user name
+#              password   ssh password
+#              dutIp      IP of the DUT
+#              option     option to the ssh2 command e.g. -p 1024
+#              kill       kill - kill the ssh session before returning
+#                         noKill - do not kill the ssh session 
+#              expected   pass - expect ssh to succed
+#                         fail - expect ssh to fail  
+#              command    ssh - use OpenSSH ssh client
+#                         ssh2 - use SSH Communications Security ssh2 client
+# Output args: return 1 if ssh result as expected in  expected, return 0
+#              otherwise
+# Typical usage:
+#       checkSsh test123 test123 $DUT1_IP 
+# Category: SSH_SCP
+##################################################################
+proc checkSsh { user password dutIp {option "" } {kill kill} \
+   {expected pass} {command sshSecure} } {
+   global SSHClient
+   global SSHUser
+   global SSHPassword
+   #upvar spawn_id spawn_id
+   global spawn_id
+
+   report_start_test "Ssh from linux to DUT, expect ssh to $expected"
+
+   #login_linux $SSHClient $SSHUser $SSHPassword $SSHPassword
+   #use spawnTelnetLinux instead of login_linux because some tests require
+   #multiple ssh sessions simultaneously.
+   set spawn_id [spawnTelnetLinux $SSHClient $SSHUser $SSHPassword]
+   if { $spawn_id == 0} { 
+      result_error "Error telneting to SSHClient"
+      report_end_test
+      return 0
+   }
+   #ssh2 is the SSH Communication client
+   #ssh is the OpenSSH client
+   set cmd(ssh2) "/usr/bin/ssh2"
+   set cmd(sshSecure) "/usr/bin/ssh2"
+   set cmd(ssh) "ssh"
+   set cmd(debug) "/usr/local/bin/ssh2 -d 1"
+#   removeLineFromFile "/root/.ssh/known_hosts" $dutIp
+   SendACmd "rm -rf /root/.ssh/known_hosts"
+   SendACmd "rm -rf /root/.ssh/known_hosts2"
+   set cmd(openSsh) "/usr/bin/ssh"  ;# openssh is in /usr/bin/ssh
+   #exp_send "$cmd($command) $user@$dutIp $option\r"
+   #expect "#"
+   #exSleep 5
+   exp_send "$cmd($command) $user@$dutIp $option\r"
+   #there could be a few yes/no prompt before password prompt, depends 
+   #whether the client has the correct public key
+   set passwordPromptSeen 0
+   set loginResult fail
+   for {set try 1} {$try <= 5} { incr try } {
+      expect {
+         -re {onnection closed.*[#>]} {
+            result_debug_expect
+            continue
+         }
+         -re {onnection Refused.*[#>]} {
+            result_debug_expect
+            continue
+         }
+         "yes/no)?"  {
+            result_debug_expect
+            exp_send "yes\r"
+         }
+         "yes\' or \'no\':" {
+            result_debug_expect
+            exp_send "yes\r"
+         }
+         -re "password for $user|$user@$dutIp's password:" {
+            result_debug_expect
+            exp_send "$password\r"
+            set passwordPromptSeen 1
+         }
+         -re {save your.*[#>]} {
+            result_debug_expect
+            if { $kill == "kill" } {
+               #clear the session to terminate ssh
+               exp_send "clear session all\r"
+               expect -re {Connection to .*closed[#>]}
+               result_debug_expect
+            }
+            set loginResult pass
+            break
+         }
+      }
+   }
+   if { $kill == "kill" } {
+      #exit the telnet session to SSHClient
+      exp_send "exit\r"
+   }
+   if { ($loginResult == "pass") && ($passwordPromptSeen != 1) } {
+      result_error "not seeing password prompt from ssh" 
+      report_end_test
+      return 0
+   }
+   #    Actual,Expected   Return code
+   set rc(pass,pass)         1
+   set rc(fail,pass)         0
+   set rc(pass,fail)         0
+   set rc(fail,fail)         1
+   #return 1 only if loginResult and expected result matched
+   if { $rc($loginResult,$expected) == 1 } {
+      if {($expected == "pass") && ($kill != "kill")} {
+	exSleep 10
+        SendACmd "disable clipaging"
+      #   EnableDebugMode
+      #   SendACmd "!echo dump_stack > /sys/module/watchdog/parameters/watchdog_warn_behavior"
+      }
+      result_ok "SUCCESS: ssh ${expected}"
+      report_end_test
+      return 1
+   } else {
+      result_error "FAILURE: ssh did not ${expected}"
+      report_end_test
+      return 0
+   }
+}
+
+##################################################################
+# Procedure Name: spawnTelnetLinux
+# Description:
+#       spawn telnet to linux
+# Input args:  ip         IP of the linux
+#              user       user name
+#              password   password
+# Output args: return 0 if failed, return spawn_id if ok
+# Typical usage:
+#       
+# Category: SSH_SCP
+##################################################################
+proc spawnTelnetLinux { ip user password } {
+   global tspids
+   upvar spawn_id spawn_id
+
+   set timeout 5
+   if [catch "spawn telnet $ip" reason] {
+      result_debug "Error telneting to $ip: $reason"
+      return 0
+   }
+   lappend tspids $spawn_id
+   lappend tspids $ip
+   for {set i 1} {$i<5} {incr i} {
+      expect {
+         -re {Last login} {
+            #make sure "Last login" is  the fist patterm because 
+            #"login" will match both "login" and "last login"
+         
+            #login success, get the prompt
+            expect -re {[#>]}
+            result_debug_expect
+            return $spawn_id
+         }
+         "login:" {
+            result_debug_expect
+            sleep 1
+            send "$user\r"
+         }
+         "assword:" {
+            result_debug_expect
+            sleep 1
+            send "$password\r"
+         }
+         timeout {
+            result_debug_expect
+            result_debug "Error logging into linux at $ip"
+         }
+      }
+   }
+   return 0
+}
+
+proc downloadModule {TFTPServerIP filename} {
+  
+   global whichDutNow
+   SendACmd "download image $TFTPServerIP $filename vr [GetVrString $whichDutNow]"
+   exSleep 4
+   SendACmd "run update"
+
+   SendACmd "restart process snmpmaster"
+   SendACmd "restart process thttpd"
+#   CheckReboot
+}
+
+proc getSshModulePath { } {
+   return [getImagePath -Image ssh]
+}
+
+proc downloadSshModule { } {
+   global tftpServerList tftpServerLogin tftpServerPasswd tftpServerTftpboot
+   global moduleArg
+   global DUTs_info
+
+   if {$moduleArg!=""} {
+      set modulePath $moduleArg
+   } else {
+      set modulePath [getSshModulePath]
+   }
+   set moduleName [file tail $modulePath ]
+
+   foreach tftpServer $tftpServerList {
+      #if module is found in the TFTP server use it
+      #this gives the user a way to manually copy the SSH module to TFTP
+      if [tftpFileExists $tftpServer $moduleName] {
+         result_debug \
+            "Module $moduleName found on TFTP server. Download it"
+         downloadModule $tftpServer $moduleName
+         return
+      }
+   }
+
+   #module is not found on tftp server
+   #Put the module to the TFTP server, download it
+   #and then remove it.
+#   result_debug \
+#      "Module $moduleName not found on TFTP server. Copy module to TFTP server from $modulePath"
+#   if ![file exists $modulePath] {
+#      report_start_test "SSH module not found in $modulePath. Please copy $moduleName to TFTP server and rerun the test."
+#      result_error "SSH module not found in $modulePath. Please copy $moduleName to TFTP server and rerun the test."
+#      report_end_test
+#      return
+#   }
+
+   foreach tftpServer $tftpServerList {
+      set fileName [uniqueName $moduleName]
+      result_debug "TFTP server is $tftpServer"
+      #put the SSH module to the TFTP server and download it
+      result_debug \
+         "puting SSH module $modulePath to TFTP Server as $fileName" 
+      exec \
+         echo "put $modulePath $fileName\nquit\n" | /usr/bin/tftp $tftpServer
+      downloadModule $tftpServer $fileName
+
+      #remove the SSH module from TFTP server
+      global spawn_id
+      set sid $spawn_id
+      result_debug "remove SSH module from TFTP Server"
+      login_linux $tftpServer $tftpServerLogin $tftpServerPasswd
+      linuxSendACmd "/bin/rm $tftpServerTftpboot/$fileName" 
+      set spawn_id $sid
+      global whichDutNow
+
+      set output [SendACmd "show version image $DUTs_info(DUT$whichDutNow,imageSel)"]
+      if [regexp {([^ ]+ssh[^ ]+)} $output] {
+         #ssh module downloaded successfully. no need to try next tftp server
+         break
+      }
+   }
+   #sleep 2
+   #SendACmd "start process exsshd"
+
+}
+
+
+proc uninstallSshModule { } {
+    global DUTs_info
+    global whichDutNow
+
+    set version $DUTs_info(DUT$whichDutNow,version)
+    if {[CompareRelease $version 11.2.0.18]>=0} {
+       SendACmd "terminate process thttpd forceful"
+    } else {
+       SendACmd "terminate process exsshd forceful"
+    }
+    exSleep 5 
+    SendACmd ""
+    if {[CompareRelease $version 12.3.0.3]>=0} {
+       SendACmd "terminate process snmpMaster forceful"
+       exSleep 10 
+       SendACmd "terminate process xmlc forceful"
+       exSleep 10
+       SendACmd "terminate process techSupport forceful"
+       exSleep 10
+    }
+
+    #uninstall all ssh module from switch
+    uninstallImage "ssh" $DUTs_info(DUT$whichDutNow,imageSel)
+
+    if {[CompareRelease $version 12.3.0.3]>=0} {
+      SendACmd "start process thttpd"
+      SendACmd "start process snmpMaster"
+      SendACmd "start process techSupport"
+      SendACmd "start process xmlc"
+      exSleep 5
+    }
+    SendACmd ""
+ }
+
+
+
+
+proc uninstallImage {moduleName partition } {
+    global DUTs_info
+    global whichDutNow
+    global stackable
+    global stacking
+    global maxSlot	
+    global DUT1_CONNECTB
+    set maxTry 5
+    set i 3
+
+for {set try 0} {$try <= 5 } {incr try } {
+       if {$try == $maxTry} {
+          result_error "Error removing $moduleName module after trying $maxTry times"
+          break
+ 	} else {
+	if {([regexp -nocase $stackable $DUTs_info(DUT$whichDutNow,platform)]) || ([GetPlatform] == "BD-12802")} {
+
+       set output [SendACmd "show version image $partition " ]
+               if {$moduleName == "ssh"} {
+                 set cnd [regexp {([^ ]+ssh[^ \r\n]+)} $output dummy imageName ]
+               } elseif {$moduleName == "cna"} {
+                 set cnd [regexp {([^ ]+cna[^ \r\n]+)} $output dummy imageName ]
+               } else {
+                 result_error "unknown module"
+                 return
+               }
+               if $cnd {
+		SendACmd "uninstall image $imageName $partition"
+                exSleep 10
+               } else {
+               break
+        }
+      } else {
+        set msmtype "msm A"
+        set output [SendACmd "show version image $partition $msmtype "]
+        if {$moduleName == "ssh"} {
+          set cnd [regexp {([^ ]+ssh[^ \r\n]+)} $output dummy imageName ]
+        } elseif {$moduleName == "cna"} {
+          set cnd [regexp {([^ ]+cna[^ \r\n]+)} $output dummy imageName ]
+        } else {
+          result_error "unknown module"
+          return
+        }
+        if $cnd {
+     	     SendACmd "uninstall image $imageName $partition $msmtype"
+             exSleep 10
+        }
+        if {[info exists DUT1_CONNECTB]!=1} {
+           return
+        }
+        set msmtype "msm B"
+        set output [SendACmd "show version image $partition $msmtype "]
+         if {$moduleName == "ssh"} {
+          set cnd [regexp {([^ ]+ssh[^ \r\n]+)} $output dummy imageName ]
+        } elseif {$moduleName == "cna"} {
+          set cnd [regexp {([^ ]+cna[^ \r\n]+)} $output dummy imageName ]
+        } else {
+          result_error "unknown module"
+          return
+        }
+        if $cnd {
+        SendACmd "uninstall image $imageName $partition $msmtype"
+             exSleep 10
+        }
+
+}
+set j $i
+ if { [regexp -nocase "$stacking" [GetPlatform]] } {
+	set parameterList ""
+	lappend parameterList "{Factory MAC address} 2"
+	set nodeMac [GetKeyValue "show stacking detail" $parameterList]
+	set maxSlot [llength $nodeMac]
+	if {$maxSlot > 2} {
+	for {set j $i } {$j <= $maxSlot} {incr j } {
+	set msmtype "slot $j"
+	set output [SendACmd "show version image $partition $msmtype "]
+        if {$moduleName == "ssh"} {
+          set cnd [regexp {([^ ]+ssh[^ \r\n]+)} $output dummy imageName ]
+        } elseif {$moduleName == "cna"} {
+          set cnd [regexp {([^ ]+cna[^ \r\n]+)} $output dummy imageName ]
+        } else {
+          result_error "unknown module"
+          return
+        }
+        	if $cnd {
+		set result [CheckCmdLegal  "uninstall image $imageName $partition $msmtype"]
+        	exSleep 10
+			 if {$result=="illegal"} {
+                        break
+                        }
+
+			
+       		 } 
+	}
+	incr j -1
+	if {$j == $maxSlot} {
+                break
+                }
+	}
+	} else {
+          break
+        }
+}
+}
+     # adding delay back - failed on 11.3.1.3 BD-10K
+     exSleep 1
+}
+
+proc removeLineFromFile {fileName1 LineString} {
+   if {[set fd1 [FileOpen Tmp/tmp[pid] w]]==-1} {
+      return $fd1
+   }
+   if {[set fd2 [FileOpen $fileName1 r]]==-1} {
+      return $fd2
+   }
+   set lines [split [read $fd2] "\n"]
+   close $fd2
+   fconfigure stdout -buffering full
+
+   for {set i 0} {$i <= [expr {[llength $lines]-2}]} {incr i 1} {
+      if {[regexp -nocase $LineString [lindex $lines $i]]!=1} {
+         puts $fd1 [lindex $lines $i]
+      }
+   }
+   close $fd1
+   file rename Tmp/tmp[pid] $fileName1
+}
+
+
+##################################################################
+# Procedure Name: ssh_vr_connect_cipher
+# Description:
+#       verify SSH from DUT to the linux machine.
+#
+# Input args:  vr            virtual router
+#              remote_host   remote host ip with user name
+#	       password      remote host password
+#              cppher         algorithm
+#
+# Output args: return 0 or 1 depends on success or failure
+# Typical usage:
+#	ssh_vr_connect_cipher vr-default admin@10.127.17.100 "pwd" "cipher 3des"
+# Category: SSH_SCP
+##################################################################
+
+proc ssh_vr_connect_cipher {{vr VR_Default} remote_host {passwd ""} {cipher ""} } {
+
+    SendACmd "\r"
+result_debug "new lib"
+    slow_send "ssh2 $cipher vr $vr $remote_host\r"
+    expect {
+      timeout {
+        result_debug_expect
+        return 0
+      }
+      "password:" {
+         result_debug_expect
+         exp_send "$passwd\r"
+      }
+    }
+     result_debug "BufferStart ===$expect_out(buffer)=== BufferEnd"
+     sleep 10
+
+    expect {
+      "]" {
+        result_debug_expect
+        result_debug "We are in ]"
+        return 1
+      }
+      ">" {
+        result_debug_expect
+        result_debug "We are in >"
+        return 1  
+
+      }
+      "$" {
+        result_debug_expect
+        result_debug "We are in $"
+        return 1
+      }
+      timeout {
+result_debug "timed out"
+      result_debug_expect
+        return 0
+      }
+    }
+}
+
+##################################################################
+# Procedure Name: logout_ssh
+# Description:
+#
+#     Used to logout linux session established from DUT
+#
+# Input args: none
+#
+# Output args: return 0 or 1 depends on success or failure
+# Typical usage:
+#		logout_ssh
+# Category: SSH_SCP
+##################################################################
+
+
+proc logout_ssh { } {
+
+    slow_send "logout\r"
+    expect {
+      "#" {
+        result_debug_expect
+        return 1
+      }
+      timeout {
+        result_debug_expect
+        result_error "switch is not echoing characters sent to the linux PC"
+        send "\r"
+        exSleep 1
+        result_debug "trying to logout with fast expect send"
+        send "logout\r"
+        expect {
+          "#" {
+            result_debug_expect
+            return 1
+          }
+          timeout {
+            result_debug_expect
+            return 0
+          }
+        }
+      }
+    }
+}

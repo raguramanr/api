@@ -1,0 +1,1134 @@
+
+################################################################## 
+# Procedure Name: GetHelloHoldTime
+#   
+# Description: proc that gets the hello hold time from a pim control packet
+#
+# Input args: rawFrame
+# Output args: none
+# Return value: short integer or -1 on error
+# Typical usage:
+#            set holdTime [GetHelloHoldTime $dataFrame]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc GetHelloHoldTime {rawFrame} {
+
+   set type [string range $rawFrame 36 40]
+   # if tagged, get rid of type and tag field from 36 to 47
+   if {$type == "81 00"} {
+      set leftRawFrame [string range $rawFrame 0 35] 
+      set rightRawFrame [string range $rawFrame 48 [string length $rawFrame]]
+      set rawFrame [format "%s%s" $leftRawFrame $rightRawFrame]
+   }
+   set optionHeader [string range $rawFrame 114 124]
+#   puts "optionHeader: |$optionHeader|"
+   if {$optionHeader == "00 01 00 02" } {   
+      return [GetShortIntOffset $rawFrame 126]
+   } else {
+      return -1
+   }
+
+}            
+
+
+################################################################## 
+# Procedure Name: GetPJUpstreamNeighborIp
+#   
+# Description: proc that gets join/prune stream neighbor ip from a pim control packet
+#
+# Input args: rawFrame
+# Output args: none
+# Return value: IP address or -1 on error
+# Typical usage:
+#            GetPJUpstreamNeighborIp $rawFrame
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc GetPJUpstreamNeighborIp {rawFrame} {
+
+   set type [string range $rawFrame 36 40]
+   # if tagged, get rid of type and tag field from 36 to 47
+   if {$type == "81 00"} {
+      set leftRawFrame [string range $rawFrame 0 35] 
+      set rightRawFrame [string range $rawFrame 48 [string length $rawFrame]]
+      set rawFrame [format "%s%s" $leftRawFrame $rightRawFrame]
+   }
+   set encodedHeader [string range $rawFrame 114 118]
+#   puts "encodedHeader: |$encodedHeader|"
+#   puts "Neighbor: [string range $rawFrame 120 140]"
+   if {$encodedHeader == "01 00" } {   
+      return [GetIPAddressOffset $rawFrame 120]
+   } else {
+      return -1
+   }
+
+} 
+
+################################################################## 
+# Procedure Name: GetEncodedBSRAddress
+#   
+# Description: proc that gets BSR ip address from a pim control packet
+#
+# Input args: rawFrame
+# Output args: none
+# Return value: IP address or -1 on error
+# Typical usage:
+#             set encodedBSRAddress [GetEncodedBSRAddress $dataFrame]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc GetEncodedBSRAddress {rawFrame} {
+   set messageType [GetMessageType $rawFrame]
+   if {$messageType=="IP_PIMv2_BOOTSTRAP"} {
+      set type [string range $rawFrame 36 40]   
+      # if tagged, get rid of type and tag field from 36 to 47
+      if {$type == "81 00"} {
+        set leftRawFrame [string range $rawFrame 0 35] 
+        set rightRawFrame [string range $rawFrame 48 [string length $rawFrame]] 
+        set rawFrame [format "%s%s" $leftRawFrame $rightRawFrame]
+      }
+      return [GetIPAddressOffset $rawFrame 132]
+   } else {
+      return -1
+   }
+}
+
+################################################################## 
+# Procedure Name: GetEncodedRegisterStopSourceAddress
+#   
+# Description: proc that gets IP address of the source which initiated register-stop from a pim packet
+#
+# Input args: rawFrame
+# Output args: none
+# Return value: IP address or -1 on error
+# Typical usage:
+#             set encodedUniSrcAddress [GetEncodedRegisterStopSourceAddress $dataFrame]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc GetEncodedRegisterStopSourceAddress {rawFrame} {
+   set messageType [GetMessageType $rawFrame]
+   if {$messageType=="IP_PIMv2_REGISTER_STOP"} {
+      set type [string range $rawFrame 36 40]   
+      # if tagged, get rid of type and tag field from 36 to 47
+      if {$type == "81 00"} {
+        set leftRawFrame [string range $rawFrame 0 35] 
+        set rightRawFrame [string range $rawFrame 48 [string length $rawFrame]] 
+        set rawFrame [format "%s%s" $leftRawFrame $rightRawFrame]
+      }
+      return [GetIPAddressOffset $rawFrame 144]
+   } else {
+      return -1
+   }
+}
+
+################################################################## 
+# Procedure Name: GetEncodedRegisterSourceAddress
+#   
+# Description: proc that gets IP address of the source which initiated register from a pim packet
+#
+# Input args: rawFrame
+# Output args: none
+# Return value: IP address or -1 on error
+# Typical usage:
+#             set encodedUniSrcAddress [GetEncodedRegisterSourceAddress $rightNullRegPacket]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc GetEncodedRegisterSourceAddress {rawFrame} {
+   set messageType [GetMessageType $rawFrame]
+   if {$messageType=="IP_PIMv2_REGISTER"} {
+      set type [string range $rawFrame 36 40]   
+      # if tagged, get rid of type and tag field from 36 to 47
+      if {$type == "81 00"} {
+        set leftRawFrame [string range $rawFrame 0 35] 
+        set rightRawFrame [string range $rawFrame 48 [string length $rawFrame]] 
+        set rawFrame [format "%s%s" $leftRawFrame $rightRawFrame]
+      }
+      return [GetIPAddressOffset $rawFrame 162]
+   } else {
+      return -1
+   }
+}
+
+################################################################## 
+# Procedure Name: GetEncodedRegisterDataPacketLength
+#   
+# Description: proc that returns the lengh of data in a register packet from a pim control packet
+#
+# Input args: rawFrame
+# Output args: none
+# Return value: short integer or -1 on error
+# Typical usage:
+#             set encodedDataPacketLength [GetEncodedRegisterDataPacketLength $rightNullRegPacket]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc GetEncodedRegisterDataPacketLength {rawFrame} {
+   set messageType [GetMessageType $rawFrame]
+   if {[regexp -nocase "IP_PIMv2_REGISTER" $messageType]} {
+      set type [string range $rawFrame 36 40]   
+      # if tagged, get rid of type and tag field from 36 to 47
+      if {$type == "81 00"} {
+        set leftRawFrame [string range $rawFrame 0 35] 
+        set rightRawFrame [string range $rawFrame 48 [string length $rawFrame]] 
+        set rawFrame [format "%s%s" $leftRawFrame $rightRawFrame]
+      }
+      return [GetShortIntOffset $rawFrame 132]
+   } else {
+      return -1
+   }
+}
+
+################################################################## 
+# Procedure Name: GetEncodedBSRPriority
+#   
+# Description: proc that returns 1 bit priority of a BSR from a pim control packet
+#
+# Input args: rawFrame
+# Output args: none
+# Return value: 2 Byte hex or -1 on error
+# Typical usage:
+#             set encodedBSRPriority [GetEncodedBSRPriority $dataFrame]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc GetEncodedBSRPriority {rawFrame} {
+   set messageType [GetMessageType $rawFrame]
+   if {$messageType=="IP_PIMv2_BOOTSTRAP"} {
+      set type [string range $rawFrame 36 40]
+      # if tagged, get rid of type and tag field from 36 to 47
+      if {$type == "81 00"} {
+        set leftRawFrame [string range $rawFrame 0 35] 
+        set rightRawFrame [string range $rawFrame 48 [string length $rawFrame]] 
+        set rawFrame [format "%s%s" $leftRawFrame $rightRawFrame]
+      }
+      return [string range $rawFrame 123 124]
+   } else {
+      return -1
+   }
+}
+
+################################################################## 
+# Procedure Name: GetEncodedCRPAddress
+#   
+# Description: proc that returns ip address of rp from a pim control packet
+#
+# Input args: rawFrame
+# Output args: none
+# Return value: IP address or -1 on error
+# Typical usage:
+#             set encodedCRPAddress [GetEncodedCRPAddress $dataFrame]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc GetEncodedCRPAddress {rawFrame} {
+   set messageType [GetMessageType $rawFrame]
+   if {$messageType=="IP_PIMv2_CANDIDATE_RP_AD"} {
+      set type [string range $rawFrame 36 40]
+      # if tagged, get rid of type and tag field from 36 to 47
+      if {$type == "81 00"} {
+        set leftRawFrame [string range $rawFrame 0 35] 
+        set rightRawFrame [string range $rawFrame 48 [string length $rawFrame]] 
+        set rawFrame [format "%s%s" $leftRawFrame $rightRawFrame]
+      }
+      return [GetIPAddressOffset $rawFrame 132]
+   } else {
+      return -1
+   }
+}
+
+################################################################## 
+# Procedure Name: GetEncodedCRPGroupAddress
+#   
+# Description: proc that returns the list of group ip address inside a crp packet from a pim control packet
+#
+# Input args: rawFrame
+# Output args: none
+# Return value: IP address or -1 on error
+# Typical usage:
+#               set encodedCRPGroupAddress [GetEncodedCRPGroupAddress $dataFrame]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc GetEncodedCRPGroupAddress {rawFrame} {
+   set messageType [GetMessageType $rawFrame]
+   set groupAddress ""
+   if {$messageType=="IP_PIMv2_CANDIDATE_RP_AD"} {
+      set type [string range $rawFrame 36 40]
+      # if tagged, get rid of type and tag field from 36 to 47
+      if {$type == "81 00"} {
+        set leftRawFrame [string range $rawFrame 0 35] 
+        set rightRawFrame [string range $rawFrame 48 [string length $rawFrame]] 
+        set rawFrame [format "%s%s" $leftRawFrame $rightRawFrame]
+      }
+      set numToCount 23
+      for {set startLoc 156} {[expr $startLoc+11] <= [expr [string length $rawFrame]-12]} {incr startLoc [expr $numToCount+1]} {
+         lappend groupAddress [GetIPAddressOffset $rawFrame $startLoc]
+      }
+      return $groupAddress
+   } else {
+      return -1
+   }
+}
+
+################################################################## 
+# Procedure Name: GetEncodedRegisterStopGroupAddress
+#   
+# Description: proc that returns the group ip address from a register-stop packet from a pim control packet
+#
+# Input args: rawFrame
+# Output args: none
+# Return value: IP address or -1 on error
+# Typical usage:
+#                set encodedGroupAddress [GetEncodedRegisterStopGroupAddress $dataFrame]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc GetEncodedRegisterStopGroupAddress {rawFrame} {
+   set messageType [GetMessageType $rawFrame]
+   set groupAddress ""
+   if {$messageType=="IP_PIMv2_REGISTER_STOP"} {
+      set type [string range $rawFrame 36 40]
+      # if tagged, get rid of type and tag field from 36 to 47
+      if {$type == "81 00"} {
+        set leftRawFrame [string range $rawFrame 0 35] 
+        set rightRawFrame [string range $rawFrame 48 [string length $rawFrame]] 
+        set rawFrame [format "%s%s" $leftRawFrame $rightRawFrame]
+      }
+      return [GetIPAddressOffset $rawFrame 126]
+   } else {
+      return -1
+   }
+}
+
+################################################################## 
+# Procedure Name: GetEncodedRegisterGroupAddress
+#   
+# Description: proc that returns the group ip address from a register packet from a pim control packet
+#
+# Input args: rawFrame
+# Output args: none
+# Return value: IP address or -1 on error
+# Typical usage:
+#                set encodedGroupAddress [GetEncodedRegisterGroupAddress $rightNullRegPacket]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc GetEncodedRegisterGroupAddress {rawFrame} {
+   set messageType [GetMessageType $rawFrame]
+   set groupAddress ""
+   if {$messageType=="IP_PIMv2_REGISTER"} {
+      set type [string range $rawFrame 36 40]
+      # if tagged, get rid of type and tag field from 36 to 47
+      if {$type == "81 00"} {
+        set leftRawFrame [string range $rawFrame 0 35] 
+        set rightRawFrame [string range $rawFrame 48 [string length $rawFrame]] 
+        set rawFrame [format "%s%s" $leftRawFrame $rightRawFrame]
+      }
+      return [GetIPAddressOffset $rawFrame 174]
+   } else {
+      return -1
+   }
+}
+
+################################################################## 
+# Procedure Name: encodedBSRGroupAddresses
+#   
+# Description: proc that returns the list of BSR group address from a BOOTSTRAP packet in a pim control packet
+#              RPAddressList is returned as OUT var corresponds to RP address in each encoded group.
+#
+#
+# Input args: rawFrame
+# Output args: RPAddressList
+# Return value: List of IP addresses or -1 on error
+#
+# Typical usage:
+#          set encodedBSRGroupAddresses [encodedBSRGroupAddresses $dataFrame encodedBSRUnicastRPAddresses]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc encodedBSRGroupAddresses {rawFrame RPAddressList} {
+   upvar $RPAddressList BSREncodedRPAddresses
+   set messageType [GetMessageType $rawFrame]
+   set groupAddress ""
+   if {$messageType=="IP_PIMv2_BOOTSTRAP"} {
+      set type [string range $rawFrame 36 40]
+      # if tagged, get rid of type and tag field from 36 to 47
+      if {$type == "81 00"} {
+        set leftRawFrame [string range $rawFrame 0 35] 
+        set rightRawFrame [string range $rawFrame 48 [string length $rawFrame]] 
+        set rawFrame [format "%s%s" $leftRawFrame $rightRawFrame]
+      }
+      set startLoc 144
+      set RPStartLoc 66      
+      set BSRGroupAddresses ""
+      for {set startLoc 144} {[expr $startLoc+66]<=[expr [string length $rawFrame]-11]} {incr startLoc $RPStartLoc} {
+         lappend BSRGroupAddresses [GetIPAddressOffset $rawFrame [expr $startLoc + 12]]         
+         set BSRRPCount [string range $rawFrame [expr $startLoc+24] [expr $startLoc+24+1]]
+         set RPAddressStartLoc [expr $startLoc + 36]
+         set BSREncodedRPAddress ""
+         for {set i 1} {$i<=$BSRRPCount} {incr i} {
+            lappend BSREncodedRPAddress [GetIPAddressOffset $rawFrame [expr $RPAddressStartLoc + 6]]
+            set RPAddressStartLoc [expr $RPAddressStartLoc + 30]
+         }
+         # Set the new RP StartLoc based on BSRRPCount value
+         set RPStartLoc [expr $RPStartLoc + [expr 30 * [expr $BSRRPCount-1]]]
+         lappend BSREncodedRPAddresses $BSREncodedRPAddress
+      }
+#      result_debug "the BSRGroupAddresses $BSRGroupAddresses"
+      return $BSRGroupAddresses
+   } else {
+      return -1
+   }
+}
+
+
+################################################################## 
+# Procedure Name: GetEncodedCRPPriority
+#   
+# Description: proc that returns priority from a CRP packet in a pim control packet
+#
+#
+# Input args: rawFrame
+# Output args: none
+# Return value: 2 byte hex value or -1 on error
+#
+# Typical usage:
+#                set encodedCRPPriority [GetEncodedCRPPriority $dataFrame]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc GetEncodedCRPPriority {rawFrame} {
+   set messageType [GetMessageType $rawFrame]
+   if {$messageType=="IP_PIMv2_CANDIDATE_RP_AD"} {
+      set type [string range $rawFrame 36 40]
+      # if tagged, get rid of type and tag field from 36 to 47
+      if {$type == "81 00"} {
+        set leftRawFrame [string range $rawFrame 0 35] 
+        set rightRawFrame [string range $rawFrame 48 [string length $rawFrame]] 
+        set rawFrame [format "%s%s" $leftRawFrame $rightRawFrame]
+      }
+      return [string range $rawFrame 117 118]
+   } else {
+      return -1
+   }
+}
+
+################################################################## 
+# Procedure Name: GetEncodedCRPHoldtime
+#   
+# Description: proc that returns 1 bit CRP hold time from a pim control packet
+#
+#
+# Input args: rawFrame
+# Output args: none
+# Return value: 2 byte hex value or -1 on error
+#
+# Typical usage:
+#                set encodedCRPHoldtime [GetEncodedCRPHoldtime $dataFrame]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc GetEncodedCRPHoldtime {rawFrame} {
+   set messageType [GetMessageType $rawFrame]
+   if {$messageType=="IP_PIMv2_CANDIDATE_RP_AD"} {
+      set type [string range $rawFrame 36 40]
+      # if tagged, get rid of type and tag field from 36 to 47
+      if {$type == "81 00"} {
+        set leftRawFrame [string range $rawFrame 0 35] 
+        set rightRawFrame [string range $rawFrame 48 [string length $rawFrame]] 
+        set rawFrame [format "%s%s" $leftRawFrame $rightRawFrame]
+      }
+      return [string range $rawFrame 123 124]
+   } else {
+      return -1
+   }
+}
+
+################################################################## 
+# Procedure Name: GetGraftUpstreamNeighborIp
+#   
+# Description: proc that returns the upstream neighbor ip, internally calls GetPJUpstreamNeighborIp
+#
+#
+# Input args: rawFrame
+# Output args: none
+# Return value: IP address or -1 on error
+#
+# Typical usage:
+#             set neighborIp [GetGraftUpstreamNeighborIp $dataFrame]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc GetGraftUpstreamNeighborIp {rawFrame} {
+#same as prune/join message
+return [GetPJUpstreamNeighborIp $rawFrame] 
+}
+
+################################################################## 
+# Procedure Name: GetPJHoldTime
+#   
+# Description: proc that returns the join/prune hold time in a pim control packet
+#
+#
+# Input args: rawFrame
+# Output args: none
+# Return value: short integer
+#
+# Typical usage:
+#             GetPJHoldTime $rawFrame
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc GetPJHoldTime {rawFrame} {
+ 
+   set type [string range $rawFrame 36 40]
+   # if tagged, get rid of type and tag field from 36 to 47
+   if {$type == "81 00"} {
+      set leftRawFrame [string range $rawFrame 0 35] 
+      set rightRawFrame [string range $rawFrame 48 [string length $rawFrame]] 
+      set rawFrame [format "%s%s" $leftRawFrame $rightRawFrame]
+   }
+#   puts "HoldTime: [string range $rawFrame 138 160]"
+   return [GetShortIntOffset $rawFrame 138]
+
+}
+
+################################################################## 
+# Procedure Name: GetGraftHoldTime
+#   
+# Description: proc that returns the hold time of a graft message from a pim control packet
+#
+#
+# Input args: rawFrame
+# Output args: none
+# Return value: short integer
+#
+# Typical usage:
+#                set holdTime [GetGraftHoldTime $dataFrame]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc GetGraftHoldTime {rawFrame} {
+#same as prune/join message
+return [GetPJHoldTime $rawFrame] 
+}
+
+################################################################## 
+# Procedure Name: GetPJMulticastGroupIp
+#   
+# Description: proc that returns the multicast address from a join/prune pim control packet
+#
+#
+# Input args: rawFrame
+# Output args: none
+# Return value: IP address or -1 on errror
+#
+# Typical usage:
+#     GetPJMulticastGroupIp $rawFrame
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc GetPJMulticastGroupIp {rawFrame} {
+
+   set type [string range $rawFrame 36 40]
+   # if tagged, get rid of type and tag field from 36 to 47
+   if {$type == "81 00"} {
+      set leftRawFrame [string range $rawFrame 0 35] 
+      set rightRawFrame [string range $rawFrame 48 [string length $rawFrame]] 
+      set rawFrame [format "%s%s" $leftRawFrame $rightRawFrame]
+   }
+   set encodedHeader [string range $rawFrame 144 154]
+#   puts "Group: [string range $rawFrame 156 170]"
+#   puts "encodedHeader: |$encodedHeader|"
+   if {$encodedHeader == "01 00 00 20" } {   
+      return [GetIPAddressOffset $rawFrame 156 ]
+   } else {
+      return -1
+   }
+
+} 
+
+################################################################## 
+# Procedure Name: GetGraftMulticastGroupIp
+#   
+# Description: proc that returns the multicast address from a graft pim control packet, internally calls GetPJMulticastGroupIp
+#
+#
+# Input args: rawFrame
+# Output args: none
+# Return value: IP address or -1 on errror
+#
+# Typical usage:
+#           set multicastGroup [GetGraftMulticastGroupIp $dataFrame]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc GetGraftMulticastGroupIp {rawFrame} {
+#same as prune/join message
+return [GetPJMulticastGroupIp $rawFrame] 
+}
+
+################################################################## 
+# Procedure Name: GetPJNumJoinedSources
+#   
+# Description: proc that returns the number of joined sources from a join/prune pim control packet
+#
+#
+# Input args: rawFrame
+# Output args: none
+# Return value: short integer
+#
+# Typical usage:
+#           set numJoined [GetPJNumJoinedSources $rawFrame]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc GetPJNumJoinedSources {rawFrame} {
+
+   set type [string range $rawFrame 36 40]
+   # if tagged, get rid of type and tag field from 36 to 47
+   if {$type == "81 00"} {
+      set leftRawFrame [string range $rawFrame 0 35] 
+      set rightRawFrame [string range $rawFrame 48 [string length $rawFrame]] 
+      set rawFrame [format "%s%s" $leftRawFrame $rightRawFrame]
+   }
+#   puts "NumJoin: [string range $rawFrame 168 190]"
+   return [GetShortIntOffset $rawFrame 168]
+
+} 
+
+################################################################## 
+# Procedure Name: GetPJNumPrunedSources
+#   
+# Description: proc that returns the number of pruned sources from a join/prune pim control packet
+#
+#
+# Input args: rawFrame
+# Output args: none
+# Return value: short integer
+# Typical usage:
+#           set numPruned [GetPJNumPrunedSources $rawFrame]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc GetPJNumPrunedSources {rawFrame} {
+
+   set type [string range $rawFrame 36 40]
+   # if tagged, get rid of type and tag field from 36 to 47
+   if {$type == "81 00"} {
+      set leftRawFrame [string range $rawFrame 0 35] 
+      set rightRawFrame [string range $rawFrame 48 [string length $rawFrame]] 
+      set rawFrame [format "%s%s" $leftRawFrame $rightRawFrame]
+   }
+#   puts "NumPruned: [string range $rawFrame 174 190]"
+   return [GetShortIntOffset $rawFrame 174]
+
+}
+
+################################################################## 
+# Procedure Name: GetPJJoinedSourceList
+#   
+# Description: proc that returns the list of ip address of sources from a join/prune pim control packet
+#
+#
+# Input args: rawFrame
+# Output args: none
+# Return value: List of ip addressed or "" on error
+# Typical usage:
+#           GetPJJoinedSourceList
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc GetPJJoinedSourceList {rawFrame} {
+
+   set ipList ""
+   set type [string range $rawFrame 36 40]
+   # if tagged, get rid of type and tag field from 36 to 47
+   set numJoined [GetPJNumJoinedSources $rawFrame]
+   if {$type == "81 00"} {
+      set leftRawFrame [string range $rawFrame 0 35]
+      set rightRawFrame [string range $rawFrame 48 [string length $rawFrame]]
+      set rawFrame [format "%s%s" $leftRawFrame $rightRawFrame]
+   }
+
+   for {set index 0 } {$index < $numJoined } {incr index } {
+      set startIndex [expr 180 + $index * 24]
+      set endIndex [expr 190 + $index * 24]
+      set encodedHeader [string range $rawFrame $startIndex $endIndex]
+      puts "encodedHeader: |$encodedHeader|"
+      if {($encodedHeader == "01 00 07 20") || \
+          ($encodedHeader == "01 00 04 20") || \
+          ($encodedHeader == "01 00 00 20")} {
+         set startIndex [expr 192 + $index * 24]
+         lappend ipList [GetIPAddressOffset $rawFrame $startIndex ]
+      } else {
+         lappend ipList "Bad encoded header"
+      }      
+   }
+   return $ipList
+}  
+
+################################################################## 
+# Procedure Name: GetGraftJoinedSourceList
+#   
+# Description: proc that returns the list of ip address of sources from a graft pim control packet
+#              internally calls GetPJJoinedSourceList
+#
+#
+# Input args: rawFrame
+# Output args: none
+# Return value: List of ip addressed or "" on error
+# Typical usage:
+#                set graftList [GetGraftJoinedSourceList $dataFrame]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc GetGraftJoinedSourceList {rawFrame} {
+#same as prune/join message
+return [GetPJJoinedSourceList $rawFrame] 
+}
+
+
+################################################################## 
+# Procedure Name: GetPJPrunedSourceList
+#   
+# Description: proc that returns the list of ip address of sources that pruned from a graft pim control packet
+#
+#
+# Input args: rawFrame
+# Output args: none
+# Return value: List of ip addressed or "" on error
+#
+# Typical usage:
+#                set prunedList [GetPJPrunedSourceList $dataFrame]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc GetPJPrunedSourceList {rawFrame} {
+
+   set ipList ""
+   set numPruned [GetPJNumPrunedSources $rawFrame]
+   set numJoined [GetPJNumJoinedSources $rawFrame]
+   set type [string range $rawFrame 36 40]
+   # if tagged, get rid of type and tag field from 36 to 47
+   if {$type == "81 00"} {
+      set leftRawFrame [string range $rawFrame 0 35]
+      set rightRawFrame [string range $rawFrame 48 [string length $rawFrame]]
+      set rawFrame [format "%s%s" $leftRawFrame $rightRawFrame]
+   }
+   for {set index 0 } {$index < $numPruned } {incr index } {
+      set startIndex [expr 180 + $index * 20 + $numJoined * 20 ]
+      set endIndex [expr 190 + $index * 20  + $numJoined * 20 ]
+      set encodedHeader [string range $rawFrame $startIndex $endIndex]
+      puts "encodedHeader: |$encodedHeader|"
+      if {($encodedHeader == "01 00 07 20") || \
+          ($encodedHeader == "01 00 04 20") || \
+          ($encodedHeader == "01 00 00 20")} {
+         set startIndex [expr 192 + $index * 20  + $numJoined * 20 ]
+         lappend ipList [GetIPAddressOffset $rawFrame $startIndex ]
+      } else {
+         lappend ipList "Bad encoded header"
+      }      
+   }
+   return $ipList
+}  
+
+################################################################## 
+# Procedure Name: GetAssertMulticastGroupIp
+#   
+# Description: proc that returns the multicast group ip from a assert message in a pim control packet
+#
+#
+# Input args: rawFrame
+# Output args: none
+# Return value: ip address or "" on error
+#
+# Typical usage:
+#                   set multicastGroup [GetAssertMulticastGroupIp $dataFrame]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc GetAssertMulticastGroupIp {rawFrame} {
+
+   set type [string range $rawFrame 36 40]
+   # if tagged, get rid of type and tag field from 36 to 47
+   if {$type == "81 00"} {
+      set leftRawFrame [string range $rawFrame 0 35] 
+      set rightRawFrame [string range $rawFrame 48 [string length $rawFrame]] 
+      set rawFrame [format "%s%s" $leftRawFrame $rightRawFrame]
+   }
+   set encodedHeader [string range $rawFrame 114 124]
+   puts "AssertGroup: [string range $rawFrame 126 170]"
+   puts "encodedHeader: |$encodedHeader|"
+   if {$encodedHeader == "01 00 00 20" } {   
+      return [GetIPAddressOffset $rawFrame 126 ]
+   } else {
+      return -1
+   }
+
+} 
+
+################################################################## 
+# Procedure Name: GetAssertSourceIp
+#   
+# Description: proc that returns the source ip address of assert message in a pim control packet
+#
+#
+# Input args: rawFrame
+# Output args: none
+# Return value: IP address or -1 on error
+#
+# Typical usage:
+#                  set sourceIp [GetAssertSourceIp $dataFrame]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc GetAssertSourceIp {rawFrame} {
+
+   set type [string range $rawFrame 36 40]
+   # if tagged, get rid of type and tag field from 36 to 47
+   if {$type == "81 00"} {
+      set leftRawFrame [string range $rawFrame 0 35] 
+      set rightRawFrame [string range $rawFrame 48 [string length $rawFrame]] 
+      set rawFrame [format "%s%s" $leftRawFrame $rightRawFrame]
+   }
+   set encodedHeader [string range $rawFrame 138 142]
+   puts "encodedHeader: |$encodedHeader|"
+   puts "AssertIp: [string range $rawFrame 144 160]"
+   if {$encodedHeader == "01 00" } {   
+      return [GetIPAddressOffset $rawFrame 144]
+   } else {
+      return -1
+   }
+
+} 
+
+################################################################## 
+# Procedure Name: GetAssertRPTBit
+#   
+# Description: proc that returns the 1 bit value from a assert message in a pim control packet
+#
+#
+# Input args: rawFrame
+# Output args: none
+# Return value: 2 byte hex digit
+#
+# Typical usage:
+#          set RPTBit [GetAssertRPTBit $dataFrame]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc GetAssertRPTBit {rawFrame} {
+ 
+   set type [string range $rawFrame 36 40]
+   # if tagged, get rid of type and tag field from 36 to 47
+   if {$type == "81 00"} {
+      set leftRawFrame [string range $rawFrame 0 35] 
+      set rightRawFrame [string range $rawFrame 48 [string length $rawFrame]] 
+      set rawFrame [format "%s%s" $leftRawFrame $rightRawFrame]
+   }
+   puts "MetricPref: [string range $rawFrame 156 157]"
+   return [string range $rawFrame 156 157]
+
+}
+
+################################################################## 
+# Procedure Name: GetAssertMetricPref
+#   
+# Description: proc that returns the integer value of metric preference from a assert message in a pim control packet
+#
+#
+# Input args: rawFrame
+# Output args: none
+# Return value: integer
+#
+# Typical usage:
+#              set metricPref [GetAssertMetricPref $dataFrame]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc GetAssertMetricPref {rawFrame} {
+ 
+   set type [string range $rawFrame 36 40]
+   # if tagged, get rid of type and tag field from 36 to 47
+   if {$type == "81 00"} {
+      set leftRawFrame [string range $rawFrame 0 35] 
+      set rightRawFrame [string range $rawFrame 48 [string length $rawFrame]] 
+      set rawFrame [format "%s%s" $leftRawFrame $rightRawFrame]
+   }
+   puts "MetricPref: [string range $rawFrame 156 170]"
+   return [GetIntOffset $rawFrame 156]
+
+}
+
+################################################################## 
+# Procedure Name: GetAssertMetric
+#   
+# Description: proc that returns the integer value of metric from a assert message in a pim control packet
+#
+#
+# Input args: rawFrame
+# Output args: none
+# Return value: integer
+# Typical usage:
+#                set metric [GetAssertMetric $dataFrame]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc GetAssertMetric {rawFrame} {
+ 
+   set type [string range $rawFrame 36 40]
+   # if tagged, get rid of type and tag field from 36 to 47
+   if {$type == "81 00"} {
+      set leftRawFrame [string range $rawFrame 0 35] 
+      set rightRawFrame [string range $rawFrame 48 [string length $rawFrame]] 
+      set rawFrame [format "%s%s" $leftRawFrame $rightRawFrame]
+   }
+   puts "Metric: [string range $rawFrame 168 180]"
+   return [GetIntOffset $rawFrame 168]
+
+} 
+
+################################################################## 
+# Procedure Name: SendPIMMessage
+#   
+# Description: proc that sends a pim packet with specific data pattern to simmulate a control scenario
+#
+#
+# Input args: args
+# Output args: none
+#
+# Return value: Returns the frame sent
+# Typical usage:
+#             SendPIMMessage
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc SendPIMMessage {args} {
+   parse_args SendPIMMessage $args {
+     txPortId "1"
+     sourceMac "default"
+	  destMac "default"
+	  sourceIp "127.0.0.1"
+	  destIp "224.0.0.4"
+	  ttl "1"
+     numFrames "1"
+	  tag "none"
+	  dataPattern "20 00 87 6E 00 01 00 02 00 69 00 14 00 04 3A 00 1E 0D 00 00 00 00 00 00 00 00"
+	  ipTotalLength 46
+   }
+
+   if {$destMac == "default"} {
+      set destMac [GetMulticastMac $destIp]
+   }
+   result_debug "Host ($sourceIp) sending a PIM message ([lindex $dataPattern 1]) on portId $txPortId"   
+   set numIxiaCd [GetNumIxiaCd $txPortId]
+   set rxPo [MapIxiaPortId $txPortId chasisId card port]
+   if {$tag != "none" } { set wTag "true" } else {set wTag "false" }
+   global startCardNum
+   
+   set frameSize [expr 38 + [llength $dataPattern] ]
+   result_debug "FrameSize: $frameSize"
+   set frameSent [ixiaConf_2Ports_ip -numIxiaCd $numIxiaCd \
+              -txChas $chasisId -txCard $card -txPort $port \
+              -rxChas $chasisId -rxCard $card -rxPort $rxPo \
+              -ipProtocol "103" -sMacAddr $sourceMac -dMacAddr $destMac \
+              -sIpAddr $sourceIp -dIpAddr $destIp -ttl $ttl -TOS "0xC0" ipTotalLength $ipTotalLength \
+	           -numFrames $numFrames -wTag $wTag -tagNo $tag  -dataPattern $dataPattern -frameSize $frameSize]  
+   result_debug "PIMFrame: $frameSent"
+   return $frameSent
+
+}
+
+################################################################## 
+# Procedure Name: getRightTimeStampedPkts
+#   
+# Description: proc that captures the packet on a given test equipment port,
+#              lists timeStampedPkts and timeStamps for caller for a given pktType
+#
+#
+# Input args: args
+# Output args: timeStampedPkts
+#
+#
+# Return value: Returns the time stamps of ppktType packets
+# Typical usage:
+#       set timeStamps [getRightTimeStampedPkts $rawPortDataList $monitorPortList IP_PIMv2_NULL_REGISTER timeStampedPkts]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc getRightTimeStampedPkts {pkts port pktType timeStampedPkts} {
+
+   upvar $timeStampedPkts pktsToBeReturned
+   set TimeStamps ""
+   set pktsToBeReturned ""
+   set timeStamps [GetCapturedFramesTimeStamp $port]
+   # Look for pktType packets in all captured packets
+   for {set i 0} {$i < [llength $pkts]} {incr i} {
+      result_debug "The messagetype captured:[GetMessageType [lindex $pkts $i]]"
+      if {[GetMessageType [lindex $pkts $i]] == "$pktType"} {
+         lappend TimeStamps [lindex $timeStamps $i]
+         lappend pktsToBeReturned [lindex $pkts $i]
+      }
+   }
+   return $TimeStamps
+}
+
+################################################################## 
+# Procedure Name: GetPimType
+#   
+# Description: proc that returns pim type from a pim control packet
+#
+# Input args: rawFrame
+# Output args: none
+# Return value: 1 Byte hex or -1 on error
+# Typical usage:
+#             set pimType [GetPimType  $dataFrame]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc GetPimType {rawFrame} {
+   set messageType [GetMessageType $rawFrame]
+   if {$messageType=="IP_PIMv2_BOOTSTRAP"} {
+      set type [string range $rawFrame 36 40]
+      # if tagged, get rid of type and tag field from 36 to 47
+      if {$type == "81 00"} {
+        set leftRawFrame [string range $rawFrame 0 35] 
+        set rightRawFrame [string range $rawFrame 48 [string length $rawFrame]] 
+        set rawFrame [format "%s%s" $leftRawFrame $rightRawFrame]
+      }
+      return [string index $rawFrame 103]
+   } else {
+      return -1
+   }
+}
+
+################################################################## 
+# Procedure Name: GetPimVersion
+#   
+# Description: proc that returns pim version from a pim control packet
+#
+# Input args: rawFrame
+# Output args: none
+# Return value: 1 Byte hex or -1 on error
+# Typical usage:
+#             set pimVersion  [GetPimVersion  $dataFrame]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc GetPimVersion {rawFrame} {
+   set messageType [GetMessageType $rawFrame]
+   if {$messageType=="IP_PIMv2_BOOTSTRAP"} {
+      set type [string range $rawFrame 36 40]
+      # if tagged, get rid of type and tag field from 36 to 47
+      if {$type == "81 00"} {
+        set leftRawFrame [string range $rawFrame 0 35] 
+        set rightRawFrame [string range $rawFrame 48 [string length $rawFrame]] 
+        set rawFrame [format "%s%s" $leftRawFrame $rightRawFrame]
+      }
+      return [string index $rawFrame 102]
+   } else {
+      return -1
+   }
+}
+
+################################################################## 
+# Procedure Name: GetPimHashMaskLength
+#   
+# Description: proc that returns pim type from a pim control packet
+#
+# Input args: rawFrame
+# Output args: none
+# Return value: 2 Byte hex or -1 on error
+# Typical usage:
+#             set hashMaskLength  [GetPimHashMaskLength  $dataFrame]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc GetPimHashMaskLength {rawFrame} {
+   set messageType [GetMessageType $rawFrame]
+   if {$messageType=="IP_PIMv2_BOOTSTRAP"} {
+      set type [string range $rawFrame 36 40]
+      # if tagged, get rid of type and tag field from 36 to 47
+      if {$type == "81 00"} {
+        set leftRawFrame [string range $rawFrame 0 35] 
+        set rightRawFrame [string range $rawFrame 48 [string length $rawFrame]] 
+        set rawFrame [format "%s%s" $leftRawFrame $rightRawFrame]
+      }
+      return [hextodec [string range $rawFrame 120 121]]
+   } else {
+      return -1
+   }
+}
+

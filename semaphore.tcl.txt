@@ -1,0 +1,219 @@
+#################################################################
+#
+#  ListToJSON 
+#################################################################
+proc listToJson {args} {
+    parse_args listToJson $args {
+        mlist ""
+        elem "Test"
+    }
+
+    #set in "\{\"uuid\":\"$myUuid\",\"config\":\"$L1CFG\",\"portlist\":\[$pstr\],\
+    #    \"ipaddress\":\"$myServerIp\",\"port\":\"$mySock\"\}"
+
+    set j "\{\"$elem\": \{"
+    foreach {a v} $mlist {
+        set j [append j "\"$a\":\"$v\","];
+    }
+    set j [string trimright $j ","]
+    set j [append j "\}\}"]
+    return $j
+
+}
+
+##################################################################
+# A library procedure to enhance writing json formated strings
+#
+# dict create key1 value1 ke2 value2 .........
+# Example:
+# set d [dict create blue [list 1 2] ocean water]
+# set jsonOut [tcl2json $d]
+#
+#
+##################################################################
+proc tcl2json value {
+    # Guess the type of the value; deep *UNSUPPORTED* magic!
+    #regexp {^value is a (.*?) with a refcount} \
+    #	[::tcl::unsupported::representation $value] -> type
+    set type dict
+
+    switch $type {
+	string {
+	    return [json::write string $value]
+	}
+	dict {
+	    return [json::write object {*}[
+		dict map {k v} $value {tcl2json $v}]]
+	}
+	list {
+	    return [json::write array {*}[lmap v $value {tcl2json $v}]]
+	}
+	int - double {
+	    return [expr {$value}]
+	}
+	booleanString {
+	    return [expr {$value ? "true" : "false"}]
+	}
+	default {
+	    # Some other type; do some guessing...
+	    if {$value eq "null"} {
+		# Tcl has *no* null value at all; empty strings are semantically
+		# different and absent variables aren't values. So cheat!
+		return $value
+	    } elseif {[string is integer -strict $value]} {
+		return [expr {$value}]
+	    } elseif {[string is double -strict $value]} {
+		return [expr {$value}]
+	    } elseif {[string is boolean -strict $value]} {
+		return [expr {$value ? "true" : "false"}]
+	    }
+	    return [json::write string $value]
+	}
+    }
+}
+
+##################################################################
+# proc _RequestSemaphore
+#
+#
+#
+##################################################################
+proc _RequestSemaphore {args} {
+    parse_args SendFrame $args {
+        user "1"
+        regServerIp "0"
+        cfg ""
+        socket ""
+        uuid ""
+        db ""
+        dbIp ""
+        harness ""
+    }
+    set in "\{\"uuid\":\"$myUuid\",\"config\":\"$L1CFG\",\"portlist\":\[$pstr\],\"ipaddress\":\"$myServerIp\",\"port\":\"$mySock\"\}"
+
+    puts "json = $in"
+    set resWaiting 1
+    while {$resWaiting} {
+        set token [::http::geturl "http://10.68.69.31/api/topologies" -type "application/json" \
+                     -method "POST" -query $in]
+        set code [::http::code $token]
+        set data [::http::data $token]
+
+        puts "code $code"
+        puts "data $data"
+
+        set parsed [json::json2dict $data]
+        puts $parsed
+        foreach {key val} $parsed {
+            set retArray($key) $val
+        }
+        if {$retArray(status) == "success"} {
+            set resWaiting 0
+            foreach ixiaList $retArray(ixia_port_list) {
+                set pId [lindex $ixiaList 0]
+                set ixiaIp [lindex $ixiaList 1]
+                set iCh [lindex $ixiaList 2]
+                set iSlot [lindex $ixiaList 3]
+                set iPort [lindex $ixiaList 4]
+                puts "portId $pId Ixia $ixiaIp info $iCh $iSlot $iPort"
+                set ixiaPortMappingArray($pId) "$iCh $iSlot $iPort"
+                set l1Configured($pId) 1
+                IxiaOnePortInit $pId
+            }
+        } else {
+            puts "\nWait 60 seconds for free Ixia Ports"
+            after 60000
+        }
+    }
+}
+##################################################################
+# proc OpenTPBControlPort:
+#    Open a communication socket for TPB to receive cases and
+#    send results.
+#
+##################################################################
+proc OpenTPBControlPort {args} {
+
+    package require json::write
+    package require json
+    global env
+
+    parse_args OpenTPBControlPort $args {
+        port "null"
+    }
+    if {$port == "null"} {
+        set mySock [expr 10000 + [expr {int(rand()*50000)}]]
+    } else {
+        set mySock $port
+    } 
+    if {[catch {socket -server on_connect $mySock} why]} {
+        puts "\n@@@@\n@@@@\nFailed to open Socket server on socket $mySock\n@@@@\n@@@@\n"
+        return 0
+    }  ;# Create a server socket
+    puts "@@@\n@@@\nTPB Control Socket = TCP Port $mySock\n@@@\n@@@";
+    return 1;
+
+}
+# Change the port to meet requirements.  Read it for example from the
+# commandline or a configuration file
+
+# socket -server on_connect 12345
+
+# Procedure called whenever a new connection is made by a client.
+proc on_connect {newsock clientAddress clientPort} {
+    global initsend mySock
+
+    if [info exists initsend] {
+        set initsend "$initsend"
+    } else {
+        set initsend "You are $clientAddress on port $clientPort. Socket is $newsock"
+    }
+    set mySock $newsock
+    # This is the place to add checks disallowing connections based
+    # upon the hostname/ipaddress of the peer.
+    #puts "CLIENT CONNECTED"
+    fconfigure $newsock -blocking 0 -buffering line
+    puts $newsock "$initsend"
+    fileevent  $newsock readable [list handleInput $newsock]
+}
+
+# Procedure called whenever input arrives on a connection.
+proc handleInput {f} {
+    global getmyjson getexec freepause ineed youneed
+    # Delete the handler if the input was exhausted.
+    if {[eof $f]} {
+        puts "Monitoring Client Closed."; 
+        fileevent $f readable {}
+        close     $f
+        return
+    }
+
+    # Read and handle the incoming information. Here we just log it to
+    # stdout.
+    set srvin [string trim [read $f]];
+    puts $f "Rx main.tcl: $srvin"
+    set initIn "$srvin"
+
+    #regsub -all {\{} $srvin "" srvin
+    # Control Returning the socket and variable svrin to the parent proc
+    if {[regexp -nocase -all "tpbsubmit" "$srvin"]} {
+        set ineed "$f=$initIn";
+        set getmyjson [ clock second ];
+    } elseif {[regexp -nocase ".*exec.*" $srvin]} {
+        set getexec [ clock second ];
+    } elseif {[regexp -nocase ".*freepause.*" $srvin]} {
+        set freepause [ clock second ];
+    } else {
+        puts $f "Input: $srvin"
+        puts $f "Input does not match the current handler"
+    }
+}
+proc handleOutput {f msg} {
+global useSocket
+    if [catch {puts $f $msg} why] {
+        puts "Socket or Client is not available"
+    } else {
+        flush $f
+    }
+}
+

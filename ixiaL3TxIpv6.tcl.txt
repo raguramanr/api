@@ -1,0 +1,615 @@
+
+# Procedure Name: ixiaConf_2Ports_ipv6
+# Description:
+#       Set up an ixia port to send IP packets (tcp/udp/icmpv6)
+# Input args: args
+# Output args: none
+# Typical usage:
+#        set frameSent [ixiaConf_2Ports_ipv6 -numIxiaCd $numIxiaCd \
+#               -txChas $chasisId -txCard $card -txPort $port          \
+#               -startCardNum $startCardNum -rxChas $ch -rxCard $c  \
+#               -rxPort $rxPort -ipProtocol $protocol -sMacAddr $sourceMac \
+#               -dMacAddr $destMac -sIpAddr $sourceIp -dIpAddr $destIp  \
+#               -pSrcPort $sourcePort -pDstPort $destPort  \
+#               -frameSizeType $frameSizeType -nHeader $nHeader \
+#               -goodChecksum $goodChecksum -numFrames $numFrames \
+#               -frameSize $frameSize -frameRate $frameRate        \
+#               -dataPattern $dataPattern -streamType $streamType \
+#               -fcsError $fcsError -wTag $wTag -tagNo $tag  \
+#               -userPriority $userPriority -percentage $percentage  \
+#               -priority $priority  -direction $direction -saMode $saMode  \
+#               -daMode $daMode -ipSaMode $ipSaMode -ipDaMode $ipDaMode  \
+#               -tcpSeqNum $tcpSeqNum -tcpSynFlag $tcpSynFlag             \
+#               -tcpFinFlag $tcpFinFlag  -tcpRstFlag $tcpRstFlag  \
+#               -tcpAckFlag $tcpAckFlag -sequence $sequence \
+#               -type $type -code $code -id $id -applyFilter $applyFilter  \
+#               -maxResponseTime $maxResponseTime -groupAddr $groupAddr \
+#               -udfEnable $udfEnable -udfInitval $udfInitval -udfOffset $udfOffset \
+#               -udfCountertype $udfCountertype ]
+# Category: SendTraffic
+##################################################################
+
+proc ixiaConf_2Ports_ipv6 {args} {
+	parse_args ixiaConf_2Ports_ipv6 $args {
+      numIxiaCd "1"
+      startCardNum "1"
+      direction "1Way"
+         txChas "1"
+         txCard "1"
+         txPort "1"
+         rxChas "1"
+         rxCard "1"
+         rxPort "2"
+      #ipProtocol "ip"
+      ipProtocol "ipV6"
+      nHeader "tcp"
+      pSrcPort "0"
+      pDstPort "0"
+      #	sMacAddr "default"
+      #  dMacAddr "00 00 00 00 00 02"
+      sMacAddr "default"
+      dMacAddr "00 e0 2b 00 00 01"
+      sIpAddr "3555:5555:6666:6666:7777:7777:8888:8888"
+      dIpAddr "FE80:0:0:0:201:3FF:FE00:100"
+      dDutIpAddr "default"
+      sIpMask "ffff:ffff:ffff:ffff:0000:0000:0000:0000"
+      dIpMask "ffff:ffff:ffff:ffff:0000:0000:0000:0000"
+      #sClass "classC"
+      #dClass "classC"
+      #ttl "64"
+      #goodChecksum "true"
+      #ipOptions ""
+      #ipTotalLength "default"
+      #TOS "default"
+      trafficClass "3"
+      flowLabel "0"
+      hopLimit "255"
+      numFrames "1"
+      #frameSize "68"
+      frameSize "128"
+      frameSizeType "sizeFixed"
+      frameRate "default"
+      dataPattern "0000"
+      #dataPattern "userpattern"
+      #frameType "08 00"
+      frameType "86 DD"
+      streamType "stopStream"
+      fcsError "good"
+      wTag "false"
+      tagNo "002"
+      tagCfi "resetCFI"
+      tagMode "vIdle"
+      tagRepeat "1"
+      userPriority "0"
+      applyFilter "0"
+      percentage "100"
+      priority "0"
+      #sendArp "false"
+      #numArpFrames "2"
+      saMode "idle"
+      daMode "idle"
+      saCount ""
+      daCount ""
+      #ipSaMode "ipIdle"
+      #ipDaMode "ipIdle"
+      ipSaMode "ipV6Idle"
+      ipDaMode "ipV6Idle"
+      ipSaCount ""
+      ipDaCount ""
+      #dontFrag "true"
+      tcpSynFlag "false"
+      tcpFinFlag "false"
+      tcpRstFlag "false"
+      tcpAckFlag "false"
+      tcpPushFlag "false"
+      tcpUrgFlag "false"
+      tcpSeqNum "0"
+      type "8"
+      code "0"
+      id "0"
+      sequence "0"
+      maxResponseTime "100"
+      #igmpMode "Fixed"
+      #igmpRepeatCount ""
+      #groupAddr "224.0.0.1"
+      #ipApplication "ip"	
+      #ripCommand "ripRequest"
+      #ripVersion "2"
+      #ripAuthen ""
+      #ripAuthenType "2"
+      #ripNumRoute "1"
+      #ripRouteFamilyId {2}
+      #ripRouteIp {0.0.0.0}
+      #ripRouteTag {00}
+      #ripRouteMask {0.0.0.0}
+      #ripRouteNextHop {0.0.0.0}
+      #ripRouteMetric {16}
+      chid "1"
+      udfEnable "false"
+      udfInitval "00"
+      udfOffset "0"
+      udfCountertype "c8"
+      udfContinuousCount "false"
+      udfUpdown "uuuu"
+      udfRepeat "1"
+      udfStep "1"
+      clearStats "yes"
+      dontTx "0"
+      invalidUdpChk "0"
+   }
+
+	result_debug "@@@ ixiaConf_2Ports_ipv6: numFrames=$numFrames,\
+                             ipDaMode=$ipDaMode, sIpAddr=$sIpAddr"
+        
+	global spawn_id
+	global one2oneArray
+	global preambleSize
+	globalSetDefault
+	protocolStackSetDefault
+
+	set date [clock format [clock seconds] -format "%m-%d-%Y %I.%M.%S%p"]
+	result_debug "\n*** date=$date"
+	set time1 [clock seconds]
+
+	set enableUDF4DVMRP 0
+	if {$ipProtocol == "dvmrp" } {
+		set ipProtocol "ipV6"
+      		set enableUDF4DVMRP 1
+	}
+	
+	set enablepimdm 0
+      	if {$ipProtocol == "pim-dm" } {
+      		set ipProtocol "ipV6"
+      		set enablepimdm 1
+   	}
+
+	set patternOffset		30
+	set preambleSize		8
+	
+	# create mapping
+
+	map new -type			one2one
+	map config -type		one2one
+	map add $txChas $txCard $txPort $rxChas $rxCard $rxPort
+	if { $direction == "2Way" } {
+		map add $rxChas $rxCard $rxPort $txChas $txCard $txPort
+	}
+
+	#if { $sendArp == "true" } {
+	 #     set numLearnFrames 2
+      	 #     learn config -numframes $numLearnFrames
+         #     send_arp_frames one2oneArray
+        # }
+
+
+	# Config streams for validation traffic
+
+	set counter	0
+    set pList [lsort [array names one2oneArray]]
+    # Code to verify that lsort has worked correctly
+    set element1 [lindex [split [lindex $pList 0] ","] 1]
+    set element2 [lindex [split [lindex $pList 1] ","] 1]
+    if {$element2 < $element1} {
+        set portList "[lindex $pList 1] [lindex $pList 0]"
+        puts "------------\nlsort failed!\nSorted List: $pList\nNew portlist: $portList"
+    } else {
+        set portList $pList
+    }
+    foreach txMap $portList {
+	scan $txMap	"%d,%d,%d" chid c p
+	port get	$chid $c $p
+	set txSpeed	[port cget -speed]
+	stream setDefault
+	stream config -numFrames	$numFrames
+	stream config -name		S_${c}_${p}
+	stream config -framesize	$frameSize
+	#random size
+	if {$frameSizeType == "sizeRandom"} {
+		stream config -frameSizeType	$frameSizeType
+		stream config -frameSizeMAX	1500
+		stream config -frameSizeMIN	128
+	}
+	decideLoopCount	$numFrames $streamType
+	if { $frameRate == "default" } {
+		set frameRate [decideFrameRate $txSpeed $frameSize $percentage]
+	} else {
+		set percentage [decidePercentage $txSpeed $frameSize $frameRate]
+	}
+	stream config -rateMode			usePercentRate
+	stream config -percentPacketRate	$percentage		
+	result_debug "@@@ frameRate=$frameRate"
+
+	#set ifg [calculateGap $frameRate $frameSize $preambleSize $txSpeed]
+
+	stream config -fcs			$fcsError
+#	stream config -ifg                      $ifg
+#      	stream config -isg                      $ifg
+#      	stream config -ibg                      $ifg
+	stream config -fir			false
+	stream config -patternType		nonRepeat
+	stream config -dataPattern		userpattern 
+   stream config -pattern        $dataPattern
+	stream config -frameType		$frameType
+	set srcAddr				[port cget -MacAddress]
+	set rxMap				$one2oneArray($txMap)
+	scan [join $rxMap]			"%d %d %d" rxch rxc rxp
+	port get				$rxch $rxc $rxp	
+	set destAddr				[port cget -MacAddress]
+	stream config -saRepeatCounter		$saMode
+	stream config -daRepeatCounter		$daMode
+	if {$saMode != "idle"} {
+		if {$saCount == ""} {
+			stream config -numSA $numFrames
+		} else {
+			stream config -numSA $saCount
+		}
+	}
+	if {$daMode != "idle"} {
+		if {$daCount == ""} {
+			stream config -numDA $numFrames
+		} else {
+			stream config -numDA $daCount
+		}
+	}
+	if { $sMacAddr == "default" } {
+		stream config -sa $srcAddr
+	} else {
+		stream config -sa $sMacAddr
+	}
+	if {[llength $dMacAddr]>2} {
+		set dMacAdd $dMacAddr
+	} else {
+		set dMacAdd [lindex $dMacAddr $counter]
+	}
+	if {$counter==0} {
+		if {[llength $dMacAddr]>2} {
+			set dMacAddToFilter $dMacAddr
+		} else {
+			set dMacAddToFilter [lindex $dMacAddr 1]
+		}
+	 } else {
+        	 set dMacAddToFilter [lindex $dMacAddr 0]
+      	}
+
+		
+	if {[regexp -nocase "01 00 5e" $dMacAddr]} {
+		set destAddr $dMacAdd
+	}
+
+	stream config -da 			$dMacAdd
+	protocol setDefault
+	protocol config -ethernetType		ethernetII
+	#protocol config -name                  ip
+	protocol config -name                   ipV6
+	protocol config -enable802dot1qTag      [lindex $wTag $counter]
+	
+	#switch $ipApplication {
+	#"rip"   { protocol config -appName Rip }
+        #"ip" -
+        #default { protocol config -appName ip }
+        #}
+
+	ipV6 setDefault
+	
+	ipV6 config -trafficClass		$trafficClass
+	ipV6 config -flowLabel			$flowLabel
+	ipV6 config -hopLimit			$hopLimit
+
+	set myDestIpAddr ""
+	if { ($chid == $txChas) && ($c == $txCard) && ($p == $txPort) } {
+		#ip config -sourceClass         $sClass
+
+		ipV6 config -sourceAddr		$sIpAddr
+		ipV6 config -sourceMask		$sIpMask
+		#ip config -destClass  		$dClass
+		ipV6 config -destAddr		$dIpAddr
+		ipV6 config -destMask		$dIpMask
+		set myDestIpAddr $dIpAddr
+	} else {
+		#ip config -sourceClass 	$dClass
+		ipV6 config -sourceAddr		$dIpAddr
+		ipV6 config -sourceMask 	$dIpMask
+		#ip config -destClass           $sClass
+		ipV6 config -destAddr		$sIpAddr
+		ipV6 config -destMask		$sIpMask
+		set myDestIpAddr $sIpAddr
+		
+	}
+	ipV6 config -nextHeader                 $nHeader
+	ipV6 config -sourceAddrMode		$ipSaMode
+	ipV6 config -sourceAddrRepeatCount	1
+	ipV6 config -destAddrMode		$ipDaMode
+	ipV6 config -destAddrRepeatCount      	1
+        # uncommentd dmacadd
+     #	ipV6 config -destMacAddr               $dMacAddr
+	#ip config -destDutIpAddr		$dDutIpAddr
+	if {$ipSaMode != "ipV6Idle"} {
+		if {$ipSaCount == ""} {
+			ipV6 config -sourceAddrRepeatCount $numFrames
+		} else {
+			ipV6 config -sourceAddrRepeatCount $ipSaCount
+		}
+	}
+
+	if {$ipDaMode != "ipV6Idle"} {
+		if {$ipDaCount == ""} {
+			ipV6 config -destAddrRepeatCount $numFrames
+		} else {
+			ipV6 config -destAddrRepeatCount $ipDaCount
+		}
+	}
+
+	#ip config -ipProtocol			$ipProtocol
+	#ip config -ttl				$ttl
+	#ip config -useValidChecksum		$goodChecksum
+         #ipV6  config            -enableSourceSyncFromPpp            false	
+         #ipV6  config            -enableDestSyncFromPpp              false
+	ipV6  clearAllExtensionHeaders 
+
+   switch $nHeader {
+      "tcp"  { tcpConfig $chid $c $p $pSrcPort $pDstPort $tcpSeqNum  \
+                        $tcpSynFlag $tcpFinFlag \
+                        $tcpRstFlag $tcpAckFlag $tcpPushFlag $tcpUrgFlag}
+      
+      "udp"  { udpConfig $chid $c $p $pSrcPort $pDstPort $invalidUdpChk}
+      
+      "icmpV6" { icmp setDefault; icmpConfig $chid $c $p $type $code $id $sequence}
+      "58"     { icmp setDefault; icmpConfig $chid $c $p $type $code $id $sequence}
+   }
+######### NOTE: MOVED THIS COMMENTED CODE OUT OF THE SWITCH BECAUSE IT WAS BREAKING THE SWITCH
+#               "igmp" { igmpConfig $chid $c $p $groupAddr $type $maxResponseTime \
+#                                $igmpMode $igmpRepeatCount
+#                 if {$type==18} {
+#                       igmp config -version 1
+#                       igmp config -maxResponseTime 0
+#                       igmp set $chid $c $p
+#                 }
+#                       }
+   ipV6  addExtensionHeader 		$nHeader
+   
+   ipV6  set               		$chid $c $p
+
+	#if {$dontFrag == "true" } {
+		#ip config -fragment		1
+	# } else {
+		#ip config -fragment 		0
+	#}
+	
+	#if {[string length $ipOptions]} {
+		#ip config -options		$ipOptions
+	#}		
+
+	 #if {$TOS != "default" } {
+         #          puts "TOS |$TOS|"
+         #     set precedence [expr [expr $TOS&0x80]==0x80]   \
+                 [expr [expr $TOS&0x40]==0x40][expr [expr $TOS&0x20]==0x20]b
+         #     puts "Precedence |$precedence|"
+         #     set key(000b) routine
+         #     set key(001b) priority
+         #     set key(010b) immediate
+         #     set key(011b) flash
+         #     set key(100b) flashOverride
+         #     set key(101b) criticEcp
+         #     set key(110b) internetControl
+         #     set key(111b) networkControl
+         #	if {([expr $TOS & 0x10] == 0x10)} {
+         #      	ip config -delay                 1
+         #   	} else { ip config -delay           0 }
+         #	if {([expr $TOS & 0x08] == 0x08)} {
+         #   	ip config -throughput            1
+         #  	} else { ip config -throughput      0 }
+         # 	if {([expr $TOS & 0x04] == 0x04)} {
+         #     	ip config -reliability                        1
+         #  	} else { ip config -reliability              0 }
+         #	 ip config -precedence                    $key($precedence)
+         #       }
+         #	if {$ipTotalLength != "default" } {
+         #	ip config -lengthOverride "true"
+         #	ip config -totalLength  $ipTotalLength
+        # 	ip config -identifier 6558 ;#14700
+      	#		}
+
+	 ipV6 set                                  $chid $c $p
+
+
+
+
+	        
+#		 if  { $ipApplication == "rip" } {
+#        	rip setDefault
+#        	rip config -command     $ripCommand
+#        	rip config -version     $ripVersion
+#
+# #       	ripRoute setDefault
+#        	for {set index 0} {$index < $ripNumRoute } {incr index} {
+#         	 set routeID [expr $index + 1]
+#         	 result_debug "Setting route $routeID to [lindex $ripRouteIp $index]"
+#         	 ripRoute config -familyId [lindex $ripRouteFamilyId $index ]
+#         	 ripRoute config -routeTag [lindex $ripRouteTag $index ]
+#          	ripRoute config -ipAddress [lindex $ripRouteIp $index ]
+#         	 ripRoute config -subnetMask [lindex $ripRouteMask $index ]
+#          	ripRoute config -nextHop [lindex $ripRouteNextHop $index ]
+#         	 ripRoute config -metric [lindex $ripRouteMetric $index ]
+#          	ripRoute set $routeID
+#        	}
+# #      	rip set         $chid $c $p
+# #	     }
+	
+        vlan                         setDefault
+	vlan config -cfi			$tagCfi
+	vlan config -mode			$tagMode
+	vlan config -repeat			$tagRepeat
+        vlan config            -maskval                            "0000XXXXXXXXXXXX"
+	vlan config -userPriority  		$userPriority
+	
+	if {[lindex $wTag $counter]=="true"} {
+		vlan config -vlanID		[lindex $tagNo $counter]
+		vlan set 			$chid $c $p
+	}
+	
+	incr counter
+	 #overwrite the ip protocol into igmp protocol, so the datapattern \
+         # can go right after the ip header and not after   \
+         # igmp header is used igmp directly
+      	if { $enableUDF4DVMRP } {
+         udf setDefault
+         udf config -enable "true"
+         udf config -initval "02"
+         udf config -offset 23
+         udf config -countertype "c8"
+         udf set 1
+      	}
+	
+	if {$enablepimdm} {
+         udf setDefault
+         udf config -enable "true"
+         udf config -initval "67"
+         udf config -offset 23
+         udf config -countertype "c8"
+         udf set 1
+      }
+   # Define UDF package 
+   if {$udfEnable == "true"} {
+      set inter 0
+      foreach udfOffs $udfOffset {
+         udf config -enable "true"
+         udf config -continuousCount [lindex $udfContinuousCount $inter]
+         udf config -initval [lindex $udfInitval $inter]
+         udf config -offset [lindex $udfOffset $inter]
+         udf config -countertype [lindex $udfCountertype $inter]
+         udf config -updown [lindex $udfUpdown $inter]
+         udf config -repeat [lindex $udfRepeat $inter]
+         udf config -step [lindex $udfStep $inter]
+         incr inter
+         udf set $inter
+      }
+   }
+
+         protocolOffset               setDefault        
+         protocolOffset               config            -enable                             false
+         protocolOffset               config            -offset                             14
+         protocolOffset               config            -userDefinedTag                     "00 00"
+         protocolOffset               set               $chid $c $p
+
+		
+	stream set				$chid $c $p 1
+	#set packet group to default, otherwise will cause ICMP bad CRC
+
+      	packetGroup setDefault
+      	packetGroup setTx                      $chid $c $p 1
+		
+   # Define filter & capture
+
+	filter config -captureFilterEnable	true
+      	filter config -captureTriggerEnable	true
+	if {$applyFilter} {
+		
+	filter config -userDefinedStat1Enable	true
+	
+	# In case of mcast fwding, dont care of SA1 value
+	
+	if {[regexp -nocase "01 00 5e" $dMacAddr]} {
+	
+	filter config -userDefinedStat1SA	anyPattern
+	} else {
+	filter config -userDefinedStat1SA       addr1
+	}
+	} else {
+	filter config -userDefinedStat1Enable   false
+	}
+	
+     	 filter config -userDefinedStat1DA      addr1
+	filter config -captureFilterPattern	anyPattern
+	filter config -captureTriggerPattern	anyPattern
+	filter config -captureTriggerDA		anyAddr
+	filter config -captureFilterDA		anyAddr
+	filter config -userDefinedStat1Pattern	pattern1
+	filter set				$rxch $rxc $rxp
+	
+	filterPallette config -DA1		$destAddr
+	filterPallette config -matchType1	matchIpDAEthernetII
+
+	set fir ""
+	set sec ""
+      	set thi ""
+      	set fou ""	
+	
+	scan $myDestIpAddr %d.%d.%d.%d fir sec thi fou
+	if {($fir!="")&&($sec!="")&&($thi!="")&&($fou!="")} {
+         set pattern1 [string toupper [format "%02x %02x %02x %02x"  \
+                            $fir $sec $thi $fou]]
+      	} else {
+         set pattern1 ""
+      	}
+
+	
+	filterPallette config -pattern1		$pattern1
+	filterPallette config -SA1		$dMacAddToFilter
+	filterPallette config -patternOffset1	$patternOffset
+	filterPallette set			$rxch $rxc $rxp
+	}
+
+	writeConfigToHardware 			one2oneArray
+
+	if {$clearStats == "yes"} {
+		zeroPortStats $txChas $txCard $txPort
+	}
+
+	set pList ""
+   	lappend pList "$txChas $txCard $txPort"
+   	lappend pList "$rxch $rxc $rxp"
+   	ixStartCapture pList
+	
+	
+	 if {!$dontTx} {
+		
+		startTx one2oneArray
+	
+		set time2 [clock seconds]
+		stream get $txChas $txCard $txPort 1
+      		set streamSent [stream cget -packetView]
+
+		result_debug "*** Time for Ixia TX setup =  \
+                                        [expr $time2-$time1] secs"
+
+		 # Make sure TX done
+		
+		if { $streamType == "stopStream" } {
+		if { ($saMode != "contIncrement") && ($saMode != "contDecrement") &&
+              	($daMode != "contIncrement") && ($daMode != "contDecrement") } {
+      				
+		ixiaCheckTxDone $txChas $txCard $txPort $numFrames $txPort
+            			
+		#Reset the filter
+
+            	if { $direction == "2Way" } {
+               	ixiaCheckTxDone $rxChas $rxCard $rxPort $numFrames $txPort
+            	}
+			
+		# Reset the filters
+	         
+		if {$applyFilter} {
+            	result_debug "resetting the UDS1 settings"
+            	foreach txMap [lsort [array names one2oneArray]] {
+               	scan $txMap                              "%d,%d,%d" chid c p
+               	set rxMap                                $one2oneArray($txMap)
+               	scan [join $rxMap]                       "%d %d %d" rxch rxc rxp
+               	filter config -userDefinedStat1Enable    false
+               	filter config -userDefinedStat2Enable    false
+               	filter set $rxch $rxc $rxp
+               	filterPallette setDefault
+              	filterPallette set $rxch $rxc $rxp
+            	}
+            	writeConfigToHardware one2oneArray
+         	}
+      }
+      }
+      after 1000
+      set time3 [clock seconds]
+      result_debug "*** Time for Ixia TX done = [expr $time3-$time2] secs\n"
+      return $streamSent
+      } else {
+      return ""
+      }
+      }
+  		

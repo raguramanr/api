@@ -1,0 +1,1239 @@
+
+################################################################## 
+# Procedure Name: startMLD
+#   
+# Description:  start the IGMP protocol server on the ixia
+#              
+# Input args: txPortIdList
+# Output args: none
+# Return value: none
+# Typical usage: 
+#      startDvmrp {1}
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: SetupTestTool
+##################################################################
+proc startMLD {txPortIdList} {
+
+   set pList ""
+   global TrafficGen
+   switch -exact -- $TrafficGen {
+      ixia -
+      ixvm {
+   foreach txPortId $txPortIdList {
+      MapIxiaPortId $txPortId cha car por
+      result_debug "startMLD - Chas: $cha Card: $car Port: $por"
+      lappend pList "$cha $car $por"
+   }
+   
+   if {[ixStartMld pList]} {
+      error "startMLD: ixStartMld  failed."
+   }
+}
+      stc {
+         set globalDeviceList ""
+         foreach txPortId $txPortIdList {
+            set txPortId [hMapPortIdToSpirentPort $txPortId]
+            set deviceList [stc::get $txPortId -affiliationport-Sources]
+            result_debug "startMld: Device List - $deviceList"
+            set globalDeviceList [concat $globalDeviceList $deviceList]				
+         }
+         
+         if {[catch {stc::perform DeviceStartCommand -DeviceList $globalDeviceList} retCode]} {
+            error "startMld: Spirent device start failed."
+         } 
+      }
+   }   
+}
+
+################################################################## 
+# Procedure Name: stopMld
+#   
+# Description:  stop the MLD protocol server on the ixia
+#              
+# Input args: txPortIdList
+# Output args: none
+# Return value: none
+# Typical usage: 
+#      stopDvmrp {1}
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: SetupTestTool
+##################################################################
+proc stopMLD {txPortIdList} {
+
+   set pList "";
+   global TrafficGen
+   switch -exact -- $TrafficGen {
+      ixia -
+      ixvm {	
+   foreach txPortId $txPortIdList {	
+      MapIxiaPortId $txPortId cha car por;
+      result_debug "StopMLD - Chas: $cha Card: $car Port: $por";
+      lappend pList "$cha $car $por";
+   }
+   
+   if {[ixStopMld pList]} {
+      error "stopMLD: ixStopMld failed."
+   }
+}
+      stc {
+         
+         set globalDeviceList ""
+         foreach txPortId $txPortIdList {
+            set txPortId [hMapPortIdToSpirentPort $txPortId]
+            set deviceList [stc::get $txPortId -affiliationport-Sources]
+            result_debug "stopMld: Device List - $deviceList"
+            set globalDeviceList [concat $globalDeviceList $deviceList]				
+         }
+         
+         if {[catch {stc::perform DeviceStopCommand -DeviceList $globalDeviceList} retCode]} {
+            error "stopMld: Spirent device start failed."
+         } 
+      }
+   }
+}
+
+
+################################################################## 
+# Procedure Name: cleanupMLD
+#   
+# Description:  cleanup the MLD protocol server on the ixia
+#              
+# Input args: txPortIdList, routerIp
+# Output args: none
+# Return value: none
+# Typical usage: 
+#      cleanupDvmrp {4}
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: SetupTestTool
+##################################################################
+proc cleanupMLD {txPortIdList} {
+
+   global TrafficGen
+   
+   switch -exact -- $TrafficGen {
+      
+      stc {
+         if { [catch {
+  foreach txPortId $txPortIdList {    
+               set txPortId [hMapPortIdToSpirentPort $txPortId]
+               foreach emulatedDevice [stc::get $txPortId -affiliationport-Sources] {
+                  set ipv4If [stc::get $emulatedDevice -children-Ipv4If]
+                  if {$ipv4If != ""} {
+                     stc::delete $emulatedDevice							
+                  }
+               }
+            }	
+            
+         } msg ] } {
+            result_error "cleanupMld : Failed to delete MLD configuration $msg"
+            return 0
+         }			
+         
+      }
+      
+      ixia -
+      ixvm {
+         
+  foreach txPortId $txPortIdList {    
+    # get the port information
+    MapIxiaPortId $txPortId chas card port;
+    set pl [list [list $chas $card $port]] 
+    result_debug "cleanupMLD - Chas: $chas Card: $card Port: $port";
+
+    interfaceTable        select     $chas $card $port
+    interfaceTable        clearAllInterfaces
+    protocolServer 		  setDefault
+    protocolServer config -enableMldService false
+    ipAddressTable		  clear
+    ipAddressTable		  setDefault
+    ipAddressTableItem	  setDefault
+
+
+      
+    mldServer             setDefault
+    mldServer             clearAllHosts
+    mldGroupRange         setDefault
+    mldHost               setDefault
+    ipAddressTable        set $chas $card $port
+ 
+    mldServer             set
+    protocolServer write $chas $card $port
+
+    # Send to the hardware 
+    ixWritePortsToHardware pl
+
+  }      
+}
+   }
+}
+
+################################################################## 
+# Procedure Name: setupMLDServer
+#   
+# Description:  setup the MLD protocol server on the ixia
+#              
+# Input args: 
+#		-reportMode: MLDReportToOneWhenQueried(0), MLDReportToAllWhenQueried(1),
+# 		MLDReportToAllUnsolicited(2)
+# Output args: none
+# Return value: none
+# Typical usage: 
+#    setupMLDPeer -txPortId 1 \
+#		-gatewayIp "61.61.1.1" -ipAddress "61.1.1.10" \
+#		-numIpAddresses "10" -groupIpAddress "224.0.1.100" \
+#		-numGroupIpAddress "20"
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: SetupTestTool
+##################################################################
+proc setupMLDServer {args} {
+   global TrafficGen
+   parse_args setupMLDServer $args {
+      gatewayIp "3FFE:1:0:0:0:0:0:1"
+      ipV6Address "3FFE:1:0:0:0:0:0:2"
+      subNetMask  "64"
+      numHosts "1"
+      tag "none"
+      priority "0"
+      groupIpFrom "FF02:0:0:0:0:0:1:0"
+      groupCount "1"
+      enablePacking "false"
+      txPortId "1"
+      repeatCount "3"
+      reportFrequency "120"
+      enUnSolicited "false"
+      enSupReports "false"
+      reportMode "2"	
+      version "2"
+   }
+
+   switch -exact -- $TrafficGen {
+      stc {
+         puts "[lindex [info level 0] 0] : $args"
+         set error_flag 0
+         set txPortIdIndex $txPortId
+         set txPortId [hMapPortIdToSpirentPort $txPortId]
+         if {($tag == "none") || !$tag} {
+            array set cmdResults [logcmd stc::perform DeviceCreateCommand -ParentList [logcmd stc::get system1 -children-project] -port $txPortId -IfStack "Ipv6If EthIIIf" -IfCount "1 1"]
+            set deviceHndl $cmdResults(-ReturnList)
+            logcmd stc::config [logcmd stc::get $deviceHndl -children-Ipv6If] -Address 2011::1 -Gateway 2011::1 -PrefixLength 64
+            logcmd stc::create Ipv6If -under $deviceHndl -stackedonendpoint-Targets [lindex [logcmd stc::get $deviceHndl -children-EthIIIf] 0] \
+               -toplevelif-Sources $deviceHndl -Address $ipV6Address -PrefixLength $subNetMask
+         } else {
+            array set cmdResults [logcmd stc::perform DeviceCreateCommand -ParentList [logcmd stc::get system1 -children-project] -port $txPortId -IfStack "Ipv6If VlanIf EthIIIf" -IfCount "1 1 1"]
+            set deviceHndl $cmdResults(-ReturnList)
+            logcmd stc::config [logcmd stc::get $deviceHndl -children-VlanIf] -VlanId $tag -priority $priority
+            logcmd stc::config [logcmd stc::get $deviceHndl -children-Ipv6If] -Address $ipV6Address -Gateway $gatewayIp -PrefixLength $subNetMask
+            logcmd stc::create Ipv6If -under $deviceHndl -stackedonendpoint-Targets [lindex [logcmd stc::get $deviceHndl -children-VlanIf] 0] -toplevelif-Sources $deviceHndl -Address FE80::$txPortIdIndex
+            logcmd stc::create Ipv6If -under $deviceHndl \
+               -stackedonendpoint-Targets [lindex [logcmd stc::get $deviceHndl -children-EthIIIf] 0] \
+               -toplevelif-Sources $deviceHndl -Address $linkLocalAddr
+         }
+         
+         
+         
+         
+         set mldAttrs "-under $deviceHndl"
+         if {$version == "1"} {
+            append mldAttrs " -Version MLD_V1"
+         } elseif {$version == "2"} {
+            append mldAttrs " -Version MLD_V2"
+         } else {
+            result_error "setupIgmpServer: MLD version $version not supported for STC"
+         }
+         if {$enablePacking != ""} {
+            append mldAttrs " -PackReports $enablePacking"
+         }
+         if {$enablePacking != ""} {
+            append mldAttrs " -UnsolicitedReportInterval $reportFrequency"
+         }
+         set ipv6Group [logcmd stc::create Ipv6Group -under [logcmd stc::get system1 -children-project]]
+         logcmd stc::config [logcmd stc::get $ipv6Group -children-Ipv6NetworkBlock] -NetworkCount $groupCount -StartIpList $groupIpFrom
+         
+         set mldHostConfig [eval "logcmd stc::create MldHostConfig [subst $mldAttrs]"]
+         if {$reportMode == "1"} {
+            set mldGroupMemberShip [logcmd stc::create MldGroupMembership -under $mldHostConfig -FilterMode "INCLUDE" -subscribedgroups-Targets $ipv6Group]
+         } else {
+            set mldGroupMemberShip [logcmd stc::create MldGroupMembership -under $mldHostConfig -FilterMode "EXCLUDE" -subscribedgroups-Targets $ipv6Group]
+         }
+         logcmd stc::config $mldHostConfig -usesif-Targets [logcmd stc::get $deviceHndl -children-Ipv6If]         
+      }
+      ixia -
+      ixvm {   
+   set error_flag 0
+   
+   MapIxiaPortId $txPortId chas card port
+   result_debug "setupMLDServer: setting up MLD server on port $txPortId"
+   
+   
+   ipAddressTable               setDefault        
+
+
+   interfaceTable               select            $chas $card $port
+   interfaceTable               clearAllInterfaces
+
+
+   interfaceEntry               clearAllItems     addressTypeIpV6
+   interfaceEntry               clearAllItems     addressTypeIpV4
+   interfaceIpV6         setDefault        
+   #interfaceIpV6        config       -maskWidth       64
+   interfaceIpV6         config       -maskWidth       $subNetMask
+   interfaceIpV6         config       -ipAddress       $ipV6Address
+   interfaceEntry               addItem           addressTypeIpV6
+   
+   interfaceEntry               setDefault        
+   interfaceEntry               config            -enable                             true
+   interfaceEntry               config            -description                        "$card - $port MLD"
+   interfaceEntry               config            -macAddress                         "00 00 11 11 11 11"
+   interfaceEntry               config            -eui64Id                            "02 00 11 FF FE 11 11 11"
+   if {$tag == "none"} {
+      interfaceEntry        config       -enableVlan                         false
+      interfaceEntry        config       -vlanId                             0
+      interfaceEntry        config       -vlanPriority                       0         
+   } else {
+      interfaceEntry        config       -enableVlan                         true
+      interfaceEntry        config       -vlanId                             $tag
+      interfaceEntry        config       -vlanPriority                       $priority
+   }
+   interfaceTable               addInterface      
+   interfaceEntry               clearAllItems     addressTypeIpV6
+   interfaceEntry               clearAllItems     addressTypeIpV4
+
+
+   mldServer             select            $chas $card $port
+   mldServer             clearAllHosts
+   mldGroupRange         setDefault
+
+   mldSourceRange config -sourceIpFrom 3ffe:200::1
+   mldSourceRange config -count 1
+   
+   # Add the source range to the group range
+   if [mldGroupRange addSourceRange source1] {
+      result_debug "Can't add source range"
+   }
+   mldGroupRange         config            -enable true
+   mldHost               setDefault
+   foreach groupAddr $groupIpFrom {
+      #mldGroupRange         config            -groupIpFrom                        "FF02:0:0:0:0:0:1:0"
+      mldGroupRange         config            -groupIpFrom                        $groupAddr
+      #mldGroupRange         config            -groupCount                         10
+      mldGroupRange         config            -groupCount                         $groupCount
+      mldGroupRange         config            -incrementStep                      1
+      #mldGroupRange         config            -enablePacking                      false
+      mldGroupRange         config            -enablePacking                      $enablePacking
+      mldGroupRange         config            -recordsPerFrame                    0
+      mldGroupRange         config            -sourcesPerRecord                   0
+      mldGroupRange         config            -sourceMode                         multicastSourceModeExclude
+   }
+   if {[mldHost               addGroupRange     groupRange1]} {
+      set error_flag 1
+      result_debug "ERROR: Can't Add Group Range Item"
+   }
+   
+           
+   mldHost               config            -enable                             true
+   mldHost               config            -protocolInterfaceDescription       "$card - $port MLD"
+   mldHost               config            -version                            mldVersion1
+   mldHost               config            -enableRouterAlert                  true
+   mldHost               config            -enableGeneralQuery                 true
+   mldHost               config            -enableGroupSpecific                true
+   mldHost               config            -enableUnsolicited                  $enUnSolicited
+   mldHost               config            -enableSuppressReports              $enSupReports
+   mldHost               config            -reportFrequency                    $reportFrequency
+   mldHost               config            -enableImmediateResponse            false
+      
+   
+   if {[mldServer addHost host1]} {
+      set error_flag 1
+      result_debug "ERROR: Can't Add MLD HOST Table Item"
+   }
+   mldServer                    setDefault        
+   mldServer                    config            -numGroups                          1
+   mldServer                    config            -timePeriod                         50
+   mldServer                    config            -mldv2ReportType                    143
+   mldServer                    config            -enableSendDoneOnStop               true
+
+   if {[mldServer set]} {
+      set error_flag 1
+      result_debug "ERROR: Can't Set MLD Service"
+   }
+   if {[mldServer write]} {
+      set error_flag 1
+      result_debug "ERROR: Can't Write MLD Service"
+   }
+
+
+   protocolServer               config            -enableMldService                   true
+
+   
+   if [protocolServer set $chas $card $port] {
+      set error_flag 1
+      result_debug "ERROR: Can't Set Protocol Server"
+   }
+      
+lappend                      portList          [list $chas $card $port]
+ixWritePortsToHardware       portList          
+ixCheckLinkState             portList   
+      }
+      
+   }
+    return $error_flag
+}
+
+
+##################################################################
+# Procedure Name: GetMLDMessage
+#
+# Description:
+#     This proc is used to get the MLD Messages from a frame received
+#
+# Input args: rawFrame
+# Output args: None.
+# Return value: MLD Messages in ixia raw frame format
+# Typical usage:
+#     set MLDMsg [GetMLDMessage $frame]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#     VerifySwitchOutput,VerifyTraffic)
+# Category: CaptureTraffic
+##################################################################
+proc GetMLDMessage {rawFrame} {
+
+   result_debug "rawFrame = $rawFrame"
+   set rtnMsg ""
+   set type [string range $rawFrame 36 40]
+
+   # if tagged, get rid of type and tag field from 36 to 47
+   if {$type == "81 00"} {
+     set leftRawFrame [string range $rawFrame 0 35]
+     set rightRawFrame [string range $rawFrame 48 [string length $rawFrame]]
+     set rawFrame [format "%s%s" $leftRawFrame $rightRawFrame]
+   }
+
+   set type [string range $rawFrame 36 40]
+   result_debug "the type $type"
+   if { $type == "08 00" } {
+      set IpType [string range $rawFrame 69 70]
+      if { $IpType == "02" } {
+#         result_debug "rawFrame = $rawFrame"
+         set macHdrLen 14
+	 set ipHdrLen [expr ([string range $rawFrame 43 43] * 4)]
+	 set MLDOffset [expr ($macHdrLen + $ipHdrLen) * 3]
+	 set rtnMsg [string range $rawFrame $MLDOffset [string length $rawFrame]]
+      }
+   }
+#   result_debug "MLDMsg: $rtnMsg"
+   return $rtnMsg
+}
+
+
+proc GetMLDType { MLDMsg } {
+   if {[string length $MLDMsg] == 0} { 
+      return "NOT_IP_MLD";
+   }
+   set type [string range $MLDMsg 0 1]
+#   set ip_version [string range $MLDMsg 0 0]
+   switch -glob -- $type \
+      "11" {
+         return "IP_MLDv2_QUERRY";
+   }  "12" {
+         return "IP_MLDv1_REPORT";
+   }  "16" {
+         return "IP_MLDv2_REPORT"
+   }  "17" {
+         return "IP_MLDv2_LEAVE"
+   }  "22" {
+         return "IP_MLDv3_REPORT"
+   }  default  {
+         result_debug "Unknown Type: IP_MLD_$type"
+         return "IP_MLD_$type"
+   }
+}
+
+proc GetMLDQueryGroup { MLDMsg } {
+   return [GetIPAddressOffset $MLDMsg 12];
+}
+
+##################################################################
+# Procedure Name: GetMLDMessage
+#
+# Description:
+#     This proc is used either an mld report or an mld done.
+#
+# Input args: args
+#  IMPORTANT!!!!!!
+#  Because some of the IXIA adapters only have for UDF fields
+#   if is necessary to force the 3rd and 4th word to be all zeros
+#
+# Output args: None.
+# Return value: MLD Messages in ixia raw frame format
+# Typical usage:
+#     set MLDMsg [GetMLDMessage $frame]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#     VerifySwitchOutput,VerifyTraffic)
+# Category: SendTraffic
+##################################################################
+proc SendMLDMessage {args} {
+   parse_args SendMLDReport $args {
+      txPortId   "1"
+      protocol   "ipV6"
+      destMac    "33:33:00:00:00:11"
+      sourceMac  "default"
+      sourceIp   "fe80::02a1:f1ff:fe00:0001"
+      destIp     "ff02:0000:0000:0000:0000:0000:0000:0002"
+      group      "ff02:0000:0000:0000:0000:0000:0000:0002"
+      numFrames  "1"
+      nHeader    "icmpV6"
+      tag        "none"
+      percentage "1"
+      mCode      "00"
+      mType      "report"
+      withRA     "0"
+      mldReponseDelay "00 00"
+      chkSumError "0"
+      underSized "0"
+      ipV6HopLimit "1"
+      streamType "stopStream"
+   }
+
+   global TrafficGen
+   switch -exact -- $TrafficGen {
+      stc -
+      ixia -
+      ixvm {
+         
+   set sIPCSum [CookIPv6Addr "$sourceIp" space]
+   set dIPCSum [CookIPv6Addr "$destIp" space]
+   set gCSum [CookIPv6Addr "$group" space]
+
+   if {$mType == "report"} {
+      set mValue "83"
+      set type 131
+   } elseif {$mType == "done"} {
+      set mValue "84"
+      set type 132
+   } elseif {$mType == "query"} {
+      set mValue "82"
+      set type 130
+   } else {
+      result_error "MLD Function: ONLY report, done or query message types (mType) supported"
+      close_result_file
+      report_end_test
+      return -code return
+   }
+
+   # Get the checksum
+   set csum [GetICMPv6Checksum -sourceIp "$sIPCSum" \
+      -destIp "$dIPCSum" \
+      -group "$gCSum" \
+      -type $type \
+      -code $mCode \
+      -mldReponseDelay "$mldReponseDelay"]
+
+   if {$chkSumError} {
+      unset csum
+      set csum "ab cd"
+   }
+
+   # NOTE: Group is required to be a full 16 byte : delimited ipv6 addr
+
+   set newGroup [CookIPv6Addr "$group" space]
+   # It is necessary to pad the beginning of the datapattern because the udf overwrites it
+   
+   if {$tag != "none"} {
+      #If tagged
+      set frameSize 86
+   } else {
+      set frameSize 82
+   }
+
+   if {$underSized} {
+      set frameSize 64
+   }
+   #################################################################
+   # Need to overwrite the next header as 3A and also decrement the csum if incr ND
+   set udfEnable "true" 
+   set udfContinuousCount "false"
+   if {$withRA} {
+      set udfInitval "00"         
+   } else {
+      set udfInitval "3A"
+   }
+   
+   if {$tag == "none"} {
+      set udfOffset "20"
+   } else {
+      set udfOffset "24"
+   }
+   set udfCountertype "c8"
+   set udfUpdown "uuuu"
+   set udfRepeat "1"
+   set udfStep "1"
+
+   if {$withRA} {
+      set raValue "3A 00 05 02 00 00 01 00 "
+      set frameSize [expr $frameSize + 8]
+   } else {
+      set raValue ""
+   }
+         
+   set dataPattern "${raValue}$mValue $mCode $csum \
+                    00 00 $mldReponseDelay $newGroup"
+
+   set streamSent [SendIpv6Frame -txPortId $txPortId -sourceIp "$sourceIp" -destIp "$destIp" \
+      -destMac "$destMac" -numFrames $numFrames -tag $tag -frameSize $frameSize \
+      -percentage "$percentage" -nHeader "ipV6NoNextHeader" -sourceMac $sourceMac \
+      -dataPattern "$dataPattern"  -hopLimit $ipV6HopLimit -udfEnable "true" \
+      -udfInitval "$udfInitval" -udfOffset "$udfOffset" -streamType "$streamType" \
+      -udfCountertype "$udfCountertype" -udfContinuousCount "$udfContinuousCount"]
+
+   displayMLDPacketFormat -txPortId $txPortId -destMac $destMac \
+      -sourceMac $sourceMac -sourceIp $sourceIp -destIp $destIp -withRA $withRA \
+      -group $group -mType $mType -mCode $mCode -tag $tag -mldReponseDelay $mldReponseDelay \
+      -percentage $percentage -numFrames $numFrames -frameSent $streamSent
+}
+   }
+}
+
+#############################################################################
+#Procedure Name: createMLDv2Record
+#
+# Description:
+#     This proc is used to construct MLDv2 records.
+#
+# Input args: args
+#      -recordType: IS_IN,IS_EX,TO_IN,TO_EX,ALLOW and BLOCK.
+#      -numSources: number of multicast sources
+#      -auxDataLen: Auxilary data length if needed to add
+#
+# Output args: None.
+# Return value: List of record fields.
+#
+# Typical usage:
+#    lappend records [createMLDv2Record -group $groupAddr -recordType "IS_IN" 
+#                -numSources $numSources ]
+#
+#############################################################################
+
+proc createMLDv2Record {args} {
+   parse_args createMLDv2Record $args {
+      group        "ff02:0000:0000:0000:0000:0000:0000:0002"
+      recordType   "IS_IN"
+      numSources   "0"
+      sources      ""
+      auxDataLen   "0"
+   }
+
+   if {$numSources != [llength $sources]} {
+       result_error "Number of source addresses is not equal to number provided"
+       close_result_file
+       report_end_test
+       return -code return
+   }
+   
+   set auxData ""
+   set record "$group $recordType $numSources $sources $auxDataLen"
+   if {$auxDataLen > 0} {
+       set actualLength [expr $auxDataLen * 4] 
+       for {set i 0} {$i < $actualLength} {incr i} {
+          lappend auxData "00"
+       }
+       set auxData [join $auxData " "]
+       lappend record $auxData
+       set record [join $record " "]
+   }
+   return $record
+}
+
+
+##################################################################
+# Procedure Name: SendMLDv2Report
+#
+# Description:
+#     This proc is used to send a valid or invalid MLDv2 Report.
+#
+# Input args: args
+#      -mType: "report" or "invalidReportType" -numRecords: number of records in the report
+#      -records: "collection of records"
+# NOTE::
+#      First construct the MLDv2 record using createMLDv2Record and then use that record in this API.
+#
+# Output args: None.
+# Return value: None.
+#
+# Typical usage:
+#      lappend records [createMLDv2Record -group "$groupAddr"\
+#                     -numSources   "2" -recordType   "TO_EX"\
+#                     -sources    "2012:0:0:0:0:0:0:0308 2012:0:0:0:0:0:0:0309"]
+#      sendmldv2report -txPortId "9" -destMac "$destMac" -sourceMac  "$sourceMac"\
+#        -sourceIp "$sourceIp" -destIp "ff02:0000:0000:0000:0000:0000:0000:0016"\
+#       -tag  "1401" -mType "report" -withRA "1" -numRecords  "1" -records "$records"
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#     VerifySwitchOutput,VerifyTraffic)
+# Category: SendTraffic
+##################################################################
+
+proc SendMLDv2Report {args} {
+   parse_args SendMLDv2Report $args {
+      txPortId     "1"
+      protocol     "ipV6"
+      destMac      "33:33:00:00:00:16"
+      sourceMac    "default"
+      sourceIp     "fe80::02a1:f1ff:fe00:0001"
+      destIp       "ff02:0000:0000:0000:0000:0000:0000:0016"
+      group        "ff02:0000:0000:0000:0000:0000:0000:0002"
+      numFrames    "1"
+      nHeader      "icmpV6"
+      tag          "none"
+      percentage   "1"
+      mCode        "00"
+      mType        "report"
+      resField     "00 00"
+      withRA       "1"
+      chkSumError  "0"
+      underSized   "0"
+      ipV6HopLimit "1"
+      numRecords   "0"
+      records      ""      
+      streamType "stopStream"
+   }
+
+#--- Checking whether numRecords value is equal to number of records provided
+
+   if {$numRecords != [llength $records]} {
+       result_error "Number of records is not equal to number provided"
+       close_result_file
+       report_end_test
+       return -code return
+   }
+
+   set hexnumrecords [dectohex $numRecords]
+   if {[string length $hexnumrecords] == 1} {
+      set hexnumrecords "00 0$hexnumrecords"
+   } else {
+      set hexnumrecords "00 $hexnumrecords"
+   }
+
+   set nHeaderLen 8
+   set checksumoption "$resField $hexnumrecords"
+   set initialframeSize 70
+
+   foreach record $records {
+      set group [lindex $record 0]
+      set recordType [lindex $record 1]
+      set numSources [lindex $record 2]
+      set sources [lrange $record 3 [expr $numSources + 2]]
+      set auxDataLength [lindex $record [expr $numSources + 3]]
+      set auxDataLength [expr $auxDataLength * 4]
+      set numAuxData [dectohex $auxDataLength]
+      if {[string length $numAuxData] == 1} {
+         set numAuxData "0$numAuxData"
+      }
+      set auxData [lrange $record [expr $numSources + 4] end]
+
+# ---- Calculating Record length
+
+      set recLength [expr 20 + $numSources * 16]
+      incr nHeaderLen $recLength
+      incr initialframeSize $recLength
+      if {$auxDataLength > 0} {
+         incr nHeaderLen $auxDataLength
+         incr initialframeSize $auxDataLength
+      }
+
+# --- Mapping values to recordTypes
+
+      switch -nocase $recordType {
+        "IS_IN" {
+            set recType "01"
+        }
+        "IS_EX" {
+            set recType "02"
+        }
+        "TO_IN" {
+            set recType "03"
+        }
+        "TO_EX" {
+            set recType "04"
+        }
+        "ALLOW" {
+            set recType "05"
+        }
+        "BLOCK" {
+            set recType "06"
+        }
+        default {
+            set recType "07"
+        }
+     }
+
+#--- Combining the source addresses
+
+     set sourceList ""
+     for {set i 0} {$i < $numSources} {incr i} {
+       set source [lindex $sources $i]
+       set Saddr [CookIPv6Addr "$source" space]
+       lappend sourceList $Saddr
+     }
+     set mcSources "[join $sourceList " "]"
+     set gCSum  [CookIPv6Addr "$group" space]
+
+#--- Calculating number of sources, limited to 255 sources
+
+     set hexnumsources [dectohex $numSources]
+     if {[string length $hexnumsources] == 1} {
+        set hexnumsources "00 0$hexnumsources"
+     }  else {
+        set hexnumsources "00 $hexnumsources"
+     }
+
+     lappend checksumoption "$recType $numAuxData $hexnumsources $gCSum $mcSources $auxData"
+   }
+
+   set checksumoption [join $checksumoption " "]
+   set nHeaderLength [dectohex $nHeaderLen]
+   set sIPCSum [CookIPv6Addr "$sourceIp" space]
+   set dIPCSum [CookIPv6Addr "$destIp" space]
+
+   if {$mType == "report"} {
+      set mValue "8F"
+      set type 143
+   } elseif {$mType == "invalidReportType"} {
+      # ---- just to insert incorrect type number
+      set mValue "C7"
+      set type 199
+   } else {
+      result_error "MLD Function: ONLY report, done or query message types (mType) supported"
+      close_result_file
+      report_end_test
+      return -code return
+   }
+
+#--- Get the checksum
+
+   set csum [GetICMPv6Checksum -sourceIp "$sIPCSum" \
+      -destIp "$dIPCSum"\
+      -type $type \
+      -code $mCode \
+      -nHeaderLength "00 00 00 $nHeaderLength" \
+      -options "$checksumoption"]
+
+   if {$chkSumError} {
+      unset csum
+      set csum "ab cd"
+   }
+
+#--- set frame size
+
+   if {$tag != "none"} {
+      set frameSize $initialframeSize
+   } else {
+      set frameSize [expr $initialframeSize - 4 ]
+   }
+
+   if {$underSized} {
+      set frameSize 64
+   }
+
+#############################################################################################################################
+#--- Need to overwrite the next header as 3A and also decrement the csum if incr ND
+
+   set udfEnable "true"
+   set udfContinuousCount "false"
+
+   if {$withRA} {
+      set udfInitval "00"
+   } else {
+      set udfInitval "3A"
+   }
+
+   if {$tag == "none"} {
+      set udfOffset "20"
+   } else {
+      set udfOffset "24"
+   }
+
+   set udfCountertype "c8"
+   set udfUpdown "uuuu"
+   set udfRepeat "1"
+   set udfStep "1"
+
+   if {$withRA} {
+      set raValue "3A 00 05 02 00 00 01 00 "
+      set frameSize [expr $frameSize + 8]
+   } else {
+      set raValue ""
+   }
+
+   set dataPattern "$raValue $mValue $mCode $csum $checksumoption"
+
+   set streamSent [SendIpv6Frame -txPortId $txPortId -sourceIp "$sourceIp" -destIp "$destIp" \
+      -destMac "$destMac" -numFrames $numFrames -tag $tag -frameSize $frameSize \
+      -percentage "$percentage" -nHeader "ipV6NoNextHeader" -sourceMac $sourceMac \
+      -dataPattern "$dataPattern" -hopLimit $ipV6HopLimit -udfEnable "true" \
+      -udfInitval "$udfInitval" -udfOffset "$udfOffset" -streamType "$streamType" \
+      -udfCountertype "$udfCountertype" -udfContinuousCount "$udfContinuousCount"]
+
+   displayMLDPacketFormat -txPortId $txPortId -destMac $destMac \
+      -sourceMac $sourceMac -sourceIp $sourceIp -destIp $destIp -withRA $withRA \
+      -group $group -mType $mType -mCode $mCode -tag $tag -version "2" \
+      -numRecords $numRecords -records $records\
+      -percentage $percentage -numFrames $numFrames -frameSent $streamSent
+}
+
+#####################################################################
+# ---- Procedure to convert binary to Integer
+
+proc bin2int {binString} {
+        set result 0
+        for {set j 0} {$j < [string length $binString]} {incr j} {
+            set bit [string range $binString $j $j]
+            set result [expr $result << 1]
+            set result [expr $result | $bit]
+        }
+        return $result
+    }
+
+
+##################################################################
+# Procedure Name: SendMLDv2Query
+#
+# Description:
+#     This proc is used to send a valid or invalid MLDv2 query.
+#
+# Input args: args
+#      -mType: "query" or "invalidQueryType" -numSources: Number of source addresses in Query
+#      -sources: Multicast sources
+#
+# Output args: None.
+# Return value: None.
+# Typical usage:
+#     SendMLDv2Query  -txPortId "9" -destMac "$destMac" -sourceMac "$sourceMac"\
+#      -sourceIp "$sourceIp" -destIp "FF02:0:0:0:0:0:0:16"\
+#      -group      "$groupAddress" -tag "1401" -mType "query" -numSources "2"\
+#      -sources    "2012:0:0:0:0:0:0:222 2012:0:0:0:0:0:0:333"
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#     VerifySwitchOutput,VerifyTraffic)
+# Category: SendTraffic
+##################################################################
+
+proc SendMLDv2Query {args} {
+   parse_args SendMLDv2Query $args {
+      txPortId          "1"
+      protocol          "ipV6"
+      destMac           "33:33:00:00:00:01"
+      sourceMac         "default"
+      sourceIp          "FE80:0:0:0:0200:07FF:FE00:0"
+      destIp            "FF02:0:0:0:0:0:0:01"
+      group             "FF05:0:0:0:0:0:0:101"
+      numFrames         "1"
+      nHeader           "icmpV6"
+      tag               "none"
+      percentage        "1"
+      mCode             "00"
+      mType             "query"
+      withRA            "0"
+      chkSumError       "0"
+      underSized        "0"
+      ipV6HopLimit      "1"
+      mldResponseDelay  "10000"
+      resField          "00 00"
+      res               "0"
+      QRV               "2"
+      QQIC              "125"
+      SFLAG             "OFF"
+      numSources        "0"
+      sources           ""
+   }
+
+# ----- Checking whether numSource value is equal to number of sources provided
+
+   if {$numSources != [llength $sources]} {
+       result_error "Number of source addresses is not equal to number provided"
+       close_result_file
+       report_end_test
+       return -code return
+   }
+
+# ---- Calculating frame size
+
+   set initialFrameSize 70
+   set nHeaderLen 8
+   set queryLength [expr 20 + $numSources * 16]
+   incr nHeaderLen $queryLength
+   incr initialFrameSize $queryLength
+   set nHeaderLength [dectohex $nHeaderLen]
+
+# ----- Combining the source addresses
+
+   set sourceList ""
+   for {set i 0} {$i < $numSources} {incr i} {
+      set source [lindex $sources $i]
+      set Saddr [CookIPv6Addr "$source" space]
+      lappend sourceList $Saddr
+   }
+   set mcSources "[join $sourceList " "]"
+
+   set sIPCSum [CookIPv6Addr "$sourceIp" space]
+   set dIPCSum [CookIPv6Addr "$destIp" space]
+   set gCSum  [CookIPv6Addr "$group" space]
+
+   if {![string match -nocase "off" $SFLAG]} {
+      set sflg "1000"
+   } else {
+      set sflg "0000"
+   }
+
+# ----- Calculating QRV field along with Reserved field
+
+   set binRep [binary format c $QRV]
+   binary scan $binRep B* qrvbin
+   set qrvbin [string trimleft $qrvbin "0"]
+   set SQRV [expr $sflg + $qrvbin]
+   set SQRV [bin2int $SQRV]
+   set SqrvValue [dectohex $SQRV]
+
+# ----- Calculating other neccessary fields
+
+   set qqicValue [dectohex $QQIC]
+   set respDelay [dectohex $mldResponseDelay]
+   set spacing [string range $respDelay 0 1]
+   lappend spacing [string range $respDelay 2 3]
+   set responseDelay [join $spacing " "]
+
+   set hexnumsources [dectohex $numSources]
+   if {[string length $hexnumsources] == 1} {
+      set hexnumsources "00 0$hexnumsources"
+   }
+
+   if {$mType == "query"} {
+      set mValue "82"
+      set type 130
+   } elseif {$mType == "invalidQueryType"} {
+      set mValue "99"
+      set type 153
+   } else {
+      result_error "MLD Function: ONLY report, done or query message types (mType) supported"
+      close_result_file
+      report_end_test
+      return -code return
+   }
+
+# ---- Get the checksum
+   set csum [GetICMPv6Checksum -sourceIp "$sIPCSum" \
+      -destIp "$dIPCSum" \
+      -group "$gCSum" \
+      -type "mldv2query" \
+      -code $mCode \
+      -nHeaderLength "00 00 00 $nHeaderLength"\
+      -options "$responseDelay $resField $gCSum ${res}$SqrvValue $qqicValue $hexnumsources $mcSources"]
+
+      if {$chkSumError} {
+         unset csum
+         set csum "ab cd"
+      }
+
+     if {$tag != "none"} {
+       #If tagged
+         set frameSize $initialFrameSize
+      } else {
+         set frameSize [expr $initialFrameSize - 4]
+      }
+ 
+      if {$underSized} {
+          set frameSize 64
+      }
+
+   #################################################################
+   # Need to overwrite the next header as 3A and also decrement the csum if incr ND
+   set udfEnable "true"
+   set udfContinuousCount "false"
+   if {$withRA} {
+      set udfInitval "00"
+   } else {
+      set udfInitval "3A"
+   }
+
+   if {$tag == "none"} {
+      set udfOffset "20"
+   } else {
+      set udfOffset "24"
+   }
+   set udfCountertype "c8"
+   set udfUpdown "uuuu"
+   set udfRepeat "1"
+   set udfStep "1"
+
+   if {$withRA} {
+      set raValue "3A 00 05 02 00 00 01 00 "
+      set frameSize [expr $frameSize + 8]
+   } else {
+      set raValue ""
+   }
+
+   set dataPattern "$raValue $mValue $mCode $csum $responseDelay $resField $gCSum \
+                    ${res}$SqrvValue $qqicValue $hexnumsources $mcSources"
+
+   set streamSent [SendIpv6Frame -txPortId $txPortId -sourceIp "$sourceIp" -destIp "$destIp" \
+      -destMac "$destMac" -numFrames $numFrames -tag $tag -frameSize $frameSize \
+      -percentage "$percentage" -nHeader "ipV6NoNextHeader" -sourceMac $sourceMac \
+      -dataPattern "$dataPattern" -hopLimit $ipV6HopLimit -udfEnable "true" \
+      -udfInitval "$udfInitval" -udfOffset "$udfOffset" \
+      -udfCountertype "$udfCountertype" -udfContinuousCount "$udfContinuousCount"]
+
+   displayMLDPacketFormat -txPortId $txPortId -destMac $destMac \
+      -sourceMac $sourceMac -sourceIp $sourceIp -destIp $destIp -withRA $withRA \
+      -group $group -mType $mType -mCode $mCode -tag $tag -version "2" -QRV "$QRV" \
+      -QQIC "$QQIC" -SFLAG "$SFLAG" -numSources "$numSources" -sources "$sources"\
+      -percentage $percentage -numFrames $numFrames -frameSent $streamSent
+
+   return $streamSent
+}
+
+##################################################################    
+# Procedure Name: displayMLDPacketFormat
+# Description:
+#     	Displays the decoded version of a MLD packet sent over
+#       the specified port.
+# Input args: 
+# Output args:  None
+# Return value: None
+# Typical usage: 
+#      displayMLDPacketFormat -txPortId $txPortId -destMac $destMac \
+#        -sourceMac $sourceMac -sourceIp $sourceIp -destIp $destIp \
+#        -group $group -mType $mType -mCode $mCode -tag $tag \
+#        -percentage $percentage -numFrames $numFrames -frameSent $streamSent 
+# Category: Utility
+##################################################################
+
+proc displayMLDPacketFormat {args} {
+  parse_args displayMLDPacketFormat $args {
+      txPortId   "1"
+      destMac    "33:33:00:00:00:11"
+      sourceMac  "00:A1:f1:00:00:01"
+      sourceIp   "fe80::02a1:f1ff:fe00:0001"
+      destIp     "ff02:0000:0000:0000:0000:0000:0000:0002"
+      group      "ff02:0000:0000:0000:0000:0000:0000:0002"
+      numFrames  "1"
+      tag        "none"
+      percentage "1"
+      mCode      "00"
+      mType      "report"
+      frameSent  "none"
+      mldReponseDelay "00 00"
+      withRA     "0"
+      SFLAG      "OFF"
+      QRV        "2"
+      QQIC       "125"
+      numRecords  "1"
+      records     ""
+      numSources  "0"
+      sources    ""
+      version    "1"
+   }
+  set strType "packet"
+  set numPacket $numFrames
+
+  result_debug "Transmit $numFrames MLD $mType from portId $txPortId"
+
+  result_debug "$frameSent"
+  result_debug " "
+
+  set space1 14
+  set space2 39
+  set space3 53
+
+  set str [format "%-*s %s" $space1 MLDversion: $version]
+  result_debug "$str"
+
+  set str [format "%-*s %s" $space1 DestMac: $destMac]
+  set str [format "%-*s %s" $space2 $str srcMac:]
+  set str [format "%-*s %s" $space3 $str $sourceMac]
+  result_debug "$str"
+
+  if {$tag != "none"} {
+     set str [format "%-*s %s" $space1 Tag: $tag]
+     set str [format "%-*s %s" $space2 $str txPerc:]
+     set str [format "%-*s %s" $space3 $str $percentage]
+     result_debug "$str"
+  } else {
+     set str [format "%-*s %s" $space1 txPerc: $percentage]
+     result_debug "$str"
+  }
+
+  set str [format "%-*s %s" $space1 MLD_Type: $mType]
+  set str [format "%-*s %s" $space2 $str MLD_Code:]
+  set str [format "%-*s %s" $space3 $str $mCode]
+  result_debug "$str"
+
+  if {$withRA} {
+     set str [format "%-*s %s" $space1 RouterAlert: True]
+     set str [format "%-*s %s" $space2 $str ResponseDelay:]
+     set str [format "%-*s %s" $space3 $str $mldReponseDelay]
+     result_debug "$str"     
+  } else {
+     set str [format "%-*s %s" $space1 RouterAlert: False]
+     set str [format "%-*s %s" $space2 $str ResponseDelay:]
+     set str [format "%-*s %s" $space3 $str $mldReponseDelay]
+     result_debug "$str"
+  }
+ 
+  set str [format "%-*s %s" $space1 DestIpV6Addr: $destIp]
+  result_debug "$str"
+  if {$version == 1 } {
+     set str [format "%-*s %s" $space1 GroupIpV6Addr: $group]
+     result_debug "$str"
+  }
+  set str [format "%-*s %s" $space1 SrcIpV6Addr: $sourceIp]
+  result_debug "$str"
+
+  if {$version == 2 && $mType == "report"} {
+     set str [format "%-*s %s" $space1 Number_Records: $numRecords]
+     result_debug "$str"
+     set sernum "1"
+     foreach record $records {
+        set str [format "%-*s %s" $space1 Record: Record$sernum]
+        set str [format "%-*s %s" $space2 $str RecordType:]
+        set str [format "%-*s %s" $space3 $str [lindex $record 1]]
+        result_debug "$str"
+        set str [format "%-*s %s" $space1 RecordType: [lindex $record 1]]
+        set str [format "%-*s %s" $space2 $str Number_Sources:]
+        set str [format "%-*s %s" $space3 $str [lindex $record 2]]
+        result_debug "$str"
+        set str [format "%-*s %s" $space1 GroupIpV6Addr: [lindex $record 0]]
+        result_debug "$str"
+        set str [format "%-*s %s" $space1 Sources: [lrange $record 3 [expr [lindex $record 2] + 2]]]
+        result_debug "$str"
+     }
+  }
+
+  if {$version == 2 && $mType == "query"} {
+     set str [format "%-*s %s" $space1 GroupIpV6Addr: $group]
+     result_debug "$str"
+     set str [format "%-*s %s" $space1 SFLAG: $SFLAG]
+     set str [format "%-*s %s" $space2 $str QRV:]
+     set str [format "%-*s %s" $space3 $str $QRV]
+     result_debug "$str"
+     set str [format "%-*s %s" $space1 QQIC: $QQIC]
+     result_debug "$str"
+     set str [format "%-*s %s" $space1 Number_Sources: $numSources]
+     result_debug "$str"
+     set str [format "%-*s %s" $space1 Sources: $sources]
+     result_debug "$str"
+  }
+
+  result_debug " "
+
+}
+
+

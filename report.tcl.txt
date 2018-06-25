@@ -1,0 +1,946 @@
+
+# Utilities for report generation
+
+# External API:
+
+set EX_REPORT_DATA ""
+set EX_REPORT_DATA_1 ""
+set EX_REPORT_LEVEL 0
+set EX_REPORT_STATUS ""
+set EX_REPORT_PERF 0
+
+
+################################################################## 
+# Procedure Name: report_fail
+#   
+# Description: Called when a test fails. (Used internally)
+#
+# Input args:  none
+#                
+# Output args: none
+#
+# Typical usage: 
+#              report_fail
+#
+# Category: setup
+################################################################## 
+proc report_fail {} {
+	global EX_REPORT_STATUS
+	set EX_REPORT_STATUS 0
+}
+##################################################################
+# Procedure Name: report_skip
+#
+# Description: Called when a test is skipped. (Used internally)
+#
+# Input args:  none
+#
+# Output args: none
+#
+# Typical usage:
+#              report_skip
+#
+# Category: setup
+##################################################################
+proc report_skip {} {
+        global EX_REPORT_STATUS
+        set EX_REPORT_STATUS skip
+}
+
+set offset -2
+proc perf_data {data} {
+global offset
+   global EX_REPORT_PERF
+   if {($data != 1) && ($data != 0)} {
+	  set EX_REPORT_PERF $data
+   } else {
+	  set EX_REPORT_PERF  [incr data $offset]
+   }
+}
+
+proc log_msg {logMsg} {
+   puts "\[Han_log\] $logMsg"
+}
+################################################################## 
+# Procedure Name: report_start_test
+#   
+# Description: Called when starting a new test
+#
+# Input args:
+#              test - test name
+#                
+# Output args: none
+#
+# Typical usage: 
+#              report_start_test "$title"
+#
+# Category: setup
+################################################################## 
+proc report_start_test {test} {
+    global EX_REPORT_DATA EX_REPORT_LEVEL EX_REPORT_STATUS EX_REPORT_PERF EX_REPORT_DATA_1 REPORTSTARTTESTCASE
+    global REPORTSTARTTESTCASELEVEL MAIN
+    #puts "@@@@@ report_start_test, EX_REPORT_STATUS=$EX_REPORT_STATUS"
+    # -- build a internal list to store test result information
+    set result1 [regexp -all {([a-zA-Z0-9]+\.)+((\.)?(\-)?(_)?[a-zA-Z0-9]+(\.)?(\-)?(_)?)+[a-zA-Z0-9]+} \
+                      $test REPORTSTARTTESTCASE]
+    if {![info exists REPORTSTARTTESTCASE]} {
+        set REPORTSTARTTESTCASE ""
+    }
+    set REPORTSTARTTESTCASELEVEL($REPORTSTARTTESTCASE) $EX_REPORT_LEVEL
+    #
+    # Currently set test
+    #
+    set MAIN(report_start_test) $test
+    #
+    # failure_analysis code to change the color of the FA tests in the report.txt
+    #
+    if {[info exists MAIN(FA_REPORT_COLOR_ASCII)] && [string trim $MAIN(FA_REPORT_COLOR_ASCII)] != ""} {
+        set test "$MAIN(FA_REPORT_COLOR_ASCII)$test"
+    }
+
+    set EX_REPORT_STATUS ""
+    set EX_REPORT_PERF 0
+    append EX_REPORT_DATA "\{" $test "\} \{\n"
+    append EX_REPORT_DATA_1 "\{" $test "\} \{\n"
+    incr EX_REPORT_LEVEL
+}
+
+################################################################## 
+# Procedure Name: report_end_test
+#   
+# Description: Called when a test completes
+#
+# Input args: none
+#                
+# Output args: none
+#
+# Typical usage: 
+#              report_end_test 
+#
+# Category: setup
+################################################################## 
+proc report_end_test {{result 1}} {
+    global EX_REPORT_DATA EX_REPORT_LEVEL EX_REPORT_STATUS EX_REPORT_PERF EX_REPORT_DATA_1
+    global REPORTSTARTTESTCASE TPBRESULTCASES TPBRESULTVALUES
+    global passCount
+    global failCount
+    global skipCount
+    global enableAbortTestCondition
+    global currentTestNumber
+    global passSubTestsArr
+    global failSubTestsArr
+    global skipSubTestsArr
+    global harness
+    global REPORTSTARTTESTCASELEVEL
+
+    if {![info exists harness]} {
+        set harness "tcl"
+        puts "###\n###\nHARNESS IS NOT SET\n###\n###"
+    }    
+    if {![info exists REPORTSTARTTESTCASE]} {
+        set REPORTSTARTTESTCASE ""
+    }
+if {[info exists REPORTSTARTTESTCASELEVEL($REPORTSTARTTESTCASE)]} {
+    set myLevel $REPORTSTARTTESTCASELEVEL($REPORTSTARTTESTCASE)
+} else {
+    set myLevel -1
+}
+#puts "\n###\n###\nIN report_end_test"
+#puts "Case $REPORTSTARTTESTCASE"
+#puts "Case Level $myLevel"
+#puts "Proc - [GetCurrentProcName]"
+#puts "PreProc - [PreProcName]"
+#puts "Current Level $EX_REPORT_LEVEL\n###\n###"
+#puts "Proc List: [ProcEvalTree]"
+
+    # TPB when to print sub cases
+    if {[PreProcName] == [lindex [ProcEvalTree] 1]} {
+        # If the previous proc cases (main test case) = the case being called by TPB
+        set print 0 ;# Change to 0 9/3/17 turn off tpb printing sub cases
+    } else {
+        set print 0
+    }
+
+    set testskipped 0;
+
+    # -- make sure it end correctly
+    if {$EX_REPORT_LEVEL == 0} {
+        error "Cannot end a report beyond level 0"
+    }
+
+    # -- convert to 0 and 1 format
+    switch -glob -- [string tolower $result] {
+		"ok" {set result 1}
+		"good" {set result 1}
+		"success*" {set result 1}
+                "skip*" {set result 1; set testskipped 1}
+		"bad" {set result 0}
+		"er*" {set result 0}
+		"fail*" {set result 0}
+		"unsuccess*" {set result 0}
+		default {set result 1}
+    }
+
+    if {$harness == "tpb"} {
+        if {![info exists TPBRESULTCASES]} {
+            set TPBRESULTVALUES ""
+            set TPBRESULTLIST ""
+        }
+        if {[info exists REPORTSTARTTESTCASE]} {
+            set subcase $REPORTSTARTTESTCASE
+        } else {
+            set subcase "NULL"
+        }
+    } else {
+    }
+    if {$EX_REPORT_STATUS != ""} {
+        if {($EX_REPORT_STATUS == "skip")&&($result == 1)} {
+            set result 1
+            set testskipped 1;
+            if {$harness == "tpb" && $print} {
+                lappend TPBRESULTLIST $subcase
+                lappend TPBRESULTVALUES "SKIPPED"
+                puts "TPB RESULT - Test Case $subcase SKIPPED"
+            }
+            
+        } elseif {($EX_REPORT_STATUS)&&($result == 1)} {
+            set result 1
+            if {$harness == "tpb" && $print} {
+                puts "TPB RESULT - Test Case $subcase PASSED"
+                lappend TPBRESULTLIST $subcase
+                lappend TPBRESULTVALUES "PASSED"
+            }
+        } else {
+            set result 0
+            if {$harness == "tpb" && $print} {
+                puts "TPB RESULT - Test Case $subcase FAILED"
+                lappend TPBRESULTLIST $subcase
+                lappend TPBRESULTVALUES "FAILED"
+            }
+        }
+    }
+    ################################################
+    # This is a hack for performace data           #
+    ################################################
+    
+    set length [string length $EX_REPORT_DATA]
+    if {$EX_REPORT_PERF != 0} {
+        set result $EX_REPORT_PERF
+    }
+    ################################################
+    
+    set trimCurrentTestNumber ""
+    if  {[info exist currentTestNumber]} {
+        set result1 [regexp {\.*([a-zA-Z0-9_\.-]+)\ *} $currentTestNumber ignore trimCurrentTestNumber]
+    }
+    
+    set tmp1 [expr $length - 4]
+    set tmp2 [expr $length - 2]
+    set tail [string range $EX_REPORT_DATA $tmp1 $tmp2]
+    if { ($tail != "\} 1") && ($tail != "\} 0") } { 
+        if { $result == 1 } { 
+            incr passCount 1
+            if {$harness == "tpb" && $print} {
+                #puts "\n***\n***\nTPB RESULT - Test Case $subcase PASSED\n***\n***"
+                lappend TPBRESULTLIST $subcase
+                lappend TPBRESULTVALUES "PASSED"
+            }
+            if {[info exist passSubTestsArr($trimCurrentTestNumber) ]} {
+                set passSubTestsArr($trimCurrentTestNumber) [expr $passSubTestsArr($trimCurrentTestNumber) + 1]
+            } else {
+                set passSubTestsArr($trimCurrentTestNumber) 1
+            }
+        } else { 
+            incr failCount 1
+            if {$harness == "tpb" && $print} {
+                puts "TPB RESULT - Test Case $subcase FAILED"
+                lappend TPBRESULTLIST $subcase
+                lappend TPBRESULTVALUES "FAILED"
+            }
+            if {[info exist failSubTestsArr($trimCurrentTestNumber) ]} {
+                set failSubTestsArr($trimCurrentTestNumber) [expr $failSubTestsArr($trimCurrentTestNumber) + 1]
+            } else {
+                set failSubTestsArr($trimCurrentTestNumber) 1
+            }
+            if { ([info exists enableAbortTestCondition] ) && \
+                 ($enableAbortTestCondition =="anyFailure") } {
+                exit
+            }
+        }
+        if {$testskipped} {
+            incr skipCount 1
+            if {$harness == "tpb" && $print} {
+                puts "TPB RESULT - Test Case $subcase SKIPPED"
+                lappend TPBRESULTLIST $subcase
+                lappend TPBRESULTVALUES "SKIPPED"
+            }
+            if {[info exist skipSubTestsArr($trimCurrentTestNumber) ]} {
+                set skipSubTestsArr($trimCurrentTestNumber) [expr $skipSubTestsArr($trimCurrentTestNumber) + 1]
+            } else {
+                set skipSubTestsArr($trimCurrentTestNumber) 1
+            }
+        }
+    }
+    if {$testskipped} {
+        set result skip
+    }
+    append EX_REPORT_DATA "\} " $result "\n"
+    append EX_REPORT_DATA_1 "\} " $result "\n"
+    incr EX_REPORT_LEVEL -1
+}
+
+################################################################## 
+# Procedure Name: fix_report_level
+#   
+# Description: fix report level (internal)
+#
+# Input args:  none
+#                
+# Output args: none
+#
+# Typical usage: 
+#              fix_report_level
+#
+# Category: setup
+##################################################################
+proc fix_report_level {} {
+	global EX_REPORT_LEVEL
+
+	while {$EX_REPORT_LEVEL > 0} {
+		report_end_test 1
+	}
+}
+
+################################################################## 
+# Procedure Name: save_test_report
+#   
+# Description: Saves the current state of the test report to the file report.
+#
+# Input args: 
+#              report - file name
+#  
+# Output args: none
+#
+# Typical usage: 
+#              save_test_report "[get_result_dir]/report.exr"
+#
+# Category: setup
+##################################################################
+proc save_test_report {report} {
+	global EX_REPORT_DATA EX_REPORT_DATA_1 
+
+	fix_report_level
+	set fid [open $report "w"]
+	puts -nonewline $fid $EX_REPORT_DATA
+	close $fid
+
+}
+
+#####################################################################
+# Procedure Name: Statustestcase
+# Description: Prints the testcase report in TestcaseStatusList.txt.
+#
+#
+# Input args:
+#	Testcase
+#	TestcaseReport
+#
+#
+#
+# Output args: none
+#
+# Typical usage:
+#	Statustestcase $casereport $tc
+#
+#####################################################################
+
+proc Statustestcase {casereport tc} {
+
+global ezinfofile
+global duration FEATMAIN
+
+if {$tc != ""} {
+set tcStatFile  [open "[get_result_dir]/TCLStatusVars.txt" "a"]
+set tcStatFile2 [open "[get_result_dir]/PHPStatusVars.txt" "a"]
+set testcasestatusfile [open "[get_result_dir]/TestcaseStatusList.txt" "a"]
+
+	 if {[regexp {\} skip} $casereport]} {
+
+		set testcasestatusresult "$tc\t:\tSKIPPED"
+		puts $testcasestatusfile "$testcasestatusresult"
+		set status "SKIPPED"
+	} elseif {[regexp {\} 0} $casereport]} {
+                set testcasestatusresult "$tc\t:\tFAILED"
+                puts $testcasestatusfile "$testcasestatusresult"
+                set status "FAILED"
+	} else {
+
+               set testcasestatusresult "$tc\t:\tPASSED"
+                puts $testcasestatusfile "$testcasestatusresult"
+                puts  "***************** $testcasestatusresult"
+                set status "PASSED"
+
+	}
+
+    if {![info exists duration]} {
+        set duration 0
+    }
+    set  FEATMAIN(TCRESULTS,$tc)  $status
+    puts $tcStatFile "lappend ReportCases \"$tc\"" 
+    puts $tcStatFile "set RepResArray($tc) \"$status\""
+    puts $tcStatFile "set RepDurArray($tc) \"$duration\""
+    puts $tcStatFile2 "\$RepResArray\[$tc] = \"$status\""
+    puts $tcStatFile2 "\$RepDurArray\[$tc] = \"$duration\""
+
+if {$ezinfofile != ""} {
+
+
+	if {[catch {exec "php /var/www/EzTest/php/tcase_update.php $ezinfofile  $tc $status $duration"} err]} {
+		result_debug "$err"
+	}	
+ 
+}
+close $tcStatFile
+close $tcStatFile2
+close $testcasestatusfile
+}
+}
+
+################################################################## 
+# Procedure Name: do_text_test
+#   
+# Description: Prints a test report to screen or file.
+#              called by gen_text_report.            
+#
+# Input args: 
+#              file pointer
+#              test
+#              data
+#              pass or fail
+#              level
+#  
+# Output args: none
+#
+# Typical usage: 
+#              do_text_test $fd $t $d $r level
+#
+# Category: setup
+##################################################################
+
+proc do_text_test {fd test data res l} {
+
+
+    upvar $l level
+    global tcl_platform	EX_REPORT_PERF
+	global offset
+
+    # -- make sure there is data 
+     
+    if {[llength $data] > 0} {
+ #      puts " data  > 0 ----> $data level = $level"
+	set dores 0
+    } else {
+	set dores 1
+#	puts " data <=0 ----> $data level = $level"
+    }
+    for {set i 0} {$i < $level} {incr i} {
+	puts -nonewline $fd "  "
+    }
+    set pos [expr {$level * 2}]
+    
+    # -- split the line out to make it more readable
+    set splitFlag "false"
+    if {$dores} {
+      while {[expr [string length $test] + $pos] > 70 } {
+      	for {set len 65} {$len > 10} {incr len -1 } {         
+            set char [string range $test $len $len]
+            if {$char == " "} { break }
+         }
+         if {$len < 15} {set len 65}
+         puts $fd [string range $test 0 $len]
+         set test [string range $test [expr $len + 1] end]
+         for {set i 0} {$i < $level} {incr i} {
+      		puts -nonewline $fd "  "
+   	 }
+      	 puts -nonewline $fd "    "
+   	 set splitFlag "true"
+       }
+       if {$splitFlag == "true"} {incr pos 4}
+    }
+   
+    puts -nonewline $fd $test
+    incr pos [string length $test]
+
+    # -- move to the end of the line	
+    set i [expr {78 - $pos - 8}]
+    while {$i > 0} {
+	puts -nonewline $fd " "
+	incr i -1
+    }
+    
+    # -- passed or failed result
+    if {$dores} {
+	   if { ($fd == "stdout") && ($tcl_platform(platform) == "unix") } {
+		 
+  		 if {($res != 0) && ($res != 1)} {
+   			if {$res < 0} {
+			   set res [expr $res - $offset]
+			}
+			puts $fd "\[\033\[1;35m  $res  \033\[0m\]"
+		 } else {
+			if {$res == 1} {
+			puts $fd "\[\033\[1;32m  OK  \033\[0m\]"
+			} else {
+			puts $fd "\[\033\[1;31mFAILED\033\[0m\]"
+			}
+		 }
+	   } else {
+		  if {($res != 0) && ($res != 1)} {
+   			if {$res < 0} {
+			   set res [expr $res - $offset]
+			}
+			puts $fd "\[  $res  ]"
+		  } else {
+		  if {$res} {
+		   puts $fd "\[  OK  \]"
+		   } else {
+		   puts $fd "\[FAILED\]"
+		   }
+		  }
+	   }
+    } else {
+	puts $fd ""
+    }
+
+    incr level 1
+    foreach {t d r} $data {
+	do_text_test $fd $t $d $r level
+    }
+    incr level -1
+
+}
+
+################################################################## 
+# Procedure Name: gen_subtests_report
+#   
+# Description: this function is called at the end of every test case run
+#              It updates the subtestscounts.txt file which has the stats for each testcase
+#              P stands for passed, F for failed and S for skipped
+#
+# Input args: 
+#              none 
+#
+# Output args: none
+#
+# Typical usage: 
+#              gen_subtests_report 
+#
+# Category: setup
+################################################################## 
+proc gen_subtests_report {} {
+
+  global currentTestNumber
+  global passSubTestsArr
+  global failSubTestsArr
+  global skipSubTestsArr
+
+  set trimCurrentTestNumber ""
+  if  {[info exist currentTestNumber]} {
+    set result1 [regexp {\.*([a-zA-Z0-9_\.-]+)\ *} $currentTestNumber ignore trimCurrentTestNumber]
+  }
+  if {$trimCurrentTestNumber != ""} {
+  if {[info exist passSubTestsArr($trimCurrentTestNumber)]} {
+    set thisPass $passSubTestsArr($trimCurrentTestNumber)
+  } else {
+    set thisPass 0
+  }
+  if {[info exist failSubTestsArr($trimCurrentTestNumber)]} {
+    set thisFail $failSubTestsArr($trimCurrentTestNumber)
+  } else {
+    set thisFail 0
+  }
+  if {[info exist skipSubTestsArr($trimCurrentTestNumber)]} {
+    set thisSkip $skipSubTestsArr($trimCurrentTestNumber)
+  } else {
+    set thisSkip 0
+  }
+  set substr $trimCurrentTestNumber
+  append substr ":P:"
+  append substr $thisPass
+  append substr ":F:"
+  append substr $thisFail
+  append substr ":S:"
+  append substr $thisSkip
+  append substr ":"
+
+  set fd_out1 [open "[get_result_dir]/subtestscounts.txt" "a"];
+  puts $fd_out1 $substr
+  close $fd_out1;
+  }
+
+}
+
+################################################################## 
+# Procedure Name: gen_text_report
+#   
+# Description: Reads in report and prints it in human-readable form to output.
+#              Generate the report.txt
+#
+# Input args: 
+#              report - file name
+#              out - file name
+#              layer
+#              fname - file name                
+#
+# Output args: none
+#
+# Typical usage: 
+#              gen_text_report "[get_result_dir]/report.exr" "[get_result_dir]/report.txt" "[file tail [pwd]]" $sourceFile
+#
+# Category: setup
+################################################################## 
+proc gen_text_report {report out layer {fname "template.cfg"} {tc ""}} {
+
+    global numDUT
+    global passCount
+    global failCount
+    global skipCount
+    global tStartDate
+    global testDuration
+    global lst MAIN
+    global EX_REPORT_DATA_1
+    #puts "@@@@@ gen_text_report @@@@@@"
+    #puts "@@@@@ report=$report"
+    #puts "@@@@@ out=$out\n"
+
+    # update subtestscounts.txt file
+    gen_subtests_report
+
+    if {![info exists skipCount]} {
+       set skipCount 0
+    }
+
+    # -- open a new file
+    set data [ex_cat $report]
+    if {$out != "stdout"} {
+	set fd [open $out "w"]
+    } else {
+ 	set fd stdout
+    }
+    # -- build a header
+    puts $fd "\n\n***********************************************************"
+    puts $fd "***********************************************************"
+    puts $fd         "***                                                     ***"
+    puts $fd [format "*** %-12s        Automated Regression Test Summary      ***" $layer]
+    puts $fd "***    $layer Automated Regression Test Summary      ***"
+    puts $fd "***                  Extreme Networks                   ***"
+    puts $fd "***                                                     ***"
+    puts $fd "***********************************************************"
+    puts $fd "***********************************************************\n"
+
+    puts $fd "For individual test case detail, please reference"
+    puts $fd "http://autoregweb\n"
+    puts $fd "Using config file: $fname"
+    if {[info exists lst]} {
+       puts $fd "Using lst: $lst\n"
+    }
+    if {[info exists MAIN(REPO_VERSION)]} {
+       puts $fd "Revision Number: $MAIN(REPO_VERSION)"
+    }
+
+    # nellinivasu : Commented remark code as it doesn't have any strategic importance
+
+    #for {set i 1} {$i <= $numDUT} {incr i 1} 
+    #   global DUTs_info
+    #   puts $fd "DUT$i Remark: $DUTs_info(DUT$i,remark)"
+    #
+    puts $fd "\n"
+    # -- display the information about test DUTs
+    for {set i 1} {$i <= $numDUT} {incr i 1} {
+       global DUT${i}_CONNECT
+       global DUT${i}_IP
+       global DUTs_info
+       set IP [set DUT${i}_IP]
+       puts $fd "------------------------DUT$i Information-------------------------"
+       puts $fd "Platform=$DUTs_info(DUT$i,platform)\tImageVer=$DUTs_info(DUT$i,version)\tBuilt on=$DUTs_info(DUT$i,verTime)"
+       puts $fd "Booted=$DUTs_info(DUT$i,imageBooted)\tIP=$IP\tMAC=$DUTs_info(DUT$i,sysMAC)\tBuilt by=$DUTs_info(DUT$i,relMaster)"
+       puts $fd "\n"
+    }
+
+    puts $fd "\nnumber of sub test cases passed  = $passCount"
+    puts $fd "number of sub test cases failed  = $failCount"
+    puts $fd "number of sub test cases skipped = $skipCount"
+    puts $fd "\nTest starting time = $tStartDate"
+    puts $fd "\nTotal test time = $testDuration seconds"
+    puts $fd "    ( [formatSeconds $testDuration] )"
+    puts $fd "\n***********************************************************\n"
+
+    # -- call do_text_test to build the test cases result
+    set level 0
+
+	Statustestcase $EX_REPORT_DATA_1 $tc
+    foreach {t d r} $data {
+        puts $fd ""
+
+	do_text_test $fd $t $d $r level
+    }
+    # -- done close the file
+    if {$out != "stdout"} { close $fd }
+}
+
+##################################################################
+# Procedure Name: get_report_dir
+#  
+# Description: Return the report dir for a particular module
+#              Called from runall_monitor.tcli when module
+#              gets aborted due to some reason.
+#
+# Input args:
+#        result_dir - result directory of the module
+#        testModule - Test module which got aborted
+#        regType - Type of regression i.e. Func/Perf/Scal etc.
+#        home - home directory of the automation tree
+#
+# return Value: Returns the full path of report directory.
+#
+# Typical usage:
+#         set repDir [get_report_dir $result_dir $tModule $rType ""]
+#
+# Category: utility
+##################################################################
+proc get_report_dir { result_dir testModule regType {home "/auto/branch/automation"}} {
+   set regDir ""
+   set regType [ string tolower $regType ]
+   switch  -regexp $regType {
+     "func*" { set regDir "$home/Functionaltest" }
+     "perf*" { set regDir "$home/PerformanceTest" }
+     "scala*" { set regDir "$home/Scalabilitytest" }
+     "bench*" { set regDir "$home/Benchmarktest" }
+     "cli" { set regDir "$home/CLItest/uploadanddownload" }
+     default { set regDir " " }
+   }
+   result_debug "Regression dir = $regDir"
+   result_debug "result_dir  = $result_dir"
+   # lets get the report directory from the result directory file reportdir.txt
+   set fd_in [open "$result_dir/reportdir.txt" "r"];
+   gets $fd_in report_dir_short
+   set report_dir "$regDir/$testModule/$report_dir_short"
+   result_debug "report_dir  = $report_dir"
+   close $fd_in;
+   return $report_dir
+   
+}
+
+##################################################################
+# Procedure Name: GetReportDir (old version)
+#  
+# Description: Return the report dir for a particular module
+#              Called from runall_monitor.tcli when module
+#              gets aborted due to some reason.
+#
+# Input args:
+#        testModule - Test module which got aborted
+#        regType - Type of regression i.e. Func/Perf/Scal etc.
+#        platform - Platform
+#        blade - Blade type
+#        imageVer - Image version on the DUT
+#
+# return Value: Returns the full path of report directory.
+#
+# Typical usage:
+#         set repDir [GetReportDir $tModule $rType $ptf $bld $img]
+#
+# Category: utility
+##################################################################
+proc GetReportDir { testModule regType platform blade imageVer {home "/auto/branch/automation"}} {
+   global DUTs_info
+   set pwd [pwd]
+   set regDir ""
+   set regType [ string tolower $regType ]
+   switch  -regexp $regType {
+     "func*" { set regDir "$home/Functionaltest" }
+     "perf*" { set regDir "$home/PerformanceTest" }
+     "scala*" { set regDir "$home/Scalabilitytest" }
+     "bench*" { set regDir "$home/Benchmarktest" }
+     "cli" { set regDir "$home/CLItest/uploadanddownload" }
+     default { set regDir " " }
+   }
+   result_debug "Regression dir = $regDir"
+   cd $regDir
+   set allFiles [glob -- *]
+   set regModules ""
+   foreach module $allFiles {
+       if {[file isdir $module]} {
+           lappend regModules $module
+        }
+   }
+   set modulename ""
+   foreach regModule $regModules {
+       set match ""
+       set str ""
+       if {[regexp -nocase "(^$testModule.*)" $regModule match str]} {
+           set modulename $str
+        }
+   }
+   set tmp "$regDir/$modulename/Report"
+   set date  [clock format [clock seconds] -format "%Y-%m-%d"]
+
+   # set index 0
+   # set reportDir "$tmp/$date $platform $blade  $imageVer $index"
+   # while { [file exists $reportDir] == 1 } {
+      # incr index 
+      # set reportDir "$tmp/$date $platform $blade  $imageVer $index"
+   # }
+
+   set index 0
+   set goOn 1
+   while {$goOn == 1} {
+     set reportDirList [glob -nocomplain -- "$tmp/*$platform*$blade*$imageVer $index"]
+     if {[llength $reportDirList] > 0} {
+       incr index
+     } else {
+       set goOn 0
+     }
+   }
+   set index [expr $index - 1]
+   set reportDir "$tmp/$date $platform $blade  $imageVer $index"
+
+
+   cd $pwd
+   return $reportDir
+}
+#################################################################################
+# Procedure: _get_report_txt_subcounts
+#
+# Returns the subtest count using grep instead of parsing the report.txt
+#
+#################################################################################
+proc _get_report_txt_subcounts {args} {
+    parse_args _get_report_txt_subcounts $args {
+       reportFile  ""
+       state       "null"
+    }
+
+    set gotIt 0
+    if {[regexp -nocase "pass" $state]} {
+        set find "number of sub test cases passed"
+    } elseif {[regexp -nocase "fail" $state]} {
+        set find "number of sub test cases failed"
+    } elseif {[regexp -nocase "skip" $state]} {
+        set find "number of sub test cases skipped"
+    }
+    if {![catch {exec grep "$find" $reportFile} matchPhrase]} {
+        set olist [split $matchPhrase " "]
+        set gotIt [lindex $olist [expr [llength $olist] -1]]
+        return $gotIt
+    } else {
+        puts "Could not find the $state sub cases in $reportFile"
+    }
+    return $gotIt
+}
+#################################################################################
+# Procedure: _get_report_txt_subverion
+#
+# Returns the subversion rev using grep instead of parsing the report.txt
+#
+#################################################################################
+proc _get_report_txt_subverion {args} {
+    parse_args _get_report_txt_subverion $args {
+       reportFile  ""
+    }
+
+    set gotIt 0
+    set find "Revision Number:"
+    if {![catch {exec grep "$find" $reportFile} matchPhrase]} {
+        set olist [split $matchPhrase " "]
+        set gotIt [lindex $olist [expr [llength $olist] -1]]
+        return $gotIt
+    } else {
+        puts "Could not find subverion rev in $reportFile"
+    }
+    return $gotIt
+}
+#################################################################################
+# Procedure: _get_report_txt_duration
+#
+# Returns the feature duration using grep instead of parsing the report.txt
+#
+#################################################################################
+proc _get_report_txt_duration {args} {
+    parse_args _get_report_txt_duration $args {
+       reportFile  ""
+    }
+
+    set gotIt 0
+    set find "Total test time "
+    if {![catch {exec grep "$find" $reportFile} matchPhrase]} {
+        set olist [split $matchPhrase " "]
+        set gotIt [lindex $olist [expr [llength $olist] -2]]
+        return $gotIt
+    } else {
+        puts "Could not find Total test time in $reportFile"
+    }
+    return $gotIt
+}
+
+#################################################################################
+# Procedure: _get_report_txt_version
+#
+# Returns the subversion rev using grep instead of parsing the report.txt
+#
+#################################################################################
+proc _get_report_txt_version {args} {
+    parse_args _get_report_txt_version $args {
+       reportFile  ""
+    }
+
+    set gotIt "0.0.0.0"
+    set find "DUT1 Information"
+    if {![catch {exec grep -C 2 "$find" $reportFile} matchPhrase]} {
+        regsub -all "\t|\n|\[ ]{3,10}" $matchPhrase "  " matchPhrase
+        if {[regexp -nocase "  ImageVer\=(\[0-9a-z\.\-_]+)  " $matchPhrase a me]} {
+            set gotIt $me
+            return $gotIt
+        }
+    } else {
+        puts "Could not find DUT1 version in $reportFile"
+    }
+    return $gotIt
+}
+#################################################################################
+# Procedure: _get_report_txt_core_uploaded
+#
+# Returns true if a test case for uploading a core using grep instead 
+#            of parsing the report.txt
+#
+#################################################################################
+proc _get_report_txt_core_uploaded {args} {
+    parse_args _get_report_txt_core_uploaded $args {
+       reportFile  ""
+    }
+
+    set out "null"
+    set matchPhrase "NULL"
+    set find "There is a coredump file on DUT"
+    if {![catch {exec grep -C 1 "$find" $reportFile} matchPhrase]} {
+        if {$matchPhrase == "NULL" || [string trim $matchPhrase] == ""} {
+            # not change
+        } elseif {[string length $matchPhrase] > 10} {
+            set out "core";
+        }
+    }
+    set matchPhrase "NULL"
+    set find "Moved the code coverage file from DUT"
+    if {![catch {exec grep -C 1 "$find" $reportFile} matchPhrase]} {
+        if {$matchPhrase == "NULL" || [string trim $matchPhrase] == ""} {
+            # not change
+        } elseif {[string length $matchPhrase] > 10} {
+            if {$out == "core"} {
+                set out "both"
+            } else {
+                set out "ccov"
+            }
+        }
+    }
+    return $out
+}

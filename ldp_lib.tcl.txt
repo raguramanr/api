@@ -1,0 +1,832 @@
+
+##################################################################
+# Procedure Name: VerifyMpls
+# Description:
+#       This proc verifies enable/disable MPLS and LDP 
+# Input args: testNo - test number
+#             status - enable or disable, default is enable 
+# Output args: None
+# Typical usage:
+#     VerifyMpls  
+#     VerifyMpls -status disable 
+##################################################################
+
+proc VerifyMpls { args } {
+   parse_args VerifyMpls $args {
+      testNo ""
+      status "enable"
+   } 
+
+   global whichDutNow
+
+   if {$status == "disable"} {
+      lappend parameterList "{MPLS Admin Status.*Disabled} exist"
+      lappend parameterList "{MPLS Oper Status.*Disabled} exist"
+      lappend parameterList "{LDP Admin Status.*Disabled} exist"
+      lappend parameterList "{LDP Oper Status.*Disabled} exist"
+      CheckKeyValue "show mpls" $parameterList -testNo $testNo -comment "- check mpls and ldp status" 
+      unset parameterList
+   } else {
+      lappend parameterList "{MPLS Admin Status.*Enabled} exist"
+      lappend parameterList "{MPLS Oper Status.*Enabled} exist"
+      lappend parameterList "{LDP Admin Status.*Enabled} exist"
+      lappend parameterList "{LDP Oper Status.*Enabled} exist"
+      CheckKeyValue "show mpls" $parameterList -testNo $testNo -comment "- check mpls and ldp status on DUT$whichDutNow" 
+      unset parameterList
+   }
+}
+
+
+##################################################################
+# Procedure Name: VerifyMplsLdp
+# Description:
+#       This proc verifies "show mpls ldp" 
+# Input args: testNo - test number
+#             status - enable or disable, default is enable 
+# Output args: None
+# Typical usage:
+#     VerifyMplsLdp  
+#     VerifyMplsLdp -status disable 
+##################################################################
+
+proc VerifyMplsLdp { args } {
+   parse_args VerifyMplsLdp $args {
+      testNo ""
+      status "enable"
+   } 
+
+   global whichDutNow
+
+   if {$status == "disable"} {
+      lappend parameterList "{LDP Admin Status.*Disabled} exist"
+      lappend parameterList "{LDP Oper Status.*Disabled} exist"
+      CheckKeyValue "show mpls ldp" $parameterList -comment "- show mpls" -testNo $testNo
+      unset parameterList
+   } else {
+      lappend parameterList "{LDP Admin Status.*Enabled} exist"
+      lappend parameterList "{LDP Oper Status.*Enabled} exist"
+      CheckKeyValue "show mpls ldp" $parameterList -testNo $testNo -comment "- check mpls ldp on DUT$whichDutNow"
+      unset parameterList
+   }
+}
+
+
+##################################################################
+# Procedure Name: VerifyMplsLdpIntOp
+# Description:
+#       This proc verifies "show mpls ldp interface" 
+# Input args: testNo - test number
+#             vlanList - List of vlans 
+#             flags - M,L and U 
+# Output args: None
+# Typical usage:
+#     VerifyMplsLdpIntOp -vlanList "trunk12_1"  
+##################################################################
+
+proc VerifyMplsLdpIntOp { args } {
+   parse_args VerifyMplsLdpIntOp $args {
+      testNo ""
+      vlanList "none"
+      flags "MLU"
+      failTime "20"
+   } 
+
+   global whichDutNow
+
+   if {$vlanList == "none"} {
+      result_error "vlan list not given"
+   } else {
+      for {set i 0} {$i < [llength $vlanList]} {incr i} {
+          set vlanName [lindex $vlanList $i] 
+          result_debug "vlanName $i : $vlanName"
+          lappend parameterList "{$vlanName.*$flags} exist"
+          CheckKeyValue "show mpls ldp interface vlan $vlanName" $parameterList -testNo $testNo -comment "- check mpls ldp interface on DUT$whichDutNow" -time [list "s:" "0" "i:" "10" "d:" "$failTime" "f:" "$failTime" "r"]
+          unset parameterList
+      }
+   }
+}
+
+
+##################################################################
+# Procedure Name: VerifyMplsLdpPeer
+# Description:
+#       This proc verifies "show mpls ldp peer" 
+# Input args: testNo - test number
+#             peerList - List of peerList 
+#             status - exist or notExist, default is exist 
+# Output args: None
+# Typical usage:
+#     VerifyMplsLdpPeer -peerList "[list  {100.100.1.1 100.100.2.1}]"  
+##################################################################
+
+proc VerifyMplsLdpPeer { args } {
+   parse_args VerifyMplsLdpPeer $args {
+      testNo ""
+      peerList "none"
+      status "exist"
+   } 
+
+   global whichDutNow
+
+   if {$peerList == "none"} {
+      result_error "peer list not given"
+   } else {
+      for {set i 0} {$i < [llength $peerList]} {incr i} {
+          set peer [lindex $peerList $i] 
+          result_debug "peer $i : $peer"
+          set localAdd [lindex $peer 0] 
+          set remoteAdd "[lindex $peer 1]:0" 
+          lappend parameterList "{$localAdd * $remoteAdd * Operational} $status"
+      }
+      CheckKeyValue "show mpls ldp peer" $parameterList -testNo $testNo -comment "- check mpls ldp peer on DUT$whichDutNow"
+      unset parameterList
+   }
+}
+
+
+
+##################################################################
+# Procedure Name: VerifyMplsLdpLsp
+# Description:
+#       This proc verifies "show mpls ldp lsp" 
+# Input args: testNo - test number
+#             lspList - List of lsps 
+#             status - exist or notExist, default is exist 
+# Output args: None
+# Typical usage:
+#    VerifyMplsLdpLsp -lspList "[list {11.0.12.0/30 yes no none trunk12_1}]" 
+##################################################################
+
+proc VerifyMplsLdpLsp { args } {
+   parse_args VerifyMplsLdpLsp $args {
+      testNo ""
+      lspList "none"
+      status "exist"
+   } 
+
+   global whichDutNow
+
+   if {$lspList == "none"} {
+      result_error "lspList not given"
+   } else {
+      for {set i 0} {$i < [llength $lspList]} {incr i} {
+          set lspEntry [lindex $lspList $i] 
+          result_debug "lspEntry $i : $lspEntry"
+          set prefix [lindex $lspEntry 0]
+          set advLabel [lindex $lspEntry 1] 
+          set peerLabel [lindex $lspEntry 2] 
+          set nexthop [lindex $lspEntry 3] 
+          set interface [lindex $lspEntry 4] 
+
+          if {$advLabel == "yes"} {
+             set advLabel "0x....."
+          } else {
+             set advLabel "--"
+          }
+          if {$peerLabel == "yes"} {
+             set peerLabel "0x....."
+          } else {
+             set peerLabel "--"
+          }
+          if {$nexthop == "none"} {
+             set nexthop "--"
+          } 
+          lappend parameterList "{$prefix * $advLabel * $peerLabel * $nexthop * $interface} $status"
+      }
+      CheckKeyValue "show mpls ldp lsp" $parameterList -testNo $testNo -comment "- check mpls ldp lsp on DUT$whichDutNow"
+      unset parameterList
+   }
+}
+
+
+##################################################################
+# Procedure Name: VerifyMplsRetainedLsp
+# Description:
+#       This proc verifies "show mpls ldp label retained lsp" 
+# Input args: testNo - test number
+#             lspList - List of lsps 
+#             status - exist or notExist, default is exist 
+# Output args: None
+# Typical usage:
+#   VerifyMplsRetainedLsp -lspList "[list {11.0.12.0/30 yes 11.0.12.2 trunk12_1}]" 
+##################################################################
+
+proc VerifyMplsRetainedLsp { args } {
+   parse_args VerifyMplsRetainedLsp $args {
+      testNo ""
+      lspList "none"
+      status "exist"
+   } 
+
+   global whichDutNow
+
+   if {$lspList == "none"} {
+      result_error "lspList not given"
+   } else {
+      for {set i 0} {$i < [llength $lspList]} {incr i} {
+          set lspEntry [lindex $lspList $i] 
+          result_debug "lspEntry $i : $lspEntry"
+          set prefix [lindex $lspEntry 0]
+          set peerLabel [lindex $lspEntry 1] 
+          set nexthop [lindex $lspEntry 2] 
+          set interface [lindex $lspEntry 3] 
+
+          if {$peerLabel == "yes"} {
+             set peerLabel "0x....."
+          } else {
+             set peerLabel "--"
+          }
+          if {$nexthop == "none"} {
+             set nexthop "--"
+          } 
+          lappend parameterList "{$prefix.* $peerLabel * $nexthop * $interface} $status"
+      }
+      CheckKeyValue "show mpls ldp label retained lsp" $parameterList -testNo $testNo -comment "- check mpls ldp label retained lsp on DUT$whichDutNow"
+      unset parameterList
+   }
+}
+
+
+##################################################################
+# Procedure Name: VerifyIpr
+# Description:
+#       This proc verifies "show iproute" 
+# Input args: testNo - test number
+#             prefixList - List of prefixes 
+#             status - exist or notExist, default is exist 
+# Output args: None
+# Typical usage:
+#  VerifyIpr -prefixList "[list {#d 11.0.12.0/30 11.0.12.1}]" 
+##################################################################
+
+proc VerifyIpr { args } {
+   parse_args VerifyIpr $args {
+      testNo ""
+      prefixList "none"
+      status "exist"
+   } 
+
+   global whichDutNow
+
+   if {$prefixList == "none"} {
+      result_error "prefix list not given"
+   } else {
+      for {set i 0} {$i < [llength $prefixList]} {incr i} {
+          set prefix [lindex $prefixList $i] 
+          result_debug "prefix $i : $prefix"
+          set origin [lindex $prefix 0]
+          set destination [lindex $prefix 1] 
+          set gateway [lindex $prefix 2] 
+          lappend parameterList "{$origin * $destination * $gateway} $status"
+      }
+      CheckKeyValue "show iproute" $parameterList -testNo $testNo -comment "- check iproute on DUT$whichDutNow"
+      unset parameterList
+   }
+}
+##################################################################
+# Procedure Name: VerifyIpv4Fib
+# Description:
+#       This proc verifies "debug hal show platform ipv4Fib"
+# Input args: testNo - test number
+#             prefixList - List of prefixes
+#             status - exist or notExist, default is exist
+# Output args: None
+# Typical usage:
+#  VerifyIpv4Fib -prefixList "[list {11.0.12.0 255.255.255.255}]"
+##################################################################
+
+proc VerifyIpv4Fib { args } {
+   parse_args VerifyIpv4Fib $args {
+      testNo ""
+      prefixList "none"
+      status "exist"
+   }
+
+   global whichDutNow
+
+   if {$prefixList == "none"} {
+      result_error "prefix list not given"
+   } else {
+      for {set i 0} {$i < [llength $prefixList]} {incr i} {
+          set prefix [lindex $prefixList $i]
+          result_debug "prefix $i : $prefix"
+          set destination [lindex $prefix 0]
+          set gateway [lindex $prefix 1]
+          lappend parameterList "{$destination * $gateway} $status"
+      }
+      CheckKeyValue "debug hal show platform ipv4Fib" $parameterList -testNo $testNo -comment "- check ipv4fib on DUT$whichDutNow"
+      unset parameterList
+   }
+}
+
+##################################################################
+# Procedure Name: VerifyIprFlag
+# Description:
+#       This proc verifies "show iproute" with flag
+# Input args: testNo - test number
+#             prefixList - List of prefixes
+#             status - exist or notExist, default is exist
+# Output args: None
+# Typical usage:
+#  VerifyIprFlag -prefixList "[list {#d 11.0.12.0/30 11.0.12.1 L}]"
+##################################################################
+
+proc VerifyIprFlag { args } {
+   parse_args VerifyIprFlag $args {
+      testNo ""
+      prefixList "none"
+      status "exist"
+   }
+
+   global whichDutNow
+
+   if {$prefixList == "none"} {
+      result_error "prefix list not given"
+   } else {
+      for {set i 0} {$i < [llength $prefixList]} {incr i} {
+          set prefix [lindex $prefixList $i]
+          result_debug "prefix $i : $prefix"
+          set origin [lindex $prefix 0]
+          set destination [lindex $prefix 1]
+          set gateway [lindex $prefix 2]
+          set flag [lindex $prefix 3]
+          lappend parameterList "{$origin * $destination * $gateway.*$flag} $status"
+      }
+      CheckKeyValue "show iproute" $parameterList -testNo $testNo -comment "- check iproute on DUT$whichDutNow"
+      unset parameterList
+   }
+}
+##################################################################
+# Procedure Name: VerifyIprMpls
+# Description:
+#       This proc verifies "show iproute mpls" 
+# Input args: testNo - test number
+#             prefixList - List of prefixes 
+#             status - exist or notExist, default is exist 
+# Output args: None
+# Typical usage:
+#  VerifyIprMpls -prefixList "[list {#mp 11.0.12.0/30 11.0.12.0/30}]" 
+##################################################################
+
+proc VerifyIprMpls { args } {
+   parse_args VerifyIprMpls $args {
+      testNo ""
+      prefixList "none"
+      status "exist"
+   } 
+
+   global whichDutNow
+
+   if {$prefixList == "none"} {
+      result_error "prefix list not given"
+   } else {
+      for {set i 0} {$i < [llength $prefixList]} {incr i} {
+          set prefix [lindex $prefixList $i] 
+          result_debug "prefix $i : $prefix"
+          set origin [lindex $prefix 0]
+          set destination [lindex $prefix 1] 
+          set endPoint [lindex $prefix 2] 
+          lappend parameterList "{$origin * $destination * $endPoint} $status"
+      }
+      CheckKeyValue "show iproute mpls" $parameterList -testNo $testNo -comment "- check iproute mpls on DUT$whichDutNow"
+      unset parameterList
+   }
+}
+
+##################################################################
+# Procedure Name: VerifyMplsLdpLabel
+# Description:
+#       This proc verifies "show mpls ldp lable" 
+# Input args: testNo - test number
+#             prefixList - List of prefixes 
+#             status - exist or notExist, default is exist 
+# Output args: None
+# Typical usage:
+#   VerifyMplsLdpLabel -prefixList "[list {LE 11.0.12.0/30 trunk12_1}]" 
+##################################################################
+
+proc VerifyMplsLdpLabel { args } {
+
+   parse_args VerifyMplsLdpLabel $args {
+      testNo ""
+      prefixList "none"
+      status "exist"
+   } 
+
+   global whichDutNow
+ set vers [GetVersion DUT1 2]
+   if {$prefixList == "none"} {
+      result_error "prefixList not given"
+   } else {
+      for {set i 0} {$i < [llength $prefixList]} {incr i} {
+          set prefix [lindex $prefixList $i] 
+          result_debug "prefix $i : $prefix"
+          set lspFlag [lindex $prefix 0]
+          set destination [lindex $prefix 1] 
+          set nexthop [lindex $prefix 2] 
+          if {($lspFlag == "LE") || ($lspFlag == "LT") || ($lspFlag == "MLT") } {
+             set advLabel "0x....."
+             if {$lspFlag == "LE"} {
+                set peerLabel "--"
+             } else {
+                set peerLabel "0x....."
+             }
+             set rcvLabel "--"
+        if {$lspFlag == "MLT"} {
+
+                if {$vers < 12.5} {
+
+                        set lspFlag "MLT"
+                } else {
+                        set lspFlag "M-LT"
+                }
+        }
+	
+             lappend parameterList "{$advLabel.*$destination.*$lspFlag.*$peerLabel.*$nexthop} $status"
+          }
+          if {$lspFlag == "LI"} {
+             set advLabel "--"
+             set peerLabel "--"
+             set rcvLabel "0x....."
+             lappend parameterList "{$rcvLabel.*$destination.*$lspFlag.*$nexthop} $status"
+          }
+      } 
+      CheckKeyValue "show mpls ldp label" $parameterList -testNo $testNo -comment "- check mpls ldp label on DUT$whichDutNow"
+      unset parameterList
+   }
+}
+
+##################################################################
+# Procedure Name: GetLdpHoldTime
+#
+# Description: Get the hold time from the packet 
+#
+# Input args:
+#              LDP packet
+#
+# Output args:
+#              return LDP hold time
+#
+# Typical usage:
+#              [GetLdpHoldTime $frame]
+#
+# Category: Utility
+##################################################################
+proc GetLdpHoldTime { rawFrame } {
+    set type [string range $rawFrame 36 40]
+    # if tagged, get rid of type and tag field from 36 to 47
+    if {$type == "81 00"} {
+        set leftRawFrame [string range $rawFrame 0 35]
+        set rightRawFrame [string range $rawFrame 48 [string length $rawFrame]]
+        set rawFrame [format "%s%s" $leftRawFrame $rightRawFrame]
+    }
+
+    puts "HelloTime: [hextodec [string range $rawFrame 195 196]]"
+    return [hextodec [string range $rawFrame 195 196]] 
+}
+
+##################################################################
+
+
+##################################################################
+# Procedure Name: GetMplsEchoReplyCode
+#
+# Description: Parses the MPLS Echo Reply message 
+#
+# Input args:
+#              LDP packet
+#
+# Output args:
+#              return Echo Reply Return Code 
+#
+# Typical usage:
+#              [GetMplsEchoReplyCode $frame]
+#
+# Category: Utility
+##################################################################
+proc GetMplsEchoReplyCode { rawFrame } {
+    set type [string range $rawFrame 36 40]
+    # if tagged, get rid of type and tag field from 36 to 47
+    if {$type == "81 00"} {
+        set leftRawFrame [string range $rawFrame 0 35]
+        set rightRawFrame [string range $rawFrame 48 [string length $rawFrame]]
+        set rawFrame [format "%s%s" $leftRawFrame $rightRawFrame]
+    }
+
+   #Assuming MPLS contains the IP packet. 8847 is for carrying unicast layer 3 packets.
+   set type [string range $rawFrame 36 40]
+   if {$type == "88 47"} {
+     set leftRawFrame [string range $rawFrame 0 35]
+     set rightRawFrame [string range $rawFrame 54 [string length $rawFrame]]
+     set rawFrame [format "%s%s %s %s" $leftRawFrame 08 00 $rightRawFrame]
+     result_debug "rawframe -2 : $rawFrame"
+   }
+
+   set returnCode [string range $rawFrame 144 145]
+   result_debug "Mpls echo reply return code : $returnCode"
+   return $returnCode 
+}
+##################################################################
+
+##################################################################
+# Procedure Name: VerifyOspfLsdb
+# Description:
+#       This proc verifies "show ospf lsdb"
+# Input args: testNo - test number
+#             LSAList - List of LSAs
+#             status - exist or notExist, default is exist
+# Output args: None
+# Typical usage:
+#     VerifyOspfLsdb -LsdbList "[list  {11.0.12.2 100.100.2.1}]"
+##################################################################
+
+proc VerifyOspfLsdb { args } {
+   parse_args VerifyOspfLsdb $args {
+      testNo ""
+      LSAList "none"
+      status "exist"
+   }
+
+   global whichDutNow
+
+   if {$LSAList == "none"} {
+      result_error "LSA list not given"
+   } else {
+      for {set i 0} {$i < [llength $LSAList]} {incr i} {
+          set LSA [lindex $LSAList $i]
+          result_debug "LSA $i : $LSA"
+          set LinkStateID [lindex $LSA 0]
+          set AdvRtr [lindex $LSA 1]
+          lappend parameterList "{$LinkStateID * $AdvRtr * 0x*} $status"
+      }
+      CheckKeyValue "show ospf lsdb" $parameterList -testNo $testNo -comment "- check ospf lsdb DUT$whichDutNow"
+      unset parameterList
+   }
+}
+##################################################################
+# Procedure Name: VerifyOspfNeighbor
+# Description:
+#       This proc verifies "show ospf neighbor"
+# Input args: testNo - test number
+#             LSAList - List of neighbors
+#             status - exist or notExist, default is exist
+# Output args: None
+# Typical usage:
+#     VerifyOspfNeighbor -NeighborList "[list  {100.100.2.1 FULL}]"
+##################################################################
+
+proc VerifyOspfNeighbor { args } {
+   parse_args VerifyOspfNeighbor $args {
+      testNo ""
+      NeighborList "none"
+      status "exist"
+   }
+
+   global whichDutNow
+
+   if {$NeighborList == "none"} {
+      result_error "Neighbor list not given"
+   } else {
+      for {set i 0} {$i < [llength $NeighborList]} {incr i} {
+          set Neighbor [lindex $NeighborList $i]
+          result_debug "Neighbor $i : $Neighbor"
+          set NeighborID [lindex $Neighbor 0]
+          set State [lindex $Neighbor 1]
+          lappend parameterList "{$NeighborID.*$State} $status"
+      }
+      CheckKeyValue "show ospf neighbor" $parameterList -testNo $testNo -comment "- check ospf neighbor DUT$whichDutNow"
+      unset parameterList
+   }
+}
+
+
+##################################################################
+# Procedure Name: setupLDPInterface
+# Description:
+#       This proc verifies "show ldp peer"
+# Input args: testNo - test number
+#             LSAList - List of neighbors
+#             status - exist or notExist, default is exist
+# Output args: None
+# Typical usage:
+##################################################################
+
+proc setupLDPInterface {args} {
+    parse_args setupLDPInterface $args {
+        dutIp ""
+        interfaceIp ""
+        interfaceMask "24"
+        routerId ""
+        discoveryMode "ldpInterfaceBasic"
+        advMode "ldpInterfaceDownstreamUnsolicited"
+        numNetworks "0"
+        networkIp   "0.0.0.0"
+        networkMask "24"
+        networkIncrement "ldpAdvertiseFecRangeIncrement"
+        networkLabelstart "16"
+        protocol "ospf"
+        txPortId  "1"
+}
+
+    # get the port information
+    MapIxiaPortId $txPortId cha car por
+   set chas(1) $cha
+   set card(1) $car
+   set port(1) $por
+   result_debug "setupLDPInterface: Chas: $cha Card: $car Port: $por"
+
+ ldpServer select $cha $car $por
+ ldpServer clearAllRouters
+
+ ldpInterface setDefault
+ ldpInterface config -enable true
+ ldpInterface config -advertisingMode $advMode
+ ldpInterface config -requestingMode ldpInterfaceIndependent
+ ldpInterface config -labelSpaceId 0
+ ldpInterface config -discoveryMode $discoveryMode
+if { $protocol == "isis" } {
+# ldpInterface config -protocolInterfaceDescription "protocol interface-$car.$por"
+  ldpInterface config -protocolInterfaceDescription "$interfaceIp/$interfaceMask"
+} elseif { $protocol == "bgp" } {
+ ldpInterface config -protocolInterfaceDescription "$interfaceIp/$interfaceMask"
+} else {
+ ldpInterface config -protocolInterfaceDescription "$interfaceIp/$interfaceMask"
+}
+ ldpInterface config -enableAtmSession false
+ ldpInterface config -atmVcDirection atmVcBidirectional
+
+ if {[ldpRouter addInterface interface1]} {
+      error "setupLDPInterface: ldpRouter addInterface interface1 failed."
+ }
+
+ ldpAdvertiseFecRange setDefault
+ ldpAdvertiseFecRange config -enable true
+ ldpAdvertiseFecRange config -numRoutes $numNetworks
+ ldpAdvertiseFecRange config -maskWidth $networkMask
+ ldpAdvertiseFecRange config -networkIpAddress $networkIp
+ ldpAdvertiseFecRange config -labelIncrementMode $networkIncrement
+ ldpAdvertiseFecRange config -labelValueStart $networkLabelstart
+ ldpAdvertiseFecRange config -enablePacking false
+
+ if {[ldpRouter addAdvertiseFecRange advertiseFecRange1]} {
+      error "setupLDPInterface: ldpRouter addAdvertiseFecRange advertiseFecRange1 failed."
+ }
+
+ ldpRouter setDefault
+ ldpRouter config -routerId $routerId
+ ldpRouter config -enable true
+ ldpRouter config -enableRemoteConnect true
+ ldpRouter config -enableL2VpnVcFecs true
+ ldpRouter config -enableVcGroupMatching false
+ ldpRouter config -enableExplicitIncludeIpFec false
+ ldpRouter config -enableGracefulRestart false
+ ldpRouter config -reconnectTime 120000
+ ldpRouter config -recoveryTime 120000
+ ldpRouter config -enablePduRateControl false
+ ldpRouter config -interPduGap 50
+
+ if {[ldpServer addRouter router1]} {
+      error "setupLDPInterface: ldpServer addRouter router1 failed."
+ }
+
+
+ ldpServer setDefault
+ ldpServer config -enableDiscardSelfAdvertiseFecs false
+ ldpServer config -helloInterval 5
+ ldpServer config -helloHoldTime 15
+ ldpServer config -keepAliveInterval 10
+ ldpServer config -keepAliveHoldTime 30
+ ldpServer config -targetedHelloInterval 15
+ ldpServer config -targetedHoldTime 45
+ ldpServer config -enableHelloJitter true
+ ldpServer set
+
+
+ protocolServer setDefault
+ protocolServer config -enableArpResponse true
+ protocolServer config -enablePingResponse true
+ protocolServer config -enableIgmpQueryResponse false
+      if { $protocol == "ospf" } {
+        protocolServer config -enableOspfService true
+      } else {
+        protocolServer config -enableOspfService false
+     }
+
+      if { $protocol == "bgp" } {
+        protocolServer config -enableBgp4Service true
+      } else {
+        protocolServer config -enableBgp4Service false
+      }
+
+      if { $protocol == "isis" } {
+        protocolServer config -enableIsisService true
+      } else {
+        protocolServer config -enableIsisService false
+     }
+
+ protocolServer config -enableRsvpService false
+ protocolServer config -enableRipService false
+ protocolServer config -enableLdpService true
+ protocolServer config -enableRipngService false
+ protocolServer config -enableMldService false
+ protocolServer config -enableOspfV3Service false
+ protocolServer config -enablePimsmService false
+ protocolServer config -enableStpService false
+ protocolServer config -enableBgp4CreateInterface false
+ protocolServer config -enableIsisCreateInterface false
+ protocolServer config -enableOspfCreateInterface false
+ protocolServer config -enableRipCreateInterface false
+ protocolServer config -enableRsvpCreateInterface false
+ protocolServer config -enableIgmpCreateInterface false
+
+if {[protocolServer set $cha $car $por]} {
+   error "setupLDPInterface: protocolServer set $cha $car $por failed."
+}
+
+    set portList [list [list $cha $car $por]]
+    result_debug "Writing Configuration to Hardware..."
+    if {[ixWriteConfigToHardware portList]} {
+        result_debug "Error writing config to hardware"
+    }
+}
+
+##################################################################
+# Procedure Name: startLdp
+#
+# Description: This proc is used to start test equipment LDP protocol adjacency
+#              on the list of ports supplied via txPortIdList
+#
+#
+#
+# Input args:  txPortIdList
+# Output args: None.
+# Return value: none
+# Typical usage:
+#      startLdp 2
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: SendTraffic
+##################################################################
+
+proc startLdp {args} {
+    parse_args startLdp $args {
+        txPortIdList ""
+        protocol ""
+  }
+    set pList ""
+    foreach txPortId $txPortIdList {
+        MapIxiaPortId $txPortId cha car por
+        result_debug "startLdp: Chas: $cha Card: $car Port: $por"
+        lappend pList "$cha $car $por"
+    }
+
+    if {[ixStartLdp pList]} {
+        error "startLdp: ixStartLdp failed."
+    }
+         if { $protocol == "isis" } {
+                 if {[ixStartIsis pList]} {
+                error "startLdp: ixStartIsis failed."
+                    }
+         } elseif { $protocol == "ospf" } {
+                 if {[ixStartOspf pList]} {
+                 error "startLdp: ixStartOspf failed."
+                   }
+        } else {
+                 if {[ixStartBGP4 pList]} {
+                 error "startLdp: ixStartBGP4 failed."
+                 }
+       }
+ }
+##################################################################
+# Procedure Name: stopLdp
+#
+# Description: This proc is used to stop test equipment LDP protocol adjacency
+#              on the list of ports supplied via txPortIdList
+#
+#
+#
+# Input args:  txPortIdList
+# Output args: None.
+# Return value: none
+# Typical usage:
+#      stopLdp 2
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: SendTraffic
+##################################################################
+
+proc stopLdp {txPortIdList} {
+    set pList ""
+    foreach txPortId $txPortIdList {
+        MapIxiaPortId $txPortId cha car por
+        result_debug "stopLdp: Chas: $cha Card: $car Port: $por"
+        lappend pList "$cha $car $por"
+    }
+
+    if {[ixStopLdp pList]} {
+        error "stopOspf: ixStopLdp failed."
+    }
+}
+

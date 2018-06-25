@@ -1,0 +1,871 @@
+
+################################################################## 
+# Procedure Name: startIgmp
+#   
+# Description:  start the IGMP protocol server on the ixia
+#              
+# Input args: txPortIdList
+# Output args: none
+# Return value: none
+# Typical usage: 
+#      startDvmrp {1}
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: SetupTestTool
+##################################################################
+proc startIgmp {txPortIdList {groupId 101064} } {
+
+    set pList ""
+   global TrafficGen
+   switch -exact -- $TrafficGen {
+      ixia -
+      ixvm {
+    foreach txPortId $txPortIdList {
+	MapIxiaPortId $txPortId cha car por
+	result_debug "startIgmp - Chas: $cha Card: $car Port: $por"
+	lappend pList "$cha $car $por"
+    }
+    
+    if {[ixTransmitIgmpJoin pList $groupId]} {
+	error "startIgmp: ixTransmitIgmpJoin failed."
+    }
+}
+      stc {
+         set globalDeviceList ""
+         foreach txPortId $txPortIdList {
+            set txPortId [hMapPortIdToSpirentPort $txPortId]
+            set deviceList [logcmd stc::get $txPortId -affiliationport-Sources]
+            result_debug "startIgmp/MLD: Device List - $deviceList"
+            set globalDeviceList [concat $globalDeviceList $deviceList]				
+         }
+         if {[llength $globalDeviceList] > 0} {
+            logcmd stc::perform DeviceStartCommand -DeviceList $globalDeviceList
+            foreach dev $globalDeviceList {
+               set igmpHost [logcmd stc::get $dev -children-igmpHostConfig]
+               set netblocks {}
+               set membership [logcmd stc::get $igmpHost -children-igmpgroupmembership]
+            #   foreach membership [logcmd stc::get $igmpHost -children-igmpgroupmembership] {
+            #      lappend netblocks [logcmd stc::get $membership -children-ipv4networkblock]
+            #   }
+               logcmd stc::perform IgmpMldJoinGroupsCommand -blocklist $membership
+            }
+         }
+      }
+   }
+}
+
+################################################################## 
+# Procedure Name: stopIgmp
+#   
+# Description:  start the IGMP protocol server on the ixia
+#              
+# Input args: txPortIdList
+# Output args: none
+# Return value: none
+# Typical usage: 
+#      stopDvmrp {1}
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: SetupTestTool
+##################################################################
+proc stopIgmp {txPortIdList {groupId 101064} } {
+
+    set pList "";
+   global TrafficGen
+   switch -exact -- $TrafficGen {
+      ixia -
+      ixvm {	
+    foreach txPortId $txPortIdList {	
+	MapIxiaPortId $txPortId cha car por;
+	result_debug "StopIgmp - Chas: $cha Card: $car Port: $por";
+	lappend pList "$cha $car $por";
+    }
+
+    if {[ixTransmitIgmpLeave pList $groupId]} {
+	error "stopIgmp: ixTransmitIgmpLeave failed."
+    }
+}
+      stc {
+         
+         set globalDeviceList ""
+         foreach txPortId $txPortIdList {
+            set txPortId [hMapPortIdToSpirentPort $txPortId]
+            set deviceList [logcmd stc::get $txPortId -affiliationport-Sources]
+            result_debug "stopIgmp/MLD: Device List - $deviceList"
+            set globalDeviceList [concat $globalDeviceList $deviceList]				
+         }
+         if {[llength $globalDeviceList] > 0} {
+            foreach dev $globalDeviceList {
+               set igmpHost [logcmd stc::get $dev -children-igmpHostConfig]
+               set netblocks {}
+               foreach membership [logcmd stc::get $igmpHost -children-igmpgroupmembership] {
+                  lappend netblocks [logcmd stc::get $membership -children-ipv4networkblock]
+               }
+               logcmd stc::perform IgmpMldLeaveGroupsCommand -blocklist $netblocks
+            }
+            logcmd stc::perform DeviceStopCommand -DeviceList $globalDeviceList
+         } 
+      }
+   }
+}
+
+################################################################## 
+# Procedure Name: cleanupIgmp
+#   
+# Description:  cleanup the IGMP protocol server on the ixia
+#              
+# Input args: txPortIdList, routerIp
+# Output args: none
+# Return value: none
+# Typical usage: 
+#      cleanupDvmrp {4}
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: SetupTestTool
+##################################################################
+proc cleanupIgmp {txPortIdList} {
+
+   global TrafficGen
+   
+   switch -exact -- $TrafficGen {
+      
+      stc {
+         if { [catch {
+            foreach txPortId $txPortIdList {
+               set txPortId [hMapPortIdToSpirentPort $txPortId]
+               foreach emulatedDevice [logcmd stc::get $txPortId -affiliationport-Sources] {
+                  set ipv4If [logcmd stc::get $emulatedDevice -children-Ipv4If]
+                  if {$ipv4If != ""} {
+                     logcmd stc::delete $emulatedDevice
+                     
+                  }
+               }	
+            }
+            
+         } msg ] } {
+            result_error "cleanupRip : Failed to delete IGMP configuration $msg"
+            return 0
+         }			
+         
+      }
+      
+      ixia -
+      ixvm {
+         
+  foreach txPortId $txPortIdList {    
+    # get the port information
+    MapIxiaPortId $txPortId chas card port;
+    set pl [list [list $chas $card $port]] 
+    result_debug "cleanupIgmp - Chas: $chas Card: $card Port: $port";
+
+    protocolServer 		setDefault      
+    ipAddressTable		clear
+    ipAddressTable		setDefault
+    ipAddressTableItem		setDefault      
+      
+    igmpServer			setDefault
+    igmpAddressTable		clear
+    igmpAddressTable	 	setDefault
+    igmpAddressTableItem 	setDefault      
+      
+    ipAddressTable set $chas $card $port
+    igmpAddressTable set $chas $card $port
+    protocolServer set $chas $card $port
+    igmpServer set $chas $card $port
+    protocolServer write $chas $card $port
+
+    # Send to the hardware 
+    ixWritePortsToHardware pl 
+  }      
+}
+   }
+}
+
+
+##################################################################
+# Procedure Name: setupIgmpServer
+#
+# Description:  setup the IGMP protocol server on the ixia
+#
+# Input args:
+#               -reportMode: igmpReportToOneWhenQueried(0), igmpReportToAllWhenQueried(1),
+#               igmpReportToAllUnsolicited(2)
+# Output args: none
+# Return value: none
+# Typical usage:
+#    setupIgmpPeer -txPortId 1 \
+#               -gatewayIp "61.61.1.1" -ipAddress "61.1.1.10" \
+#               -numIpAddresses "10" -groupIpAddress "224.0.1.100" \
+#               -numGroupIpAddress "20"
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: SetupTestTool
+##################################################################
+proc setupIgmpServer {args} {
+    global TrafficGen
+    parse_args setupIgmpServer $args {
+        gatewayIp "1.1.1.1"
+        ipAddress "1.1.1.2"
+        numIpAddr "1"
+        groupIp "224.0.1.14"
+        numGroupIp "1"
+        txPortId "1"
+        repeatCount "3"
+        reportFrequency "120"
+        reportMode "1"
+        version "2"
+        tag "0"
+    }
+    
+    
+    switch -exact -- $TrafficGen {
+        stc {
+            
+            set error_flag 0
+            set txPortId [hMapPortIdToSpirentPort $txPortId]
+            if {($tag == "none") || !$tag} {
+                array set cmdResults [logcmd stc::perform DeviceCreateCommand -ParentList [logcmd stc::get system1 -children-project] -port $txPortId -IfStack "Ipv4If EthIIIf" -IfCount "1 1"]
+                set deviceHndl $cmdResults(-ReturnList)
+            
+            } else {
+                array set cmdResults [logcmd stc::perform DeviceCreateCommand -ParentList [logcmd stc::get system1 -children-project] -port $txPortId -IfStack "Ipv4If VlanIf EthIIIf" -IfCount "1 1 1"]
+                set deviceHndl $cmdResults(-ReturnList)
+                logcmd stc::config [logcmd stc::get $deviceHndl -children-VlanIf] -VlanId $tag 
+            }
+            logcmd stc::config [logcmd stc::get $deviceHndl -children-Ipv4If] -Address $ipAddress -Gateway $gatewayIp
+            
+            set igmpAttrs "-under $deviceHndl"
+            if {$version == "1"} {
+                append igmpAttrs " -Version IGMP_V1"
+            } elseif {$version == "2"} {
+                append igmpAttrs " -Version IGMP_V2"
+            } elseif {$version == "3"} {
+                append igmpAttrs " -Version IGMP_V3"
+            } else {
+                result_error "setupIgmpServer: IGMP version $version not supported for STC"
+            }
+            
+            set igmpHostConfig [eval "logcmd stc::create IgmpHostConfig [subst $igmpAttrs]"]
+            logcmd stc::config $igmpHostConfig -usesif-Targets [logcmd stc::get $deviceHndl -children-Ipv4If]
+            foreach ip $groupIp {
+                set ipv4Group [logcmd stc::create Ipv4Group -under [logcmd stc::get system1 -children-project]]
+                logcmd stc::config [logcmd stc::get $ipv4Group -children-Ipv4NetworkBlock] -NetworkCount $numGroupIp -StartIpList $ip
+                set igmpGroupMemberShip [logcmd stc::create IgmpGroupMembership -under $igmpHostConfig -FilterMode "EXCLUDE" -subscribedgroups-Targets $ipv4Group]
+                #             if {$reportMode == "1"} {
+                #                set igmpGroupMemberShip [logcmd stc::create IgmpGroupMembership -under $igmpHostConfig -FilterMode "INCLUDE" -subscribedgroups-Targets $ipv4Group]
+                #             } else {
+                #                set igmpGroupMemberShip [logcmd stc::create IgmpGroupMembership -under $igmpHostConfig -FilterMode "EXCLUDE" -subscribedgroups-Targets $ipv4Group]
+                #             }
+            }
+            logcmd stc::apply
+        }
+        ixia -
+        ixvm {
+            
+    set error_flag 0
+
+    MapIxiaPortId $txPortId chas card port
+    result_debug "setupIgmpServer: setting up IGMP server on port $txPortId"
+
+    protocolServer setDefault
+
+    ipAddressTable clear
+    ipAddressTable setDefault
+    ipAddressTableItem setDefault
+    ipAddressTableItem config -fromIpAddress $ipAddress
+    ipAddressTableItem config -numAddresses $numIpAddr
+    if {$tag != 0} {
+           ipAddressTableItem config -enableVlan true
+           ipAddressTableItem config -vlanId $tag
+      }
+    if {[ipAddressTableItem set]} {
+        set error_flag 1
+        result_debug "ERROR: Can't Set IP Addr Table Item"
+    }
+
+    if {[ipAddressTable addItem]} {
+        set error_flag 1
+        result_debug "ERROR: Can't Add IP Address Table Item"
+    }
+    ipAddressTable config -defaultGateway $gatewayIp
+    if {[ipAddressTable set $chas $card $port]} {
+        set error_flag 1
+        result_debug "ERROR: Can't Set IP Address Table"
+    }
+
+    igmpServer setDefault
+    igmpAddressTable clear
+    igmpAddressTableItem setDefault
+    foreach groupAddr $groupIp {
+        igmpAddressTableItem config -fromClientAddress  $ipAddress
+        igmpAddressTableItem config -fromGroupAddress   $groupAddr
+        igmpAddressTableItem config -numClientAddresses $numIpAddr
+        igmpAddressTableItem config -numGroupAddresses  $numGroupIp
+        if {[igmpAddressTableItem set]} {
+            set error_flag 1
+            result_debug "ERROR: Can't Set IGMP Addr Table Item"
+        }
+        if {[igmpAddressTable addItem]} {
+            set error_flag 1
+            result_debug "ERROR: Can't Add IGMP Address Table Item"
+        }
+    }
+    if {[igmpAddressTable set $chas $card $port]} {
+        set error_flag 1
+        result_debug "ERROR: Can't Set IGMP Address Table"
+    }
+
+    protocolServer config -enableIgmpQueryResponse    true
+    protocolServer config -enableArpResponse true
+    if [protocolServer set $chas $card $port] {
+        set error_flag 1
+        result_debug "ERROR: Can't Set Protocol Server"
+    }
+
+    igmpServer config -enableQueryResponse      true
+#   igmpServer config -rate                     $rate
+    igmpServer config -repeatCount              $repeatCount
+    igmpServer config -reportFrequency          $reportFrequency
+    igmpServer config -reportMode               $reportMode
+    igmpServer config -sendRouterAlert          false
+    igmpServer config -version                  $version
+    if {[igmpServer set $chas $card $port]} {
+        set error_flag 1
+        result_debug "ERROR: Can't Set IGMP Server"
+    }
+
+    if {[protocolServer write $chas $card $port]} {
+        result_debug "ERROR: Unable to write protocolServer to h/w"
+        set error_flag 1
+    }
+        }
+    }
+   return $error_flag
+}
+
+
+
+##################################################################
+# Procedure Name: GetIGMPMessage
+#
+# Description:
+#     This proc is used to get the IGMP Messages from a frame received
+#
+# Input args: rawFrame
+# Output args: None.
+# Return value: IGMP Messages in ixia raw frame format
+# Typical usage:
+#     set igmpMsg [GetIGMPMessage $frame]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#     VerifySwitchOutput,VerifyTraffic)
+# Category: CaptureTraffic
+##################################################################
+proc GetIGMPMessage {rawFrame} {
+
+   result_debug "rawFrame = $rawFrame"
+   set rtnMsg ""
+   set type [string range $rawFrame 36 40]
+
+   # if tagged, get rid of type and tag field from 36 to 47
+   if {$type == "81 00"} {
+     set leftRawFrame [string range $rawFrame 0 35]
+     set rightRawFrame [string range $rawFrame 48 [string length $rawFrame]]
+     set rawFrame [format "%s%s" $leftRawFrame $rightRawFrame]
+   }
+
+   set type [string range $rawFrame 36 40]
+   result_debug "the type $type"
+   if { $type == "08 00" } {
+      set IpType [string range $rawFrame 69 70]
+      if { $IpType == "02" } {
+#         result_debug "rawFrame = $rawFrame"
+         set macHdrLen 14
+	 set ipHdrLen [expr ([string range $rawFrame 43 43] * 4)]
+	 set igmpOffset [expr ($macHdrLen + $ipHdrLen) * 3]
+	 set rtnMsg [string range $rawFrame $igmpOffset [string length $rawFrame]]
+      }
+   }
+#   result_debug "igmpMsg: $rtnMsg"
+   return $rtnMsg
+}
+
+
+proc GetIGMPType { igmpMsg } {
+   if {[string length $igmpMsg] == 0} { 
+      return "NOT_IP_IGMP";
+   }
+   set type [string range $igmpMsg 0 1]
+#   set ip_version [string range $igmpMsg 0 0]
+   switch -glob -- $type \
+      "11" {
+         return "IP_IGMPv2_QUERRY";
+   }  "12" {
+         return "IP_IGMPv1_REPORT";
+   }  "16" {
+         return "IP_IGMPv2_REPORT"
+   }  "17" {
+         return "IP_IGMPv2_LEAVE"
+   }  "22" {
+         return "IP_IGMPv3_REPORT"
+   }  default  {
+         result_debug "Unknown Type: IP_IGMP_$type"
+         return "IP_IGMP_$type"
+   }
+}
+
+proc GetIGMPQueryGroup { igmpMsg } {
+   return [GetIPAddressOffset $igmpMsg 12];
+}
+
+proc CheckIGMPV3Query { igmpMsg } {
+       set maxResp [string range $igmpMsg 3 4]
+       set qrv [string range $igmpMsg 25 25]
+       set qqic [string range $igmpMsg 27 28]
+       result_debug "The values of maxResp: $maxResp,qrv: $qrv,qqic: $qqic"
+       if { ($maxResp == "64") && ($qrv == "2") && ($qqic == "7D")} {
+           report_start_test "Valid IGMPV3 packet received"          
+           result_ok "IGMPv3 general Querry with valid QRV: $qrv, QQIC: $qqic \
+                      and max response time: $maxResp received"
+           report_end_test
+           return "VALID_IGMPV3_QUERY"
+
+       }
+   return "INVALID_IGMPV3_QUERY"
+}
+##################################################################
+# Procedure Name: sendIgmpv3BadReport
+#
+# Description:
+#     This proc is used to send Bad IGMPv3 Reports
+#
+#     Note!! This used to be the original proc for sending v3 reports
+#            but the ip header link was wrong and this started causing
+#            problems.
+#
+# Input args: args
+# Output args: None.
+# Return value: Send IGMPv3 Messages
+# Typical usage:
+#     sendIgmpv3BadReport -txPortId $host7 -hostIp $host7ip \
+#                 -srcIpAddr "$srcIp4" -groupAddr $grpAddr1 \
+#                 -reportType "15" -igmpMsgType "33"
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#     VerifySwitchOutput,VerifyTraffic)
+# Category: Traffic
+##################################################################
+proc sendIgmpv3BadReport {args} {
+   parse_args sendIgmpv3BadReport $args {
+   igmpMsgType "34"
+   reportType "1"
+   hostIp "137.1.1.1"
+   srcIpAddr "137.1.1.1"
+   groupAddr "232.1.1.1"
+   txPortId  "1"
+   numSource "1"
+   numGroup "1"
+   streamType "stopStream"
+  } 
+
+set type 0
+set val3 "{00 00 00 00}"
+set val4 "{00 00 00 00}"
+set val5 "{00 00 00 00}"
+
+set type $reportType
+set multicastIP 224.0.0.22
+set destMacMulticast [GetMulticastMac $multicastIP]
+result_debug "Host Address: $hostIp source address: $val5 Group Address: $val4"
+
+set dataPattern "0$type 00 00 0$numSource"
+result_debug "dataPattern $dataPattern"
+set udf "true"
+set val1 "{22 00}"
+set val2 "{00 00 00 01}"
+set val3 "{[snmpConvertIpAddrFormat $groupAddr]}"
+
+if {$numSource ==0 } {
+   set udfOffset  "34 38 46"
+   set udfInitval "$val1 $val2 $val3"
+   set udfCounterType "c16 c32 c32"
+   set udfContinuousCount "false false false"
+} else {
+   set srcIpAddr1 [lindex $srcIpAddr 0]
+   set srcIpAddr2 [lindex $srcIpAddr 1] 
+   if {$srcIpAddr2 == ""} { set srcIpAddr2 "0.0.0.0" }
+   
+   result_debug "source1 $srcIpAddr1"
+   result_debug "source2 $srcIpAddr2"
+
+   set val4 "{[snmpConvertIpAddrFormat $srcIpAddr1]}"
+   set val5 "{[snmpConvertIpAddrFormat $srcIpAddr2]}"
+   set udfOffset  "34 38 46 50 54"
+   set udfInitval "$val1 $val2 $val3 $val4 $val5"
+   set udfCounterType "c16 c32 c32 c32 c32"
+   set udfContinuousCount "false false false false false"
+}
+
+result_debug "Send an IGMPv3 report of type $type for source $srcIpAddr and \
+              group $groupAddr"
+
+set frameSent [SendIpFrame -txPortId $txPortId -protocol "igmp" -destIp $multicastIP -destMac $destMacMulticast -groupAddr $groupAddr -sourceIp $hostIp -streamType "$streamType" -frameRate 1 -udfEnable $udf -udfInitval $udfInitval -udfOffset $udfOffset -udfCountertype $udfCounterType -udfContinuousCount $udfContinuousCount -dataPattern $dataPattern]
+
+
+result_debug "IGMPSent: $frameSent"
+return $frameSent
+}
+##################################################################
+# Procedure Name: sendIgmpv3Report
+#
+# Description:
+#     This proc is used to send IGMPv3 Reports
+#
+# Input args: args
+# Output args: None.
+# Return value: Send IGMPv3 Reports
+# Typical usage:
+#     sendIgmpv3BadReport -txPortId $host8 -hostIp $host8ip \
+#                  -srcIpAddr "$srcIp2" -groupAddr $grpAddr1
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#     VerifySwitchOutput,VerifyTraffic)
+# Category: Traffic
+##################################################################
+proc sendIgmpv3Report {args} {
+   parse_args sendIgmpv3Report $args {
+     txPortId "1"
+     sourceMac "00 A1 F1 00 00 01"
+     destMac "01 00 5E 00 00 16"
+     hostIp "127.0.0.1"
+     destIp "224.0.0.22"
+     streamType "stopStream"
+     numFrames "1"
+     tag "none"
+     tagMode "vIdle"
+     tagRepeat "1"
+     percentage "1"
+     saMode "idle"
+     daMode "idle"
+     ipSaMode "ipIdle"
+     ipDaMode "ipIdle"
+     reportType "1"
+     groupAddr "224.0.0.22"
+     srcIpAddr "{}"
+     igmpType  "report"
+     maxResponseTime "100"
+     qqic "127"
+     qrv  "0"
+     numSource "1"
+     numGroup "1"
+     fpsRate 0
+   }
+   global TrafficGen
+   switch -exact -- $TrafficGen {
+      
+      stc {
+puts "IN STC CASES FOR IGMPv3"
+         array set aSettings $args
+         set outin [parray aSettings]
+         result_debug "$outin"           
+         
+         #Stop generator before making changes.
+         StopPortsTransmit $txPortId
+         
+         # Delete all existing streamblocks.
+         set lsthStreamblocks [logcmd stc::get project1 -children-StreamBlock]
+         foreach hStreamblock $lsthStreamblocks {
+            logcmd stc::delete $hStreamblock
+         }
+         set lsthPorts [logcmd stc::get project1 -children-port]
+         foreach hPort $lsthPorts {
+            set lsthStreamblocks [logcmd stc::get $hPort -children-StreamBlock]
+            foreach hStreamblock $lsthStreamblocks {
+               logcmd stc::delete $hStreamblock
+            }
+         }
+         logcmd stc::apply
+         
+         # Retrieve the Spirent port handle.
+         set hPort [hMapPortIdToSpirentPort $txPortId]
+         
+         # Create the streamblock.
+         puts "Configuring stream block ..."
+         if {![info exists frameSize]} {
+            set frameSize 128
+         }
+         
+         set hStreamBlock [logcmd stc::create streamBlock -under $hPort -insertSig false \
+				  -frameConfig "" -frameLengthMode AUTO]
+         
+         # Add an EthernetII Protocol Data Unit (PDU).
+         puts "Adding Ethernet header"
+         if {![info exists sourceMac]} {
+            #set sourceMac 00:00:20:00:00:00
+            set sourceMac [GetDefaultPortIdMAC -portId $txPortId]
+         }
+         
+         set destIpList [split $destIp .]
+         #set macAddr "01:00:5e:[format %02x [expr [lindex $destIpList 1] >> 1]]:[lindex $destIpList 2]:[lindex $destIpList 3]"
+         set macAddr "01:00:5e:[format %02x [expr [lindex $destIpList 1] >> 1]]:[lindex $destIpList 2]:16"
+         set destMac $macAddr
+         
+         set hEthernet [logcmd stc::create ethernet:EthernetII -under $hStreamBlock -name sb1_eth \
+                           -srcMac $sourceMac \
+                           -dstMac $destMac]
+         
+         # Add an IP Protocol Data Unit (PDU).
+         puts "Adding IP header"
+         if {![info exists sourceIp]} {
+            set sourceIp 192.85.1.2
+         }
+         if {![info exists destIp]} {
+            set destIp 225.0.0.1
+         }
+         
+         
+       #  set hIpv4 [logcmd stc::create ipv4:IPv4 -under $hStreamBlock -name sb1_ip \
+       #                -sourceAddr $sourceIp -destAddr $destIp]
+
+
+         set hIpv4 [logcmd stc::create ipv4:IPv4 -under $hStreamBlock -name sb1_ip \
+                       -sourceAddr $hostIp -destAddr $destIp -ttl 1 -protocol 2]
+         
+       
+       #  set options [logcmd stc::create options -under $hIpv4]
+       #  set ipv4HeaderOption1 [logcmd stc::create IPv4HeaderOption -under $options]
+       #  logcmd stc::create rtrAlert -under $ipv4HeaderOption1
+       #  set ipv4HeaderOption2 [logcmd stc::create IPv4HeaderOption -under $options]
+       #  logcmd stc::create endOfOptlist -under $ipv4HeaderOption2
+         
+         switch -exact -- $igmpType {
+            
+            "query" {
+               # IGMPv2 Query
+               puts "STC In type query"
+               set hIgmp [logcmd stc::create igmp:Igmpv3Query -under $hStreamBlock -groupAddress $groupAddr -maxRespTime $maxResponseTime -qqic $qqic -qrv $qrv]
+               if {[llength $srcIpAddr] > 0} {
+                  set addrList [logcmd stc::create addrList -under $Igmp]
+                  for {set i 0} {$i < [llength $srcIpAddr]} {incr i} {
+                     logcmd stc::create Ipv4Addr -under $addrList -value [lindex $srcIpAddr $i]
+                  }
+               }
+            }
+            
+            "report" {
+               # IGMPv3 Report
+               puts "STC In type report"
+               set hIgmp [logcmd stc::create igmp:Igmpv3Report -under $hStreamBlock -numGrpRecords 1 -type 22]
+               
+               set grpRecordsObj [logcmd stc::create grpRecords -under $hIgmp]
+               for {set i 0} {$i < $numGroup} {incr i} {
+                  set grpRecord [logcmd stc::create GroupRecord -under $grpRecordsObj -mcastAddr $groupAddr -recordType 1 -numSource [llength $srcIpAddr]]
+                  if {[llength $srcIpAddr] > 0} {
+                     set addrList [logcmd stc::create addrList -under $grpRecord]
+                     for {set k 0} {$k < [llength $srcIpAddr]} {incr k} {
+                        logcmd stc::create Ipv4Addr -under $addrList -value [lindex $srcIpAddr $k]
+                     }
+                  }
+                  
+               }
+               
+            }
+            default {
+                puts "STC missed all types"
+            }            
+         }			
+         
+         if {[info exists $ipDaMode]} {
+            set aSpirentMode(ipIncrHost) INCR
+            
+            # Use modifier to generate multiple streams.
+            puts "\nCreating Modifier on Stream Block"
+            set hRangeModifer1 [logcmd stc::create RangeModifier \
+                                   -under $hStreamBlock \
+                                   -ModifierMode $aSpirentMode($ipDaMode) \
+                                   -Mask 255.255.255.255 \
+                                   -StepValue 0.0.0.1 \
+                                   -Data $destIp \
+                                   -RecycleCount $ipDaCount \
+                                   -RepeatCount 0 \
+                                   -DataType NATIVE \
+                                   -EnableStream false \
+                                   -OffsetReference "sb1_ip.destAddr"]
+         }
+         
+         if {![info exists numFrames]} {
+            set numFrames 100
+         }
+         
+         if {![info exists tag] || ($tag == "none")} {
+            set tag 0
+         }
+         
+         if {($tag)} {
+            # Add a Vlan container object.
+            set hVlanContainer [logcmd stc::create vlans -under $hEthernet]
+            
+            # Add a Vlan header to the container object.  
+            # This is required since there can be multiple VLANs 
+            # as in Q-in-Q.  
+            logcmd stc::create Vlan -under $hVlanContainer -pri 000 -cfi 0 -id $tag
+         }
+         
+         # Configure generator
+         puts "Configuring Generator"
+         
+         
+         
+         if {(![info exists streamType])} {
+            set szDurationMode BURSTS
+            set streamType "stopStream"
+         } elseif {($streamType == "stopStream")} {
+            set szDurationMode BURSTS
+         } else {
+            set aDurationMode(contPacket) CONTINUOUS
+            set szDurationMode $aDurationMode($streamType)
+         }
+         
+         
+         if {$fpsRate} {				
+            set szLoadUnit FRAMES_PER_SECOND
+            set szLoad $fpsRate
+         } else {
+            set szLoadUnit PERCENT_LINE_RATE
+            set szLoad $percentage
+         }
+         
+         set hGeneratorConfig [logcmd stc::config $hPort.Generator.GeneratorConfig \
+                                  -DurationMode $szDurationMode -BurstSize 1 \
+                                  -Duration $numFrames -LoadMode FIXED \
+                                  -FixedLoad $szLoad -LoadUnit $szLoadUnit]
+         
+         # Apply changes.
+         logcmd stc::apply
+         
+         StartPortsTransmit $txPortId
+         
+         
+         
+         #set szFrameContents [GetFrameContentsFromStreamblock $hStreamBlock]
+         logcmd stc::perform GetPreviewData -StreamBlock $hStreamBlock
+         set szFrameContents [logcmd stc::get [logcmd stc::get $hStreamBlock -children-PreviewData] -HexData]
+         puts "test packet view: [getFrameContents $hStreamBlock igmp]"
+         result_debug "igmpv3: $szFrameContents"
+         return $szFrameContents
+      }
+      ixia -
+      ixvm {
+         
+   if {$tag == "none"} {
+       set tagged "false"
+   } else {
+       set tagged "true"
+   }
+   createStreams -portn $txPortId -startId 1 -endId 1 -name S1 -type "ipv4_igmp" -writeToHw 0
+   set optionsList ""
+   lappend optionsList "enable802dot1qTag $tagged"
+   setStreamOptions -portn $txPortId -startId 1 -endId 1 -type "protocol" \
+         -optionVal $optionsList -writeToHw 0
+
+   if {$tagged == "true"} {
+       set optionsList ""
+       lappend optionsList "vlanID $tag"
+       lappend optionsList "mode $tagMode"
+       lappend optionsList "repeat $tagRepeat"
+       lappend optionsList "step 1"
+       setStreamOptions -portn $txPortId -startId 1 -endId 1 -type "vlan" \
+             -optionVal $optionsList -writeToHw 0
+   }
+   set optionsList ""
+   lappend optionsList "sa \"$sourceMac\""
+   lappend optionsList "frameType \"81 00\""
+   lappend optionsList "enable true"
+   if $fpsRate {
+   lappend optionsList "fpsRate $fpsRate"
+   lappend optionsList "rateMode streamRateModeFps"
+   } else {
+   lappend optionsList "rateMode usePercentRate"
+   lappend optionsList "percentPacketRate $percentage"
+   }
+   lappend optionsList "da \"$destMac\""
+   lappend optionsList "dma $streamType"
+   lappend optionsList "dataPattern 1"
+   lappend optionsList "numFrames $numFrames"
+   setStreamOptions -portn $txPortId -startId 1 -endId 1 -type "stream" \
+         -optionVal $optionsList -writeToHw 0
+
+   set optionsList ""
+   lappend optionsList "sourceIpAddr \"$hostIp\""
+   lappend optionsList "sourceIpAddrMode $ipSaMode"
+   lappend optionsList "sourceIpAddrRepeatCount $numFrames"
+   lappend optionsList "destIpAddr \"$destIp\""
+   lappend optionsList "destIpAddrMode $ipDaMode"
+   lappend optionsList "destIpAddrRepeatCount $numFrames"
+   lappend optionsList "ttl 1"
+#   lappend optionsList "options 94040000"
+   lappend optionsList "qosMode 1"
+   lappend optionsList "dscpMode 0"
+#   lappend optionsList "dscpValue C0"
+#   lappend optionsList "fragment 1"
+   setStreamOptions -portn $txPortId -startId 1 -endId 1 -type "ip" \
+         -optionVal $optionsList -writeToHw 0
+
+   if {$igmpType == "query"} {
+       set sFlag "true"
+       set igmpType "membershipQuery"
+   } else {
+       set sFlag "false"
+       set igmpType "membershipReport3"
+   }
+   
+   set optionsList ""
+   lappend optionsList "type $igmpType"
+   lappend optionsList "version igmpVersion3"
+   lappend optionsList "qqic $qqic"
+   lappend optionsList "qrv  $qrv"
+   lappend optionsList "maxResponseTime $maxResponseTime"
+   lappend optionsList "igmpGroupRecordtype $reportType"
+   lappend optionsList "igmpGroupmulticastAddress $groupAddr"
+   lappend optionsList "igmpGroupsourceIpAddressList {\"$srcIpAddr\"}"
+   setStreamOptions -portn $txPortId -startId 1 -endId 1 -type "igmp" \
+         -optionVal $optionsList -writeToHw 0
+   
+   WriteStreamsToHw $txPortId
+   exSleep 2
+
+   displayIGMPv3PacketFormat  -txPortId "$txPortId" \
+     -sourceMac "$sourceMac" \
+     -destMac "$destMac" \
+     -hostIp "$hostIp" \
+     -destIp "$destIp" \
+     -streamType "$streamType" \
+     -numFrames "$numFrames" \
+     -tag "$tag" \
+     -tagMode "$tagMode" \
+     -tagRepeat "$tagRepeat" \
+     -percentage "$percentage" \
+     -saMode "$saMode" \
+     -daMode "$daMode" \
+     -ipSaMode "$ipSaMode" \
+     -ipDaMode "$ipDaMode" \
+     -reportType "$reportType" \
+     -groupAddr "$groupAddr" \
+     -srcIpAddr "{$srcIpAddr}" \
+     -igmpType  "$igmpType" \
+     -maxResponseTime "$maxResponseTime" \
+     -qqic "$qqic" \
+     -qrv  "$qrv"
+
+   MapIxiaPortId $txPortId ixChassis ixCard ixPort
+   set streamSent [stream cget -packetView]
+   result_debug "$streamSent"
+
+   StartPortsTransmit $txPortId
+      }
+   }  
+}

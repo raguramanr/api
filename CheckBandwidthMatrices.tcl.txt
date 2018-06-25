@@ -1,0 +1,3968 @@
+
+################################################################## 
+# Procedure Name: CheckBandwidthMatrix   
+# Description:  Verify the effects of QOS based on qos profiles matrix
+#		in QOS test plan or user-specified ones
+# Input args: args
+# Output args: none
+# Return value: none
+# Typical usage: 
+# 	SendACmd "create access-list permitList1 ip dest any source 192.10.1.0/24 deny ports any"
+#	SendACmd "create access-list permitList2 ip dest any source 192.10.2.0/24 deny ports any"
+#	SendACmd "create access-list permitList3 ip dest any source 192.10.3.0/24 permit QP3 ports any"
+#	SendACmd "create access-list permitList4 ip dest any source 192.10.4.0/24 deny ports any"
+#	CheckBandwidthMatrix -checkMatrix 8 -filePt $fd_res -testFileName $testNo     
+# Category: VerifyTraffic
+##################################################################
+proc CheckBandwidthMatrix {args} {
+   parse_args CheckBandwidthMatrix $args {
+     numIxiaCd "3"
+     protocol "ip"
+     srcMacAddrTxList "srcMac"
+     destMacAddrTxList "DUTMac"
+     sIpAddrList "192.10.1.2 192.10.2.2 192.10.3.2 192.10.4.2"
+     dIpAddrList "192.20.1.2 192.20.2.2 192.20.3.2 192.20.4.2"
+     sPortList "0 0 0 0"
+     dPortList "0 0 0 0"
+     TOSList "0x00 0x00 0x00 0x00"
+     QPList "1 2 3 4"
+     priList "0 1 2 3"
+     tagList "none none none none"
+     checkQosList ""
+     ratioExpectList "25.00 25.00 25.00 25.00"
+     ratioThreshold "18"
+     ratioAggregateThreshold "2.5"
+     checkMatrix "1-7"
+     userMatrix "none"
+     qosType "802.1p"
+     filePt "NULL"
+     testFileName "Temp"
+     initRateCheck "1"
+   }
+
+global startCardNum
+global DUTs_info
+global PortID_Info
+set percent_tolerance [expr double($ratioThreshold) / double(100)]
+# Check for 10Gig platform, call different checkBwMatrix specifically
+global DUTs_Slot_info
+set 10GigSlot 0
+#for {set i 1} {$i<=$DUTs_info(DUT1,numSlots)} {incr i} {
+#   if {[regexp -nocase "10Gig" $DUTs_Slot_info(DUT1,slot$i,hwModType)]} {
+#      set 10GigSlot 1
+#      break
+#   }
+#}
+
+if {$10GigSlot} {
+   # Call 10Gig qos routine
+   if {$ratioAggregateThreshold==2.5} {
+      set ratioAggregateThreshold 14
+   }
+   if {[regexp -nocase "25.00 25.00 25.00 25.00" $ratioExpectList]} {
+      set ratioExpectList "100.00 100.00 100.00 100.00"
+   }
+   return [CheckBandwidthMatrix10Gig -numIxiaCd $numIxiaCd -protocol $protocol -srcMacAddrTxList $srcMacAddrTxList -destMacAddrTxList $destMacAddrTxList \
+   -sIpAddrList $sIpAddrList -dIpAddrList $dIpAddrList -sPortList $sPortList -dPortList $dPortList -TOSList $TOSList \
+   -QPList $QPList -tagList $tagList -checkQosList $checkQosList \
+    -ratioExpectList $ratioExpectList -ratioThreshold $ratioThreshold \
+    -ratioAggregateThreshold $ratioAggregateThreshold -checkMatrix $checkMatrix \
+    -qosType $qosType -filePt $filePt -testFileName $testFileName]
+}
+
+set pPattern "5678"
+if {$protocol == "multicast"} {
+   set joinGroup 22
+   set portList {1 2 3 4}
+   foreach portId $portList {
+      set portIdTx [expr $portId + 8]
+      set multicastIP 22[expr $portId + 4].1.2.3
+      set destMacMulticast "01 00 5E 01 02 03" 
+      set clientIP1 192.20.$portId.2
+      #send an join multicast group igmp packet
+      result_debug "$clientIP1 joins multicast group $multicastIP"
+      set rxPort [MapIxiaPortId $portIdTx chasis card port]
+      set frameSent [ixiaConf_2Ports_ip	-txChas $chasis -txCard $card  -txPort $port \
+                       -rxChas $chasis -rxCard $card  -rxPort $rxPort  \
+                       -ipProtocol "igmp" -type $joinGroup -ttl 1      \
+                       -percentage $PortID_Info($portId,normTxPerc) \
+                       -startCardNum $startCardNum  -dMacAddr $destMacMulticast \
+                       -sIpAddr  $clientIP1  -dIpAddr $multicastIP -groupAddr $multicastIP ]
+   }
+
+   set ipProtocol "udp"
+   set destMacAddrTxList {01:00:5E:01:02:03 01:00:5E:01:02:03 01:00:5E:01:02:03 01:00:5E:01:02:03}
+   #send join
+} else {
+   set ipProtocol $protocol
+}
+set QPa "QP[lindex $QPList 0]"
+set QPb "QP[lindex $QPList 1]"
+set QPc "QP[lindex $QPList 2]"
+set QPd "QP[lindex $QPList 3]"
+set Qa [expr [lindex $QPList 0] - 1]
+set Qb [expr [lindex $QPList 1] - 1]
+set Qc [expr [lindex $QPList 2] - 1]
+set Qd [expr [lindex $QPList 3] - 1]
+
+if {$checkMatrix == 8} {
+   ################################################
+   set subTest "Checking Matrix 8 Bandwidth criteria using $QPa, $QPb, $QPc, $QPd"
+   ################################################
+   result_h2 "$subTest"
+   report_start_test "$subTest"        
+   #Test Matrix 8
+   SendACmd	"config qosprofile $QPa minbw 10 maxbw 100 priority Low port all"
+   SendACmd	"config qosprofile $QPb minbw 10 maxbw 100 priority Normal port all"
+   SendACmd	"config qosprofile $QPc minbw 10 maxbw 100 priority Medium port all"
+   SendACmd	"config qosprofile $QPd minbw 10 maxbw 100 priority High port all"
+} elseif {$checkMatrix == "1-7"} {
+   ################################################
+   set subTest "Checking Matrix 1 Bandwidth criteria"
+   ################################################
+   result_h2 "$subTest"
+   report_start_test "$subTest"
+   
+   global DUT1_CONNECT
+   Login $DUT1_CONNECT -fd $filePt
+   SendACmd	"config qosprofile $QPa minbw 0 maxbw 100 priority Low port all"
+   SendACmd	"config qosprofile $QPb minbw 0 maxbw 100 priority LowHi port all"
+   SendACmd	"config qosprofile $QPc minbw 0 maxbw 100 priority Medium port all"
+   SendACmd	"config qosprofile $QPd minbw 0 maxbw 100 priority MediumHi port all"
+}
+
+   set portIdTxList {1 2 3 4}
+   set portIdRxList {9 10 11 12}
+   foreach portIdTx $portIdTxList {
+      MapIxiaPortId $portIdTx txChas txCard txPort
+      set portIdRx [expr $portIdTx + 8]
+      MapIxiaPortId $portIdRx rxChas rxCard rxPort   
+      set sIpAddr [lindex $sIpAddrList [expr $portIdTx - 1] ]
+      set dIpAddr [lindex $dIpAddrList [expr $portIdTx - 1] ]
+      set sPort [lindex $sPortList [expr $portIdTx - 1] ]
+      set dPort [lindex $dPortList [expr $portIdTx - 1] ]
+      set TOS [lindex $TOSList [expr $portIdTx - 1] ]
+      set tag [lindex $tagList [expr $portIdTx - 1] ]
+      set wTag "true"
+      if { $tag == "none" } { set wTag "false" }
+      set priority [lindex $priList [expr $portIdTx - 1] ]
+      if {$destMacAddrTxList == "DUTMac"} {
+         set destMacAddrTx $DUTs_info(DUT1,sysMAC)
+      } else {
+         set destMacAddrTx [lindex $destMacAddrTxList [expr $portIdTx - 1] ]
+      }
+      if {![regexp -nocase "10.2" $qosType] && $checkMatrix!=8} {
+         global DUT1_CONNECT
+#         Login $DUT1_CONNECT
+#         SendACmd "ping $dIpAddr"
+      } else {
+         set frameSent [ixiaConf_2Ports_ip -txChas $txChas -txCard $txCard -txPort $txPort \
+                          -rxChas $rxChas -rxCard $rxCard -rxPort $rxPort  \
+                          -startCardNum $startCardNum -dataPattern $pPattern \
+                          -TOS $TOS -numFrames 4 \
+                          -percentage $PortID_Info($portIdTx,normTxPerc) \
+                          -ipProtocol $ipProtocol -pDstPort $dPort -pSrcPort $sPort \
+                          -dMacAddr $destMacAddrTx  -sIpAddr $sIpAddr  -dIpAddr $dIpAddr \
+                          -wTag $wTag -tagNo $tag -userPriority $priority ]
+      }
+   }
+   foreach portIdTx $portIdTxList {
+      MapIxiaPortId $portIdTx txChas txCard txPort
+      set portIdRx [expr $portIdTx + 8]
+      MapIxiaPortId $portIdRx rxChas rxCard rxPort   
+      set sIpAddr [lindex $sIpAddrList [expr $portIdTx - 1] ]
+      set dIpAddr [lindex $dIpAddrList [expr $portIdTx - 1] ]
+      set sPort [lindex $sPortList [expr $portIdTx - 1] ]
+      set dPort [lindex $dPortList [expr $portIdTx - 1] ]
+      set TOS [lindex $TOSList [expr $portIdTx - 1] ]
+      set tag [lindex $tagList [expr $portIdTx - 1] ]
+      set wTag "true"
+      if { $tag == "none" } { set wTag "false" }
+      set priority [lindex $priList [expr $portIdTx - 1] ]
+      if {$destMacAddrTxList == "DUTMac"} {
+         set destMacAddrTx $DUTs_info(DUT1,sysMAC)
+      } else {
+         set destMacAddrTx [lindex $destMacAddrTxList [expr $portIdTx - 1] ]
+      }
+
+      set frameSent [ixiaConf_2Ports_ip	-txChas $txChas -txCard $txCard -txPort $txPort \
+                       -rxChas $rxChas -rxCard $rxCard -rxPort $rxPort  \
+                       -startCardNum $startCardNum -dataPattern $pPattern \
+                       -streamType "contPacket" -percentage $PortID_Info($portIdTx,normTxPerc) \
+                       -TOS $TOS -frameSizeType "sizeRandom" \
+                       -ipProtocol $ipProtocol -pDstPort $dPort -pSrcPort $sPort \
+                       -dMacAddr $destMacAddrTx  -sIpAddr $sIpAddr  -dIpAddr $dIpAddr \
+                       -wTag $wTag -tagNo $tag -userPriority $priority ]
+      #wait for things to settle down
+      if {$initRateCheck} {
+         exSleep 6
+         set portIdList {1 2 3 4 9 10 11 12}
+         foreach portId $portIdList {
+            
+            MapIxiaPortId $portId chasisId card port
+            stat getRate statAllStats $chasisId $card $port
+            set rateSent [stat cget -bytesSent]
+            set rateRecv [stat cget -bytesReceived]
+            set rateArray($portId,sent) $rateSent.00
+            set rateArray($portId,recv) $rateRecv.00
+         
+            result_debug "Rate on port $portId Sent: $rateSent Recv: $rateRecv"
+         }
+         if {$checkMatrix == 8} {
+         
+         } elseif {$checkMatrix == "1-7"} {
+            set ratioFound [format %.2f [expr $rateArray($portIdRx,recv)*100/($rateArray($portIdTx,sent)+1)]]
+            set ratioExpect 100
+            if {[expr abs($ratioFound - $ratioExpect)] > $ratioThreshold } {
+               result_error "Matrix 1 failed rate ratio threshold test on port $portIdRx. Got $ratioFound EXPECT $ratioExpect +/- $ratioThreshold"
+            } else {
+               result_ok "Matrix 1 pass rate ratio threshold test on port $portIdRx. Got $ratioFound AS EXPECT $ratioExpect +/- $ratioThreshold"
+            }
+         }         
+      }
+
+   }
+   if {$checkMatrix == 8} { 
+      set portIdList {1 2 3 4 9 10 11 12}
+ 
+      set ratioExpectArray(9) 0
+      set ratioExpectArray(10) 0
+      set ratioExpectArray(11) 100
+      set ratioExpectArray(12) 0
+      set ratioExpect [expr $ratioExpectArray(9)+$ratioExpectArray(10)+$ratioExpectArray(11)+$ratioExpectArray(12)]
+      lappend checkRateList {"negTest" "1  0"}
+      lappend checkRateList {"negTest" "2  0"}
+      lappend checkRateList {"negTest" "3  0"}
+      lappend checkRateList {"negTest" "4  0"}
+      foreach portId $portIdRxList {
+         set portIdTx [expr $portId - 8]
+         set t [expr $portIdTx - 1];
+         set tag [lindex $tagList $t]
+         if { $tag == "none" } { set $tag "" }
+         lappend checkRateList "{$portIdTx 100} {$portId $ratioExpectArray($portId)} $tag"         
+      }
+      result_debug "$checkRateList"
+      CheckRatesTxRx $checkRateList "Check for Matrix 8 Rates based on QP Assignment" \
+                     $percent_tolerance SumRx $ratioExpect
+      unset checkRateList
+      report_end_test
+      SendACmd "clear counter"
+
+      #check Q
+      #lappend checkQosList "0 1000 minPacket" ;#not testing this, unpredictable for now
+      lappend checkQosList "$Qb 10 maxPacket"
+      lappend checkQosList "$Qc 1000 minPacket"
+      lappend checkQosList "$Qd 10 maxPacket"
+      CheckQoSMonitor [GetATrunkPort 1 2 1] $checkQosList $filePt $testFileName
+      unset checkQosList
+   } elseif {$checkMatrix == "1-7"} {
+      set ratioExpectArray(9) 0
+      set ratioExpectArray(10) 0
+      set ratioExpectArray(11) 0
+      set ratioExpectArray(12) 100
+      set ratioExpect [expr $ratioExpectArray(9)+$ratioExpectArray(10)+$ratioExpectArray(11)+$ratioExpectArray(12)]
+      lappend checkRateList {"negTest" "1  0"}
+      lappend checkRateList {"negTest" "2  0"}
+      lappend checkRateList {"negTest" "3  0"}
+      lappend checkRateList {"negTest" "4  0"}
+      foreach portId $portIdRxList {
+         set portIdTx [expr $portId - 8]
+         set t [expr $portIdTx - 1];
+         set tag [lindex $tagList $t]
+         if { $tag == "none" } { set $tag "" }
+         lappend checkRateList "{$portIdTx 100} {$portId $ratioExpectArray($portId)} $tag"         
+      }
+      result_debug "$checkRateList"
+      CheckRatesTxRx $checkRateList "Check for Matrix 1 Rates based on QP Assignment" \
+                     $percent_tolerance SumRx $ratioExpect
+      unset checkRateList
+      report_end_test
+      SendACmd "clear counter"
+      exSleep 1
+      #check Q
+      # Matrix1 has qosmonitor problems when leaking to Q2.
+      lappend checkQosList "$Qa 10 maxPacket"
+      lappend checkQosList "$Qb 10 maxPacket"
+      lappend checkQosList "$Qc 3000 maxPacket"
+      lappend checkQosList "$Qd 3000 minPacket"
+      CheckQoSMonitor [GetATrunkPort 1 2 1] $checkQosList $filePt $testFileName 
+      unset checkQosList  
+
+      SendACmd	"config qosprofile $QPa minbw 0 maxbw 100 priority Low port all"
+      SendACmd	"config qosprofile $QPb minbw 0 maxbw 100 priority LowHi port all"
+      SendACmd	"config qosprofile $QPc minbw 0 maxbw 100 priority Normal port all"
+      SendACmd	"config qosprofile $QPd minbw 0 maxbw 100 priority NormalHi port all"
+      set priList "0 2 4 6"
+      if {$qosType=="diffserv"} {
+         set TOSList "0x00 0x40 0x80 0xc0"
+      } elseif {$qosType=="diffservCodePoint"} {
+         SendACmd "unconfig diffserv examination"      
+         SendACmd "config diffserv examination code-point 8 qosprofile QP7"
+         SendACmd "config diffserv examination code-point 25 qosprofile QP3"
+         set TOSList "0x00 0x64 0x80 0x20"
+      }
+      configMatrix -priList $priList -portIdTxList $portIdTxList -qosType $qosType -sIpAddrList $sIpAddrList -dIpAddrList $dIpAddrList \
+                   -sPortList $sPortList -dPortList $dPortList -TOSList $TOSList -tagList $tagList -destMacAddrTxList $destMacAddrTxList \
+                   -ipProtocol $ipProtocol
+
+   ################################################
+   set subTest "Checking Matrix 2 Bandwidth criteria using QP1, QP3, QP5, QP7"
+   ################################################
+   result_h2 "$subTest"
+   report_start_test "$subTest"
+   #Test Matrix 2
+   SendACmd	"config qosprofile qp1 minbw 10 maxbw 100 priority Low port all"
+   SendACmd	"config qosprofile qp3 minbw 10 maxbw 100 priority Normal port all"
+   SendACmd	"config qosprofile qp5 minbw 10 maxbw 100 priority Medium port all"
+   SendACmd	"config qosprofile qp7 minbw 10 maxbw 100 priority High port all"
+
+      #wait for things to settle down
+      exSleep 2
+      set portIdList {1 2 3 4 9 10 11 12}
+      set ratioExpectArray(9) 10.00
+      set ratioExpectArray(10) 10.00
+      set ratioExpectArray(11) 10.00
+      set ratioExpectArray(12) 70.00
+      set ratioExpect [expr $ratioExpectArray(9)+$ratioExpectArray(10)+$ratioExpectArray(11)+$ratioExpectArray(12)]
+      lappend checkRateList {"negTest" "1  0"}
+      lappend checkRateList {"negTest" "2  0"}
+      lappend checkRateList {"negTest" "3  0"}
+      lappend checkRateList {"negTest" "4  0"}
+      foreach portId $portIdRxList {
+         set portIdTx [expr $portId - 8]
+         set t [expr $portIdTx - 1];
+         set tag [lindex $tagList $t]
+         if { $tag == "none" } { set $tag "" }
+         lappend checkRateList "{$portIdTx 100} {$portId $ratioExpectArray($portId)} $tag"         
+      }
+      result_debug "$checkRateList"
+      CheckRatesTxRx $checkRateList "Check for Matrix 2 Rates based on QP Assignment" \
+                     $percent_tolerance SumRx $ratioExpect
+      unset checkRateList
+      
+      report_end_test
+      SendACmd "clear counter"
+      #check Q
+      lappend checkQosList "0 100 minPacket"
+      lappend checkQosList "2 100 minPacket"
+      lappend checkQosList "4 100 minPacket"
+      lappend checkQosList "6 700 minPacket"
+      CheckQoSMonitor [GetATrunkPort 1 2 1] $checkQosList $filePt $testFileName
+      unset checkQosList
+
+      #restore to default
+      SendACmd	"config qosprofile QP1 minbw 0 maxbw 100 priority Low port all"
+      SendACmd	"config qosprofile QP3 minbw 0 maxbw 100 priority Normal port all"
+      SendACmd	"config qosprofile QP5 minbw 0 maxbw 100 priority Medium port all"
+      SendACmd	"config qosprofile QP7 minbw 0 maxbw 100 priority High port all"
+      set priList "1 3 5 7"
+      if {$qosType=="diffserv"} {
+         set TOSList "0x20 0x60 0xa0 0xe0"
+      } elseif {$qosType=="diffservCodePoint"} {
+         SendACmd "unconfig diffserv examination"      
+         SendACmd "config diffserv examination code-point 9 qosprofile QP8"
+         SendACmd "config diffserv examination code-point 25 qosprofile QP4"
+         set TOSList "0x20 0x64 0xa0 0x24"
+      }
+      configMatrix -priList $priList -portIdTxList $portIdTxList -qosType $qosType -sIpAddrList $sIpAddrList -dIpAddrList $dIpAddrList \
+                   -sPortList $sPortList -dPortList $dPortList -TOSList $TOSList -tagList $tagList -destMacAddrTxList $destMacAddrTxList \
+                   -ipProtocol $ipProtocol
+
+   ################################################
+   set subTest "Checking Matrix 3 Bandwidth criteria using QP2, QP4, QP6, QP8"
+   ################################################
+   result_h2 "$subTest"
+   report_start_test "$subTest"
+   #Test Matrix 3
+   SendACmd	"config qosprofile qp2 minbw 10 maxbw 100 priority Low port all"
+   SendACmd	"config qosprofile qp4 minbw 10 maxbw 100 priority Low port all"
+   SendACmd	"config qosprofile qp6 minbw 10 maxbw 100 priority Low port all"
+   SendACmd	"config qosprofile qp8 minbw 10 maxbw 100 priority Low port all"
+      
+      #wait for things to settle down
+      exSleep 2
+      set portIdList {1 2 3 4 9 10 11 12}
+      set ratioExpectArray(9)  25.00
+      set ratioExpectArray(10) 25.00
+      set ratioExpectArray(11) 25.00
+      set ratioExpectArray(12) 25.00
+
+      set ratioExpect [expr $ratioExpectArray(9)+$ratioExpectArray(10)+$ratioExpectArray(11)+$ratioExpectArray(12)]
+      lappend checkRateList {"negTest" "1  0"}
+      lappend checkRateList {"negTest" "2  0"}
+      lappend checkRateList {"negTest" "3  0"}
+      lappend checkRateList {"negTest" "4  0"}
+      foreach portId $portIdRxList {
+         set portIdTx [expr $portId - 8]
+         set t [expr $portIdTx - 1];
+         set tag [lindex $tagList $t]
+         if { $tag == "none" } { set $tag "" }
+         lappend checkRateList "{$portIdTx 100} {$portId $ratioExpectArray($portId)} $tag"         
+      }
+      result_debug "$checkRateList"
+      CheckRatesTxRx $checkRateList "Check for Matrix 3 Rates based on QP Assignment" \
+                     $percent_tolerance SumRx $ratioExpect
+      unset checkRateList
+      report_end_test
+      SendACmd "clear counter"
+      #check Q
+      lappend checkQosList "1 300 minPacket"
+      lappend checkQosList "3 300 minPacket"
+      lappend checkQosList "5 300 minPacket"
+      lappend checkQosList "7 300 minPacket"
+      CheckQoSMonitor [GetATrunkPort 1 2 1] $checkQosList $filePt $testFileName 
+      unset checkQosList  
+
+      #restore to default
+      SendACmd	"config qosprofile QP2 minbw 0 maxbw 100 priority LowHi port all"
+      SendACmd	"config qosprofile QP4 minbw 0 maxbw 100 priority NormalHi port all"
+      SendACmd	"config qosprofile QP6 minbw 0 maxbw 100 priority MediumHi port all"
+      SendACmd	"config qosprofile QP8 minbw 0 maxbw 100 priority HighHi port all"
+      set priList "3 4 5 6"
+      if {$qosType=="diffserv"} {
+         set TOSList "0x60 0x80 0xa0 0xc0"
+      } elseif {$qosType=="diffservCodePoint"} {
+         SendACmd "unconfig diffserv examination"      
+         SendACmd "config diffserv examination code-point 8 qosprofile QP7"
+         SendACmd "config diffserv examination code-point 25 qosprofile QP5"
+         set TOSList "0x60 0x64 0xa0 0x20"
+      }
+      configMatrix -priList $priList -portIdTxList $portIdTxList -qosType $qosType -sIpAddrList $sIpAddrList -dIpAddrList $dIpAddrList \
+                   -sPortList $sPortList -dPortList $dPortList -TOSList $TOSList -tagList $tagList -destMacAddrTxList $destMacAddrTxList \
+                   -ipProtocol $ipProtocol
+      
+   ################################################
+   set subTest "Checking Matrix 3b Bandwidth criteria using QP4, QP5, QP6, QP7"
+   ################################################
+   result_h2 "$subTest"
+   report_start_test "$subTest"      
+   #Test Matrix 3b
+   SendACmd	"config qosprofile QP4 minbw 10 maxbw 50 priority Low port all"
+   SendACmd	"config qosprofile QP5 minbw 10 maxbw 50 priority Low port all"
+   SendACmd	"config qosprofile QP6 minbw 10 maxbw 50 priority Low port all"
+   SendACmd	"config qosprofile QP7 minbw 10 maxbw 70 priority Low port all"
+      
+      #wait for things to settle down
+      exSleep 2
+      set portIdList {1 2 3 4 9 10 11 12}
+      foreach portId $portIdList {
+         
+         MapIxiaPortId $portId chasisId card port
+         stat getRate statAllStats $chasisId $card $port
+         set rateSent [stat cget -bytesSent]
+         set rateRecv [stat cget -bytesReceived]
+         set rateArray($portId,sent) $rateSent.00
+         set rateArray($portId,recv) $rateRecv.00
+      
+            result_debug "Mtrx3b Rate on port $portId Sent: $rateSent Recv: $rateRecv"
+      }    
+      set sum 0
+      foreach portId $portIdRxList {
+         set portIdTx [expr $portId - 8]
+         set ratioFound [format %.2f [expr $rateArray($portId,recv)*100/($rateArray($portIdTx,sent)+1)]]
+         set sum [expr $sum + $ratioFound]
+         set proratedRatioThresholdLow [expr 10.00/100.00*$ratioThreshold]
+         set proratedRatioThresholdHigh [expr 25.00/100.00*$ratioThreshold]
+         #between 10-25%
+         if {($ratioFound < [expr 10 - $proratedRatioThresholdLow]) || ($ratioFound > [expr 25 + $proratedRatioThresholdHigh])} {
+            result_error "Matrix 3b failed rate ratio threshold test on port $portId. Got $ratioFound EXPECT between 10 +/-$proratedRatioThresholdLow to 25 +/-$proratedRatioThresholdHigh"
+         } else {
+            result_ok "Matrix 3b pass rate ratio threshold test on port $portId. Got $ratioFound AS EXPECT between 10 +/-$proratedRatioThresholdLow to 25 +/-$proratedRatioThresholdHigh"
+         }
+      }
+      #total rate
+      set ratioExpect 100
+      set ratioFound $sum
+      if {[expr abs($ratioFound - $ratioExpect)] > $ratioAggregateThreshold } {
+         result_error "Matrix 3b failed aggregate rate ratio threshold test. Got $ratioFound EXPECT $ratioExpect +/- $ratioAggregateThreshold"
+      } else {
+         result_ok "Matrix 3b pass rate aggregate ratio threshold test. Got $ratioFound AS EXPECT $ratioExpect +/- $ratioAggregateThreshold"
+      }
+
+
+      set ratioExpectArray(9)  25.00
+      set ratioExpectArray(10) 25.00
+      set ratioExpectArray(11) 25.00
+      set ratioExpectArray(12) 25.00
+
+      set ratioExpect [expr $ratioExpectArray(9)+$ratioExpectArray(10)+$ratioExpectArray(11)+$ratioExpectArray(12)]
+      lappend checkRateList {"negTest" "1  0"}
+      lappend checkRateList {"negTest" "2  0"}
+      lappend checkRateList {"negTest" "3  0"}
+      lappend checkRateList {"negTest" "4  0"}
+      foreach portId $portIdRxList {
+         set portIdTx [expr $portId - 8]
+         set t [expr $portIdTx - 1];
+         set tag [lindex $tagList $t]
+         if { $tag == "none" } { set $tag "" }
+         lappend checkRateList "{$portIdTx 100} {$portId $ratioExpectArray($portId)} $tag"         
+      }
+      result_debug "$checkRateList"
+      CheckRatesTxRx $checkRateList "Check for Matrix 3 Rates based on QP Assignment" \
+                     $percent_tolerance SumRx $ratioExpect
+      unset checkRateList
+
+
+      report_end_test
+      SendACmd "clear counter"
+      #check Q
+      lappend checkQosList "3 300 minPacket"
+      lappend checkQosList "4 300 minPacket"
+      lappend checkQosList "5 300 minPacket"
+      lappend checkQosList "6 300 minPacket"
+      CheckQoSMonitor [GetATrunkPort 1 2 1] $checkQosList $filePt $testFileName 
+      unset checkQosList  
+
+      #restore to default
+      SendACmd	"config qosprofile QP4 minbw 0 maxbw 100 priority NormalHi port all"
+      SendACmd	"config qosprofile QP5 minbw 0 maxbw 100 priority Medium port all"
+      SendACmd	"config qosprofile QP6 minbw 0 maxbw 100 priority MediumHi port all"
+      SendACmd	"config qosprofile QP7 minbw 0 maxbw 100 priority High port all"
+
+   # Matrix 4 deleted
+      set priList "0 3 4 7"
+      if {$qosType=="diffserv"} {
+         set TOSList "0x00 0x60 0x80 0xe0"
+      } elseif {$qosType=="diffservCodePoint"} {
+         SendACmd "unconfig diffserv examination"      
+         SendACmd "config diffserv examination code-point 8 qosprofile QP8"
+         SendACmd "config diffserv examination code-point 25 qosprofile QP4"
+         set TOSList "0x00 0x64 0x80 0x20"
+      }
+      configMatrix -priList $priList -portIdTxList $portIdTxList -qosType $qosType -sIpAddrList $sIpAddrList -dIpAddrList $dIpAddrList \
+                   -sPortList $sPortList -dPortList $dPortList -TOSList $TOSList -tagList $tagList -destMacAddrTxList $destMacAddrTxList \
+                   -ipProtocol $ipProtocol
+      
+   ################################################
+   set subTest "Checking Matrix 5 Bandwidth criteria using QP1, QP4, QP5, QP8"
+   ################################################
+   result_h2 "$subTest"
+   report_start_test "$subTest"          
+   #Test Matrix 5
+   SendACmd	"config qosprofile QP1 minbw 10 maxbw 100 priority Low port all"
+   SendACmd	"config qosprofile QP4 minbw 10 maxbw 50 priority Normalhi port all"
+   SendACmd	"config qosprofile QP5 minbw 10 maxbw 40 priority Medium port all"
+   SendACmd	"config qosprofile QP8 minbw 10 maxbw 30 priority Highhi port all"
+      
+      #wait for things to settle down
+      exSleep 4
+      set portIdList {1 2 3 4 9 10 11 12}
+      set ratioExpectArray(9) 10.00
+      set ratioExpectArray(10) 20.00
+      set ratioExpectArray(11) 40.00
+      set ratioExpectArray(12) 30.00
+      set ratioExpect [expr $ratioExpectArray(9)+$ratioExpectArray(10)+$ratioExpectArray(11)+$ratioExpectArray(12)]
+      lappend checkRateList {"negTest" "1  0"}
+      lappend checkRateList {"negTest" "2  0"}
+      lappend checkRateList {"negTest" "3  0"}
+      lappend checkRateList {"negTest" "4  0"}
+      foreach portId $portIdRxList {
+         set portIdTx [expr $portId - 8]
+         set t [expr $portIdTx - 1];
+         set tag [lindex $tagList $t]
+         if { $tag == "none" } { set $tag "" }
+         lappend checkRateList "{$portIdTx 100} {$portId $ratioExpectArray($portId)} $tag"         
+      }
+      result_debug "$checkRateList"
+      CheckRatesTxRx $checkRateList "Check for Matrix 5 Rates based on QP Assignment" \
+                     $percent_tolerance SumRx $ratioExpect
+      unset checkRateList
+      report_end_test
+      SendACmd "clear counter"
+      #check Q
+      lappend checkQosList "0 90 minPacket"
+      lappend checkQosList "3 180 minPacket"
+      lappend checkQosList "4 360 minPacket"
+      lappend checkQosList "7 270 minPacket"
+      CheckQoSMonitor [GetATrunkPort 1 2 1] $checkQosList $filePt $testFileName 
+      unset checkQosList      
+
+      #restore to default
+      SendACmd	"config qosprofile QP1 minbw 0 maxbw 100 priority Low port all"
+      SendACmd	"config qosprofile QP4 minbw 0 maxbw 100 priority NormalHi port all"
+      SendACmd	"config qosprofile QP5 minbw 0 maxbw 100 priority Medium port all"
+      SendACmd	"config qosprofile QP8 minbw 0 maxbw 100 priority HighHi port all"
+      set priList "0 1 2 3"
+      if {$qosType=="diffserv"} {
+         set TOSList "0x00 0x20 0x40 0x60"
+      } elseif {$qosType=="diffservCodePoint"} {
+         SendACmd "unconfig diffserv examination"      
+         SendACmd "config diffserv examination code-point 8 qosprofile QP4"
+         SendACmd "config diffserv examination code-point 25 qosprofile QP2"
+         set TOSList "0x00 0x64 0x40 0x20"
+      }
+
+      configMatrix -priList $priList -portIdTxList $portIdTxList -qosType $qosType -sIpAddrList $sIpAddrList -dIpAddrList $dIpAddrList \
+                   -sPortList $sPortList -dPortList $dPortList -TOSList $TOSList -tagList $tagList -destMacAddrTxList $destMacAddrTxList \
+                   -ipProtocol $ipProtocol
+      
+   ################################################
+   set subTest "Checking Matrix 6 Bandwidth criteria using QP1, QP2, QP3, QP4"
+   ################################################
+   result_h2 "$subTest"
+   report_start_test "$subTest"  
+   #Test Matrix 6
+   SendACmd	"config qosprofile QP1 minbw 10 maxbw 100 priority Low port all"
+   SendACmd	"config qosprofile QP2 minbw 10 maxbw 50 priority Low port all"
+   SendACmd	"config qosprofile QP3 minbw 10 maxbw 40 priority Low port all"
+   SendACmd	"config qosprofile QP4 minbw 10 maxbw 30 priority Low port all"
+      
+      #wait for things to settle down
+      exSleep 2
+      set portIdList {1 2 3 4 9 10 11 12}
+      set ratioExpectArray(9) 25.00
+      set ratioExpectArray(10) 25.00
+      set ratioExpectArray(11) 25.00
+      set ratioExpectArray(12) 25.00
+
+      set ratioExpect [expr $ratioExpectArray(9)+$ratioExpectArray(10)+$ratioExpectArray(11)+$ratioExpectArray(12)]
+      lappend checkRateList {"negTest" "1  0"}
+      lappend checkRateList {"negTest" "2  0"}
+      lappend checkRateList {"negTest" "3  0"}
+      lappend checkRateList {"negTest" "4  0"}
+      foreach portId $portIdRxList {
+         set portIdTx [expr $portId - 8]
+         set t [expr $portIdTx - 1];
+         set tag [lindex $tagList $t]
+         if { $tag == "none" } { set $tag "" }
+         lappend checkRateList "{$portIdTx 100} {$portId $ratioExpectArray($portId)} $tag"         
+      }
+      result_debug "$checkRateList"
+      CheckRatesTxRx $checkRateList "Check for Matrix 6b Rates based on QP Assignment" \
+                     $percent_tolerance SumRx $ratioExpect
+      unset checkRateList 
+      report_end_test
+      SendACmd "clear counter"
+      #check Q
+      lappend checkQosList "0 300 minPacket"
+      lappend checkQosList "1 300 minPacket"
+      lappend checkQosList "2 300 minPacket"
+      lappend checkQosList "3 300 minPacket"
+      CheckQoSMonitor [GetATrunkPort 1 2 1] $checkQosList $filePt $testFileName 
+      unset checkQosList   
+
+      #restore to default
+      SendACmd	"config qosprofile QP1 minbw 0 maxbw 100 priority Low port all"
+      SendACmd	"config qosprofile QP2 minbw 0 maxbw 100 priority LowHi port all"
+      SendACmd	"config qosprofile QP3 minbw 0 maxbw 100 priority Normal port all"
+      SendACmd	"config qosprofile QP4 minbw 0 maxbw 100 priority NormalHi port all"
+      set priList "4 5 6 7"
+      if {$qosType=="diffserv"} {
+         set TOSList "0x80 0xa0 0xc0 0xe0"
+      } elseif {$qosType=="diffservCodePoint"} {
+         SendACmd "unconfig diffserv examination"      
+         SendACmd "config diffserv examination code-point 8 qosprofile QP8"
+         SendACmd "config diffserv examination code-point 25 qosprofile QP6"
+         set TOSList "0x80 0x64 0xc0 0x20"
+      }
+
+      configMatrix -priList $priList -portIdTxList $portIdTxList -qosType $qosType -sIpAddrList $sIpAddrList -dIpAddrList $dIpAddrList \
+                   -sPortList $sPortList -dPortList $dPortList -TOSList $TOSList -tagList $tagList -destMacAddrTxList $destMacAddrTxList \
+                   -ipProtocol $ipProtocol
+   
+   ################################################
+   set subTest "Checking Matrix 6b Bandwidth criteria using QP5, QP6, QP7, QP8"
+   ################################################
+   result_h2 "$subTest"
+   report_start_test "$subTest"           
+   #Test Matrix 6b
+   SendACmd	"config qosprofile QP5 minbw 10 maxbw 100 priority Low port all"
+   SendACmd	"config qosprofile QP6 minbw 10 maxbw 50 priority Low port all"
+   SendACmd	"config qosprofile QP7 minbw 10 maxbw 40 priority Low port all"
+   SendACmd	"config qosprofile QP8 minbw 10 maxbw 10 priority Low port all"
+      
+      #wait for things to settle down
+      exSleep 2
+      set portIdList {1 2 3 4 9 10 11 12}
+      set ratioExpectArray(9) 30.00
+      set ratioExpectArray(10) 30.00
+      set ratioExpectArray(11) 30.00
+      set ratioExpectArray(12) 9.60
+
+      set ratioExpect [expr $ratioExpectArray(9)+$ratioExpectArray(10)+$ratioExpectArray(11)+$ratioExpectArray(12)]
+      lappend checkRateList {"negTest" "1  0"}
+      lappend checkRateList {"negTest" "2  0"}
+      lappend checkRateList {"negTest" "3  0"}
+      lappend checkRateList {"negTest" "4  0"}
+      foreach portId $portIdRxList {
+         set portIdTx [expr $portId - 8]
+         set t [expr $portIdTx - 1];
+         set tag [lindex $tagList $t]
+         if { $tag == "none" } { set $tag "" }
+         lappend checkRateList "{$portIdTx 100} {$portId $ratioExpectArray($portId)} $tag"         
+      }
+      result_debug "$checkRateList"
+      CheckRatesTxRx $checkRateList "Check for Matrix 6b Rates based on QP Assignment" \
+                     $percent_tolerance SumRx $ratioExpect
+      unset checkRateList
+
+
+
+      report_end_test
+      SendACmd "clear counter"
+      #check Q
+      lappend checkQosList "4 300 minPacket"
+      lappend checkQosList "5 300 minPacket"
+      lappend checkQosList "6 300 minPacket"
+      lappend checkQosList "7 100 minPacket"
+      CheckQoSMonitor [GetATrunkPort 1 2 1] $checkQosList $filePt $testFileName 
+      unset checkQosList    
+
+      #restore to default
+      SendACmd	"config qosprofile QP5 minbw 0 maxbw 100 priority Medium port all"
+      SendACmd	"config qosprofile QP6 minbw 0 maxbw 100 priority MediumHi port all"
+      SendACmd	"config qosprofile QP7 minbw 0 maxbw 100 priority High port all"
+      SendACmd	"config qosprofile QP8 minbw 0 maxbw 100 priority HighHi port all"
+      set priList "0 2 4 6"
+      if {$qosType=="diffserv"} {
+         set TOSList "0x00 0x40 0x80 0xc0"
+      } elseif {$qosType=="diffservCodePoint"} {
+         SendACmd "unconfig diffserv examination"      
+         SendACmd "config diffserv examination code-point 8 qosprofile QP7"
+         SendACmd "config diffserv examination code-point 25 qosprofile QP3"
+         set TOSList "0x00 0x64 0x80 0x20"
+      }
+      configMatrix -priList $priList -portIdTxList $portIdTxList -qosType $qosType -sIpAddrList $sIpAddrList -dIpAddrList $dIpAddrList \
+                   -sPortList $sPortList -dPortList $dPortList -TOSList $TOSList -tagList $tagList -destMacAddrTxList $destMacAddrTxList \
+                   -ipProtocol $ipProtocol
+      
+   ################################################
+   set subTest "Checking Matrix 7 Bandwidth criteria using QP1, QP3, QP5, QP7"
+   ################################################
+   result_h2 "$subTest"
+   report_start_test "$subTest"        
+   #Test Matrix 7
+   SendACmd	"config qosprofile QP1 minbw 10 maxbw 50 priority Low port all"
+   SendACmd	"config qosprofile QP3 minbw 20 maxbw 50 priority Normal port all"
+   SendACmd	"config qosprofile QP5 minbw 25 maxbw 50 priority Medium port all"
+   SendACmd	"config qosprofile QP7 minbw 35 maxbw 50 priority High port all"
+      
+      #wait for things to settle down
+      exSleep 4
+      set portIdList {1 2 3 4 9 10 11 12}
+      set ratioExpectArray(9) 10.00
+      set ratioExpectArray(10) 20.00
+      set ratioExpectArray(11) 25.00
+      set ratioExpectArray(12) 45.00
+
+      set ratioExpect [expr $ratioExpectArray(9)+$ratioExpectArray(10)+$ratioExpectArray(11)+$ratioExpectArray(12)]
+      lappend checkRateList {"negTest" "1  0"}
+      lappend checkRateList {"negTest" "2  0"}
+      lappend checkRateList {"negTest" "3  0"}
+      lappend checkRateList {"negTest" "4  0"}
+      foreach portId $portIdRxList {
+         set portIdTx [expr $portId - 8]
+         set t [expr $portIdTx - 1];
+         set tag [lindex $tagList $t]
+         if { $tag == "none" } { set $tag "" }
+         lappend checkRateList "{$portIdTx 100} {$portId $ratioExpectArray($portId)} $tag"         
+      }
+      result_debug "$checkRateList"
+      CheckRatesTxRx $checkRateList "Check for Matrix 7 Rates based on QP Assignment" \
+                     $percent_tolerance SumRx $ratioExpect
+      unset checkRateList
+
+      report_end_test
+      #check Q
+      SendACmd "clear counter"
+      lappend checkQosList "0 100 minPacket"
+      lappend checkQosList "2 180 minPacket"
+      lappend checkQosList "4 260 minPacket"
+      lappend checkQosList "6 450 minPacket"
+      CheckQoSMonitor [GetATrunkPort 1 2 1] $checkQosList $filePt $testFileName 
+      unset checkQosList   
+      #restore to default
+      SendACmd	"config qosprofile QP1 minbw 0 maxbw 100 priority Low port all"
+      SendACmd	"config qosprofile QP3 minbw 0 maxbw 100 priority Normal port all"
+      SendACmd	"config qosprofile QP5 minbw 0 maxbw 100 priority Medium port all"
+      SendACmd	"config qosprofile QP7 minbw 0 maxbw 100 priority High port all"
+               
+} elseif {$checkMatrix == "user"} {
+   ################################################
+   set subTest "Checking User Bandwidth criteria"
+   ################################################
+   result_h2 "$subTest"
+   report_start_test "$subTest"
+      
+   if {$userMatrix == 5} {
+      SendACmd	"config qosprofile QP1 minbw 10 maxbw 100 priority Low port all"
+      SendACmd	"config qosprofile QP4 minbw 10 maxbw 50 priority Normalhi port all"
+      SendACmd	"config qosprofile QP5 minbw 10 maxbw 40 priority Medium port all"
+      SendACmd	"config qosprofile QP8 minbw 10 maxbw 30 priority Highhi port all"
+      #set ratioExpectArray(9) 10.00
+      #set ratioExpectArray(10) 20.00
+      #set ratioExpectArray(11) 40.00
+      #set ratioExpectArray(12) 30.00
+      #lappend checkQosList "0 90 minPacket"
+      #lappend checkQosList "3 180 minPacket"
+      #lappend checkQosList "4 360 minPacket"
+      #lappend checkQosList "7 270 minPacket"      
+      exSleep 5   
+   }
+   if {$userMatrix == 7} {
+      SendACmd	"config qosprofile QP1 minbw 10 maxbw 50 priority Low port all"
+      SendACmd	"config qosprofile QP3 minbw 20 maxbw 50 priority Normal port all"
+      SendACmd	"config qosprofile QP5 minbw 25 maxbw 50 priority Medium port all"
+      SendACmd	"config qosprofile QP7 minbw 35 maxbw 50 priority High port all"
+      #set ratioExpectArray(9) 10.00
+      #set ratioExpectArray(10) 18.70
+      #set ratioExpectArray(11) 26.30
+      #set ratioExpectArray(12) 45.00
+      #lappend checkQosList "0 100 minPacket"
+      #lappend checkQosList "2 180 minPacket"
+      #lappend checkQosList "4 260 minPacket"
+      #lappend checkQosList "6 450 minPacket"
+      exSleep 5
+   }
+
+
+
+   #wait for things to settle down
+   exSleep 5
+   set portIdList {1 2 3 4 9 10 11 12}
+   set sum 0
+   set ratioExpectArray(9) [lindex $ratioExpectList 0]
+   set ratioExpectArray(10) [lindex $ratioExpectList 1]
+   set ratioExpectArray(11) [lindex $ratioExpectList 2]
+   set ratioExpectArray(12) [lindex $ratioExpectList 3]
+
+   set ratioExpect [expr $ratioExpectArray(9)+$ratioExpectArray(10)+$ratioExpectArray(11)+$ratioExpectArray(12)]
+   lappend checkRateList {"negTest" "1  0"}
+   lappend checkRateList {"negTest" "2  0"}
+   lappend checkRateList {"negTest" "3  0"}
+   lappend checkRateList {"negTest" "4  0"}
+   foreach portId $portIdRxList {
+      set portIdTx [expr $portId - 8]
+      set t [expr $portIdTx - 1];
+      set tag [lindex $tagList $t]
+      if { $tag == "none" } { set $tag "" }
+      lappend checkRateList "{$portIdTx 100} {$portId $ratioExpectArray($portId)} $tag"         
+   }
+   result_debug "$checkRateList"
+   CheckRatesTxRx $checkRateList "Check for USER MATRIX Rates based on QP Assignment" \
+                  $percent_tolerance SumRx $ratioExpect
+   unset checkRateList
+
+   report_end_test
+   SendACmd "clear counter"
+   #check Q
+   CheckQoSMonitor [GetATrunkPort 1 2 1] $checkQosList $filePt $testFileName 
+   unset checkQosList 
+}
+   #special check for multicast, these commands should not cause switch to crash
+   if {$protocol == "multicast"} { 
+      global DUT2_CONNECT
+      Login $DUT2_CONNECT -fd $filePt
+#      SendACmd	"clear igmp snooping"
+#      SendACmd	"disable pim"
+#      SendACmd	"enable pim"
+
+      global DUT1_CONNECT
+      Login $DUT1_CONNECT -fd $filePt
+#      SendACmd	"clear igmp snooping"
+#      SendACmd	"disable pim"
+#      SendACmd	"enable pim"
+   }
+   #stop Tx
+   foreach portIdTx $portIdTxList {
+         MapIxiaPortId $portIdTx txChas txCard txPort
+         ixStopPortTransmit  $txChas $txCard $txPort  
+   }
+   #restore to default
+   SendACmd	"config qosprofile QP1 minbw 0 maxbw 100 priority Low port all"
+   SendACmd	"config qosprofile QP2 minbw 0 maxbw 100 priority LowHi port all"
+   SendACmd	"config qosprofile QP3 minbw 0 maxbw 100 priority Normal port all"
+   SendACmd	"config qosprofile QP4 minbw 0 maxbw 100 priority NormalHi port all"
+   SendACmd	"config qosprofile QP5 minbw 0 maxbw 100 priority Medium port all"
+   SendACmd	"config qosprofile QP6 minbw 0 maxbw 100 priority MediumHi port all"
+   SendACmd	"config qosprofile QP7 minbw 0 maxbw 100 priority High port all"
+   SendACmd	"config qosprofile QP8 minbw 0 maxbw 100 priority HighHi port all"
+
+}
+
+################################################################## 
+# Procedure Name: CheckQoSMonitor   
+# Description:  Verify packets are greater or less than specified
+#               numbers for each of 8 queues
+# Input args: port checkList fd_res testNo
+# Output args: none
+# Return value: none
+# Typical usage: 
+#      lappend checkQosList "0 1000 minPacket"
+#      lappend checkQosList "3 1000 minPacket"
+#      lappend checkQosList "4 1000 minPacket"
+#      lappend checkQosList "7 1000 minPacket"
+#      CheckQoSMonitor [GetATrunkPort 1 2 1] $checkQosList $filePt $testFileName      
+# Category: VerifyTraffic
+##################################################################
+proc CheckQoSMonitor { port checkList fd_res testNo} {
+
+   global spawn_id
+   global PortID_Info
+   global bcmPlatform
+   global DUTs_info
+   global whichDutNow
+
+   exSleep 2
+   report_start_test "Checking port $port qosmonitor"
+   SendACmd "show ports $port qosmonitor no-refresh"
+   if [regexp -nocase "$bcmPlatform" $DUTs_info(DUT$whichDutNow,platform)] {
+      exSleep 2
+      SendACmd "show ports $port qosmonitor no-refresh"
+   }
+   set fd_in [open "Tmp/tmp_$testNo[pid]" "w"]
+   SendACmd "show ports $port qosmonitor" $fd_res $fd_in
+   close $fd_in
+   
+   set fd_in [open "Tmp/tmp_$testNo[pid]" "r"]   
+   set indexFound -1
+   while {[gets $fd_in line] != -1} {
+      set words [split $line]
+      if {[string trim [lindex $words 0]] == $port} {
+         set indexFound 0
+         set lineFound $line         
+      }
+   }   
+   close $fd_in
+   file delete "Tmp/tmp_$testNo[pid]"
+   if {$indexFound >= 0} {
+      foreach qosItem $checkList {
+         set index [lindex $qosItem 0]
+         set valueWanted [lindex $qosItem 1]
+         set compareFlag [lindex $qosItem 2]
+         set valueFound [lindex $lineFound [expr $indexFound + $index + 1]]
+	      set Qid  [expr $index + 1]
+         switch $compareFlag {
+            "minPacket" {
+               if {$valueWanted <= $valueFound } {
+                  result_ok "Checking Q$Qid minimum value passed. Is over $valueWanted packets."
+               } else {
+                  result_error "Checking Q$Qid minimum value failed. Wanted $valueWanted BUTGOT $valueFound"
+               }
+            }
+            "maxPacket" {
+               if {$valueWanted > $valueFound } {
+                  result_ok "Checking Q$Qid maximum value passed. Is under $valueWanted packets."
+               } else {
+                  result_error "Checking Q$Qid maximum value failed. Wanted $valueWanted BUTGOT $valueFound"
+               }
+            }
+            "exactPacket" -
+            default {
+               if {$valueWanted == $valueFound } {
+                  result_ok "Checking Q$Qid exact value passed. Is exactly $valueWanted packets."
+               } else {
+                  result_error "Checking Q$Qid exact value failed. Wanted $valueWanted BUTGOT $valueFound"
+               }
+            }
+         }
+      }            
+   } else {
+     result_error "No QoS data found for port $port"
+   }
+   report_end_test
+}
+
+################################################################## 
+# Procedure Name: QosTestSetup   
+# Description:  Set up required vlans on 2 DUTs according to test cases in 
+#		QOS test plan
+# Input args: args
+# Output args: none
+# Return value: none
+# Typical usage: 
+#      	set mode "multicast"
+#	set vlanDUT1 "single"
+#	set sIpAddrList "192.10.1.2 192.10.1.3 192.10.1.4 192.10.1.5"
+#	set vlanDUT1IpAddrList "192.10.1.1"
+#	QosTestSetup -mode $mode -vlanDUT1 $vlanDUT1 -sIpAddrList $sIpAddrList \
+#             	     -vlanDUT1IpAddrList $vlanDUT1IpAddrList -filePt $fd_res
+# Category: SetupSwitch
+##################################################################
+proc QosTestSetup {args} {
+   parse_args QosTestSetup $args {
+     mode "unicast"
+     vlanDUT1 "multiple"
+     vlanDUT2 "multiple"
+     sIpAddrList "192.10.1.2 192.10.2.2 192.10.3.2 192.10.4.2"
+     dIpAddrList "192.20.1.2 192.20.2.2 192.20.3.2 192.20.4.2"
+     vlanDUT1IpAddrList "192.10.1.1 192.10.2.1 192.10.3.1 192.10.4.1"
+     vlanDUT2IpAddrList "192.20.1.1 192.20.2.1 192.20.3.1 192.20.4.1"
+     wTagDUT1 "false false false false"
+	  tagListDUT1 "10 20 30 40"
+     wTagDUT2 "false false false false"
+	  tagListDUT2 "10 20 30 40"
+     filePt "NULL"
+     }
+global DUT1_CONNECT
+global PortID_Info
+Login $DUT1_CONNECT -fd $filePt
+SendACmd	"config default add port [GetATrunkPort 1 2 1]"
+SendACmd	"config default ipa 192.207.38.1"
+
+if {$vlanDUT1 == "multiple"} {
+   SendACmd	"create vlan vlan1"
+   SendACmd	"create vlan vlan2"
+   SendACmd	"create vlan vlan3"
+   SendACmd	"create vlan vlan4"
+
+   SendACmd	"config vlan1 ipa [lindex $vlanDUT1IpAddrList 0]"
+   SendACmd	"config vlan2 ipa [lindex $vlanDUT1IpAddrList 1]"
+   SendACmd	"config vlan3 ipa [lindex $vlanDUT1IpAddrList 2]"
+   SendACmd	"config vlan4 ipa [lindex $vlanDUT1IpAddrList 3]"
+
+   for {set i 1} {$i <= 4} {incr i 1} {
+      set tCount [expr $i - 1]
+      if { [lindex $wTagDUT1 $tCount] == "true" } { 
+         SendACmd	"config vlan$i tag [lindex $tagListDUT1 $tCount]"
+         SendACmd	"config vlan$i add port [MapDUTPortId $i] tag"
+      } else {
+         SendACmd	"config vlan$i add port [MapDUTPortId $i]"
+	   }
+   }
+} else {
+   SendACmd	"create vlan vlan1"
+   SendACmd	"config vlan1 ipa [lindex $vlanDUT1IpAddrList 0]"
+   if { [lindex $wTagDUT1 0] == "true" } { 
+      SendACmd	"config vlan1 tag [lindex $tagListDUT1 0]"
+      SendACmd	"config vlan1 add port [MapDUTPortId 1-4] tag"
+   } else {
+      SendACmd	"config vlan1 add port [MapDUTPortId 1-4]"
+   }
+}
+
+if {$mode == "unicast"} {
+   SendACmd	"enable ipforwarding"
+   #SendACmd	"config rip add vlan all"
+   #SendACmd	"enable rip"
+   SendACmd "conf ipr add default 192.207.38.2"
+} else {
+   SendACmd "enable igmp"
+   SendACmd "configure igmp 250 10 1 5"
+   SendACmd "configure igmp snooping timer 1000 1000"
+   SendACmd	"enable igmp snooping"
+   SendACmd	"enable ipforwarding"
+   #SendACmd	"config rip add vlan all"
+   #SendACmd	"enable rip"
+   SendACmd "conf ipr add default 192.207.38.2"
+   SendACmd	"enable ipmcforwarding"
+   SendACmd	"config pim add vlan all"
+   SendACmd	"enable pim"
+}
+
+SendACmd	"config iparp add [lindex $sIpAddrList 0] 00:A1:F1:00:00:01"
+SendACmd	"config iparp add [lindex $sIpAddrList 1] 00:A1:F2:00:00:01"
+SendACmd	"config iparp add [lindex $sIpAddrList 2] 00:A1:F3:00:00:01"
+SendACmd	"config iparp add [lindex $sIpAddrList 3] 00:A1:F4:00:00:01"
+
+global DUT2_CONNECT
+Login $DUT2_CONNECT -fd $filePt
+SendACmd	"config default add port [GetATrunkPort 2 1 1]"
+SendACmd	"config default ipa 192.207.38.2"
+
+global DUTs_info
+# Check for 10Gig platform, call different checkBwMatrix specifically
+global DUTs_Slot_info
+set 10GigSlot 0
+#for {set i 1} {$i<=$DUTs_info(DUT1,numSlots)} {incr i} {
+#   if {[regexp -nocase "10Gig" $DUTs_Slot_info(DUT1,slot$i,hwModType)]} {
+#      set 10GigSlot 1
+#      break
+#   }
+#}
+if {$10GigSlot} {
+   SendACmd "nofeep"
+   foreach po [GetATrunkPort 2 1] {
+      set c 0
+      set p 0
+      scan $po %d:%d c p
+      if {$p!=0} {
+         SendACmd "hurricanelb [expr $c-1],3"
+      }
+   }
+   SendACmd "shswitch"
+}
+
+
+if {$vlanDUT2 == "multiple"} {
+   SendACmd	"create vlan vlan1"
+   SendACmd	"create vlan vlan2"
+   SendACmd	"create vlan vlan3"
+   SendACmd	"create vlan vlan4"
+
+   SendACmd	"config vlan vlan1 ipa [lindex $vlanDUT2IpAddrList 0]"
+   SendACmd	"config vlan vlan2 ipa [lindex $vlanDUT2IpAddrList 1]"
+   SendACmd	"config vlan vlan3 ipa [lindex $vlanDUT2IpAddrList 2]"
+   SendACmd	"config vlan vlan4 ipa [lindex $vlanDUT2IpAddrList 3]"
+
+   for {set i 1} {$i <= 4} {incr i 1} {
+      set tCount [expr $i - 1]
+      set tPort [expr $i + 8]
+      if { [lindex $wTagDUT2 $tCount] == "true" } { 
+         SendACmd	"config vlan$i tag [lindex $tagListDUT2 $tCount]"
+         SendACmd	"config vlan$i add port [MapDUTPortId $tPort 2] tag"
+      } else {
+         SendACmd	"config vlan$i add port [MapDUTPortId $tPort 2]"
+	  }
+   }
+   SendACmd	"create fdbentry 00:A3:F1:00:00:01 vlan1 ports [MapDUTPortId 9 2]"
+   SendACmd	"create fdbentry 00:A3:F2:00:00:01 vlan2 ports [MapDUTPortId 10 2]"
+   SendACmd	"create fdbentry 00:A3:F3:00:00:01 vlan3 ports [MapDUTPortId 11 2]"
+   SendACmd	"create fdbentry 00:A3:F4:00:00:01 vlan4 ports [MapDUTPortId 12 2]"
+} else {
+   SendACmd	"create vlan vlan1"
+   SendACmd	"config vlan vlan1 ipa [lindex $vlanDUT2IpAddrList 0]"
+
+   if { [lindex $wTagDUT2 0] == "true" } { 
+      SendACmd	"config vlan1 tag [lindex $tagListDUT2 0]"
+      SendACmd	"config vlan1 add port [MapDUTPortId 9-12 2] tag"
+   } else {
+      SendACmd	"config vlan1 add port [MapDUTPortId 9-12 2]"
+   }
+   SendACmd	"create fdbentry 00:A3:F1:00:00:01 vlan1 ports [MapDUTPortId 9 2]"
+   SendACmd	"create fdbentry 00:A3:F2:00:00:01 vlan1 ports [MapDUTPortId 10 2]"
+   SendACmd	"create fdbentry 00:A3:F3:00:00:01 vlan1 ports [MapDUTPortId 11 2]"
+   SendACmd	"create fdbentry 00:A3:F4:00:00:01 vlan1 ports [MapDUTPortId 12 2]"
+}
+SendACmd	"config iparp add [lindex $dIpAddrList 0] 00:A3:F1:00:00:01"
+SendACmd	"config iparp add [lindex $dIpAddrList 1] 00:A3:F2:00:00:01"
+SendACmd	"config iparp add [lindex $dIpAddrList 2] 00:A3:F3:00:00:01"
+SendACmd	"config iparp add [lindex $dIpAddrList 3] 00:A3:F4:00:00:01"
+
+if {$mode == "unicast"} {
+   SendACmd	"enable ipforwarding"
+   #SendACmd	"config rip add vlan all"
+   #SendACmd	"enable rip"
+   #exSleep 10
+   SendACmd	"config ipr add default 192.207.38.1"
+} else {
+   SendACmd "enable igmp"
+   SendACmd "configure igmp 250 10 1 5"
+   SendACmd "configure igmp snooping timer 1000 1000"
+   SendACmd	"enable igmp snooping"
+   SendACmd	"enable ipforwarding"
+   #SendACmd	"config rip add vlan all"
+   #SendACmd	"enable rip"
+   SendACmd "conf ipr add default 192.207.38.1"
+   SendACmd	"enable ipmcforwarding"
+   SendACmd	"config pim add vlan all"
+   SendACmd	"enable pim"
+}
+Login $DUT1_CONNECT
+SendACmd     "disable rip";
+exSleep 10;
+SendACmd     "enable rip";
+}
+
+################################################################## 
+# Procedure Name: QosTestCleanup   
+# Description:  Clean up the QOS config set up by QosTestSetup                   
+# Input args: args
+# Output args: none
+# Return value: none
+# Typical usage: 
+# 	QosTestCleanup -mode $mode -vlanDUT1 $vlanDUT1 -sIpAddrList $sIpAddrList     
+# Category: SetupSwitch
+##################################################################
+proc QosTestCleanup {args} {
+   parse_args QosTestCleanup $args {
+     mode "unicast"
+     vlanDUT1 "multiple"
+     vlanDUT2 "multiple"
+     sIpAddrList "192.10.1.2 192.10.2.2 192.10.3.2 192.10.4.2"
+     dIpAddrList "192.20.1.2 192.20.2.2 192.20.3.2 192.20.4.2"
+     filePt "NULL"
+     }
+global DUT1_CONNECT
+global PortID_Info
+global whichDutNow
+global bcmPlatform
+global DUTs_info
+
+Login $DUT1_CONNECT -fd $filePt
+SendACmd	"config default del port [GetATrunkPort 1 2 1]"
+SendACmd "conf ipr del default 192.207.38.2"
+SendACmd	"unconfig default ipa"
+if ![regexp -nocase "$bcmPlatform" $DUTs_info(DUT$whichDutNow,platform)] {
+   SendACmd	"unconfig qosprofile"
+   SendACmd	"unconfig qosprofile port all"
+}
+SendACmd	"config iparp del [lindex $sIpAddrList 0]"
+SendACmd	"config iparp del [lindex $sIpAddrList 1]"
+SendACmd	"config iparp del [lindex $sIpAddrList 2]"
+SendACmd	"config iparp del [lindex $sIpAddrList 3]"
+
+if {$vlanDUT1 == "multiple"} {
+   SendACmd	"unconf access-list"
+   SendACmd	"delete vlan vlan1"
+   SendACmd	"delete vlan vlan2"
+   SendACmd	"delete vlan vlan3"
+   SendACmd	"delete vlan vlan4"
+} else {
+   SendACmd	"unconf access-list"
+   SendACmd	"delete vlan vlan1"
+}
+
+if {$mode == "unicast"} {
+   SendACmd	"disable ipforwarding"
+   #SendACmd	"config rip del vlan all"
+   #SendACmd	"disable rip"
+} else {
+   SendACmd	"disable igmp"
+   SendACmd	"disable igmp snooping"
+   SendACmd     "unconfigure igmp"
+   SendACmd	"disable ipmcforwarding"
+   SendACmd	"config pim del vlan all"
+   SendACmd	"disable pim"
+   SendACmd	"disable ipforwarding"
+   #SendACmd	"config rip del vlan all"
+   #SendACmd	"disable rip"
+}
+
+#SendACmd	"configure ports [GetATrunkPort 1 2 1] auto on"
+
+global DUT2_CONNECT
+Login $DUT2_CONNECT -fd $filePt
+SendACmd	"config default del port [GetATrunkPort 2 1 1]"
+SendACmd "conf ipr del default 192.207.38.1"
+SendACmd	"unconfig default ipa"
+SendACmd	"config iparp del [lindex $dIpAddrList 0]"
+SendACmd	"config iparp del [lindex $dIpAddrList 1]"
+SendACmd	"config iparp del [lindex $dIpAddrList 2]"
+SendACmd	"config iparp del [lindex $dIpAddrList 3]"
+
+if {$vlanDUT2 == "multiple"} {
+   SendACmd	"delete fdbentry 00:A3:F1:00:00:01 vlan vlan1"
+   SendACmd	"delete fdbentry 00:A3:F2:00:00:01 vlan vlan2"
+   SendACmd	"delete fdbentry 00:A3:F3:00:00:01 vlan vlan3"
+   SendACmd	"delete fdbentry 00:A3:F4:00:00:01 vlan vlan4"
+   
+   SendACmd	"delete vlan vlan1"
+   SendACmd	"delete vlan vlan2"
+   SendACmd	"delete vlan vlan3"
+   SendACmd	"delete vlan vlan4"
+} else {
+   SendACmd	"delete fdbentry 00:A3:F1:00:00:01 vlan vlan1"
+   SendACmd	"delete fdbentry 00:A3:F2:00:00:01 vlan vlan1"
+   SendACmd	"delete fdbentry 00:A3:F3:00:00:01 vlan vlan1"
+   SendACmd	"delete fdbentry 00:A3:F4:00:00:01 vlan vlan1"
+   
+   SendACmd	"delete vlan vlan1"
+}
+if {$mode == "unicast"} {
+   SendACmd	"disable ipforwarding"
+   #SendACmd	"config rip del vlan all"
+   #SendACmd	"disable rip"
+} else {
+   SendACmd	"disable igmp"
+   SendACmd	"disable igmp snooping"
+   SendACmd     "unconfigure igmp"
+   SendACmd	"disable ipmcforwarding"
+   SendACmd	"config pim del vlan all"
+   SendACmd	"disable pim"
+   SendACmd	"disable ipforwarding"
+   #SendACmd	"config rip del vlan all"
+   #SendACmd	"disable rip"
+}
+
+}
+
+################################################################## 
+# Procedure Name: QosTestSetupSingleVlan   
+# Description:  Set up one vlan only on both DUTs per single vlan QOS tests
+# Input args: args
+# Output args: none
+# Return value: none
+# Typical usage: 
+# 	QosTestSetupSingleVlan -wTag "true" -filePt $fd_res     
+# Category: SetupSwitch
+##################################################################
+proc QosTestSetupSingleVlan {args} {
+   parse_args QosTestSetupSingleVlan $args {
+     sIpAddrList "192.10.1.11 192.10.1.12 192.10.1.13 192.10.1.14"
+     dIpAddrList "192.10.1.21 192.10.1.22 192.10.1.23 192.10.1.24"
+     vlanDUT1IpAddrList "192.10.1.1"
+     vlanDUT2IpAddrList "192.10.1.100"
+     wTag "false"
+	 tagNo "2"
+     filePt "NULL"
+     }
+global DUT1_CONNECT
+global DUTs_info
+global whichDutNow
+global PortID_Info
+global bcmPlatform
+   
+
+set 10GigSlot 0
+#for {set i 1} {$i<=$DUTs_info(DUT1,numSlots)} {incr i} {
+#   if {[regexp -nocase "10Gig" $DUTs_Slot_info(DUT1,slot$i,hwModType)]} {
+#      set 10GigSlot 1
+#      break
+#   }
+#}
+
+if {$10GigSlot} {
+   # Call 10Gig qos routine
+   return [QosTestSetupSingleVlan10Gig -sIpAddrList $sIpAddrList -dIpAddrList $dIpAddrList -vlanDUT1IpAddrList $vlanDUT1IpAddrList -vlanDUT2IpAddrList $vlanDUT2IpAddrList -wTag $wTag -tagNo $tagNo -filePt $filePt]
+}
+
+Login $DUT1_CONNECT -fd $filePt
+
+   SendACmd	"create vlan vlan1"
+   SendACmd	"config vlan vlan1 ipa [lindex $vlanDUT1IpAddrList 0]"
+   if { $wTag == "true" } { 
+      SendACmd	"config vlan1 tag $tagNo"
+      SendACmd	"config vlan vlan1 add port [MapDUTPortId 1-4], [GetATrunkPort 1 2 1] tag"
+   } else {
+      SendACmd	"config vlan vlan1 add port [MapDUTPortId 1-4], [GetATrunkPort 1 2 1]"
+   }
+
+   SendACmd	"config iparp add [lindex $sIpAddrList 0] 00:A1:F1:00:00:01"
+   SendACmd	"config iparp add [lindex $sIpAddrList 1] 00:A1:F2:00:00:01"
+   SendACmd	"config iparp add [lindex $sIpAddrList 2] 00:A1:F3:00:00:01"
+   SendACmd	"config iparp add [lindex $sIpAddrList 3] 00:A1:F4:00:00:01"
+
+   global bcmPlatform
+   # add 1 as debug use static for all platforms
+   if {1 || [regexp -nocase "$bcmPlatform" $DUTs_info(DUT$whichDutNow,platform)]} {
+      SendACmd	"create fdbentry 00:A3:F1:00:00:01 vlan1 ports [GetATrunkPort 1 2 1]"
+      SendACmd	"create fdbentry 00:A3:F2:00:00:01 vlan1 ports [GetATrunkPort 1 2 1]"
+      SendACmd	"create fdbentry 00:A3:F3:00:00:01 vlan1 ports [GetATrunkPort 1 2 1]"
+      SendACmd	"create fdbentry 00:A3:F4:00:00:01 vlan1 ports [GetATrunkPort 1 2 1]"
+   }
+global DUT2_CONNECT
+Login $DUT2_CONNECT -fd $filePt
+
+   SendACmd	"create vlan vlan1"
+
+   if { $wTag == "true" } { 
+      SendACmd	"config vlan1 tag $tagNo"
+      SendACmd	"config vlan vlan1 add port [MapDUTPortId 9-12 2], [GetATrunkPort 2 1 1] tag"
+   } else {
+      SendACmd	"config vlan vlan1 add port [MapDUTPortId 9-12 2], [GetATrunkPort 2 1 1]"
+   }
+   
+   SendACmd	"config vlan vlan1 ipa [lindex $vlanDUT2IpAddrList 0]"
+   SendACmd	"create fdbentry 00:A3:F1:00:00:01 vlan1 ports [MapDUTPortId 9 2]"
+   SendACmd	"create fdbentry 00:A3:F2:00:00:01 vlan1 ports [MapDUTPortId 10 2]"
+   SendACmd	"create fdbentry 00:A3:F3:00:00:01 vlan1 ports [MapDUTPortId 11 2]"
+   SendACmd	"create fdbentry 00:A3:F4:00:00:01 vlan1 ports [MapDUTPortId 12 2]"
+
+   SendACmd	"config iparp add [lindex $dIpAddrList 0] 00:A3:F1:00:00:01"
+   SendACmd	"config iparp add [lindex $dIpAddrList 1] 00:A3:F2:00:00:01"
+   SendACmd	"config iparp add [lindex $dIpAddrList 2] 00:A3:F3:00:00:01"
+   SendACmd	"config iparp add [lindex $dIpAddrList 3] 00:A3:F4:00:00:01"
+
+}
+
+################################################################## 
+# Procedure Name: QosTestCleanupSingleVlan   
+# Description: Clean up the QOS config set up by QosTestSetupSingleVlan  
+# Input args: args
+# Output args: none
+# Return value: none
+# Typical usage: 
+#      	QosTestCleanupSingleVlan -filePt $fd_res
+# Category: SetupSwitch
+##################################################################
+proc QosTestCleanupSingleVlan {args} {
+   parse_args QosTestCleanupSingleVlan $args {
+     sIpAddrList "192.10.1.11 192.10.1.12 192.10.1.13 192.10.1.14"
+     dIpAddrList "192.10.1.21 192.10.1.22 192.10.1.23 192.10.1.24"
+     filePt "NULL"
+     }
+global DUT1_CONNECT
+global PortID_Info
+global whichDutNow
+global bcmPlatform
+global DUTs_info
+set 10GigSlot 0
+#for {set i 1} {$i<=$DUTs_info(DUT1,numSlots)} {incr i} {
+#   if {[regexp -nocase "10Gig" $DUTs_Slot_info(DUT1,slot$i,hwModType)]} {
+#      set 10GigSlot 1
+#      break
+#   }
+#}
+
+if {$10GigSlot} {
+   # Call 10Gig qos routine
+   return [QosTestCleanupSingleVlan10Gig -sIpAddrList $sIpAddrList -dIpAddrList $dIpAddrList -filePt $filePt]
+}
+Login $DUT1_CONNECT -fd $filePt
+
+   SendACmd	"config iparp del [lindex $sIpAddrList 0]"
+   SendACmd	"config iparp del [lindex $sIpAddrList 1]"
+   SendACmd	"config iparp del [lindex $sIpAddrList 2]"
+   SendACmd	"config iparp del [lindex $sIpAddrList 3]"
+   global bcmPlatform
+   # Add 1 for debug to add static for genesis as well
+   if {1 || [regexp -nocase "$bcmPlatform" $DUTs_info(DUT$whichDutNow,platform)]} {
+      SendACmd	"delete fdbentry 00:A3:F1:00:00:01 vlan1"
+      SendACmd	"delete fdbentry 00:A3:F2:00:00:01 vlan1"
+      SendACmd	"delete fdbentry 00:A3:F3:00:00:01 vlan1"
+      SendACmd	"delete fdbentry 00:A3:F4:00:00:01 vlan1"
+   }
+   if ![regexp -nocase "$bcmPlatform" $DUTs_info(DUT$whichDutNow,platform)] {
+      SendACmd	"unconfig qosprofile"
+      SendACmd	"unconfig qosprofile port all"
+   }
+   SendACmd	"unconf access-list"
+   SendACmd	"delete vlan vlan1"
+
+
+
+#SendACmd	"configure ports [GetATrunkPort 1 2 1] auto on"
+
+global DUT2_CONNECT
+Login $DUT2_CONNECT -fd $filePt
+
+   SendACmd	"config iparp del [lindex $dIpAddrList 0]"
+   SendACmd	"config iparp del [lindex $dIpAddrList 1]"
+   SendACmd	"config iparp del [lindex $dIpAddrList 2]"
+   SendACmd	"config iparp del [lindex $dIpAddrList 3]"
+
+
+   SendACmd	"delete fdbentry 00:A3:F1:00:00:01 vlan vlan1"
+   SendACmd	"delete fdbentry 00:A3:F2:00:00:01 vlan vlan1"
+   SendACmd	"delete fdbentry 00:A3:F3:00:00:01 vlan vlan1"
+   SendACmd	"delete fdbentry 00:A3:F4:00:00:01 vlan vlan1"
+   
+   SendACmd	"delete vlan vlan1"
+
+}
+
+
+################################################################## 
+# Procedure Name: configMatrix   
+# Description:  Send IP stream from a list of ports after acess-list or port/vlan/fdb
+#		are configured per qosType
+# Input args: args
+# Output args: none
+# Return value: none
+# Typical usage: 
+#  	configMatrix -priList $priList -portIdTxList $portIdTxList -qosType $qosType \
+#		     -sIpAddrList $sIpAddrList -dIpAddrList $dIpAddrList -sPortList $sPortList \
+#                    -dPortList $dPortList -TOSList $TOSList -tagList $tagList \
+#		     -destMacAddrTxList $destMacAddrTxList -ipProtocol $ipProtocol    
+# Category: SetupSwitch, SendTraffic
+##################################################################
+proc configMatrix {args} {
+   parse_args configMatrix $args {
+     priList "0 1 2 3"
+     portIdTxList "1 2 3 4"
+     qosType "802.1p"
+     destMacAddrTxList "DUTMac"
+     sIpAddrList "192.10.1.2 192.10.2.2 192.10.3.2 192.10.4.2"
+     dIpAddrList "192.20.1.2 192.20.2.2 192.20.3.2 192.20.4.2"
+     sPortList "0 0 0 0"
+     dPortList "0 0 0 0"
+     TOSList "0x00 0x00 0x00 0x00"
+     tagList "none none none none"
+     ipProtocol "ip"
+   }
+   global startCardNum
+   global DUTs_info
+   global PortID_Info
+
+   set 10GigSlot 0
+#   for {set i 1} {$i<=$DUTs_info(DUT1,numSlots)} {incr i} {
+#      if {[regexp -nocase "10Gig" $DUTs_Slot_info(DUT1,slot$i,hwModType)]} {
+#         set 10GigSlot 1
+#         break
+#      }
+#   }
+
+   if {$10GigSlot} {
+      # Call 10Gig qos routine
+      return [configMatrix10Gig -priList $priList -portIdTxList $portIdTxList \
+   -qosType $qosType -destMacAddrTxList $destMacAddrTxList \
+   -sIpAddrList $sIpAddrList -dIpAddrList $dIpAddrList -sPortList $sPortList \
+   -dPortList $dPortList -TOSList $TOSList -tagList $tagList -ipProtocol $ipProtocol]
+}
+   set pPattern "5678"
+   
+   foreach portIdTx $portIdTxList {
+      MapIxiaPortId $portIdTx txChas txCard txPort
+      ixStopPortTransmit  $txChas $txCard $txPort  
+   }
+
+   set QPa "QP[expr [lindex $priList 0]+1]"
+   set QPb "QP[expr [lindex $priList 1]+1]"
+   set QPc "QP[expr [lindex $priList 2]+1]"
+   set QPd "QP[expr [lindex $priList 3]+1]"
+
+   switch $qosType {
+      "port" {
+         SendACmd "conf port [MapDUTPortId 1] qosprofile $QPa"
+         SendACmd "conf port [MapDUTPortId 2] qosprofile $QPb"
+         SendACmd "conf port [MapDUTPortId 3] qosprofile $QPc"
+         SendACmd "conf port [MapDUTPortId 4] qosprofile $QPd"
+      }
+      "mac" {
+         SendACmd	"delete fdbentry 00:A3:F1:00:00:01 vlan vlan1"
+         SendACmd	"delete fdbentry 00:A3:F2:00:00:01 vlan vlan1"
+         SendACmd	"delete fdbentry 00:A3:F3:00:00:01 vlan vlan1"
+         SendACmd	"delete fdbentry 00:A3:F4:00:00:01 vlan vlan1"
+         SendACmd	"create fdbentry 00:A3:F1:00:00:01 vlan vlan1 port [GetATrunkPort 1 2 1] qosprofile $QPa"
+         SendACmd	"create fdbentry 00:A3:F2:00:00:01 vlan vlan1 port [GetATrunkPort 1 2 1] qosprofile $QPb"
+         SendACmd	"create fdbentry 00:A3:F3:00:00:01 vlan vlan1 port [GetATrunkPort 1 2 1] qosprofile $QPc"
+         SendACmd	"create fdbentry 00:A3:F4:00:00:01 vlan vlan1 port [GetATrunkPort 1 2 1] qosprofile $QPd"
+      }
+      "vlan" {
+         SendACmd "conf vlan1 qosprofile $QPa"
+         SendACmd "conf vlan2 qosprofile $QPb"
+         SendACmd "conf vlan3 qosprofile $QPc"
+         SendACmd "conf vlan4 qosprofile $QPd"
+      }
+      "10.1.1" {
+         SendACmd "uncon access-list"
+         set polName [CreateACLsFor10.1.1 $QPa $QPb $QPc $QPd]
+      }
+      "10.1.2" {
+         SendACmd "uncon access-list"
+         set polName [CreateACLsFor10.1.2 $QPa $QPb $QPc $QPd]
+      }
+      "10.1.4" {
+         SendACmd "uncon access-list"
+         set polName [CreateACLsFor10.1.4 $QPa $QPb $QPc $QPd]
+      }
+      "10.1.5" {
+         SendACmd "uncon access-list"
+         set polName [CreateACLsFor10.1.5 "destination-port" $dPortList "tcp" $QPa $QPb $QPc $QPd]
+      }
+      "10.1.6" {
+         SendACmd "uncon access-list"
+         set polName [CreateACLsFor10.1.5 "source-port" $sPortList  "udp" $QPa $QPb $QPc $QPd]
+      }
+      "10.1.7" {
+         SendACmd "uncon access-list"
+         set polName [CreateACLsFor10.1.7 $QPa $QPb $QPc $QPd]
+      }
+      "10.2.1" {
+         SendACmd "uncon access-list"
+         set polName [CreateACLsforMCast -dIpAddrList $dIpAddrList -dMaskList "32 32 32 32" \
+                      -sIpAddrList $sIpAddrList -sMaskList "24 24 24 24" -qpList "$QPa $QPb $QPc $QPd"]
+      }
+      "10.2.2" {
+         SendACmd "uncon access-list"
+         set polName [CreateACLsforMCast -dIpAddrList $dIpAddrList -dMaskList "32 32 32 32" \
+                      -sIpAddrList $sIpAddrList -sMaskList "24 24 24 24" -qpList "$QPa $QPb $QPc $QPd"]
+      }
+      "10.2.3" {
+         SendACmd "uncon access-list"
+         set polName [CreateACLsforMCast -dIpAddrList $dIpAddrList -dMaskList "8 16 24 8" \
+                      -sIpAddrList $sIpAddrList -sMaskList "24 24 24 24" -qpList "$QPa $QPb $QPc $QPd"]
+      }
+      "10.2.4" {
+         SendACmd "uncon access-list"
+         set polName [CreateACLsforMCast -dIpAddrList $dIpAddrList -dMaskList "24 24 24 24" \
+                      -dstPortList $dPortList -proto $ipProtocol \
+                      -sIpAddrList $sIpAddrList -sMaskList "24 24 24 24" -qpList "$QPa $QPb $QPc $QPd"]
+      }
+      "10.2.5" {
+         SendACmd "uncon access-list"
+         set polName [CreateACLsforMCast -dIpAddrList $dIpAddrList -dMaskList "24 24 24 24" \
+                      -srcPortList $sPortList -proto $ipProtocol \
+                      -sIpAddrList $sIpAddrList -sMaskList "24 24 24 24" -qpList "$QPa $QPb $QPc $QPd"]
+      }
+      "10.2.6" {
+         SendACmd "uncon access-list"
+         set polName [CreateACLsforMCast -dIpAddrList $dIpAddrList -dMaskList "24 24 24 24" \
+                      -srcPortList $sPortList -proto $ipProtocol -dstPortList $dPortList \
+                      -sIpAddrList $sIpAddrList -sMaskList "24 24 24 24" -qpList "$QPa $QPb $QPc $QPd"]
+      }
+      default {
+      }
+   }
+
+   foreach portIdTx $portIdTxList {
+      MapIxiaPortId $portIdTx txChas txCard txPort
+      set portIdRx [expr $portIdTx + 8]
+      MapIxiaPortId $portIdRx rxChas rxCard rxPort   
+      set sIpAddr [lindex $sIpAddrList [expr $portIdTx - 1] ]
+      set dIpAddr [lindex $dIpAddrList [expr $portIdTx - 1] ]
+      set sPort [lindex $sPortList [expr $portIdTx - 1] ]
+      set dPort [lindex $dPortList [expr $portIdTx - 1] ]
+      set TOS [lindex $TOSList [expr $portIdTx - 1] ]
+      set tag [lindex $tagList [expr $portIdTx - 1] ]
+      set wTag "true"
+      if { $tag == "none" } { set wTag "false" }
+      set priority [lindex $priList [expr $portIdTx - 1] ]
+      if {$destMacAddrTxList == "DUTMac"} {
+         global DUTs_info
+         set destMacAddrTx $DUTs_info(DUT1,sysMAC)
+      } else {
+         set destMacAddrTx [lindex $destMacAddrTxList [expr $portIdTx - 1] ]
+      }
+      #send a continuous ip stream
+      if {![regexp -nocase "10.2" $qosType]} {
+         global DUT1_CONNECT
+         Login $DUT1_CONNECT
+#         SendACmd "ping $dIpAddr"
+      } else {
+      set frameSent [ixiaConf_2Ports_ip	-txChas $txChas -txCard $txCard -txPort $txPort \
+                       -rxChas $rxChas -rxCard $rxCard -rxPort $rxPort  \
+                       -startCardNum $startCardNum -dataPattern $pPattern \
+                       -percentage $PortID_Info($portIdTx,normTxPerc) \
+                       -TOS $TOS \
+                       -ipProtocol $ipProtocol -pDstPort $dPort -pSrcPort $sPort \
+                       -dMacAddr $destMacAddrTx -sIpAddr $sIpAddr  -dIpAddr $dIpAddr \
+                       -wTag $wTag -tagNo $tag -userPriority $priority ]
+      }
+   }
+   foreach portIdTx $portIdTxList {
+      MapIxiaPortId $portIdTx txChas txCard txPort
+      set portIdRx [expr $portIdTx + 8]
+      MapIxiaPortId $portIdRx rxChas rxCard rxPort   
+      set sIpAddr [lindex $sIpAddrList [expr $portIdTx - 1] ]
+      set dIpAddr [lindex $dIpAddrList [expr $portIdTx - 1] ]
+      set sPort [lindex $sPortList [expr $portIdTx - 1] ]
+      set dPort [lindex $dPortList [expr $portIdTx - 1] ]
+      set TOS [lindex $TOSList [expr $portIdTx - 1] ]
+      set tag [lindex $tagList [expr $portIdTx - 1] ]
+      set wTag "true"
+      if { $tag == "none" } { set wTag "false" }
+      set priority [lindex $priList [expr $portIdTx - 1] ]
+      if {$destMacAddrTxList == "DUTMac"} {
+         global DUTs_info
+         set destMacAddrTx $DUTs_info(DUT1,sysMAC)
+      } else {
+         set destMacAddrTx [lindex $destMacAddrTxList [expr $portIdTx - 1] ]
+      }
+      set frameSent [ixiaConf_2Ports_ip	-txChas $txChas -txCard $txCard -txPort $txPort \
+                       -rxChas $rxChas -rxCard $rxCard -rxPort $rxPort  \
+                       -startCardNum $startCardNum -dataPattern $pPattern \
+                       -streamType "contPacket" -percentage $PortID_Info($portIdTx,normTxPerc) \
+                       -TOS $TOS -frameSizeType "sizeRandom" \
+                       -ipProtocol $ipProtocol -pDstPort $dPort -pSrcPort $sPort \
+                       -dMacAddr $destMacAddrTx  -sIpAddr $sIpAddr  -dIpAddr $dIpAddr \
+                       -wTag $wTag -tagNo $tag -userPriority $priority ]
+      #wait for things to settle down
+#      exSleep 3
+   }
+}
+
+################################################################## 
+# Procedure Name: configBCMMatrixQosType   
+# Description:  Send Variable Percentage IP stream from a list of 
+#               ports after acess-list or port/vlan/fdb
+#       		are configured per qosType
+# Input args: args
+# Output args: none
+# Return value: none
+# Typical usage: 
+#  	configMatrixQosType -priList $priList -portIdTxList $portIdTxList -qosType $qosType \
+#		     -sIpAddrList $sIpAddrList -dIpAddrList $dIpAddrList -sPortList $sPortList \
+#                    -dPortList $dPortList -TOSList $TOSList -tagList $tagList \
+#		     -destMacAddrTxList $destMacAddrTxList -ipProtocol $ipProtocol    
+# Category: SetupSwitch, SendTraffic
+##################################################################
+proc CheckBCMMatrixQosType {args} {
+    parse_args configMatrix $args {
+        priList "0 1 2 3"
+        portIdTxList "1 2 3 4"
+        protocol "ip"
+        qosType "802.1p"
+        srcMacAddrTxList "srcMac"
+        destMacAddrTxList "DUTMac"
+        sIpAddrList "192.10.1.2 192.10.2.2 192.10.3.2 192.10.4.2"
+        dIpAddrList "192.20.1.2 192.20.2.2 192.20.3.2 192.20.4.2"
+        sPortList "0 0 0 0"
+        dPortList "0 0 0 0"
+        TOSList "0x00 0x00 0x00 0x00"
+        tagList "none none none none"
+        ratioThreshold "2.5"
+        qosEnable "1"
+        percent_tolerance ".061"
+    
+    }
+    
+    set ipProtocol $protocol
+    
+    global startCardNum
+    global PortID_Info
+    global DUTs_info
+
+
+    # Local Variables
+    set portIdTxList "1 2 3 4"
+    set portIdRxList "9 10 11 12"
+
+    set 10GigSlot 0
+#   for {set i 1} {$i<=$DUTs_info(DUT1,numSlots)} {incr i} {
+#      if {[regexp -nocase "10Gig" $DUTs_Slot_info(DUT1,slot$i,hwModType)]} {
+#         set 10GigSlot 1
+#         break
+#      }
+#   }
+
+    if {$10GigSlot} {
+        # Call 10Gig qos routine
+        return [configMatrix10Gig -priList $priList -portIdTxList $portIdTxList \
+        -qosType $qosType -destMacAddrTxList $destMacAddrTxList \
+        -sIpAddrList $sIpAddrList -dIpAddrList $dIpAddrList -sPortList $sPortList \
+        -dPortList $dPortList -TOSList $TOSList -tagList $tagList -ipProtocol $ipProtocol]
+    }
+    set pPattern "5678"
+    
+    foreach portIdTx $portIdTxList {
+       MapIxiaPortId $portIdTx txChas txCard txPort
+       ixStopPortTransmit  $txChas $txCard $txPort  
+    }
+    
+    set QPa "QP[expr [lindex $priList 0]+1]"
+    set QPb "QP[expr [lindex $priList 1]+1]"
+    set QPc "QP[expr [lindex $priList 2]+1]"
+    set QPd "QP[expr [lindex $priList 3]+1]"
+
+    switch $qosType {
+        "port" {
+             SendACmd "conf port [MapDUTPortId 1] qosprofile $QPa"
+             SendACmd "conf port [MapDUTPortId 2] qosprofile $QPb"
+             SendACmd "conf port [MapDUTPortId 3] qosprofile $QPc"
+             SendACmd "conf port [MapDUTPortId 4] qosprofile $QPd"
+        }
+        "mac" {
+             SendACmd	"delete fdbentry 00:A3:F1:00:00:01 vlan vlan1"
+             SendACmd	"delete fdbentry 00:A3:F2:00:00:01 vlan vlan1"
+             SendACmd	"delete fdbentry 00:A3:F3:00:00:01 vlan vlan1"
+             SendACmd	"delete fdbentry 00:A3:F4:00:00:01 vlan vlan1"
+             SendACmd	"create fdbentry 00:A3:F1:00:00:01 vlan vlan1 port [GetATrunkPort 1 2 1] qosprofile $QPa"
+             SendACmd	"create fdbentry 00:A3:F2:00:00:01 vlan vlan1 port [GetATrunkPort 1 2 1] qosprofile $QPb"
+             SendACmd	"create fdbentry 00:A3:F3:00:00:01 vlan vlan1 port [GetATrunkPort 1 2 1] qosprofile $QPc"
+             SendACmd	"create fdbentry 00:A3:F4:00:00:01 vlan vlan1 port [GetATrunkPort 1 2 1] qosprofile $QPd"
+        }
+        "vlan" {
+             SendACmd "conf vlan1 qosprofile $QPa"
+             SendACmd "conf vlan2 qosprofile $QPb"
+             SendACmd "conf vlan3 qosprofile $QPc"
+             SendACmd "conf vlan4 qosprofile $QPd"
+        }
+        "10.1.1" {
+             SendACmd "uncon access-list"
+             set polName [CreateACLsFor10.1.1 $QPa $QPb $QPc $QPd]
+        }
+        "10.1.2" {
+             SendACmd "uncon access-list"
+             set polName [CreateACLsFor10.1.2 $QPa $QPb $QPc $QPd]
+        }
+        "10.1.4" {
+             SendACmd "uncon access-list"
+             set polName [CreateACLsFor10.1.4 $QPa $QPb $QPc $QPd]
+        }
+        "10.1.5" {
+             SendACmd "uncon access-list"
+             set polName [CreateACLsFor10.1.5 "destination-port" $dPortList "tcp" $QPa $QPb $QPc $QPd]
+        }
+        "10.1.6" {
+             SendACmd "uncon access-list"
+             set polName [CreateACLsFor10.1.5 "source-port" $sPortList  "udp" $QPa $QPb $QPc $QPd]
+        }
+        "10.1.7" {
+             SendACmd "uncon access-list"
+             set polName [CreateACLsFor10.1.7 $QPa $QPb $QPc $QPd]
+        }
+        "10.2.1" {
+             SendACmd "uncon access-list"
+             set polName [CreateACLsforMCast -dIpAddrList $dIpAddrList -dMaskList "32 32 32 32" \
+                          -sIpAddrList $sIpAddrList -sMaskList "24 24 24 24" -qpList "$QPa $QPb $QPc $QPd"]
+        }
+        "10.2.2" {
+             SendACmd "uncon access-list"
+             set polName [CreateACLsforMCast -dIpAddrList $dIpAddrList -dMaskList "32 32 32 32" \
+                          -sIpAddrList $sIpAddrList -sMaskList "24 24 24 24" -qpList "$QPa $QPb $QPc $QPd"]
+        }
+        "10.2.3" {
+             SendACmd "uncon access-list"
+             set polName [CreateACLsforMCast -dIpAddrList $dIpAddrList -dMaskList "8 16 24 8" \
+                          -sIpAddrList $sIpAddrList -sMaskList "24 24 24 24" -qpList "$QPa $QPb $QPc $QPd"]
+        }
+        "10.2.4" {
+             SendACmd "uncon access-list"
+             set polName [CreateACLsforMCast -dIpAddrList $dIpAddrList -dMaskList "24 24 24 24" \
+                          -dstPortList $dPortList -proto $ipProtocol \
+                          -sIpAddrList $sIpAddrList -sMaskList "24 24 24 24" -qpList "$QPa $QPb $QPc $QPd"]
+        }
+        "10.2.5" {
+             SendACmd "uncon access-list"
+             set polName [CreateACLsforMCast -dIpAddrList $dIpAddrList -dMaskList "24 24 24 24" \
+                          -srcPortList $sPortList -proto $ipProtocol \
+                          -sIpAddrList $sIpAddrList -sMaskList "24 24 24 24" -qpList "$QPa $QPb $QPc $QPd"]
+        }
+        "10.2.6" {
+             SendACmd "uncon access-list"
+             set polName [CreateACLsforMCast -dIpAddrList $dIpAddrList -dMaskList "24 24 24 24" \
+                          -srcPortList $sPortList -proto $ipProtocol -dstPortList $dPortList \
+                          -sIpAddrList $sIpAddrList -sMaskList "24 24 24 24" -qpList "$QPa $QPb $QPc $QPd"]
+        }
+        default {
+        }
+    }
+    #
+    # Prime the traffic
+    #
+   result_debug "---------------- PRIME Traffic ----------------"
+   foreach portIdTx $portIdTxList {
+      MapIxiaPortId $portIdTx txChas txCard txPort
+      set portIdRx [expr $portIdTx + 8]
+      MapIxiaPortId $portIdRx rxChas rxCard rxPort   
+      set sIpAddr [lindex $sIpAddrList [expr $portIdTx - 1] ]
+      set dIpAddr [lindex $dIpAddrList [expr $portIdTx - 1] ]
+      set sPort [lindex $sPortList [expr $portIdTx - 1] ]
+      set dPort [lindex $dPortList [expr $portIdTx - 1] ]
+      set TOS [lindex $TOSList [expr $portIdTx - 1] ]
+      set tag [lindex $tagList [expr $portIdTx - 1] ]
+      set wTag "true"
+      if { $tag == "none" } { set wTag "false" }
+         set priority [lindex $priList [expr $portIdTx - 1] ]
+      if {$destMacAddrTxList == "DUTMac"} {
+         global DUTs_info
+         set destMacAddrTx $DUTs_info(DUT1,sysMAC)
+      } else {
+         set destMacAddrTx [lindex $destMacAddrTxList [expr $portIdTx - 1] ]
+      }
+      #send a continuous ip stream
+      if {![regexp -nocase "10.2" $qosType]} {
+         global DUT1_CONNECT
+         Login $DUT1_CONNECT
+      } else {
+         result_debug "Prime% ID$portIdTx : $PortID_Info($portIdTx,normTxPerc) "
+         set frameSent [ixiaConf_2Ports_ip	-txChas $txChas -txCard $txCard -txPort $txPort \
+                 -rxChas $rxChas -rxCard $rxCard -rxPort $rxPort  \
+                 -startCardNum $startCardNum -dataPattern $pPattern \
+                 -percentage $PortID_Info($portIdTx,normTxPerc) \
+                 -TOS $TOS \
+                 -ipProtocol $ipProtocol -pDstPort $dPort -pSrcPort $sPort \
+                 -dMacAddr $destMacAddrTx -sIpAddr $sIpAddr  -dIpAddr $dIpAddr \
+                 -wTag $wTag -tagNo $tag -userPriority $priority ]
+      }
+   }
+
+
+#Matrix Values.  Traffic is throttled by the trunk port
+set qpList "$QPa $QPb $QPc $QPd"
+if {$qosEnable} {
+   set eTitle "Enabled"
+   # This is a little cryptic but qosPortOrder is a port
+   #  ordering from lowest priority (1234 port 1 lowest 4 highest)
+   #  (1342 port 1 lowest 3 next highest 4 next highest, 2 highest priority 
+   set txBW {"20  100 100 100" "20  33  100 100" "20  33  50  100" "20  34  50  100"}
+   set rxBW {"100 0   0   0"   "100 100 0   0"   "100 100 100   0" "100 100 100 100"}
+   if {0} {
+   for {set p 0} {$p<4} {incr p} {
+      set qpIn [lindex $qpList $p]
+      switch $qpIn {
+         "QP1" {
+                set txPortBW1 [lindex $txBW 0]
+                set rxPortBW1 [lindex $rxBW 0]
+                lappend txBW $txPortBW1
+                lappend rxBW $rxPortBW1
+             }
+         "QP2" {
+                set txPortBW2 [lindex $txBW 1]
+                set rxPortBW2 [lindex $rxBW 1]
+                lappend txBW $txPortBW2
+                lappend rxBW $rxPortBW2
+             }
+         "QP3" { 
+                set txPortBW3 [lindex $txBW 2]
+                set rxPortBW3 [lindex $rxBW 2]
+                lappend txBW $txPortBW3
+                lappend rxBW $rxPortBW3
+             }
+         "QP4" {
+                set txPortBW4 [lindex $txBW 3]
+                set rxPortBW4 [lindex $rxBW 3]
+                lappend txBW $txPortBW4
+                lappend rxBW $rxPortBW4
+             }
+      }
+   }
+   }
+   result_debug "$txBW"
+   result_debug "$rxBW"
+
+} else {
+    set eTitle "Disabled"
+    set txBW {{20 50 75 100} \
+                       {20 50 75 100} \
+                       {20 50 75 100} \
+                       {20 50 75 100}}
+    set rxBW {{100 50 33 25} \
+                       {100 50 33 25} \
+                       {100 50 33 25} \
+                       {100 50 33 25}}
+}
+
+    ################################################
+    set subTest "Checking $qosType $eTitle Bandwidth criteria using $QPa, $QPb, $QPc, $QPd"
+    ################################################
+    result_h2 "$subTest"
+    report_start_test "$subTest"
+    set j 0;
+    foreach priValue $priList {
+        ################################################
+        set subTest "Matrix Variable Rates $QPa Rx=[lindex [lindex $rxBW 0] $j] $QPb Rx=[lindex [lindex $rxBW 1] $j] $QPc Rx=[lindex [lindex $rxBW 2] $j] $QPd Rx=[lindex [lindex $rxBW 3] $j]"
+        ################################################
+        result_h2 "$subTest"
+        report_start_test "$subTest"
+           set portIndex 0;
+           foreach portIdTx $portIdTxList {
+              result_debug "TX % ID$portIdTx : [expr (double([lindex [lindex $txBW $portIndex] $j]) * double($PortID_Info($portIdTx,normTxPercBy100)))]"
+              set portIdRx [expr $portIdTx + 8]
+              set sIpAddr [lindex $sIpAddrList [expr $portIdTx - 1] ]
+              set dIpAddr [lindex $dIpAddrList [expr $portIdTx - 1] ]
+              set sPort [lindex $sPortList $portIndex ]
+              set dPort [lindex $dPortList $portIndex ]
+              set TOS [lindex $TOSList $portIndex ]
+              set tag [lindex $tagList $portIndex ]
+              set wTag "true"
+              if { $tag == "none" } { set wTag "false" }
+              set priority [lindex $priList [expr $portIdTx - 1] ]
+              if {$destMacAddrTxList == "DUTMac"} {
+                 global DUTs_info
+                 set destMacAddrTx $DUTs_info(DUT1,sysMAC)
+              } else {
+                 set destMacAddrTx [lindex $destMacAddrTxList [expr $portIdTx - 1] ]
+              }
+              result_debug "TOS = $TOS Test percentage [lindex [lindex $txBW $portIndex] $j]";
+              #set frameSent [ixiaConf_2Ports_ip	-txChas $txChas -txCard $txCard -txPort $txPort \
+              #                 -rxChas $rxChas -rxCard $rxCard -rxPort $rxPort  \
+              #                 -startCardNum $startCardNum -dataPattern $pPattern \
+              #                 -streamType "contPacket" -percentage [lindex [lindex $txBW $portIndex] $j] -TOS $TOS -frameSizeType "sizeRandom" \
+              #                 -ipProtocol $ipProtocol -pDstPort $dPort -pSrcPort $sPort \
+              #                 -dMacAddr $destMacAddrTx  -sIpAddr $sIpAddr  -dIpAddr $dIpAddr \
+              #                 -wTag $wTag -tagNo $tag -userPriority $priority ]
+              #wait for things to settle down
+              SendIpFrame -txPortId $portIdTx -streamType "contPacket" \
+              -tag $tag \
+              -userPriority $priority -TOS $TOS \
+              -percentage [expr (double([lindex [lindex $txBW $portIndex] $j]) * double($PortID_Info($portIdTx,normTxPercBy100)))] \
+              -destMac $destMacAddrTx \
+              -sourceIp [lindex $sIpAddrList $portIndex] \
+              -destIp [lindex $dIpAddrList $portIndex] \
+              -sourcePort [lindex $sPortList $portIndex] \
+              -destPort [lindex $dPortList  $portIndex]
+        #      exSleep 3
+              incr portIndex;
+          }              
+           
+          set tag [lindex $tagList $j]
+          if { $tag == "none" } { set $tag "" }
+
+          SendACmd "clear count"
+           
+          ClearPortsStats $portIdTxList
+          ClearPortsStats $portIdRxList
+            
+          exSleep 3
+          lappend checkRateList {"negTest" "1  0"}
+          lappend checkRateList {"negTest" "2  0"}
+          lappend checkRateList {"negTest" "3  0"}
+          lappend checkRateList {"negTest" "4  0"}
+          lappend checkRateList "{1 [lindex [lindex $txBW 0] $j]} {9  [lindex [lindex $rxBW 0] $j]} $tag"
+          lappend checkRateList "{2 [lindex [lindex $txBW 1] $j]} {10 [lindex [lindex $rxBW 1] $j]} $tag"
+          lappend checkRateList "{3 [lindex [lindex $txBW 2] $j]} {11 [lindex [lindex $rxBW 2] $j]} $tag"
+          lappend checkRateList "{4 [lindex [lindex $txBW 3] $j]} {12 [lindex [lindex $rxBW 3] $j]} $tag"
+          result_debug "$checkRateList"
+          CheckRatesTxRx $checkRateList "Check for receive rates based on QP Assignment" $percent_tolerance
+          unset checkRateList
+          StopPortsTransmit $portIdTxList;
+            
+          report_end_test;
+          incr j;
+     }
+     report_end_test;
+}
+
+
+#############################################################################
+proc CheckBCMMatrix {args} {
+   parse_args CheckBandwidthMatrix $args {
+     protocol "ip"
+     srcMacAddrTxList "srcMac"
+     destMacAddrTxList "DUTMac"
+     sIpAddrList "192.10.1.2 192.10.2.2 192.10.3.2 192.10.4.2"
+     dIpAddrList "192.20.1.2 192.20.2.2 192.20.3.2 192.20.4.2"
+     sPortList "0 0 0 0"
+     dPortList "0 0 0 0"
+     TOSList "0x00 0x00 0x00 0x00"
+     QPList "1 2 3 4"
+     tagList "none none none none"
+     rxPortsTagged "0"
+     checkQosList ""
+     checkMatrix "BasicL2"
+     ratioThreshold "3"
+     qosType "802.1p"
+     filePt "NULL"
+     testFileName "Temp"
+     qosEnable "1"
+   }
+global startCardNum
+global DUTs_info
+global PortID_Info
+# Local Variables
+set portIdTxList "1 2 3 4"
+set portIdRxList "9 10 11 12"
+set pPattern "5678"
+
+if {$protocol == "multicast"} {
+   set joinGroup 22
+   set portList {1 2 3 4}
+   foreach portId $portList {
+      set portIdTx [expr $portId + 8]
+      set multicastIP 22[expr $portId + 4].1.2.3
+      set destMacMulticast "01 00 5E 01 02 03" 
+      set clientIP1 192.20.$portId.2
+      #send an join multicast group igmp packet
+      result_debug "$clientIP1 joins multicast group $multicastIP"
+      set rxPort [MapIxiaPortId $portIdTx chasis card port]
+      set frameSent [ixiaConf_2Ports_ip	-txChas $chasis -txCard $card  -txPort $port \
+                       -rxChas $chasis -rxCard $card  -rxPort $rxPort  \
+                       -ipProtocol "igmp" -type $joinGroup -ttl 1      \
+                       -startCardNum $startCardNum  -dMacAddr $destMacMulticast \
+                       -sIpAddr  $clientIP1  -dIpAddr $multicastIP -groupAddr $multicastIP ]
+   }
+
+   set ipProtocol "udp"
+   set destMacAddrTxList {01:00:5E:01:02:03 01:00:5E:01:02:03 01:00:5E:01:02:03 01:00:5E:01:02:03}
+   #send join
+} else {
+   set ipProtocol $protocol
+}
+set QPa "QP[lindex $QPList 0]"
+set QPb "QP[lindex $QPList 1]"
+set QPc "QP[lindex $QPList 2]"
+set QPd "QP[lindex $QPList 3]"
+set Qa [expr [lindex $QPList 0] - 1]
+set Qb [expr [lindex $QPList 1] - 1]
+set Qc [expr [lindex $QPList 2] - 1]
+set Qd [expr [lindex $QPList 3] - 1]
+#Matrix Values.  Traffic is throttled by the trunk port
+if {$qosEnable} {
+    # This is a little cryptic but qosPortOrder is a port
+    #  ordering from lowest priority (1234 port 1 lowest 4 highest)
+    #  (1342 port 1 lowest 3 next highest 4 next highest, 2 highest priority 
+    set txBW {"20  100 100 100" "20  33  100 100" "20  33  50  100" "20  34  50  100"}
+    set rxBW {"100 0   0   0  " "100 100 0   0"   "100 100 100   0" "100 100 100 100"}
+    if {0} {
+    for {set p 0} {$p<4} {incr p} {
+        set qpIn [lindex $QPList $p]
+        switch $qpIn {
+            "4" {
+                   set txPortBW1 [lindex $txBW $p]
+                   set rxPortBW1 [lindex $rxBW $p]
+                   lappend txBW $txPortBW1
+                   lappend rxBW $rxPortBW1
+                }
+            "3" {
+                   set txPortBW2 [lindex $txBW $p]
+                   set rxPortBW2 [lindex $rxBW $p]
+                   lappend txBW $txPortBW2
+                   lappend rxBW $rxPortBW2
+                }
+            "2" { 
+                   set txPortBW3 [lindex $txBW $p]
+                   set rxPortBW3 [lindex $rxBW $p]
+                   lappend txBW $txPortBW3
+                   lappend rxBW $rxPortBW3
+                }
+            "1" {
+                   set txPortBW4 [lindex $txBW $p]
+                   set rxPortBW4 [lindex $rxBW $p]
+                   lappend txBW $txPortBW4
+                   lappend rxBW $rxPortBW4
+                }
+        }
+    }
+    }
+
+} else {
+    set txBW  {"20 50 75 100" \
+                        "20 50 75 100" \
+                        "20 50 75 100" \
+                        "20 50 75 100" }
+    set rxBW  {"100 50 33 25" \
+                        "100 50 33 25" \
+                        "100 50 33 25" \
+                        "100 50 33 25"}
+}
+
+
+if {$checkMatrix == "BasicL2"} {
+
+    ################################################
+    set subTest "Checking Basic L2 Bandwidth criteria using $QPa, $QPb, $QPc, $QPd"
+    ################################################
+    result_h2 "$subTest"
+    report_start_test "$subTest"
+    set w 0;
+    foreach qpValue $QPList {
+        ################################################
+        set subTest "$QPa Tx=[lindex [lindex $txBW 0] $w] dot1P=[expr [lindex $QPList 0] - 1] $QPb Tx=[lindex [lindex $txBW 1] $w] dot1P=[expr [lindex $QPList 1] - 1]  $QPc Tx=[lindex [lindex $txBW 2] $w] dot1P=[expr [lindex $QPList 2] - 1] $QPd Tx=[lindex [lindex $txBW 3] $w] dot1P=[expr [lindex $QPList 3] - 1] "
+        ################################################
+        result_h2 "$subTest"
+        report_start_test "$subTest"
+        set idListIndex 0;
+        foreach portIdTx $portIdTxList {
+            SendFrame -txPortId $portIdTx -streamType "contPacket" \
+            -tag [lindex $tagList $idListIndex] \
+            -tagPriority [expr [lindex $QPList $idListIndex] - 1] \
+            -sourceMac [lindex $srcMacAddrTxList $idListIndex] \
+            -percentage [expr (double([lindex [lindex $txBW $idListIndex] $w])  * double($PortID_Info($portIdTx,normTxPercBy100)))] \
+            -destMac [lindex $destMacAddrTxList $idListIndex]
+    
+            #make a taglist for the rate check below
+            if {[lindex $tagList $idListIndex] == "none" || !$rxPortsTagged} {
+                lappend tagRateList "{}"
+            } else {
+                lappend tagRateList [lindex $tagList $idListIndex]
+            }
+
+            incr idListIndex
+        }
+
+
+
+        SendACmd "clear count"
+        
+        ClearPortsStats $portIdTxList
+        ClearPortsStats $portIdRxList
+        
+        exSleep 3
+        lappend checkRateList {"negTest" "1 0"}
+        lappend checkRateList {"negTest" "2 0"}
+        lappend checkRateList {"negTest" "3 0"}
+        lappend checkRateList {"negTest" "4 0"}
+        lappend checkRateList "{1 [lindex [lindex $txBW 0] $w]} {9  [lindex [lindex $rxBW 0] $w] [lindex $tagRateList 0]} "
+        lappend checkRateList "{2 [lindex [lindex $txBW 1] $w]} {10 [lindex [lindex $rxBW 1] $w] [lindex $tagRateList 1]} "
+        lappend checkRateList "{3 [lindex [lindex $txBW 2] $w]} {11 [lindex [lindex $rxBW 2] $w] [lindex $tagRateList 2]} "
+        lappend checkRateList "{4 [lindex [lindex $txBW 3] $w]} {12 [lindex [lindex $rxBW 3] $w] [lindex $tagRateList 3]} "
+        CheckRatesTxRx $checkRateList "Check for receive rates based on QP Assignment" $ratioThreshold
+        unset checkRateList
+        StopPortsTransmit $portIdTxList;
+        
+        incr w;
+
+        report_end_test;
+    }
+    report_end_test;
+}
+if {$checkMatrix == "BasicL3"} {
+
+    ################################################
+    set subTest "Checking Basic L3 Bandwidth criteria using $QPa, $QPb, $QPc, $QPd"
+    ################################################
+    result_h2 "$subTest"
+    report_start_test "$subTest"
+    set w 0;
+    foreach qpValue $QPList {
+        ################################################
+        set subTest "$QPa Tx=[lindex [lindex $txBW 0] $w] dot1P=[expr [lindex $QPList 0] - 1] $QPb Tx=[lindex [lindex $txBW 1] $w] dot1P=[expr [lindex $QPList 1] - 1]  $QPc Tx=[lindex [lindex $txBW 2] $w] dot1P=[expr [lindex $QPList 2] - 1] $QPd Tx=[lindex [lindex $txBW 3] $w] dot1P=[expr [lindex $QPList 3] - 1] "
+        ################################################
+        result_h2 "$subTest"
+        report_start_test "$subTest"
+        set idListIndex 0;
+        foreach portIdTx $portIdTxList {
+
+            if {$destMacAddrTxList == "DUTMac"} {
+               global DUTs_info
+               set destMacAddrTx $DUTs_info(DUT1,sysMAC)
+            } else {
+               set destMacAddrTx [lindex $destMacAddrTxList $idListIndex ]
+            }
+
+            result_debug "txid = $portIdTx -tag [lindex $tagList $idListIndex] \
+            -userPriority [expr [lindex $QPList $idListIndex] - 1] \
+            -percentage [expr (double([lindex [lindex $txBW $idListIndex] $w]) * double($PortID_Info($portIdTx,normTxPercBy100)))] \
+            -destMac $destMacAddrTx \
+            -sourceIp [lindex $sIpAddrList $idListIndex] \
+            -destIp [lindex $dIpAddrList $idListIndex] \
+            -sourcePort [lindex $sPortList $idListIndex] \
+            -destPort [lindex $dPortList  $idListIndex]"
+
+            SendIpFrame -txPortId $portIdTx -streamType "contPacket" \
+            -tag [lindex $tagList $idListIndex] \
+            -userPriority [expr [lindex $QPList $idListIndex] - 1] \
+            -percentage [expr (double([lindex [lindex $txBW $idListIndex] $w])  * double($PortID_Info($portIdTx,normTxPercBy100)))] \
+            -destMac $destMacAddrTx \
+            -sourceIp [lindex $sIpAddrList $idListIndex] \
+            -destIp [lindex $dIpAddrList $idListIndex] \
+            -sourcePort [lindex $sPortList $idListIndex] \
+            -destPort [lindex $dPortList  $idListIndex]
+    
+            #make a taglist for the rate check below
+            if {[lindex $tagList $idListIndex] == "none" || !$rxPortsTagged} {
+                lappend tagRateList "{}"
+            } else {
+                lappend tagRateList [lindex $tagList $idListIndex]
+            }
+
+            incr idListIndex
+        }
+
+        set tag [lindex $tagList $w ]
+        if { $tag == "none" } { set $tag "" }
+        Login $DUTs_info(DUT1,connect)
+        SendACmd "clear count"
+        SendACmd "show ipr"
+        SendACmd "show port [MapDUTPortId 1-4],[GetATrunkPort 1 2 1] stat"
+        SendACmd "clear count"
+        Login $DUTs_info(DUT2,connect)
+        SendACmd "clear count"
+        SendACmd "show ipr"
+        SendACmd "show port [MapDUTPortId 9-12 2],[GetATrunkPort 2 1 1] stat"
+        ClearPortsStats $portIdTxList
+        ClearPortsStats $portIdRxList
+        
+        #puts "\nDebug Traffic Flow Sleeping";
+        exSleep 3
+        lappend checkRateList {"negTest" "1 0"}
+        lappend checkRateList {"negTest" "2 0"}
+        lappend checkRateList {"negTest" "3 0"}
+        lappend checkRateList {"negTest" "4 0"}
+        lappend checkRateList "{1 [lindex [lindex $txBW 0] $w]} {9  [lindex [lindex $rxBW 0] $w] [lindex $tagRateList 0]}"
+        lappend checkRateList "{2 [lindex [lindex $txBW 1] $w]} {10 [lindex [lindex $rxBW 1] $w] [lindex $tagRateList 1]}"
+        lappend checkRateList "{3 [lindex [lindex $txBW 2] $w]} {11 [lindex [lindex $rxBW 2] $w] [lindex $tagRateList 2]}"
+        lappend checkRateList "{4 [lindex [lindex $txBW 3] $w]} {12 [lindex [lindex $rxBW 3] $w] [lindex $tagRateList 3]}"
+        CheckRatesTxRx $checkRateList "Check for receive rates based on QP Assignment" $ratioThreshold
+        unset checkRateList
+        StopPortsTransmit $portIdTxList;
+        
+        incr w;
+
+        report_end_test;
+    }
+    report_end_test;
+}
+
+
+   if {$protocol == "multicast"} { 
+      global DUT2_CONNECT
+      Login $DUT2_CONNECT -fd $filePt
+      #SendACmd	"clear igmp snooping"
+
+      global DUT1_CONNECT
+      Login $DUT1_CONNECT -fd $filePt
+      #SendACmd	"clear igmp snooping"
+   }
+
+}
+################################################################## 
+# Procedure Name: CreateBcmQPs   
+# Description:  Since only Qp1 and Qp8 are on BCM by default.. 
+#		        create the rest or a portion
+# Input args: args
+# Output args: none
+# Return value: none
+# Typical usage: 
+#  	CreateBcmQPs -dutList "1 2"   
+# Category: SetupSwitch
+##################################################################
+proc CreateBcmQPs {args} {
+   parse_args CreateBcmQPs $args {
+      dutList "1"
+      qpList "2 3 4 5 6 7"
+      defaultDot1P "1"
+   }
+   global DUTs_info
+   foreach dutID $dutList {
+       Login $DUTs_info(DUT${dutID},connect)
+       foreach qp $qpList {
+           SendACmd "create qosprofile qp$qp";
+       }
+       if {$defaultDot1P} {
+           foreach qp $qpList {
+               SendACmd "configure dot1p type [expr $qp -1] qp$qp"
+           }
+       }
+   }
+}
+################################################################## 
+# Procedure Name: DeleteBcmQPs   
+# Description:  Since only Qp1 and Qp8 are on BCM by default.. 
+#		        This state should be returned to after a test runs
+# Input args: args
+# Output args: none
+# Return value: none
+# Typical usage: 
+#  	DeleteBcmQPs -dutList "1 2"   
+# Category: SetupSwitch
+##################################################################
+proc DeleteBcmQPs {args} {
+   parse_args CreateBcmQPs $args {
+      dutList "1"
+      qpList "2 3 4 5 6 7"
+      cleanDot1P "1"
+   }
+   global DUTs_info
+   foreach dutID $dutList {
+       Login $DUTs_info(DUT${dutID},connect)
+       if {$cleanDot1P} {
+           foreach qp $qpList {
+               if {$qp != 8} {
+                   SendACmd "configure dot1p type [expr $qp - 1] qp1"
+               } else {
+                   SendACmd "configure dot1p type 7 qp8"
+               }
+               
+           }
+       }
+       foreach qp $qpList {
+           SendACmd "delete qosprofile qp$qp";
+       }
+   }
+}
+################################################################## 
+# Procedure Name: ConfigDiffServExamMapping   
+# Description:  Since only Qp1 and Qp8 are on BCM by default.. 
+#		  diffserv examination dscp mapping values
+#                 are set to none standard values.  This function
+#                 allows for creation of dscp to qp mappings 
+# Input args: args
+# Output args: none
+# Return value: none
+# Typical usage: 
+#  	ConfigDiffServExamMapping -dutList "1" -dscpList "0 8 16" \
+#             -qpList "1 2 3"
+# Category: SetupSwitch
+##################################################################
+proc ConfigDiffServExamMapping {args} {
+   parse_args CreateBcmQPs $args {
+      dutList "1"
+      dscpList "0 8 16 23 24 25 32 40 48 50 56"
+      qpList   "1 2 3  3  4  4  5  6  7  7  8"
+   }
+   global DUTs_info
+   foreach dutID $dutList {
+       Login $DUTs_info(DUT${dutID},connect)
+       set i 0;
+       foreach qp $qpList {
+           SendACmd "conf diff exam code-point [lindex $dscpList $i] qp[lindex $qpList $i]";
+           incr i;
+       }
+   }
+}
+################################################################## 
+# Procedure Name: UnConfigBcmDiffServExam   
+# Description:  Since only Qp1 and Qp8 are on BCM by default.. 
+#		  diffserv examination values are set to none 
+#                 standard values.  This function returns 
+#                 diffserv exam to base bcm config 
+# Input args: args
+# Output args: none
+# Return value: none
+# Typical usage: 
+#  	UnConfigDiffServExamMapping -dutList "1" -dscpList "0 8 16"
+# Category: SetupSwitch
+##################################################################
+proc UnConfigBcmDiffServExamMapping {args} {
+   parse_args CreateBcmQPs $args {
+      dutList "1"
+      dscpList "0 8 16 23 24 25 32 40 48 50 56"
+   }
+   global DUTs_info
+   foreach dutID $dutList {
+      Login $DUTs_info(DUT${dutID},connect)
+      foreach ds $dscpList {
+         if {$ds < 56} {
+            SendACmd "conf diff exam code-point $ds qp1";               
+         } else {
+            SendACmd "conf diff exam code-point $ds qp8";
+         }
+      }
+   }
+}
+
+################################################################## 
+# Procedure Name: CheckBCMQueuePriority   
+# Description:  Since BCM has no QOS MONITOR we need a way 
+#               to gaurantee traffic is on the right queue.  This
+#               Function will send traffic on the queue directly
+#               below the test traffic and none should pass.
+#
+# Input args: args
+# Output args: none
+# Return value: none
+# Typical usage: 
+#  	CheckBCMQueuePriority -priorityList 0 -txPortList 2 \
+#		     -sIpAddrList 192.168.1.12 -dIpAddrList 192.168.2.12 -sPortList 0 \
+#                    -dPortList 0 -TOSList 0x00 -tagList "none" \
+#		     -destMacList DUTMac -ipProtocol ip    
+# Category: SetupSwitch, SendTraffic
+##################################################################
+proc CheckBCMQueuePriority {args} {
+    parse_args configMatrix $args {
+        traffic "L3"
+        priorityList "0"
+        txPortList "2"
+        rxPortList "4"
+        protocol "ip"
+        srcMacAddrList "default"
+        destMacList "DUTMac"
+        sIpAddrList "192.10.1.2"
+        dIpAddrList "192.20.1.2"
+        dIpGwAddrList "192.20.1.1"
+        sPortList "0"
+        dPortList "0"
+        TOSList "0x00"
+        tagList "none"
+        ratioThreshold "2"
+        percentage "100"
+    }
+
+global PortID_Info
+if {$traffic == "L3"} {
+
+    ################################################
+    set subTest "Start L3 traffic on a lower QP.  If shoud not pass"
+    ################################################
+    result_h2 "$subTest"
+    report_start_test "$subTest"
+
+    global DUTs_info
+
+    set i 0;
+    foreach txPort $txPortList {
+        SendArpFrame -txPortId [lindex $rxPortList $i] \
+         -sourceIp [lindex $dIpAddrList $i] -destIp [lindex $dIpGwAddrList $i]
+
+        incr i;
+    }
+
+    set i 0;
+    foreach txPort $txPortList {
+        if {[lindex $destMacList $i] == "DUTMac"} {
+           set destMacAddrTx $DUTs_info(DUT1,sysMAC)
+        } else {
+           set destMacAddrTx [lindex $destMacList $i]
+        }
+    
+        SendIpFrame -txPortId $txPort -streamType "contPacket" \
+        -tag [lindex $tagList $i] \
+        -userPriority [lindex $priorityList $i] -TOS [lindex $TOSList $i] \
+        -percentage $percentage \
+        -destMac $destMacAddrTx \
+        -sourceIp [lindex $sIpAddrList $i] \
+        -destIp [lindex $dIpAddrList $i] \
+        -sourcePort [lindex $sPortList $i] \
+        -destPort [lindex $dPortList  $i]
+
+        incr i;
+    }
+
+    ClearPortsStats $txPortList
+    ClearPortsStats $rxPortList
+    
+    exSleep 3;
+
+    set i 0;
+    foreach txPort $txPortList {
+        if {[lindex $tagList $i] == "none"} {
+            set tag "";
+        } else {
+            set tag [lindex $tagList $i];
+        }
+        lappend checkRateList "{[lindex $portIdTxList $i] $percentage} {[lindex $portIdRxList $i] 0 $tag}"
+        incr i;
+    }
+    CheckRatesTxRx $checkRateList "Check for receive rates based on QP Assignment" $ratioThreshold
+    unset checkRateList
+    StopPortsTransmit $txPortList;
+}
+
+if {$traffic == "L2"} {
+
+    ################################################
+    set subTest "Start L2 traffic on a lower QP.  If shoud not pass"
+    ################################################
+    result_h2 "$subTest"
+    report_start_test "$subTest"
+
+    # Prime receive fdb
+    set i 0;
+    foreach txPort $txPortList {
+            SendFrame -txPortId [lindex $rxPortList $i] \
+            -tag [lindex $tagList $i] \
+            -sourceMac [lindex $destMacList $i] \
+            -destMac [lindex $srcMacAddrList $i]
+    
+            incr i;
+    }    
+
+    set i 0;
+    foreach txPort $txPortList {
+        SendFrame -txPortId $txPort -streamType "contPacket" \
+        -tag [lindex $tagList $i] \
+        -tagPriority [lindex $priorityList $i] \
+        -sourceMac [lindex $srcMacAddrList $i] \
+        -percentage $percentage \
+        -destMac [lindex $destMacList $i]
+
+        incr i;
+    }
+
+    ClearPortsStats $txPortList
+    ClearPortsStats $rxPortList
+    
+    exSleep 3;
+
+    set i 0;
+    foreach txPort $txPortList {
+        if {[lindex $tagList $i] == "none"} {
+            set tag "";
+        } else {
+            set tag [lindex $tagList $i];
+        }
+        lappend checkRateList "{[lindex $portIdTxList $i] $percentage} {[lindex $portIdRxList $i] 0 $tag}"
+        incr i;
+    }
+    CheckRatesTxRx $checkRateList "Check for receive rates based on QP Assignment" $ratioThreshold
+    unset checkRateList
+    StopPortsTransmit $txPortList;
+
+}
+
+}
+
+
+################################################################## 
+# Procedure Name: CheckBWMatrixNewGenBCom   
+# Description:  Verify the effects of QOS based on qos profiles matrix
+#		in QOS test plan or user-specified ones
+# Input args: args
+# Output args: none
+# Return value: none
+# Typical usage: 
+# 	SendACmd "create access-list permitList1 ip dest any source 192.10.1.0/24 deny ports any"
+#	SendACmd "create access-list permitList2 ip dest any source 192.10.2.0/24 deny ports any"
+#	SendACmd "create access-list permitList3 ip dest any source 192.10.3.0/24 permit QP3 ports any"
+#	SendACmd "create access-list permitList4 ip dest any source 192.10.4.0/24 deny ports any"
+#	CheckBWMatrixNewGenBCom -checkMatrix 8 -filePt $fd_res \
+#                          -testFileName $testNo     
+# Category: VerifyTraffic
+##################################################################
+proc CheckBWMatrixNewGenBCom {args} {
+   parse_args CheckBWMatrixNewGenBCom $args {
+     numIxiaCd "3"
+     protocol "ip"
+     srcMacAddrTxList "srcMac"
+     destMacAddrTxList "DUTMac"
+     sIpAddrList "192.10.1.2 192.10.2.2 192.10.3.2 192.10.4.2"
+     dIpAddrList "192.20.1.2 192.20.2.2 192.20.3.2 192.20.4.2"
+     sPortList "0 0 0 0"
+     dPortList "0 0 0 0"
+     TOSList "0x00 0x00 0x00 0x00"
+     QPList "1 2 3 4"
+     priList "0 1 2 3"
+     tagList "none none none none"
+     checkQosList ""
+     ratioExpectList "25.00 25.00 25.00 25.00"
+     ratioThreshold "20"
+     ratioAggregateThreshold "2.5"
+     checkMatrix "1-7"
+     userMatrix "none"
+     qosType "802.1p"
+     filePt "NULL"
+     testFileName "Temp"
+     initRateCheck "1"
+     frameSizeType "sizeRandom"
+     frameSize "64"
+   }
+
+set percent_tolerance [expr double($ratioThreshold) / double(100)]
+global startCardNum
+global DUTs_info
+global PortID_Info
+# Check for 10Gig platform, call different checkBwMatrix specifically
+global DUTs_Slot_info
+set 10GigSlot 0
+#for {set i 1} {$i<=$DUTs_info(DUT1,numSlots)} {incr i} {
+#   if {[regexp -nocase "10Gig" $DUTs_Slot_info(DUT1,slot$i,hwModType)]} {
+#      set 10GigSlot 1
+#      break
+#   }
+#}
+
+if {$10GigSlot} {
+   # Call 10Gig qos routine
+   if {$ratioAggregateThreshold==2.5} {
+      set ratioAggregateThreshold 14
+   }
+   if {[regexp -nocase "25.00 25.00 25.00 25.00" $ratioExpectList]} {
+      set ratioExpectList "100.00 100.00 100.00 100.00"
+   }
+   return [CheckBandwidthMatrix10Gig -numIxiaCd $numIxiaCd -protocol $protocol -srcMacAddrTxList $srcMacAddrTxList -destMacAddrTxList $destMacAddrTxList \
+   -sIpAddrList $sIpAddrList -dIpAddrList $dIpAddrList -sPortList $sPortList -dPortList $dPortList -TOSList $TOSList \
+   -QPList $QPList -tagList $tagList -checkQosList $checkQosList \
+    -ratioExpectList $ratioExpectList -ratioThreshold $ratioThreshold \
+    -ratioAggregateThreshold $ratioAggregateThreshold -checkMatrix $checkMatrix \
+    -qosType $qosType -filePt $filePt -testFileName $testFileName]
+}
+
+set pPattern "5678"
+if {$protocol == "multicast"} {
+   set joinGroup 22
+   set portList {1 2 3 4}
+   foreach portId $portList {
+      set portIdTx [expr $portId + 8]
+      set multicastIP 22[expr $portId + 4].1.2.3
+      set destMacMulticast "01 00 5E 01 02 03" 
+      set clientIP1 192.20.$portId.2
+      #send an join multicast group igmp packet
+      result_debug "$clientIP1 joins multicast group $multicastIP"
+      set rxPort [MapIxiaPortId $portIdTx chasis card port]
+      set frameSent [ixiaConf_2Ports_ip	-txChas $chasis -txCard $card  -txPort $port \
+                       -rxChas $chasis -rxCard $card  -rxPort $rxPort  \
+                       -ipProtocol "igmp" -type $joinGroup -ttl 1      \
+                       -percentage $PortID_Info($portId,normTxPerc) \
+                       -startCardNum $startCardNum  -dMacAddr $destMacMulticast \
+                       -sIpAddr  $clientIP1  -dIpAddr $multicastIP -groupAddr $multicastIP ]
+   }
+
+   set ipProtocol "udp"
+   set destMacAddrTxList {01:00:5E:01:02:03 01:00:5E:01:02:03 01:00:5E:01:02:03 01:00:5E:01:02:03}
+   #send join
+} else {
+   set ipProtocol $protocol
+}
+set QPa "QP[lindex $QPList 0]"
+set QPb "QP[lindex $QPList 1]"
+set QPc "QP[lindex $QPList 2]"
+set QPd "QP[lindex $QPList 3]"
+set Qa [expr [lindex $QPList 0] - 1]
+set Qb [expr [lindex $QPList 1] - 1]
+set Qc [expr [lindex $QPList 2] - 1]
+set Qd [expr [lindex $QPList 3] - 1]
+
+if {$checkMatrix == 8} {
+   ################################################
+   set subTest "Checking Matrix 8 Bandwidth criteria using $QPa, $QPb, $QPc, $QPd"
+   ################################################
+   result_h2 "$subTest"
+   report_start_test "$subTest"        
+   #Test Matrix 8
+   SendACmd	"config qosprofile $QPa minbw 10 maxbw 100 port [GetATrunkPort 1 2 1]"
+   SendACmd	"config qosprofile $QPb minbw 10 maxbw 100 port [GetATrunkPort 1 2 1]"
+   SendACmd	"config qosprofile $QPc minbw 10 maxbw 100 port [GetATrunkPort 1 2 1]"
+   SendACmd	"config qosprofile $QPd minbw 10 maxbw 100 port [GetATrunkPort 1 2 1]"
+} elseif {$checkMatrix == "1-7"} {
+   ################################################
+   set subTest "Checking Matrix 1 Bandwidth criteria"
+   ################################################
+   result_h2 "$subTest"
+   report_start_test "$subTest"
+   
+   global DUT1_CONNECT
+   Login $DUT1_CONNECT -fd $filePt
+   SendACmd	"config qosprofile $QPa minbw 0 maxbw 100 port [GetATrunkPort 1 2 1]"
+   SendACmd	"config qosprofile $QPb minbw 0 maxbw 100 port [GetATrunkPort 1 2 1]"
+   SendACmd	"config qosprofile $QPc minbw 0 maxbw 100 port [GetATrunkPort 1 2 1]"
+   SendACmd	"config qosprofile $QPd minbw 0 maxbw 100 port [GetATrunkPort 1 2 1]"
+}
+
+   set portIdTxList {1 2 3 4}
+   set portIdRxList {9 10 11 12}
+   foreach portIdTx $portIdTxList {
+      MapIxiaPortId $portIdTx txChas txCard txPort
+      set portIdRx [expr $portIdTx + 8]
+      MapIxiaPortId $portIdRx rxChas rxCard rxPort   
+      set sIpAddr [lindex $sIpAddrList [expr $portIdTx - 1] ]
+      set dIpAddr [lindex $dIpAddrList [expr $portIdTx - 1] ]
+      set sPort [lindex $sPortList [expr $portIdTx - 1] ]
+      set dPort [lindex $dPortList [expr $portIdTx - 1] ]
+      set TOS [lindex $TOSList [expr $portIdTx - 1] ]
+      set tag [lindex $tagList [expr $portIdTx - 1] ]
+      set wTag "true"
+      if { $tag == "none" } { set wTag "false" }
+      set priority [lindex $priList [expr $portIdTx - 1] ]
+      if {$destMacAddrTxList == "DUTMac"} {
+         set destMacAddrTx $DUTs_info(DUT1,sysMAC)
+      } else {
+         set destMacAddrTx [lindex $destMacAddrTxList [expr $portIdTx - 1] ]
+      }
+      if {![regexp -nocase "10.2" $qosType] && $checkMatrix!=8} {
+         global DUT1_CONNECT
+#         Login $DUT1_CONNECT
+#         SendACmd "ping $dIpAddr"
+      } else {
+         set frameSent [ixiaConf_2Ports_ip -txChas $txChas -txCard $txCard -txPort $txPort \
+                          -rxChas $rxChas -rxCard $rxCard -rxPort $rxPort  \
+                          -startCardNum $startCardNum -dataPattern $pPattern \
+                          -TOS $TOS -numFrames 4 \
+                          -percentage $PortID_Info($portIdTx,normTxPerc) \
+                          -ipProtocol $ipProtocol -pDstPort $dPort -pSrcPort $sPort \
+                          -dMacAddr $destMacAddrTx  -sIpAddr $sIpAddr  -dIpAddr $dIpAddr \
+                          -wTag $wTag -tagNo $tag -userPriority $priority ]
+      }
+   }
+   foreach portIdTx $portIdTxList {
+      MapIxiaPortId $portIdTx txChas txCard txPort
+      set portIdRx [expr $portIdTx + 8]
+      MapIxiaPortId $portIdRx rxChas rxCard rxPort   
+      set sIpAddr [lindex $sIpAddrList [expr $portIdTx - 1] ]
+      set dIpAddr [lindex $dIpAddrList [expr $portIdTx - 1] ]
+      set sPort [lindex $sPortList [expr $portIdTx - 1] ]
+      set dPort [lindex $dPortList [expr $portIdTx - 1] ]
+      set TOS [lindex $TOSList [expr $portIdTx - 1] ]
+      set tag [lindex $tagList [expr $portIdTx - 1] ]
+      set wTag "true"
+      if { $tag == "none" } { set wTag "false" }
+      set priority [lindex $priList [expr $portIdTx - 1] ]
+      if {$destMacAddrTxList == "DUTMac"} {
+         set destMacAddrTx $DUTs_info(DUT1,sysMAC)
+      } else {
+         set destMacAddrTx [lindex $destMacAddrTxList [expr $portIdTx - 1] ]
+      }
+
+      set frameSent [ixiaConf_2Ports_ip	-txChas $txChas -txCard $txCard -txPort $txPort \
+                       -rxChas $rxChas -rxCard $rxCard -rxPort $rxPort  \
+                       -startCardNum $startCardNum -dataPattern $pPattern \
+                       -streamType "contPacket" -percentage $PortID_Info($portIdTx,normTxPerc) \
+                       -TOS $TOS -frameSizeType "$frameSizeType" \
+                       -ipProtocol $ipProtocol -pDstPort $dPort -pSrcPort $sPort \
+                       -dMacAddr $destMacAddrTx  -sIpAddr $sIpAddr  -dIpAddr $dIpAddr \
+                       -wTag $wTag -tagNo $tag -userPriority $priority ]
+      #wait for things to settle down
+      if {$initRateCheck} {
+         exSleep 6
+         set portIdList {1 2 3 4 9 10 11 12}
+         foreach portId $portIdList {
+            
+            MapIxiaPortId $portId chasisId card port
+            stat getRate statAllStats $chasisId $card $port
+            set rateSent [stat cget -bytesSent]
+            set rateRecv [stat cget -bytesReceived]
+            set rateArray($portId,sent) $rateSent.00
+            set rateArray($portId,recv) $rateRecv.00
+         
+            result_debug "Rate on port $portId Sent: $rateSent Recv: $rateRecv"
+         }
+         if {$checkMatrix == 8} {
+         
+         } elseif {$checkMatrix == "1-7"} {
+            set ratioFound [format %.2f [expr $rateArray($portIdRx,recv)*100/($rateArray($portIdTx,sent)+1)]]
+            set ratioExpect 100
+            if {[expr abs($ratioFound - $ratioExpect)] > $ratioThreshold } {
+               result_error "Matrix 1 failed rate ratio threshold test on port $portIdRx. Got $ratioFound EXPECT $ratioExpect +/- $ratioThreshold"
+            } else {
+               result_ok "Matrix 1 pass rate ratio threshold test on port $portIdRx. Got $ratioFound AS EXPECT $ratioExpect +/- $ratioThreshold"
+            }
+         }         
+      }
+
+   }
+   if {$checkMatrix == 8} { 
+      set portIdList {1 2 3 4 9 10 11 12}
+      foreach portId $portIdList {
+         
+         MapIxiaPortId $portId chasisId card port
+         stat getRate statAllStats $chasisId $card $port
+         set rateSent [stat cget -bytesSent]
+         set rateRecv [stat cget -bytesReceived]
+         set rateArray($portId,sent) $rateSent.00
+         set rateArray($portId,recv) $rateRecv.00
+      
+            result_debug "Mtrx8 Rate on port $portId Sent: $rateSent Recv: $rateRecv"
+      } 
+      set ratioExpectArray(9) 0
+      set ratioExpectArray(10) 0
+      set ratioExpectArray(11) 100
+      set ratioExpectArray(12) 0
+
+      exSleep 4
+      lappend checkRateList {"negTest" "1  0"}
+      lappend checkRateList {"negTest" "2  0"}
+      lappend checkRateList {"negTest" "3  0"}
+      lappend checkRateList {"negTest" "4  0"}
+      foreach portId $portIdRxList {
+         ##set portIdTx [expr $portId - 8]
+         ##set ratioFound [format %.2f [expr $rateArray($portId,recv)*100/($rateArray($portIdTx,sent)+1)]]
+         ##set ratioExpect $ratioExpectArray($portId)
+         ##if {[expr abs($ratioFound - $ratioExpect)] > $ratioThreshold } {
+         ##   result_error "Matrix 8 failed rate ratio threshold test on port $portId. Got $ratioFound EXPECT $ratioExpect +/- $ratioThreshold"
+         ##} else {
+         ##   result_ok "Matrix 8 pass rate ratio threshold test on port $portId. Got $ratioFound AS EXPECT $ratioExpect +/- $ratioThreshold"
+         ##}
+         set portIdTx [expr $portId - 8]
+         set t [expr $portIdTx - 1];
+         set tag [lindex $tagList $t]
+         if { $tag == "none" } { set $tag "" }
+         lappend checkRateList "{$portIdTx 100} {$portId $ratioExpectArray($portId)} $tag"         
+      }
+
+      ################# Replace Old Gorp with New Proc  ##################
+      result_debug "$checkRateList"
+      CheckRatesTxRx $checkRateList "Check for MATRIX 8 Rates based on QP Assignment" $percent_tolerance
+      unset checkRateList
+
+      ####################################################################
+      report_end_test
+      SendACmd "clear counter"
+
+      #check Q
+      #lappend checkQosList "0 1000 minPacket" ;#not testing this, unpredictable for now
+      lappend checkQosList "$Qb 10 maxPacket"
+      lappend checkQosList "$Qc 1000 minPacket"
+      lappend checkQosList "$Qd 10 maxPacket"
+      CheckQoSMonitor [GetATrunkPort 1 2 1] $checkQosList $filePt $testFileName
+      unset checkQosList
+   } elseif {$checkMatrix == "1-7"} {
+      set ratioExpectArray(9) 0
+      set ratioExpectArray(10) 0
+      set ratioExpectArray(11) 0
+      set ratioExpectArray(12) 100
+      #foreach portId $portIdRxList {
+      #   set portIdTx [expr $portId - 8]
+      #   set ratioFound [format %.2f [expr $rateArray($portId,recv)*100/($rateArray($portIdTx,sent)+1)]]
+      #   set ratioExpect $ratioExpectArray($portId)
+      #   if {[expr abs($ratioFound - $ratioExpect)] > $ratioThreshold } {
+      #      result_error "Matrix 1 failed rate ratio threshold test on port $portId. Got $ratioFound EXPECT $ratioExpect +/- $ratioThreshold"
+      #   } else {
+      #      result_ok "Matrix 1 pass rate ratio threshold test on port $portId. Got $ratioFound AS EXPECT $ratioExpect +/- $ratioThreshold"
+      #   }
+      #}
+
+      exSleep 4
+      lappend checkRateList {"negTest" "1  0"}
+      lappend checkRateList {"negTest" "2  0"}
+      lappend checkRateList {"negTest" "3  0"}
+      lappend checkRateList {"negTest" "4  0"}
+      foreach portId $portIdRxList {
+         set portIdTx [expr $portId - 8]
+         set t [expr $portIdTx - 1];
+         set tag [lindex $tagList $t]
+         if { $tag == "none" } { set $tag "" }
+         lappend checkRateList "{$portIdTx 100} {$portId $ratioExpectArray($portId)} $tag"         
+      }
+      result_debug "$checkRateList"
+      CheckRatesTxRx $checkRateList "Check for MATRIX 1 Rates based on QP Assignment" $percent_tolerance
+      unset checkRateList
+
+      report_end_test
+      SendACmd "clear counter"
+      SendACmd "show ports [GetATrunkPort 1 2 1] qosmonitor no-refresh"
+      #check Q
+      # Matrix1 has qosmonitor problems when leaking to Q2.
+      lappend checkQosList "$Qa 10 maxPacket"
+      lappend checkQosList "$Qb 10 maxPacket"
+      lappend checkQosList "$Qc 4000 maxPacket"
+      lappend checkQosList "$Qd 4000 minPacket"
+      CheckQoSMonitor [GetATrunkPort 1 2 1] $checkQosList $filePt $testFileName 
+      unset checkQosList  
+
+      SendACmd	"config qosprofile $QPa minbw 0 maxbw 100 port [GetATrunkPort 1 2 1]"
+      SendACmd	"config qosprofile $QPb minbw 0 maxbw 100 port [GetATrunkPort 1 2 1]"
+      SendACmd	"config qosprofile $QPc minbw 0 maxbw 100 port [GetATrunkPort 1 2 1]"
+      SendACmd	"config qosprofile $QPd minbw 0 maxbw 100 port [GetATrunkPort 1 2 1]"
+
+   ################################################
+   set subTest "Checking Matrix 2 Bandwidth criteria using QP1, QP3, QP5, QP7"
+   ################################################
+   result_h2 "$subTest"
+   report_start_test "$subTest"
+   #Test Matrix 2
+   set priList "0 2 4 6"
+   if {$qosType=="diffserv"} {
+      set TOSList "0x00 0x40 0x80 0xc0"
+   } elseif {$qosType=="diffservCodePoint"} {
+      SendACmd "unconfig diffserv examination"      
+      SendACmd "config diffserv examination code-point 8 qosprofile QP7"
+      SendACmd "config diffserv examination code-point 25 qosprofile QP3"
+      set TOSList "0x00 0x64 0x80 0x20"
+   }
+   configMatrix -priList $priList -portIdTxList $portIdTxList -qosType $qosType -sIpAddrList $sIpAddrList -dIpAddrList $dIpAddrList \
+                -sPortList $sPortList -dPortList $dPortList -TOSList $TOSList -tagList $tagList -destMacAddrTxList $destMacAddrTxList \
+                -ipProtocol $ipProtocol
+
+   SendACmd	"config qosprofile qp1 minbw 10 maxbw 100 port [GetATrunkPort 1 2 1]"
+   SendACmd	"config qosprofile qp3 minbw 10 maxbw 100 port [GetATrunkPort 1 2 1]"
+   SendACmd	"config qosprofile qp5 minbw 10 maxbw 100 port [GetATrunkPort 1 2 1]"
+   SendACmd	"config qosprofile qp7 minbw 10 maxbw 100 port [GetATrunkPort 1 2 1]"
+
+      #wait for things to settle down
+      exSleep 2
+      set portIdList {1 2 3 4 9 10 11 12}
+ 
+      set sum 0
+      set ratioExpectArray(9) 10.00
+      set ratioExpectArray(10) 10.00
+      set ratioExpectArray(11) 10.00
+      set ratioExpectArray(12) 70.00
+
+      set ratioExpect 100
+
+
+      exSleep 4
+      lappend checkRateList {"negTest" "1  0"}
+      lappend checkRateList {"negTest" "2  0"}
+      lappend checkRateList {"negTest" "3  0"}
+      lappend checkRateList {"negTest" "4  0"}
+      foreach portId $portIdRxList {
+         set portIdTx [expr $portId - 8]
+         set t [expr $portIdTx - 1];
+         set tag [lindex $tagList $t]
+         if { $tag == "none" } { set $tag "" }
+         lappend checkRateList "{$portIdTx 100} {$portId $ratioExpectArray($portId)} $tag"         
+      }
+      result_debug "$checkRateList"
+      CheckRatesTxRx $checkRateList "Check for MATRIX 2 Rates based on QP Assignment" \
+                     $percent_tolerance SumRx $ratioExpect
+      unset checkRateList
+      report_end_test
+
+      SendACmd "clear counter"
+      exSleep 3
+      #check Q
+      lappend checkQosList "0 100 minPacket"
+      lappend checkQosList "2 100 minPacket"
+      lappend checkQosList "4 100 minPacket"
+      lappend checkQosList "6 700 minPacket"
+      CheckQoSMonitor [GetATrunkPort 1 2 1] $checkQosList $filePt $testFileName
+      unset checkQosList
+
+      #restore to default
+      SendACmd	"config qosprofile QP1 minbw 0 maxbw 100  port [GetATrunkPort 1 2 1]"
+      SendACmd	"config qosprofile QP3 minbw 0 maxbw 100 port [GetATrunkPort 1 2 1]"
+      SendACmd	"config qosprofile QP5 minbw 0 maxbw 100 port [GetATrunkPort 1 2 1]"
+      SendACmd	"config qosprofile QP7 minbw 0 maxbw 100 port [GetATrunkPort 1 2 1]"
+
+   # Matrix 3 does not apply to broadcom because priority is not available.
+   # Matrix 4 deleted
+
+      
+   ################################################
+   set subTest "Checking Matrix 5 Bandwidth criteria using QP1, QP4, QP5, QP8"
+   ################################################
+   result_h2 "$subTest"
+   report_start_test "$subTest"          
+   #Test Matrix 5
+   set priList "0 3 4 7"
+   if {$qosType=="diffserv"} {
+      set TOSList "0x00 0x60 0x80 0xe0"
+   } elseif {$qosType=="diffservCodePoint"} {
+      SendACmd "unconfig diffserv examination"      
+      SendACmd "config diffserv examination code-point 8 qosprofile QP8"
+      SendACmd "config diffserv examination code-point 25 qosprofile QP4"
+      set TOSList "0x00 0x64 0x80 0x20"
+   }
+   configMatrix -priList $priList -portIdTxList $portIdTxList -qosType $qosType -sIpAddrList $sIpAddrList -dIpAddrList $dIpAddrList \
+                -sPortList $sPortList -dPortList $dPortList -TOSList $TOSList -tagList $tagList -destMacAddrTxList $destMacAddrTxList \
+                -ipProtocol $ipProtocol   
+
+   SendACmd	"config qosprofile QP1 minbw 10 maxbw 100  port [GetATrunkPort 1 2 1]"
+   SendACmd	"config qosprofile QP4 minbw 10 maxbw 50 port [GetATrunkPort 1 2 1]"
+   SendACmd	"config qosprofile QP5 minbw 10 maxbw 40 port [GetATrunkPort 1 2 1]"
+   SendACmd	"config qosprofile QP8 minbw 10 maxbw 30 port [GetATrunkPort 1 2 1]"
+      
+      #wait for things to settle down
+      exSleep 4
+      set portIdList {1 2 3 4 9 10 11 12}
+      #foreach portId $portIdList {
+      #   
+      #   MapIxiaPortId $portId chasisId card port
+      #   stat getRate statAllStats $chasisId $card $port
+      #   set rateSent [stat cget -bytesSent]
+      #   set rateRecv [stat cget -bytesReceived]
+      #   set rateArray($portId,sent) $rateSent.00
+      #   set rateArray($portId,recv) $rateRecv.00
+      #
+      #      result_debug "Mtrx5 Rate on port $portId Sent: $rateSent Recv: $rateRecv"
+      #} 
+      #set sum 0
+      set ratioExpectArray(9) 10.00
+      set ratioExpectArray(10) 20.00
+      set ratioExpectArray(11) 40.00
+      set ratioExpectArray(12) 30.00
+      #foreach portId $portIdRxList {
+      #   set portIdTx [expr $portId - 8]
+      #   set ratioFound [format %.2f [expr $rateArray($portId,recv)*100/($rateArray($portIdTx,sent)+1)]]
+      #   set ratioExpect $ratioExpectArray($portId)
+      #   set proratedRatioThreshold [expr $ratioExpect/100.00*$ratioThreshold]
+      #   set sum [expr $ratioFound + $sum]
+      #   if {[expr abs($ratioFound - $ratioExpect)] > $proratedRatioThreshold } {
+      #      result_error "Matrix 5 failed rate ratio threshold test on port $portId. Got $ratioFound EXPECT $ratioExpect +/- $proratedRatioThreshold"
+      #   } else {
+      #      result_ok "Matrix 5 pass rate ratio threshold test on port $portId. Got $ratioFound AS EXPECT $ratioExpect +/- $proratedRatioThreshold"
+      #   }
+      #} 
+      #total rate
+      set ratioExpect 100
+      #set ratioFound $sum
+      #if {[expr abs($ratioFound - $ratioExpect)] > $ratioAggregateThreshold } {
+      #   result_error "Matrix 5 failed aggregate rate ratio threshold test. Got $ratioFound EXPECT $ratioExpect +/- $ratioAggregateThreshold"
+      #} else {
+      #   result_ok "Matrix 5 pass rate aggregate ratio threshold test. Got $ratioFound AS EXPECT $ratioExpect +/- $ratioAggregateThreshold"
+      #}
+
+      exSleep 4
+      lappend checkRateList {"negTest" "1  0"}
+      lappend checkRateList {"negTest" "2  0"}
+      lappend checkRateList {"negTest" "3  0"}
+      lappend checkRateList {"negTest" "4  0"}
+      foreach portId $portIdRxList {
+         set portIdTx [expr $portId - 8]
+         set t [expr $portIdTx - 1];
+         set tag [lindex $tagList $t]
+         if { $tag == "none" } { set $tag "" }
+         lappend checkRateList "{$portIdTx 100} {$portId $ratioExpectArray($portId)} $tag"         
+      }
+      result_debug "$checkRateList"
+      CheckRatesTxRx $checkRateList "Check for MATRIX 5 Rates based on QP Assignment" \
+                     $percent_tolerance SumRx $ratioExpect
+      unset checkRateList
+
+      report_end_test
+      SendACmd "clear counter"
+      exSleep 3
+      #check Q
+      lappend checkQosList "0 90 minPacket"
+      lappend checkQosList "3 180 minPacket"
+      lappend checkQosList "4 360 minPacket"
+      lappend checkQosList "7 270 minPacket"
+      CheckQoSMonitor [GetATrunkPort 1 2 1] $checkQosList $filePt $testFileName 
+      unset checkQosList      
+
+      #restore to default
+      SendACmd	"config qosprofile QP1 minbw 0 maxbw 100 port [GetATrunkPort 1 2 1]"
+      SendACmd	"config qosprofile QP4 minbw 0 maxbw 100 port [GetATrunkPort 1 2 1]"
+      SendACmd	"config qosprofile QP5 minbw 0 maxbw 100 port [GetATrunkPort 1 2 1]"
+      SendACmd	"config qosprofile QP8 minbw 0 maxbw 100 port [GetATrunkPort 1 2 1]"
+
+      
+   ## Removed Matrix 6 - Broadcom Q priority can not be changed
+      
+   ################################################
+   set subTest "Checking Matrix 7 Bandwidth criteria using QP1, QP3, QP5, QP7"
+   ################################################
+   result_h2 "$subTest"
+   report_start_test "$subTest"        
+   #Test Matrix 7
+   set priList "0 2 4 6"
+   if {$qosType=="diffserv"} {
+      set TOSList "0x00 0x40 0x80 0xc0"
+   } elseif {$qosType=="diffservCodePoint"} {
+      SendACmd "unconfig diffserv examination"      
+      SendACmd "config diffserv examination code-point 8 qosprofile QP7"
+      SendACmd "config diffserv examination code-point 25 qosprofile QP3"
+      set TOSList "0x00 0x64 0x80 0x20"
+   }
+   configMatrix -priList $priList -portIdTxList $portIdTxList -qosType $qosType -sIpAddrList $sIpAddrList -dIpAddrList $dIpAddrList \
+                -sPortList $sPortList -dPortList $dPortList -TOSList $TOSList -tagList $tagList -destMacAddrTxList $destMacAddrTxList \
+                -ipProtocol $ipProtocol   
+
+   SendACmd	"config qosprofile QP1 minbw 10 maxbw 50  port [GetATrunkPort 1 2 1]"
+   SendACmd	"config qosprofile QP3 minbw 20 maxbw 50 port [GetATrunkPort 1 2 1]"
+   SendACmd	"config qosprofile QP5 minbw 25 maxbw 50 port [GetATrunkPort 1 2 1]"
+   SendACmd	"config qosprofile QP7 minbw 35 maxbw 50 port [GetATrunkPort 1 2 1]"
+      
+      #wait for things to settle down
+      exSleep 4
+      set portIdList {1 2 3 4 9 10 11 12}
+      #foreach portId $portIdList {
+      #   
+      #   MapIxiaPortId $portId chasisId card port
+      #   stat getRate statAllStats $chasisId $card $port
+      #   set rateSent [stat cget -bytesSent]
+      #   set rateRecv [stat cget -bytesReceived]
+      #   set rateArray($portId,sent) $rateSent.00
+      #   set rateArray($portId,recv) $rateRecv.00
+      #
+      #      result_debug "Mtrx7 Rate on port $portId Sent: $rateSent Recv: $rateRecv"
+      #} 
+      #set sum 0
+      set ratioExpectArray(9) 10.00
+      set ratioExpectArray(10) 18.70
+      set ratioExpectArray(11) 26.30
+      set ratioExpectArray(12) 45.00
+      #foreach portId $portIdRxList {
+      #   set portIdTx [expr $portId - 8]
+      #   set ratioFound [format %.2f [expr $rateArray($portId,recv)*100/($rateArray($portIdTx,sent)+1)]]
+      #   set ratioExpect $ratioExpectArray($portId)
+      #   set proratedRatioThreshold [expr $ratioExpect/100.00*$ratioThreshold]
+      #   set sum [expr $ratioFound + $sum]
+      #   if {[expr abs($ratioFound - $ratioExpect)] > $proratedRatioThreshold } {
+      #      result_error "Matrix 7 failed rate ratio threshold test on port $portId. Got $ratioFound EXPECT $ratioExpect +/- $proratedRatioThreshold"
+      #   } else {
+      #      result_ok "Matrix 7 pass rate ratio threshold test on port $portId. Got $ratioFound AS EXPECT $ratioExpect +/- $proratedRatioThreshold"
+      #   }
+      #} 
+      #total rate
+      set ratioExpect 100
+      #set ratioFound $sum
+      #if {[expr abs($ratioFound - $ratioExpect)] > $ratioAggregateThreshold } {
+      #   result_error "Matrix 7 failed aggregate rate ratio threshold test. Got $ratioFound EXPECT $ratioExpect +/- $ratioAggregateThreshold"
+      #} else {
+      #   result_ok "Matrix 7 pass rate aggregate ratio threshold test. Got $ratioFound AS EXPECT $ratioExpect +/- $ratioAggregateThreshold"
+      #}
+
+      exSleep 4
+      lappend checkRateList {"negTest" "1  0"}
+      lappend checkRateList {"negTest" "2  0"}
+      lappend checkRateList {"negTest" "3  0"}
+      lappend checkRateList {"negTest" "4  0"}
+      foreach portId $portIdRxList {
+         set portIdTx [expr $portId - 8]
+         set t [expr $portIdTx - 1];
+         set tag [lindex $tagList $t]
+         if { $tag == "none" } { set $tag "" }
+         lappend checkRateList "{$portIdTx 100} {$portId $ratioExpectArray($portId)} $tag"         
+      }
+      result_debug "$checkRateList"
+      CheckRatesTxRx $checkRateList "Check for MATRIX 7 Rates based on QP Assignment" \
+                     $percent_tolerance SumRx $ratioExpect
+      unset checkRateList
+      report_end_test
+      #check Q
+      SendACmd "clear counter"
+      exSleep 3
+      lappend checkQosList "0 100 minPacket"
+      lappend checkQosList "2 180 minPacket"
+      lappend checkQosList "4 260 minPacket"
+      lappend checkQosList "6 450 minPacket"
+      CheckQoSMonitor [GetATrunkPort 1 2 1] $checkQosList $filePt $testFileName 
+      unset checkQosList   
+      #restore to default
+      SendACmd	"config qosprofile QP1 minbw 0 maxbw 100  port [GetATrunkPort 1 2 1]"
+      SendACmd	"config qosprofile QP3 minbw 0 maxbw 100 port [GetATrunkPort 1 2 1]"
+      SendACmd	"config qosprofile QP5 minbw 0 maxbw 100 port [GetATrunkPort 1 2 1]"
+      SendACmd	"config qosprofile QP7 minbw 0 maxbw 100 port [GetATrunkPort 1 2 1]"
+               
+} elseif {$checkMatrix == "user"} {
+   ################################################
+   set subTest "Checking User Bandwidth criteria"
+   ################################################
+   result_h2 "$subTest"
+   report_start_test "$subTest"
+      
+   if {$userMatrix == 5} {
+      SendACmd	"config qosprofile QP1 minbw 10 maxbw 100  port [GetATrunkPort 1 2 1]"
+      SendACmd	"config qosprofile QP4 minbw 10 maxbw 50 port [GetATrunkPort 1 2 1]"
+      SendACmd	"config qosprofile QP5 minbw 10 maxbw 40 port [GetATrunkPort 1 2 1]"
+      SendACmd	"config qosprofile QP8 minbw 10 maxbw 30 port [GetATrunkPort 1 2 1]"
+      #set ratioExpectArray(9) 10.00
+      #set ratioExpectArray(10) 20.00
+      #set ratioExpectArray(11) 40.00
+      #set ratioExpectArray(12) 30.00
+      #lappend checkQosList "0 90 minPacket"
+      #lappend checkQosList "3 180 minPacket"
+      #lappend checkQosList "4 360 minPacket"
+      #lappend checkQosList "7 270 minPacket"      
+      exSleep 5   
+   }
+   if {$userMatrix == 7} {
+      SendACmd	"config qosprofile QP1 minbw 10 maxbw 50  port [GetATrunkPort 1 2 1]"
+      SendACmd	"config qosprofile QP3 minbw 20 maxbw 50 port [GetATrunkPort 1 2 1]"
+      SendACmd	"config qosprofile QP5 minbw 25 maxbw 50 port [GetATrunkPort 1 2 1]"
+      SendACmd	"config qosprofile QP7 minbw 35 maxbw 50 port [GetATrunkPort 1 2 1]"
+      #set ratioExpectArray(9) 10.00
+      #set ratioExpectArray(10) 18.70
+      #set ratioExpectArray(11) 26.30
+      #set ratioExpectArray(12) 45.00
+      #lappend checkQosList "0 100 minPacket"
+      #lappend checkQosList "2 180 minPacket"
+      #lappend checkQosList "4 260 minPacket"
+      #lappend checkQosList "6 450 minPacket"
+
+      exSleep 5
+   }
+
+      #wait for things to settle down
+      exSleep 5
+      set portIdList {1 2 3 4 9 10 11 12}
+
+      set ratioExpectArray(9) [lindex $ratioExpectList 0]
+      set ratioExpectArray(10) [lindex $ratioExpectList 1]
+      set ratioExpectArray(11) [lindex $ratioExpectList 2]
+      set ratioExpectArray(12) [lindex $ratioExpectList 3]
+      set ratioExpect [expr $ratioExpectArray(9)+$ratioExpectArray(10)+$ratioExpectArray(11)+$ratioExpectArray(12)]
+            
+      exSleep 4
+      lappend checkRateList {"negTest" "1  0"}
+      lappend checkRateList {"negTest" "2  0"}
+      lappend checkRateList {"negTest" "3  0"}
+      lappend checkRateList {"negTest" "4  0"}
+      foreach portId $portIdRxList {
+         set portIdTx [expr $portId - 8]
+         set t [expr $portIdTx - 1];
+         set tag [lindex $tagList $t]
+         if { $tag == "none" } { set $tag "" }
+         lappend checkRateList "{$portIdTx 100} {$portId $ratioExpectArray($portId)} $tag"         
+      }
+      result_debug "$checkRateList"
+      CheckRatesTxRx $checkRateList "Check for USER MATRIX Rates based on QP Assignment" \
+                     $percent_tolerance SumRx $ratioExpect
+      unset checkRateList
+
+      report_end_test
+      SendACmd "clear counter"
+      #check Q
+      CheckQoSMonitor [GetATrunkPort 1 2 1] $checkQosList $filePt $testFileName 
+      unset checkQosList 
+}
+   #special check for multicast, these commands should not cause switch to crash
+   if {$protocol == "multicast"} { 
+      global DUT2_CONNECT
+      Login $DUT2_CONNECT -fd $filePt
+#      SendACmd	"clear igmp snooping"
+#      SendACmd	"disable pim"
+#      SendACmd	"enable pim"
+
+      global DUT1_CONNECT
+      Login $DUT1_CONNECT -fd $filePt
+#      SendACmd	"clear igmp snooping"
+#      SendACmd	"disable pim"
+#      SendACmd	"enable pim"
+   }
+   #stop Tx
+   foreach portIdTx $portIdTxList {
+         MapIxiaPortId $portIdTx txChas txCard txPort
+         ixStopPortTransmit  $txChas $txCard $txPort  
+   }
+   #restore to default
+   SendACmd	"config qosprofile QP1 minbw 0 maxbw 100 port [GetATrunkPort 1 2 1]"
+   SendACmd	"config qosprofile QP2 minbw 0 maxbw 100 port [GetATrunkPort 1 2 1]"
+   SendACmd	"config qosprofile QP3 minbw 0 maxbw 100 port [GetATrunkPort 1 2 1]"
+   SendACmd	"config qosprofile QP4 minbw 0 maxbw 100 port [GetATrunkPort 1 2 1]"
+   SendACmd	"config qosprofile QP5 minbw 0 maxbw 100 port [GetATrunkPort 1 2 1]"
+   SendACmd	"config qosprofile QP6 minbw 0 maxbw 100 port [GetATrunkPort 1 2 1]"
+   SendACmd	"config qosprofile QP7 minbw 0 maxbw 100 port [GetATrunkPort 1 2 1]"
+   SendACmd	"config qosprofile QP8 minbw 0 maxbw 100 port [GetATrunkPort 1 2 1]"
+
+}
+################################################################## 
+# Procedure Name: CheckBWMatrixPioneer   
+# Description:  Verify the effects of QOS based on qos profiles matrix
+#		in QOS test plan or user-specified ones
+# Input args: args
+# Output args: none
+# Return value: none
+# Typical usage: 
+# 	SendACmd "create access-list permitList1 ip dest any source 192.10.1.0/24 deny ports any"
+#	SendACmd "create access-list permitList2 ip dest any source 192.10.2.0/24 deny ports any"
+#	SendACmd "create access-list permitList3 ip dest any source 192.10.3.0/24 permit QP3 ports any"
+#	SendACmd "create access-list permitList4 ip dest any source 192.10.4.0/24 deny ports any"
+#	CheckBWMatrixPioneer -checkMatrix 8 -filePt $fd_res \
+#                          -testFileName $testNo     
+# Category: VerifyTraffic
+##################################################################
+proc CheckBWMatrixPioneer {args} {
+   parse_args CheckBWMatrixPioneer $args {
+     numIxiaCd "3"
+     protocol "ip"
+     srcMacAddrTxList "srcMac"
+     destMacAddrTxList "DUTMac"
+     sIpAddrList "192.10.1.2 192.10.2.2 192.10.3.2 192.10.4.2"
+     dIpAddrList "192.20.1.2 192.20.2.2 192.20.3.2 192.20.4.2"
+     sPortList "0 0 0 0"
+     dPortList "0 0 0 0"
+     TOSList "0x00 0x00 0x00 0x00"
+     QPList "1 2 3 4"
+     priList "0 1 2 3"
+     tagList "none none none none"
+     checkQosList ""
+     ratioExpectList "25.00 25.00 25.00 25.00"
+     ratioThreshold "20"
+     ratioAggregateThreshold "2.5"
+     checkMatrix "1-7"
+     userMatrix "none"
+     qosType "802.1p"
+     filePt "NULL"
+     testFileName "Temp"
+     initRateCheck "1"
+     frameSizeType "sizeRandom"
+     frameSize "64"
+   }
+
+set percent_tolerance [expr double($ratioThreshold) / double(100)]
+global startCardNum
+global DUTs_info
+global PortID_Info
+# Check for 10Gig platform, call different checkBwMatrix specifically
+
+set pPattern "5678"
+if {$protocol == "multicast"} {
+   set joinGroup 22
+   set portList {1 2 3 4}
+   foreach portId $portList {
+      set portIdTx [expr $portId + 8]
+      set multicastIP 22[expr $portId + 4].1.2.3
+      set destMacMulticast "01 00 5E 01 02 03" 
+      set clientIP1 192.20.$portId.2
+      #send an join multicast group igmp packet
+      #PortID_Info($portIdTx,portSpeed)
+      # --------------------------  Traffic Note -------------------
+      #       In the new format all traffic is sent at 100Mbps
+      #       which is the peak bandwidth of any qp on the wan link
+      # 
+      switch $PortID_Info($portId,portSpeed) {
+          "100" {
+              set LimitPerc 100;
+          }
+          "1000" {
+              set LimitPerc 10;
+          }
+          "10000" {
+              set LimitPerc 1;
+          }
+          default {
+              set LimitPerc 10;
+          }
+      }
+
+      result_debug "$clientIP1 joins multicast group $multicastIP"
+      set rxPort [MapIxiaPortId $portIdTx chasis card port]
+      set frameSent [ixiaConf_2Ports_ip	-txChas $chasis -txCard $card  -txPort $port \
+                       -rxChas $chasis -rxCard $card  -rxPort $rxPort  \
+                       -ipProtocol "igmp" -type $joinGroup -ttl 1      \
+                       -percentage $LimitPerc \
+                       -startCardNum $startCardNum  -dMacAddr $destMacMulticast \
+                       -sIpAddr  $clientIP1  -dIpAddr $multicastIP -groupAddr $multicastIP ]
+   }
+
+   set ipProtocol "udp"
+   set destMacAddrTxList {01:00:5E:01:02:03 01:00:5E:01:02:03 01:00:5E:01:02:03 01:00:5E:01:02:03}
+   #send join
+} else {
+   set ipProtocol $protocol
+}
+set QPa "QP[lindex $QPList 0]"
+set QPb "QP[lindex $QPList 1]"
+set QPc "QP[lindex $QPList 2]"
+set QPd "QP[lindex $QPList 3]"
+set Qa [expr [lindex $QPList 0] - 1]
+set Qb [expr [lindex $QPList 1] - 1]
+set Qc [expr [lindex $QPList 2] - 1]
+set Qd [expr [lindex $QPList 3] - 1]
+# Just make sure before we start
+SendACmd "unconfig diffserv examination port all"
+
+if {$checkMatrix == 8} {
+   ################################################
+   set subTest "Checking Matrix 8 Bandwidth criteria using $QPa, $QPb, $QPc, $QPd"
+   ################################################
+   result_h2 "$subTest"
+   report_start_test "$subTest"        
+   #Test Matrix 8
+   SendACmd	"config qosprofile $QPa weight 10 peak_rate 100 M port [GetATrunkPort 1 2 1]"
+   SendACmd	"config qosprofile $QPb weight 10 peak_rate 100 M port [GetATrunkPort 1 2 1]"
+   SendACmd	"config qosprofile $QPc weight 10 peak_rate 100 M port [GetATrunkPort 1 2 1]"
+   SendACmd	"config qosprofile $QPd weight 10 peak_rate 100 M port [GetATrunkPort 1 2 1]"
+} elseif {$checkMatrix == "1-7"} {
+   ################################################
+   set subTest "Checking Matrix 1 Bandwidth criteria"
+   ################################################
+   result_h2 "$subTest"
+   report_start_test "$subTest"
+   
+   global DUT1_CONNECT
+   Login $DUT1_CONNECT -fd $filePt
+   SendACmd	"config qosprofile $QPa weight 0 peak_rate 100 M port [GetATrunkPort 1 2 1]"
+   SendACmd	"config qosprofile $QPb weight 0 peak_rate 100 M port [GetATrunkPort 1 2 1]"
+   SendACmd	"config qosprofile $QPc weight 0 peak_rate 100 M port [GetATrunkPort 1 2 1]"
+   SendACmd	"config qosprofile $QPd weight 0 peak_rate 100 M port [GetATrunkPort 1 2 1]"
+}
+
+   set portIdTxList {1 2 3 4}
+   set portIdRxList {9 10 11 12}
+   foreach portIdTx $portIdTxList {
+      MapIxiaPortId $portIdTx txChas txCard txPort
+      set portIdRx [expr $portIdTx + 8]
+      MapIxiaPortId $portIdRx rxChas rxCard rxPort   
+      set sIpAddr [lindex $sIpAddrList [expr $portIdTx - 1] ]
+      set dIpAddr [lindex $dIpAddrList [expr $portIdTx - 1] ]
+      set sPort [lindex $sPortList [expr $portIdTx - 1] ]
+      set dPort [lindex $dPortList [expr $portIdTx - 1] ]
+      set TOS [lindex $TOSList [expr $portIdTx - 1] ]
+      set tag [lindex $tagList [expr $portIdTx - 1] ]
+      set wTag "true"
+      if { $tag == "none" } { set wTag "false" }
+      set priority [lindex $priList [expr $portIdTx - 1] ]
+      if {$destMacAddrTxList == "DUTMac"} {
+         set destMacAddrTx $DUTs_info(DUT1,sysMAC)
+      } else {
+         set destMacAddrTx [lindex $destMacAddrTxList [expr $portIdTx - 1] ]
+      }
+      if {![regexp -nocase "10.2" $qosType] && $checkMatrix!=8} {
+         global DUT1_CONNECT
+#         Login $DUT1_CONNECT
+#         SendACmd "ping $dIpAddr"
+      } else {
+            #PortID_Info($portIdTx,portSpeed)
+            # --------------------------  Traffic Note -------------------
+            #       In the new format all traffic is sent at 100Mbps
+            #       which is the peak bandwidth of any qp on the wan link
+            # 
+            switch $PortID_Info($portIdTx,portSpeed) {
+                "100" {
+                    set LimitPerc 100;
+                }
+                "1000" {
+                    set LimitPerc 10;
+                }
+                "10000" {
+                    set LimitPerc 1;
+                }
+                "40000" {
+                    set LimitPerc 1;
+                }
+                default {
+                    set LimitPerc 10;
+                }
+            }
+            set frameSent [ixiaConf_2Ports_ip -txChas $txChas -txCard $txCard -txPort $txPort \
+                          -rxChas $rxChas -rxCard $rxCard -rxPort $rxPort  \
+                          -startCardNum $startCardNum -dataPattern $pPattern \
+                          -TOS $TOS -numFrames 4 \
+                          -percentage $LimitPerc \
+                          -ipProtocol $ipProtocol -pDstPort $dPort -pSrcPort $sPort \
+                          -dMacAddr $destMacAddrTx  -sIpAddr $sIpAddr  -dIpAddr $dIpAddr \
+                          -wTag $wTag -tagNo $tag -userPriority $priority ]
+      }
+   }
+   foreach portIdTx $portIdTxList {
+      MapIxiaPortId $portIdTx txChas txCard txPort
+      set portIdRx [expr $portIdTx + 8]
+      MapIxiaPortId $portIdRx rxChas rxCard rxPort   
+      set sIpAddr [lindex $sIpAddrList [expr $portIdTx - 1] ]
+      set dIpAddr [lindex $dIpAddrList [expr $portIdTx - 1] ]
+      set sPort [lindex $sPortList [expr $portIdTx - 1] ]
+      set dPort [lindex $dPortList [expr $portIdTx - 1] ]
+      set TOS [lindex $TOSList [expr $portIdTx - 1] ]
+      set tag [lindex $tagList [expr $portIdTx - 1] ]
+      set wTag "true"
+      if { $tag == "none" } { set wTag "false" }
+      set priority [lindex $priList [expr $portIdTx - 1] ]
+      if {$destMacAddrTxList == "DUTMac"} {
+         set destMacAddrTx $DUTs_info(DUT1,sysMAC)
+      } else {
+         set destMacAddrTx [lindex $destMacAddrTxList [expr $portIdTx - 1] ]
+      }
+      #PortID_Info($portIdTx,portSpeed)
+      # --------------------------  Traffic Note -------------------
+      #       In the new format all traffic is sent at 100Mbps
+      #       which is the peak bandwidth of any qp on the wan link
+      # 
+      switch $PortID_Info($portIdTx,portSpeed) {
+          "100" {
+              set LimitPerc 100;
+          }
+          "1000" {
+              set LimitPerc 10;
+          }
+          "10000" {
+              set LimitPerc 1;
+          }
+          "40000" {
+              set LimitPerc 1;
+          }
+          default {
+              set LimitPerc 10;
+          }
+      }
+      set frameSent [ixiaConf_2Ports_ip	-txChas $txChas -txCard $txCard -txPort $txPort \
+                       -rxChas $rxChas -rxCard $rxCard -rxPort $rxPort  \
+                       -startCardNum $startCardNum -dataPattern $pPattern \
+                       -streamType "contPacket" -percentage $LimitPerc \
+                       -TOS $TOS -frameSizeType "$frameSizeType" \
+                       -ipProtocol $ipProtocol -pDstPort $dPort -pSrcPort $sPort \
+                       -dMacAddr $destMacAddrTx  -sIpAddr $sIpAddr  -dIpAddr $dIpAddr \
+                       -wTag $wTag -tagNo $tag -userPriority $priority ]
+      #wait for things to settle down
+      if {$initRateCheck} {
+         exSleep 6
+         set portIdList {1 2 3 4 9 10 11 12}
+         foreach portId $portIdList {
+            
+            MapIxiaPortId $portId chasisId card port
+            stat getRate statAllStats $chasisId $card $port
+            set rateSent [stat cget -bytesSent]
+            set rateRecv [stat cget -bytesReceived]
+            set rateArray($portId,sent) $rateSent.00
+            set rateArray($portId,recv) $rateRecv.00
+         
+            result_debug "Rate on port $portId Sent: $rateSent Recv: $rateRecv"
+         }
+         if {$checkMatrix == 8} {
+         
+         } elseif {$checkMatrix == "1-7"} {
+            set ratioFound [format %.2f [expr $rateArray($portIdRx,recv)*100/($rateArray($portIdTx,sent)+1)]]
+            set ratioExpect 100
+            if {[expr abs($ratioFound - $ratioExpect)] > $ratioThreshold } {
+               result_error "Matrix 1 failed rate ratio threshold test on port $portIdRx. Got $ratioFound EXPECT $ratioExpect +/- $ratioThreshold"
+            } else {
+               result_ok "Matrix 1 pass rate ratio threshold test on port $portIdRx. Got $ratioFound AS EXPECT $ratioExpect +/- $ratioThreshold"
+            }
+         }         
+      }
+
+   }
+   if {$checkMatrix == 8} { 
+      set portIdList {1 2 3 4 9 10 11 12}
+      foreach portId $portIdList {
+         
+         MapIxiaPortId $portId chasisId card port
+         stat getRate statAllStats $chasisId $card $port
+         set rateSent [stat cget -bytesSent]
+         set rateRecv [stat cget -bytesReceived]
+         set rateArray($portId,sent) $rateSent.00
+         set rateArray($portId,recv) $rateRecv.00
+      
+            result_debug "Mtrx8 Rate on port $portId Sent: $rateSent Recv: $rateRecv"
+      } 
+      set ratioExpectArray(9) 0
+      set ratioExpectArray(10) 0
+      set ratioExpectArray(11) 100
+      set ratioExpectArray(12) 0
+
+      exSleep 4
+      lappend checkRateList {"negTest" "1  0"}
+      lappend checkRateList {"negTest" "2  0"}
+      lappend checkRateList {"negTest" "3  0"}
+      lappend checkRateList {"negTest" "4  0"}
+      foreach portId $portIdRxList {
+         ##set portIdTx [expr $portId - 8]
+         ##set ratioFound [format %.2f [expr $rateArray($portId,recv)*100/($rateArray($portIdTx,sent)+1)]]
+         ##set ratioExpect $ratioExpectArray($portId)
+         ##if {[expr abs($ratioFound - $ratioExpect)] > $ratioThreshold } {
+         ##   result_error "Matrix 8 failed rate ratio threshold test on port $portId. Got $ratioFound EXPECT $ratioExpect +/- $ratioThreshold"
+         ##} else {
+         ##   result_ok "Matrix 8 pass rate ratio threshold test on port $portId. Got $ratioFound AS EXPECT $ratioExpect +/- $ratioThreshold"
+         ##}
+         set portIdTx [expr $portId - 8]
+         set t [expr $portIdTx - 1];
+         set tag [lindex $tagList $t]
+         if { $tag == "none" } { set $tag "" }
+         lappend checkRateList "{$portIdTx 100} {$portId $ratioExpectArray($portId)} $tag"         
+      }
+
+      ################# Replace Old Gorp with New Proc  ##################
+      result_debug "$checkRateList"
+      CheckRatesTxRx $checkRateList "Check for MATRIX 8 Rates based on QP Assignment" $percent_tolerance
+      unset checkRateList
+
+      ####################################################################
+      report_end_test
+      SendACmd "clear counter"
+
+      #check Q
+      #lappend checkQosList "0 1000 minPacket" ;#not testing this, unpredictable for now
+      lappend checkQosList "$Qb 10 maxPacket"
+      lappend checkQosList "$Qc 1000 minPacket"
+      lappend checkQosList "$Qd 10 maxPacket"
+      CheckQoSMonitor [GetATrunkPort 1 2 1] $checkQosList $filePt $testFileName
+      unset checkQosList
+   } elseif {$checkMatrix == "1-7"} {
+      set ratioExpectArray(9) 0
+      set ratioExpectArray(10) 0
+      set ratioExpectArray(11) 0
+      set ratioExpectArray(12) 100
+      #foreach portId $portIdRxList {
+      #   set portIdTx [expr $portId - 8]
+      #   set ratioFound [format %.2f [expr $rateArray($portId,recv)*100/($rateArray($portIdTx,sent)+1)]]
+      #   set ratioExpect $ratioExpectArray($portId)
+      #   if {[expr abs($ratioFound - $ratioExpect)] > $ratioThreshold } {
+      #      result_error "Matrix 1 failed rate ratio threshold test on port $portId. Got $ratioFound EXPECT $ratioExpect +/- $ratioThreshold"
+      #   } else {
+      #      result_ok "Matrix 1 pass rate ratio threshold test on port $portId. Got $ratioFound AS EXPECT $ratioExpect +/- $ratioThreshold"
+      #   }
+      #}
+
+      exSleep 4
+      lappend checkRateList {"negTest" "1  0"}
+      lappend checkRateList {"negTest" "2  0"}
+      lappend checkRateList {"negTest" "3  0"}
+      lappend checkRateList {"negTest" "4  0"}
+      foreach portId $portIdRxList {
+         set portIdTx [expr $portId - 8]
+         set t [expr $portIdTx - 1];
+         set tag [lindex $tagList $t]
+         if { $tag == "none" } { set $tag "" }
+         lappend checkRateList "{$portIdTx 100} {$portId $ratioExpectArray($portId)} $tag"         
+      }
+      result_debug "$checkRateList"
+      CheckRatesTxRx $checkRateList "Check for MATRIX 1 Rates based on QP Assignment" $percent_tolerance
+      unset checkRateList
+
+      report_end_test
+      SendACmd "clear counter"
+      SendACmd "show ports [GetATrunkPort 1 2 1] qosmonitor no-refresh"
+      #check Q
+      # Matrix1 has qosmonitor problems when leaking to Q2.
+      lappend checkQosList "$Qa 10 maxPacket"
+      lappend checkQosList "$Qb 10 maxPacket"
+      lappend checkQosList "$Qc 4000 maxPacket"
+      lappend checkQosList "$Qd 4000 minPacket"
+      CheckQoSMonitor [GetATrunkPort 1 2 1] $checkQosList $filePt $testFileName 
+      unset checkQosList  
+
+      SendACmd	"config qosprofile $QPa weight 0 peak_rate 100 M port [GetATrunkPort 1 2 1]"
+      SendACmd	"config qosprofile $QPb weight 0 peak_rate 100 M port [GetATrunkPort 1 2 1]"
+      SendACmd	"config qosprofile $QPc weight 0 peak_rate 100 M port [GetATrunkPort 1 2 1]"
+      SendACmd	"config qosprofile $QPd weight 0 peak_rate 100 M port [GetATrunkPort 1 2 1]"
+
+   ################################################
+   set subTest "Checking Matrix 2 Bandwidth criteria using QP1, QP3, QP5, QP7"
+   ################################################
+   result_h2 "$subTest"
+   report_start_test "$subTest"
+   #Test Matrix 2
+   set priList "0 2 4 6"
+   if {$qosType=="diffserv"} {
+      set TOSList "0x00 0x40 0x80 0xc0"
+   } elseif {$qosType=="diffservCodePoint"} {
+      SendACmd "unconfig diffserv examination port all"      
+      SendACmd "config diffserv examination code-point 8 qosprofile QP7 port all"
+      SendACmd "config diffserv examination code-point 25 qosprofile QP3 port all"
+      set TOSList "0x00 0x64 0x80 0x20"
+   }
+   configMatrix -priList $priList -portIdTxList $portIdTxList -qosType $qosType -sIpAddrList $sIpAddrList -dIpAddrList $dIpAddrList \
+                -sPortList $sPortList -dPortList $dPortList -TOSList $TOSList -tagList $tagList -destMacAddrTxList $destMacAddrTxList \
+                -ipProtocol $ipProtocol
+
+   SendACmd	"config qosprofile qp1 weight 10 peak_rate 100 M port [GetATrunkPort 1 2 1]"
+   SendACmd	"config qosprofile qp3 weight 10 peak_rate 100 M port [GetATrunkPort 1 2 1]"
+   SendACmd	"config qosprofile qp5 weight 10 peak_rate 100 M port [GetATrunkPort 1 2 1]"
+   SendACmd	"config qosprofile qp7 weight 10 peak_rate 100 M port [GetATrunkPort 1 2 1]"
+
+      #wait for things to settle down
+      exSleep 2
+      set portIdList {1 2 3 4 9 10 11 12}
+ 
+      set sum 0
+      set ratioExpectArray(9) 10.00
+      set ratioExpectArray(10) 10.00
+      set ratioExpectArray(11) 10.00
+      set ratioExpectArray(12) 70.00
+
+      set ratioExpect 100
+
+
+      exSleep 4
+      lappend checkRateList {"negTest" "1  0"}
+      lappend checkRateList {"negTest" "2  0"}
+      lappend checkRateList {"negTest" "3  0"}
+      lappend checkRateList {"negTest" "4  0"}
+      foreach portId $portIdRxList {
+         set portIdTx [expr $portId - 8]
+         set t [expr $portIdTx - 1];
+         set tag [lindex $tagList $t]
+         if { $tag == "none" } { set $tag "" }
+         lappend checkRateList "{$portIdTx 100} {$portId $ratioExpectArray($portId)} $tag"         
+      }
+      result_debug "$checkRateList"
+      CheckRatesTxRx $checkRateList "Check for MATRIX 2 Rates based on QP Assignment" \
+                     $percent_tolerance SumRx $ratioExpect
+      unset checkRateList
+      report_end_test
+
+      SendACmd "clear counter"
+      exSleep 3
+      #check Q
+      lappend checkQosList "0 100 minPacket"
+      lappend checkQosList "2 100 minPacket"
+      lappend checkQosList "4 100 minPacket"
+      lappend checkQosList "6 700 minPacket"
+      CheckQoSMonitor [GetATrunkPort 1 2 1] $checkQosList $filePt $testFileName
+      unset checkQosList
+
+      #restore to default
+      SendACmd	"config qosprofile QP1 weight 0 peak_rate 100 M  port [GetATrunkPort 1 2 1]"
+      SendACmd	"config qosprofile QP3 weight 0 peak_rate 100 M port [GetATrunkPort 1 2 1]"
+      SendACmd	"config qosprofile QP5 weight 0 peak_rate 100 M port [GetATrunkPort 1 2 1]"
+      SendACmd	"config qosprofile QP7 weight 0 peak_rate 100 M port [GetATrunkPort 1 2 1]"
+
+   # Matrix 3 does not apply to broadcom because priority is not available.
+   # Matrix 4 deleted
+
+      
+   ################################################
+   set subTest "Checking Matrix 5 Bandwidth criteria using QP1, QP4, QP5, QP8"
+   ################################################
+   result_h2 "$subTest"
+   report_start_test "$subTest"          
+   #Test Matrix 5
+   set priList "0 3 4 7"
+   if {$qosType=="diffserv"} {
+      set TOSList "0x00 0x60 0x80 0xe0"
+   } elseif {$qosType=="diffservCodePoint"} {
+      SendACmd "unconfig diffserv examination port all"      
+      SendACmd "config diffserv examination code-point 8 qosprofile QP8 port all"
+      SendACmd "config diffserv examination code-point 25 qosprofile QP4 port all"
+      set TOSList "0x00 0x64 0x80 0x20"
+   }
+   configMatrix -priList $priList -portIdTxList $portIdTxList -qosType $qosType -sIpAddrList $sIpAddrList -dIpAddrList $dIpAddrList \
+                -sPortList $sPortList -dPortList $dPortList -TOSList $TOSList -tagList $tagList -destMacAddrTxList $destMacAddrTxList \
+                -ipProtocol $ipProtocol   
+
+   SendACmd	"config qosprofile QP1 weight 10 peak_rate 100 M  port [GetATrunkPort 1 2 1]"
+   SendACmd	"config qosprofile QP4 weight 10 peak_rate 50 M port [GetATrunkPort 1 2 1]"
+   SendACmd	"config qosprofile QP5 weight 10 peak_rate 40 M port [GetATrunkPort 1 2 1]"
+   SendACmd	"config qosprofile QP8 weight 10 peak_rate 30 M port [GetATrunkPort 1 2 1]"
+      
+      #wait for things to settle down
+      exSleep 4
+      set portIdList {1 2 3 4 9 10 11 12}
+      #foreach portId $portIdList {
+      #   
+      #   MapIxiaPortId $portId chasisId card port
+      #   stat getRate statAllStats $chasisId $card $port
+      #   set rateSent [stat cget -bytesSent]
+      #   set rateRecv [stat cget -bytesReceived]
+      #   set rateArray($portId,sent) $rateSent.00
+      #   set rateArray($portId,recv) $rateRecv.00
+      #
+      #      result_debug "Mtrx5 Rate on port $portId Sent: $rateSent Recv: $rateRecv"
+      #} 
+      #set sum 0
+      set ratioExpectArray(9) 10.00
+      set ratioExpectArray(10) 20.00
+      set ratioExpectArray(11) 40.00
+      set ratioExpectArray(12) 30.00
+      #foreach portId $portIdRxList {
+      #   set portIdTx [expr $portId - 8]
+      #   set ratioFound [format %.2f [expr $rateArray($portId,recv)*100/($rateArray($portIdTx,sent)+1)]]
+      #   set ratioExpect $ratioExpectArray($portId)
+      #   set proratedRatioThreshold [expr $ratioExpect/100.00*$ratioThreshold]
+      #   set sum [expr $ratioFound + $sum]
+      #   if {[expr abs($ratioFound - $ratioExpect)] > $proratedRatioThreshold } {
+      #      result_error "Matrix 5 failed rate ratio threshold test on port $portId. Got $ratioFound EXPECT $ratioExpect +/- $proratedRatioThreshold"
+      #   } else {
+      #      result_ok "Matrix 5 pass rate ratio threshold test on port $portId. Got $ratioFound AS EXPECT $ratioExpect +/- $proratedRatioThreshold"
+      #   }
+      #} 
+      #total rate
+      set ratioExpect 100
+      #set ratioFound $sum
+      #if {[expr abs($ratioFound - $ratioExpect)] > $ratioAggregateThreshold } {
+      #   result_error "Matrix 5 failed aggregate rate ratio threshold test. Got $ratioFound EXPECT $ratioExpect +/- $ratioAggregateThreshold"
+      #} else {
+      #   result_ok "Matrix 5 pass rate aggregate ratio threshold test. Got $ratioFound AS EXPECT $ratioExpect +/- $ratioAggregateThreshold"
+      #}
+
+      exSleep 4
+      lappend checkRateList {"negTest" "1  0"}
+      lappend checkRateList {"negTest" "2  0"}
+      lappend checkRateList {"negTest" "3  0"}
+      lappend checkRateList {"negTest" "4  0"}
+      foreach portId $portIdRxList {
+         set portIdTx [expr $portId - 8]
+         set t [expr $portIdTx - 1];
+         set tag [lindex $tagList $t]
+         if { $tag == "none" } { set $tag "" }
+         lappend checkRateList "{$portIdTx 100} {$portId $ratioExpectArray($portId)} $tag"         
+      }
+      result_debug "$checkRateList"
+      CheckRatesTxRx $checkRateList "Check for MATRIX 5 Rates based on QP Assignment" \
+                     $percent_tolerance SumRx $ratioExpect
+      unset checkRateList
+
+      report_end_test
+      SendACmd "clear counter"
+      exSleep 3
+      #check Q
+      lappend checkQosList "0 90 minPacket"
+      lappend checkQosList "3 180 minPacket"
+      lappend checkQosList "4 360 minPacket"
+      lappend checkQosList "7 270 minPacket"
+      CheckQoSMonitor [GetATrunkPort 1 2 1] $checkQosList $filePt $testFileName 
+      unset checkQosList      
+
+      #restore to default
+      SendACmd	"config qosprofile QP1 weight 0 peak_rate 100 M port [GetATrunkPort 1 2 1]"
+      SendACmd	"config qosprofile QP4 weight 0 peak_rate 100 M port [GetATrunkPort 1 2 1]"
+      SendACmd	"config qosprofile QP5 weight 0 peak_rate 100 M port [GetATrunkPort 1 2 1]"
+      SendACmd	"config qosprofile QP8 weight 0 peak_rate 100 M port [GetATrunkPort 1 2 1]"
+
+      
+   ## Removed Matrix 6 - Broadcom Q priority can not be changed
+      
+   ################################################
+   set subTest "Checking Matrix 7 Bandwidth criteria using QP1, QP3, QP5, QP7"
+   ################################################
+   result_h2 "$subTest"
+   report_start_test "$subTest"        
+   #Test Matrix 7
+   set priList "0 2 4 6"
+   if {$qosType=="diffserv"} {
+      set TOSList "0x00 0x40 0x80 0xc0"
+   } elseif {$qosType=="diffservCodePoint"} {
+      SendACmd "unconfig diffserv examination port all"      
+      SendACmd "config diffserv examination code-point 8 qosprofile QP7 port all"
+      SendACmd "config diffserv examination code-point 25 qosprofile QP3 prot all"
+      set TOSList "0x00 0x64 0x80 0x20"
+   }
+   configMatrix -priList $priList -portIdTxList $portIdTxList -qosType $qosType -sIpAddrList $sIpAddrList -dIpAddrList $dIpAddrList \
+                -sPortList $sPortList -dPortList $dPortList -TOSList $TOSList -tagList $tagList -destMacAddrTxList $destMacAddrTxList \
+                -ipProtocol $ipProtocol   
+
+   SendACmd	"config qosprofile QP1 weight 10 peak_rate 50 M  port [GetATrunkPort 1 2 1]"
+   SendACmd	"config qosprofile QP3 weight 20 peak_rate 50 M port [GetATrunkPort 1 2 1]"
+   SendACmd	"config qosprofile QP5 weight 25 peak_rate 50 M port [GetATrunkPort 1 2 1]"
+   SendACmd	"config qosprofile QP7 weight 35 peak_rate 50 M port [GetATrunkPort 1 2 1]"
+      
+      #wait for things to settle down
+      exSleep 4
+      set portIdList {1 2 3 4 9 10 11 12}
+      #foreach portId $portIdList {
+      #   
+      #   MapIxiaPortId $portId chasisId card port
+      #   stat getRate statAllStats $chasisId $card $port
+      #   set rateSent [stat cget -bytesSent]
+      #   set rateRecv [stat cget -bytesReceived]
+      #   set rateArray($portId,sent) $rateSent.00
+      #   set rateArray($portId,recv) $rateRecv.00
+      #
+      #      result_debug "Mtrx7 Rate on port $portId Sent: $rateSent Recv: $rateRecv"
+      #} 
+      #set sum 0
+      set ratioExpectArray(9) 10.00
+      set ratioExpectArray(10) 18.70
+      set ratioExpectArray(11) 26.30
+      set ratioExpectArray(12) 45.00
+      #foreach portId $portIdRxList {
+      #   set portIdTx [expr $portId - 8]
+      #   set ratioFound [format %.2f [expr $rateArray($portId,recv)*100/($rateArray($portIdTx,sent)+1)]]
+      #   set ratioExpect $ratioExpectArray($portId)
+      #   set proratedRatioThreshold [expr $ratioExpect/100.00*$ratioThreshold]
+      #   set sum [expr $ratioFound + $sum]
+      #   if {[expr abs($ratioFound - $ratioExpect)] > $proratedRatioThreshold } {
+      #      result_error "Matrix 7 failed rate ratio threshold test on port $portId. Got $ratioFound EXPECT $ratioExpect +/- $proratedRatioThreshold"
+      #   } else {
+      #      result_ok "Matrix 7 pass rate ratio threshold test on port $portId. Got $ratioFound AS EXPECT $ratioExpect +/- $proratedRatioThreshold"
+      #   }
+      #} 
+      #total rate
+      set ratioExpect 100
+      #set ratioFound $sum
+      #if {[expr abs($ratioFound - $ratioExpect)] > $ratioAggregateThreshold } {
+      #   result_error "Matrix 7 failed aggregate rate ratio threshold test. Got $ratioFound EXPECT $ratioExpect +/- $ratioAggregateThreshold"
+      #} else {
+      #   result_ok "Matrix 7 pass rate aggregate ratio threshold test. Got $ratioFound AS EXPECT $ratioExpect +/- $ratioAggregateThreshold"
+      #}
+
+      exSleep 4
+      lappend checkRateList {"negTest" "1  0"}
+      lappend checkRateList {"negTest" "2  0"}
+      lappend checkRateList {"negTest" "3  0"}
+      lappend checkRateList {"negTest" "4  0"}
+      foreach portId $portIdRxList {
+         set portIdTx [expr $portId - 8]
+         set t [expr $portIdTx - 1];
+         set tag [lindex $tagList $t]
+         if { $tag == "none" } { set $tag "" }
+         lappend checkRateList "{$portIdTx 100} {$portId $ratioExpectArray($portId)} $tag"         
+      }
+      result_debug "$checkRateList"
+      CheckRatesTxRx $checkRateList "Check for MATRIX 7 Rates based on QP Assignment" \
+                     $percent_tolerance SumRx $ratioExpect
+      unset checkRateList
+      report_end_test
+      #check Q
+      SendACmd "clear counter"
+      exSleep 3
+      lappend checkQosList "0 100 minPacket"
+      lappend checkQosList "2 180 minPacket"
+      lappend checkQosList "4 260 minPacket"
+      lappend checkQosList "6 450 minPacket"
+      CheckQoSMonitor [GetATrunkPort 1 2 1] $checkQosList $filePt $testFileName 
+      unset checkQosList   
+      #restore to default
+      SendACmd	"unconfigure qosprofile"
+               
+} elseif {$checkMatrix == "user"} {
+   ################################################
+   set subTest "Checking User Bandwidth criteria"
+   ################################################
+   result_h2 "$subTest"
+   report_start_test "$subTest"
+      
+   if {$userMatrix == 5} {
+      SendACmd	"config qosprofile QP1 weight 10 peak_rate 100 M  port [GetATrunkPort 1 2 1]"
+      SendACmd	"config qosprofile QP4 weight 10 peak_rate 50 M port [GetATrunkPort 1 2 1]"
+      SendACmd	"config qosprofile QP5 weight 10 peak_rate 40 M port [GetATrunkPort 1 2 1]"
+      SendACmd	"config qosprofile QP8 weight 10 peak_rate 30 M port [GetATrunkPort 1 2 1]"
+      #set ratioExpectArray(9) 10.00
+      #set ratioExpectArray(10) 20.00
+      #set ratioExpectArray(11) 40.00
+      #set ratioExpectArray(12) 30.00
+      #lappend checkQosList "0 90 minPacket"
+      #lappend checkQosList "3 180 minPacket"
+      #lappend checkQosList "4 360 minPacket"
+      #lappend checkQosList "7 270 minPacket"      
+      exSleep 5   
+   }
+   if {$userMatrix == 7} {
+      SendACmd	"config qosprofile QP1 weight 10 peak_rate 50 M port [GetATrunkPort 1 2 1]"
+      SendACmd	"config qosprofile QP3 weight 20 peak_rate 50 M port [GetATrunkPort 1 2 1]"
+      SendACmd	"config qosprofile QP5 weight 25 peak_rate 50 M port [GetATrunkPort 1 2 1]"
+      SendACmd	"config qosprofile QP7 weight 35 peak_rate 50 M port [GetATrunkPort 1 2 1]"
+      #set ratioExpectArray(9) 10.00
+      #set ratioExpectArray(10) 18.70
+      #set ratioExpectArray(11) 26.30
+      #set ratioExpectArray(12) 45.00
+      #lappend checkQosList "0 100 minPacket"
+      #lappend checkQosList "2 180 minPacket"
+      #lappend checkQosList "4 260 minPacket"
+      #lappend checkQosList "6 450 minPacket"
+
+      exSleep 5
+   }
+
+      #wait for things to settle down
+      exSleep 5
+      set portIdList {1 2 3 4 9 10 11 12}
+
+      set ratioExpectArray(9) [lindex $ratioExpectList 0]
+      set ratioExpectArray(10) [lindex $ratioExpectList 1]
+      set ratioExpectArray(11) [lindex $ratioExpectList 2]
+      set ratioExpectArray(12) [lindex $ratioExpectList 3]
+      set ratioExpect [expr $ratioExpectArray(9)+$ratioExpectArray(10)+$ratioExpectArray(11)+$ratioExpectArray(12)]
+            
+      exSleep 4
+      lappend checkRateList {"negTest" "1  0"}
+      lappend checkRateList {"negTest" "2  0"}
+      lappend checkRateList {"negTest" "3  0"}
+      lappend checkRateList {"negTest" "4  0"}
+      foreach portId $portIdRxList {
+         set portIdTx [expr $portId - 8]
+         set t [expr $portIdTx - 1];
+         set tag [lindex $tagList $t]
+         if { $tag == "none" } { set $tag "" }
+         lappend checkRateList "{$portIdTx 100} {$portId $ratioExpectArray($portId)} $tag"         
+      }
+      result_debug "$checkRateList"
+      CheckRatesTxRx $checkRateList "Check for USER MATRIX Rates based on QP Assignment" \
+                     $percent_tolerance SumRx $ratioExpect
+      unset checkRateList
+
+      report_end_test
+      SendACmd "clear counter"
+      #check Q
+      CheckQoSMonitor [GetATrunkPort 1 2 1] $checkQosList $filePt $testFileName 
+      unset checkQosList 
+}
+   #special check for multicast, these commands should not cause switch to crash
+   if {$protocol == "multicast"} { 
+      global DUT2_CONNECT
+      Login $DUT2_CONNECT -fd $filePt
+#      SendACmd	"clear igmp snooping"
+#      SendACmd	"disable pim"
+#      SendACmd	"enable pim"
+
+      global DUT1_CONNECT
+      Login $DUT1_CONNECT -fd $filePt
+#      SendACmd	"clear igmp snooping"
+#      SendACmd	"disable pim"
+#      SendACmd	"enable pim"
+   }
+   #stop Tx
+   foreach portIdTx $portIdTxList {
+         MapIxiaPortId $portIdTx txChas txCard txPort
+         ixStopPortTransmit  $txChas $txCard $txPort  
+   }
+   #restore to default
+   SendACmd	"unconfig qosprofile"
+
+}

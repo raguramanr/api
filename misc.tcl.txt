@@ -1,0 +1,5512 @@
+#load {expect52.dll}
+set auto_path [linsert $auto_path 0 . ]
+
+################################################################## 
+# Procedure Name: cookString
+#   
+# Description: String alternation
+#              Change it to a list 
+#
+# Input args:
+#              line - string 
+#                
+# Output args: 
+#              string
+#
+# Typical usage: 
+#      return [cookString $line]
+#
+# Category: Utility
+################################################################## 
+
+proc cookString {line} {
+   global spawn_id
+   set finalString ""
+   set emptyStr	""
+   set aList [split $line]
+   set lineLength [llength $aList]
+   set last [expr $lineLength-1]
+   for {set i 0} {$i < $lineLength} {incr i 1} {
+      set element [lindex $aList $i]
+	  if {$element != ""} {
+	     switch $i {
+		    $last { ;# last element
+	            set finalString [append $emptyStr $element] }
+			default {
+	            set finalString [append $emptyStr $element " "] }
+		 }
+      }
+   }
+   return $finalString
+}
+
+################################################################## 
+# Procedure Name: cookMacForIxia
+#   
+# Description: Mac String alternation
+#              Replace mac string colons with spaces 
+#
+# Input args:
+#              line - mac string 
+#                
+# Output args: 
+#              mac string
+#
+# Typical usage: 
+#      return [cookMacForIxia $mac]
+#
+# Category: Utility
+################################################################## 
+
+proc cookMacForIxia {mac} {
+   global spawn_id
+   set cookedMac ""
+   # -- split the mac by colon
+   set aList [split $mac ":"]
+   # -- join by space
+   set cookedMac [join $aList " "]
+   # -- to upper case
+   set cookedMac [string toupper $cookedMac]
+   result_debug "cookedMac=$cookedMac"
+   return $cookedMac
+}
+
+################################################################## 
+# Procedure Name: IxiaMacFormat2FdbFormat
+#   
+# Description: Mac String alternation
+#              Replace mac string colons with spaces and change it to lowercase 
+#
+# Input args:
+#              line - mac string 
+#                
+# Output args: 
+#              mac string
+#
+# Typical usage: 
+#      return [IxiaMacFormat2FdbFormat $mac]
+#
+# Category: Utility
+################################################################## 
+
+proc IxiaMacFormat2FdbFormat {mac} {
+   regsub -all { } $mac {:} sourceMacFdb
+   return [string tolower $sourceMacFdb]
+}
+
+################################################################## 
+# Procedure Name: eSplit
+#   
+# Description: String alternation
+#              Change it to a list 
+#
+# Input args:
+#              line - string 
+#                
+# Output args: 
+#              string
+#
+# Typical usage: 
+#      return [eSplit $line]
+#
+# Category: Utility
+################################################################## 
+
+proc eSplit {line} {
+   set cookedLine [cookString $line]
+   set aList [split $cookedLine]
+   return $aList
+}
+
+################################################################## 
+# Procedure Name: GetDUTName
+#   
+# Description: Get DUTx based on DUTx_CONNECT 
+#
+# Input args:
+#              IP address 
+#                
+# Output args: 
+#              DUTx
+#
+# Typical usage: 
+#             [GetDUTName $ip]
+#
+# Category: Utility
+################################################################## 
+
+proc GetDUTName {ip} {
+   set index 1
+   global DUT${index}_CONNECT
+   while { [info exists DUT${index}_CONNECT] } {
+      set connect [set DUT${index}_CONNECT]
+      if {$connect == $ip} { return "DUT$index"}
+      incr index
+      global DUT${index}_CONNECT
+   }
+   return "UnknownDUT"
+}
+
+################################################################## 
+# Procedure Name: oldGetVersion
+#   
+# Description: Get EW version on the DUT 
+#
+# Input args:
+#              DUTName 
+#              level 
+#                
+# Output args: 
+#              return version
+#
+# Typical usage: 
+#             [GetVersion "DUT1" 2]
+#
+# Category: Utility
+################################################################## 
+
+proc oldGetVersion {{DUTName "DUT1"} {level "1"} } {
+global DUTs_info
+if {$level == "1" } {
+   # -- return release and build number x.x.xbx
+   return $DUTs_info($DUTName,VERSION)
+} elseif {$level == "2"} {
+   # -- return partly release number x.x
+   set x $DUTs_info($DUTName,version)
+   set ver 0;
+   set match 0;
+   set flg [regexp -nocase {^([0-9]+.[0-9a-z]+).[0-9].*} $x match ver]
+   if {$flg} {
+      return $ver
+   } else {
+      return $match
+   }
+} elseif {$level == "3"} {
+   # -- return build number  
+   set x $DUTs_info($DUTName,version)
+   set match 0;
+   set build 0;
+   set flg [regexp -nocase {^[0-9]+.[0-9a-z]+.[0-9]+[a-z]+([0-9]*)} $x match build]
+   if {$flg} {
+      return $build
+   } else {
+      return $match
+   }
+} elseif {$level == "4"} {
+   # -- return release number x.x.x
+   set x $DUTs_info($DUTName,version)
+   set ver 0;
+   set match 0;
+   set flg [regexp -nocase {^([0-9]+.[0-9a-z]+.[0-9]+)[a-z]+} $x match ver]
+   if {$flg} {
+      return $ver
+   } else {
+      return $match
+   }
+}   
+
+return $DUTs_info($DUTName,version)
+}
+
+##################################################################
+# Procedure Name: VmanSupport 
+#
+# Description: 
+#              This API checks whether Vman can be run on the DUT. Default is DUT1
+#
+# Input args:
+#              DUT1 or DUT2 or DUTx and portnumber
+#
+# Output args:
+#              
+# Typical usage:
+#      VmanSupport DUT1 [GetTrunkPort x x x ]
+#       VmanSupport   (Default is DUT and GetATrunkport 1 2 1)
+#
+# Category: Utility
+##################################################################
+
+
+proc VmanSupport {{DUT "DUT1"} {trunkport ""}} {
+global [set DUT]_CONNECT
+global bd8kChassis
+global queensBlade
+global napaBlade
+global  aspenBlade
+upvar time1 time1
+upvar time2 time2
+upvar testNo testNo
+
+set plat [GetPlatform [set DUT]]
+if { [regexp -nocase $bd8kChassis| $plat] } {
+   Login [set [set DUT]_CONNECT]
+   set port ""
+   set parameterlist ""
+   if { $trunkport == "" } {
+      set trunkport [GetATrunkPort 1 2 1]
+   }
+   set port $trunkport
+   set port [split $port :]
+   set slot [lindex $port 0]
+   lappend parameterlist "Slot-$slot 1"
+   set blade [GetKeyValue "show slot" $parameterlist]
+   puts "The blade that is used : $blade"
+   if { [regexp -nocase "$queensBlade|$napaBlade|$aspenBlade" $blade"] } {
+      result_skip "Skipping this testcase as Broadcom XGs3 platforms don't support VMAN operations"
+      set time2 [clock seconds];
+      result_p "*** Time for $testNo = [expr $time2-$time1] secs\n\n"
+      close_result_file
+      report_end_test
+      return -code return 0
+   }
+}
+
+}
+
+
+
+################################################################## 
+# Procedure Name: GetVersion
+#   
+# Description: Get version on the DUT 
+#
+# Input args:
+#             DUTName   DUTx
+#              option    takes the following values:
+#                     1|whole     return whole version number
+#                     2|majmin    return major.minor  number
+#                     3|build     return build number
+#                     4|release   return major.minor,patch number
+#                     major       return major number
+#                     minor       return minor number
+#                     sustain     return sustaining number
+#              e.g. if DUT version is 10.2.0.16 or 10.2.0b16 the following
+#                   options returns different values
+#                      option       return
+#                    -----------   --------
+#                     1 or whole    10.2.0.16 or 10.2.0b16 
+#                     2 or majmin   10.2
+#                     3 or build    16
+#                     4 or release  10.2.0
+#                     major         10
+#                     minor          2 
+#                     sustain        0 
+# Output args: 
+#             none
+# Typical usage: 
+#             [GetVersion "DUT1" whole]
+#             [GetVersion "DUT1" major]
+#             [GetVersion "DUT1" build]
+#
+# Category: Utility
+################################################################## 
+proc GetVersion {{DUTName "DUT1"} {option 1} } {
+   global DUTs_info whichDutNow
+
+   if {![info exists DUTs_info($DUTName,version)]} {
+      error \
+         "GetVersion: DUTs_info($DUTName,version) is not set."
+   } elseif {$DUTs_info($DUTName,version) == "INVALID"} {
+      global ${DUTName}_CONNECT
+      Login [set ${DUTName}_CONNECT] -CheckOperational 0 -masterCheck 0 ;
+      set verList ""
+      lappend verList "{XOS version} 1"
+      set xos_version [GetKeyValue "show version" $verList]
+      if {![regexp "KEY_NOT_FOUND" $xos_version]} {
+         set DUTs_info($DUTName,version) $xos_version
+      } else {
+         result_error \
+            "GetVersion: DUTs_info($DUTName,version) is not set. Making it up"
+         set DUTs_info($DUTName,version) "24.1.1.1"
+      }
+   }
+   #puts  "version $DUTs_info($DUTName,version)"
+   if ![regexp {([0-9]+)\.([0-9]+)\.([0-9]+)[\.b]([0-9]+)} \
+      $DUTs_info($DUTName,version)  match \
+      major minor patch build] {  
+      error \
+         "GetVersion: $DUTs_info($DUTName,version) not in good format."
+      return "error"
+   }
+   switch $option {
+      whole -
+      1 {
+         return $DUTs_info($DUTName,version)
+      }  
+      majmin -
+      2 {
+         return "$major.$minor"
+      }
+      build -
+      3 {
+        return $build
+      }
+      release -
+      4 {
+        return "$major.$minor.$patch"  
+      }
+      major {
+        return $major
+      }
+      minor {
+        return $minor
+      }
+      patch {
+        return $patch
+      }
+      default {
+         return $DUTs_info($DUTName,version)
+      }  
+   }
+}
+################################################################## 
+# Procedure Name: GetDUTMac
+#   
+# Description: Get DUT Mac 
+#
+# Input args:
+#              DUTName 
+#              delimiter 
+#                
+# Output args: 
+#              return dut mac
+#
+# Typical usage: 
+#             [GetDUTMac "DUT1" ":"]
+#
+# Category: Utility
+##################################################################
+
+proc GetDUTMac {{DUTName "DUT1"} {delim ":"}} {
+global DUTs_info
+set mac $DUTs_info($DUTName,sysMAC)
+regsub -all {:} $mac $delim mac
+return $mac
+}
+
+################################################################## 
+# Procedure Name: GetPortIdMac
+#   
+# Description: Get Port ID Mac 
+#
+# Input args:
+#              portId  
+#              delimiter 
+#                
+# Output args: 
+#              return port mac
+#
+# Typical usage: 
+#             [GetPortIdMac $portId ":"]
+#
+# Category: Utility
+##################################################################
+
+proc GetPortIdMac {portId {delim " "} } {
+global TrafficGen
+if {$TrafficGen != "ept"} {
+set portId [expr $portId - 1 ]
+set card [expr $portId / 4 + 1 ]
+set port [expr $portId % 4 + 1 ]
+set cardNum [expr 160 + $card] 
+set cardNumInHex [format %X $cardNum]
+set mac "00 $cardNumInHex F$port 00 00 01"
+regsub -all { } $mac $delim mac
+return $mac
+} else {
+MapIxiaPortId $portId chasis card port
+set mac [list 00 A1 F1 00 00 01 ]
+set p1 [ expr 0x[ lindex $mac 0 ] ]
+set p2 [ expr 0x[ lindex $mac 1 ] ]
+set p3 [ expr 0x[ lindex $mac 2 ] ]
+set p4 [ expr 0x[ lindex $mac 3 ] ]
+set p5 [ expr 0x[ lindex $mac 4 ] ]
+set p6 [ expr 0x[ lindex $mac 5 ] ]
+if { [ expr $port % 15 ] == 0 } {
+    set p2in [ expr (($port / 15) - 1 ) + $p2 ]
+    set p3in 255
+   } else {
+      set p2in [ expr ($port / 15) + $p2]
+      set p3in [ expr (($port % 15) - 1 ) + $p3 ]
+   }
+set mac [format "%02X %02X %02X %02X %02X %02X" $p1 $p2in $p3in $p4 $p5 $p6 ]
+regsub -all { } $mac $delim mac
+return $mac
+}
+}
+################################################################## 
+# Procedure Name: GetSysType
+#   
+# Description: Get the show switch system type
+#
+# Input args:
+#              DUT name   
+#                
+# Output args: 
+#              return sysType
+#
+# Typical usage: 
+#             [GetSysType $dutname]
+#
+# Category: Utility
+##################################################################
+proc GetSysType {{DUTName "DUT1"}} {
+   global DUTs_info
+   if {[info exists DUTs_info($DUTName,sysType)]} {
+      return $DUTs_info($DUTName,sysType)
+   } else {
+      return "unknown"
+   }
+}
+################################################################## 
+# Procedure Name: GetPlatform
+#   
+# Description: Get platform 
+#
+# Input args:
+#              DUT name   
+#                
+# Output args: 
+#              return platform
+#
+# Typical usage: 
+#             [GetPlatform $dutname]
+#
+# Category: Utility
+##################################################################
+
+proc GetPlatform {{DUTName "DUT1"}} {
+    global DUTs_info CFG_PLATFORM
+
+    set dut "null";
+    catch {regexp {DUT([0-9]+)} $DUTName line dut} oops
+    if {$dut == "null"} {
+        result_warning "Called GetPlatform incorrectly.  Arg should be DUT# not just the #"
+	set dut 1
+    }
+    if {[info exists CFG_PLATFORM($dut)] && $CFG_PLATFORM($dut) != "null"} {
+        set DUTs_info($DUTName,platform) $CFG_PLATFORM($dut)
+        return $CFG_PLATFORM($dut)
+    } elseif {[info exists DUTs_info($DUTName,platform)]} {
+        return $DUTs_info($DUTName,platform)
+    } else {
+        return "unknown"
+    }
+}
+##################################################################
+# Procedure Name: GetSystemType
+#
+# Description: Get the platform from show switch 
+#      instead of from sysName.  Similar to GetPlatform
+#      but not dependent on DUTs_info
+# Input args:
+#              DUT number  ie 1 | 2 | 3 | 4 | 5
+#
+# Output args:
+#              return platform
+#
+# Typical usage:
+#             [GetSystemType $dutname]
+#
+# Category: Utility
+##################################################################
+proc  GetSystemType {{num "1"}} {
+   global DUTs_info CFG_PLATFORM
+   set returnValue "unknown"
+
+   if {[info exists DUTs_info(DUT${num},platform)] && $DUTs_info(DUT${num},platform) != "INVALID"} {
+      return $DUTs_info(DUT${num},platform)
+   } elseif {[info exists CFG_PLATFORM($num)] && $CFG_PLATFORM($num) != "null"} {
+      set DUTs_info(DUT${num},platform) $CFG_PLATFORM($num)
+      result_debug "SystemType bypassed.  Setting platform to vpex"
+      return $CFG_PLATFORM($num)
+   } else {
+      global DUT${num}_CONNECT;
+      Login [set DUT${num}_CONNECT] -CheckOperational 0 -masterCheck 0 ;
+      set param ""
+      lappend  param "{System Type:} 0"
+      set pSystemType [GetKeyValue "show switch" $param 0 1]
+      result_debug "pSystemType is $pSystemType"
+      if {[regexp -nocase "Stack" [lindex $pSystemType 0]]} {
+          set returnValue  "Stack"
+      } else {
+        set returnValue  [lindex [lindex $pSystemType 0]  2]
+        result_debug "SystemType is $returnValue"
+      }
+      if {$returnValue != ""} {
+          return $returnValue
+      } else {
+          return "unknown"
+      }
+   }
+}
+################################################################## 
+# Procedure Name: GetHardwareType
+#   
+# Description: Get hardware information 
+#
+# Input args:
+#              DUT name   
+#                
+# Output args: 
+#              return hardware type
+#
+# Typical usage: 
+#             [GetHardwareType $dutname]
+#
+# Category: Utility
+##################################################################
+
+proc GetHardwareType {{DUTName "DUT1"}} {
+global DUTs_info
+return $DUTs_info($DUTName,HardwareType)
+}
+
+################################################################## 
+# Procedure Name: GetRelMaster
+#   
+# Description: Get EW information - release master 
+#
+# Input args:
+#              DUT name   
+#                
+# Output args: 
+#              return release master information
+#
+# Typical usage: 
+#             [GetRelMaster $dutname]
+#
+# Category: Utility
+##################################################################
+
+proc GetRelMaster {{DUTName "DUT1"}} {
+global DUTs_info
+return  $DUTs_info($DUTName,relMaster)
+}
+
+################################################################## 
+# Procedure Name: GetMulticastMac
+#   
+# Description: Change Multicast IP to mac  
+#
+# Input args:
+#              Mutlicast IP 
+#              delimiter   
+#                
+# Output args: 
+#              return mac address
+#
+# Typical usage: 
+#             [GetMulticastMac $IP $delimiter]
+#
+# Category: Utility
+##################################################################
+
+proc GetMulticastMac {multicastIp {delim " "}} {
+
+   set ip1 0
+   set ip2 0
+   set ip3 0
+   set ip4 0
+   
+   scan $multicastIp {%d.%d.%d.%d} ip1 ip2 ip3 ip4
+   set macAddr "01${delim}00${delim}5E${delim}[format %02X $ip2]${delim}[format %02X $ip3]${delim}[format %02X $ip4]"
+   #puts "Mac: |$macAddr| for ip: $multicastIp"
+   return $macAddr
+
+}
+
+################################################################## 
+# Procedure Name: GetSysName
+#   
+# Description: Get sysName 
+#
+# Input args:
+#              DUT name   
+#                
+# Output args: 
+#              return sysName
+#
+# Typical usage: 
+#             [GetSysName $dutname]
+#
+# Category: Utility
+##################################################################
+
+proc GetSysName {{DUTName "DUT1"}} {
+   global DUTs_info
+   if {[info exists DUTs_info($DUTName,sysName)]} {
+      return $DUTs_info($DUTName,sysName)
+   } else {
+      return "unknown"
+   }
+}
+
+################################################################## 
+# Procedure Name: EnableLink
+#   
+# Description: Enable port link - like disconect/reconnect a cable  
+#
+# Input args:
+#              Port list 
+#              dut name   
+#                
+# Output args: none
+#              
+#
+# Typical usage: 
+#             [EnableLink $portIdList $DUTName]
+#
+# Category: setup
+##################################################################
+proc EnableLink {portIdList DUTName} {
+   global ${DUTName}_CONNECT;
+   global DUTs_info;
+
+   global spawn_id
+   set pid _[pid]
+   Login [set ${DUTName}_CONNECT];
+   set result 1
+   foreach portId $portIdList {
+       set fd_in [open "Tmp/tmp_EnableLink$pid" "w"]
+       SendACmd "enable port $portId" NULL $fd_in
+       close $fd_in
+       set fd_in [open "Tmp/tmp_EnableLink$pid" "r"]
+       set rtValue [check_illegality $fd_in]
+       close $fd_in
+       if { $rtValue == "illegal" } {
+ 	  set result 0
+       }
+       sleep 5
+   }
+   return $result
+}
+
+
+################################################################## 
+# Procedure Name: DisableLink
+#   
+# Description: Disable port link - like disconect/reconnect a cable  
+#
+# Input args:
+#              Port list 
+#              dut name   
+#                
+# Output args: none
+#              
+#
+# Typical usage: 
+#             [DisableLink $portIdList $DUTName]
+#
+# Category: setup
+##################################################################
+proc DisableLink {portIdList DUTName} {
+   global ${DUTName}_CONNECT;
+   global DUTs_info;
+
+   global spawn_id
+   set pid _[pid]
+   Login [set ${DUTName}_CONNECT];
+   set result 1
+   foreach portId $portIdList {
+       set fd_in [open "Tmp/tmp_DisableLink$pid" "w"]
+       SendACmd "disable port $portId" NULL $fd_in
+       close $fd_in
+       set fd_in [open "Tmp/tmp_DisableLink$pid" "r"]
+       set rtValue [check_illegality $fd_in]
+       close $fd_in
+       if { $rtValue == "illegal" } {
+ 	  set result 0
+       }
+       sleep 3
+   }
+   return $result
+}
+
+##################################################################
+# Procedure Name: EnableDutPort
+#  
+# Description: Wrap command to send enable port x and wait for port(s) to come
+#              up
+#
+# Input args: port(s)
+#             dut name
+#
+# Output args: none
+#
+#
+# Typical usage:
+#             [EnableDutPort $port $DUTName]
+#
+# Category: setup
+##################################################################
+proc EnableDutPort {portList DUTName {waitActive 1}} {
+    global ${DUTName}_CONNECT;
+    global DUTs_info;
+
+    Login [set ${DUTName}_CONNECT];
+
+    set dutPortList ""
+
+    foreach port $portList {
+
+        SendACmd "enable port $port";
+
+        if {($port != "mgmt") && ($port != "all")} {
+            lappend parameterList "{.*$port.*active} exist"
+            set dutPortList "$dutPortList $port,"
+        }
+    }
+
+    if {$waitActive == 1} {
+        ;# After all ports are enabled, wait until they go active before returning
+
+        if {$dutPortList != ""} {
+            ;# Strip trailing comma
+            set dutPortList [string trimright $dutPortList ,]
+            CheckKeyValue "show port $dutPortList info" $parameterList \
+                    -time {s: 0 i: 1 d: 10 f: 10} \
+                    -reportResults 0
+        }
+    }
+}
+
+##################################################################
+# Procedure Name: DisableDutPort
+#  
+# Description: Wrap command to send disable port x.
+#              up
+#
+# Input args: port(s)
+#             dut name
+#
+# Output args: none
+#
+#
+# Typical usage:
+#             [DisableDutPort $port $DUTName]
+#
+# Category: setup
+##################################################################
+proc DisableDutPort {portList DUTName} {
+    global ${DUTName}_CONNECT;
+    global DUTs_info;
+
+    Login [set ${DUTName}_CONNECT];
+
+    foreach port $portList {
+        SendACmd "disable port $port";
+    }
+}
+
+################################################################## 
+# Procedure Name: CompareVersion
+#   
+# Description: Compare the version with the version on the dut  
+#
+# Input args:
+#              version 
+#              dut name   
+#                
+# Output args: none
+#              
+#
+# Typical usage: 
+#             [CompareVersion $version $DUTName]
+#
+# Category: utility
+##################################################################
+
+proc CompareVersion {version {DUTName "DUT1"}} {
+
+    global DUTs_info;  
+                
+    result_debug "CompareVersion build($version) and SW($DUTs_info($DUTName,version))"
+    set vn [GetVersion $DUTName 4];
+    set bn [GetVersion $DUTName 3];      
+    set flag [regexp -nocase {^(.*)b(.*)} $version vs vn1 bn1];
+    if {$flag} {
+        # -- compare release and build number
+        if {$vn1 > $vn} {
+            return 1;
+        } elseif {$vn1 < $vn} {
+            return -1;
+        } else {
+          result_debug "Build bld($bn1) sw($bn)";
+          if {$bn1 > $bn} {
+              return 1;
+          } elseif {$bn1 < $bn} {
+              return -1;
+          } else {
+              return 0;
+          }
+        }    
+    } else {
+        # ---- compare only release number
+        set sw_fullversion $vn;
+        set lng [string length $version];
+        if {$lng >= [string length $sw_fullversion]} {
+            set sw_shortversion $sw_fullversion;
+        } else {
+            set sw_shortversion [string range $sw_fullversion 0 [expr $lng-1]];   
+        }     
+        
+        if {($version == "6.2e") && ($sw_shortversion != "6.2e")} {
+            # to prevent s24lc code
+            return 1;
+        } elseif {$version > $sw_shortversion} {
+            return 1;
+        } elseif {$version < $sw_shortversion} {
+            return -1;
+        } else {
+            return 0;
+        }        
+    }
+}
+################################################################## 
+# Procedure Name: CompareRelease
+#   
+# Description: Compare two version strings. return 1 if first version
+#              is greater. Return -1 if second version is greater
+#              Return 0 if they are the same
+#              Also do partial matching e.g.
+#              version1  version2  return 
+#              --------  -------- -------
+#              10.2      10.2.1     0
+#              10.2.3b6  10.2.3     0
+#              10.3      10.4.1     -1
+#              7.3.40b3  7.3.40b2   1  
+# Input args:
+#              version1 in the format of x.x.x.x or x.x.xbx
+#              version2 in the format of x.x.x.x or x.x.xbx
+#                
+# Output args: none
+#              
+#
+# Typical usage: 
+#             [CompareRelease $version $version2]
+#
+# Category: utility
+##################################################################
+proc CompareRelease {version1 version2} {
+   #puts "comparing release $version1 and $version2"
+   set v1 $version1
+   set v2 $version2
+   while { [string length $v1] > 0 && [string length $v2] > 0} {
+      # extract the first token from the version strings
+      # it can be a number or the . or b characters
+      if ![regexp {^[0-9]+|^[\.b]} $v1 token1 ] {
+         error "CompareRelease: illegal characters in version1: $version1."
+         return "error"
+      }
+      if ![regexp {^[0-9]+|^[\.b]} $v2 token2 ] {
+         error "CompareRelease: illegal characters in version2: $version2."
+         return "error"
+      }
+      # remove the first tokens from version strings
+      regsub {^[0-9]+|^[\.b]} $v1 "" v1
+      regsub {^[0-9]+|^[\.b]} $v2 "" v2
+      #puts "token1 is $token1"
+      #puts "token2 is $token2"
+      #puts "v1 becomes $v1"
+      #puts "v2 becomes $v2"
+      #if the token is . or b both tokens has to match otherwise
+      #it's some kind of different format in the strings
+      if { [regexp {[\.b]} $token1] && $token1 != $token2 } { 
+         error "CompareRelease: format mismatch in $version1 and $version2"
+         return "error"
+      } 
+      #compare the numeric tokens
+      if {$token1 > $token2 } {
+         return 1
+      }
+      if {$token1 < $token2 } {
+         return -1
+      }
+      #if matches loop to the next token 
+   }
+   #if we get here that means both version strings matches entirely or
+   #one of the version strings matches till the end e.g. 10.2 matches 10.2.0.6
+   return 0
+}
+
+################################################################## 
+# Procedure Name: DBug
+#   
+# Description: for variable debug printing  
+#
+# Input args:
+#              level 
+#              command 1
+#              command 2   
+#                
+# Output args: none
+#              
+# Typical usage: 
+#             [DBug $lvl $cmd1 $cmd2]
+#
+# Category: utility
+##################################################################
+
+proc DBug { {lvl "0"}  {cmd1 "0"} {cmd2 "0"} } {
+    # dBuglevel meant to be a multiTest level trigger
+    global DUT
+
+    if {[info exist DUT(bug)]} {
+    
+         if { ($lvl <= $DUT(bug)) } {
+                 puts "**************************************************************************"
+                 puts "***********-- $cmd1 --************"
+                 puts "**************************************************************************"
+         }
+         if { ($lvl == "2") && ($DUT(bug) == "2") } {
+             puts "Press z then enter to continue"
+             gets stdin z
+         }
+         if { ($lvl == "10") && ($DUT(bug) == "10") } {
+             SendACmd "$cmd2"
+             
+         }
+    }
+}
+
+################################################################################
+# VerifyKeyValue
+#
+#     Find out if a value is in a buffer or not
+#
+#  Examples:
+#     VerifyKeyValue 1 "show vlan" 0 "mgmt"             
+#        mgmt is in the output of 'show vlan' on DUT1
+#     VerifyKeyValue 2 "show vlan" 0 "mgmt -key 4094"
+#        mgmt is in the buffer, on the same line a '4094' on DUT2
+#     VerifyKeyValue 1 "show vlan" 0 "vlan12 -exist 0"
+#        vlan12 is not in the output of show vlan
+#     VerifyKeyValue 1 "show vlan" 0 "ANY -exist 5"
+#        the word ANY appears 5 times in the output
+#     VerifyKeyValue 1 "show vlan" 0 "vlan12 -key vlan9 -line 3"
+#        the word vlan12 is in buffer, three lines after 'vlan9' appears
+#     VerifyKeyValue 1 "show vlan" {s: 1 i: 5 d: 20 f: 20} "sue"
+#        see if the word 'sue' is in output.
+#        wait 1 second before looking
+#        if it is not there keep looking every 5 seconds until
+#        20 seconds.  If not there in 20seconds, we fail.
+#
+#     Added ckcase parm... DEFAULT WE ARE CASE SENSITIVE, if you pass
+#     -ckcase n   we will not be case sensitive. 
+#
+#     Also changed key/val to work if there are multiple lines with key and
+#     the key/val match is not on the first line key exists
+#
+################################################################################
+proc VerifyKeyValue {dut cmd time args} {
+
+   # if we have a time sensitive Verify, get the time information
+   # -time {s: 10 i: 5 d: 20 f:50}
+   if {$time != "0"} {
+      set sTime [lindex $time 1] ; # time to initally wait before starting
+      set iTime [lindex $time 3] ; # interval time to wait between checks
+      set dTime [lindex $time 5] ; # expected time that we should pass
+      set fTime [lindex $time 7] ; # max time we wait before failing the test
+      sleep $sTime
+   } else {
+      set sTime 2; set iTime 1; set dTime 1; set fTime 1; 
+   }
+
+   set done      0
+   set ttime     $sTime
+   set checkList [lindex $args 0] ; # do this cause we have {{}}
+   set checkNum  [llength $checkList]
+
+   report_start_test "Verify <$cmd>"
+
+   while {!$done} {
+      set DUTName [format %s%d DUT $dut]
+      global ${DUTName}_CONNECT;
+      Login [set ${DUTName}_CONNECT];
+      set buf [SendACmd $cmd]
+
+      set numFail 0
+      set myline "##############################"
+
+      result_p "\n$myline $myline"
+      result_p "$myline $myline"
+      result_p "SENDACMD <$dut> = $cmd\n$myline $myline"
+      result_p $buf
+      result_p "$myline $myline"
+      result_p "$myline $myline\n"
+
+      for {set i 1} {$i <= $checkNum} {incr i} {
+         set check   [lindex $checkList [expr $i - 1]]
+         set val     [lindex $check 0]
+         set valArgs [lrange $check 1 "end"]
+         parse_args Verify $valArgs {
+            exist   1
+            key     NULL
+            line    NULL
+            comment ""
+            ckcase  "y"
+         }
+         # check to see if the buffer has the value 
+         set inBuf [CheckBufHaveValue $buf $val $key $line $ckcase]
+
+         # if inBuf == exist, we got as many hits as we thought we would
+         if {$inBuf == $exist} {
+            result_debug [format "%-20s pass" $val]
+            result_ok "Verify passed: time=$ttime val=<$val> key=$key line=$line exist=$exist"
+         } else {
+            incr numFail
+            if {$ttime > $fTime} {
+               result_debug [format "%-20s fail" $val]
+               result_error "Verify fail: time=$ttime val=<$val> key=$key line=$line exist=$exist\($inBuf\)" 
+            }
+         }
+      }
+
+      # we want to end the testing if
+      # 1) no failures
+      # 2) we were not timing this test
+      # 3) we exceeded the max time allowed
+      # otherwise, we want to increment the time
+      if {($numFail == "0") || ($time == "0") || ($ttime > $fTime)} {
+          set done 1
+      } else {
+         result_debug "sleeping for $iTime secs..."      
+         result_debug "Verify sleep: time= $ttime out of $fTime seconds"
+         sleep $iTime
+         set ttime [expr $ttime + $iTime]
+      }
+   }
+
+   report_end_test
+   return $ttime
+}
+
+################################################################################
+# VerifyTraffic
+#
+#  This takes are arguement a list from IxFramesSent, and sees that 
+#  bidirection traffic got to the destination.  If we recieve more than send,
+#  we assume pass, since probably igmp snoop or something.
+#
+#  Ex.     VerifyTraffic [IxFramesSent $ixport1 $ixport2]
+#  
+################################################################################
+proc VerifyTraffic {traffic {comment ""}} {
+   
+   set sentx [lindex $traffic 0]
+   set recx  [lindex $traffic 1]
+   set senty [lindex $traffic 2]
+   set recy  [lindex $traffic 3]
+
+   report_start_test "VerifyTraffic $comment"
+
+   report_start_test "VerifyTraffic X->Y"
+   if {$recy >= ($sentx -10)} {
+      result_ok "VerifyTraffic passed: SentX=$sentx RecY=$recy"
+   } else {
+      result_error "VerifyTraffic failed: SentX=$sentx RecY=$recy"
+   }
+   report_end_test
+
+   report_start_test "VerifyTraffic Y->X"
+   if {$recx >= ($senty -10)} {
+      result_ok "VerifyTraffic passed: SentY=$senty RecX=$recx"
+   } else {
+      result_error "VerifyTraffic failed: SentY=$senty RecX=$recx"
+   }
+   report_end_test
+ 
+   report_end_test
+}
+
+###############################################################################
+# CheckBufHaveValue
+#
+#   Finds out if val is in buf, based on a key or line parameter.
+#   See Verify for more description
+#
+#   Change so we check can toggle case sensitivity...
+#   Changed so if we have a scenario like
+#
+#   "a b c"
+#   "x b c"
+#
+#   CheckBufHaveValue $buf x b 
+#
+#   This will work. Before, it would find the first key hit, then see if the
+#   val in on the line.  Now, it finds all lines the key is on, and returns
+#   the number of times val is on key
+#
+###############################################################################
+proc CheckBufHaveValue {buf val key line ckcase} {
+
+   set buf       [MakeList $buf]
+   set buflen    [llength $buf]
+   set numFound  0
+
+   result_debug ">>>val=$val key=$key line=$line ckcase=$ckcase"
+
+   # if key is NULL, we want to just find the number of times we see val
+   # and return it
+   if {$key == "NULL"} {
+         set indx 0
+         set done 0
+         while {!$done} {
+            set linenum [CheckBuf_FindValLine $buf $val $indx $ckcase]
+            if {$linenum != -1} {
+               set indx [expr $linenum + 1]
+               incr numFound
+            } else {
+               set done 1
+            }
+         }
+   } else {
+
+      # we have a key, find all the linenumbers the key is on
+      set done 0
+      set indx 0
+      set keylinefoundlist ""
+      while {!$done} {
+
+         set linenum [CheckBuf_FindValLine $buf $key $indx $ckcase]
+         if {$linenum != -1} {
+            lappend keylinefoundlist $linenum
+            set indx [expr $linenum + 1]
+         } else {
+            set done 1
+         }
+      }
+
+      foreach linenum $keylinefoundlist {
+         # if we pass line, then search 'line' lines after the line key 
+         # was found on.  Otherwise, find the val on the key line.
+         if {$line == "NULL"} {
+            set linebuf [lindex $buf $linenum]
+         } else {
+            set linebuf [lindex $buf [expr $linenum + $line]]
+         }
+         if {$ckcase != "y"} {
+            set found   [regexp -nocase -indices $val $linebuf matchedRange]
+         } else {
+            set found   [regexp -indices $val $linebuf matchedRange]
+         }
+         if {$found} {
+            incr numFound
+         }
+      }
+   }
+   return $numFound
+}
+
+###############################################################################
+# CheckBuf_FindValLine
+#
+#  Finds out if 'val' is in 'buf', and returns the line number val is found on
+#  
+#  buf - buffer you are looking in, must be a list  (use MakeList)
+#  val - regexp value of what you are looking for
+#  linenum - starting line you are looking in buf for the val
+#
+#  returns: line number of first occurance of a match, -1 if no match
+#  added change so we can toggle case sensitivity
+#
+##############################################################################
+proc CheckBuf_FindValLine {buf val linenum ckcase} {
+
+   for {} {$linenum < [llength $buf]} {incr linenum} {
+      set line    [lindex $buf $linenum]
+
+      # found is 1 if we find our val in line
+      # regexp will be case insensitive, and store the beginning and ending
+      # column of the match in matchedRange
+      if {$ckcase != "y"} {
+         set found   [regexp -nocase -indices $val $line matchedRange]
+      } else {
+         set found   [regexp -indices $val $line matchedRange]
+      }
+      if {$found} {
+         return $linenum 
+      }
+   }
+   return -1
+}
+
+################################################################## 
+# Procedure Name: SendDUT
+#   
+# Description: Send a command to one or many DUT(s).
+#
+# Input args:
+#              num - one or all
+#              cmd - command   
+#                
+# Output args: none or output buffer
+#              
+# Typical usage: 
+#             [SendDUT "all" "show switch"]
+#
+# Category: setup
+##################################################################
+
+##############################################################################
+##############################################################################
+##############################################################################
+proc SendDUT {num cmd} {
+   global spawn_id DUT
+
+   #trying not to use InitLoginDUT
+   if {$num == "all"} {
+      foreach dut $DUT(list) {
+         set     DUTName [format %s%d DUT $dut]
+         global ${DUTName}_CONNECT;
+         Login  [set ${DUTName}_CONNECT];
+         SendACmd $cmd
+      }
+   } else {
+      set     DUTName [format %s%d DUT $num]
+      global ${DUTName}_CONNECT;
+      Login  [set ${DUTName}_CONNECT];
+      return [SendACmd $cmd]
+   }
+
+}
+
+################################################################## 
+# Procedure Name: VerifyNum
+#   
+# Description: 
+#   Runs a pass/fail test on wether the number passed
+#   passed in is in the min/max range.  If so, test passes.  If 
+#   not, the test fails.  
+#
+# Input args:
+#     num       - the value you are testing
+#   minVal      - the minimum accepted pass value
+#   maxVal      - the maximum accepted pass value
+#   description - optional - custom text to output test case
+#                
+# Output args: none
+#              
+#
+# Typical usage: 
+#
+#    lappend parameterList "11.100.100.4 1"
+#    set num [GetKeyValue "sh mpls vpls detail" $parameterList]     
+#    # we expect num to be 1000, give or take a few.
+#    VerifyNum $num 900 1100 "VPLS counter stats"
+#
+#
+# Category: 
+##################################################################
+proc VerifyNum {num minVal maxVal {description ""}} {
+   report_start_test "VerifyNum $description"
+   if {$num >= $minVal && $num <= $maxVal} {
+      result_ok "VerifyNum $description passed: $minVal >= $num <= $maxVal"
+   } else {
+      result_error "VerifyNum $description failed: !  $minVal >= $num <= $maxVal"
+   }
+   report_end_test
+}
+
+
+
+
+################################################################## 
+# Procedure Name: BeginTest
+#   
+# Description: Build the test case detail report header
+#
+# Input args:
+#              testNo 
+#              title   
+#                
+# Output args: test case  file handle
+#              
+# Typical usage: 
+#             [BeginTest "2.1.1" "BGP CLI"]
+#
+# Category: setup
+##################################################################
+
+##############################################################################
+##############################################################################
+##############################################################################
+proc BeginTest {testNo title} {
+   global DUT
+   set DUT(fd_res)       [open_result_file "$testNo"]
+   set DUT(mystartTime)  [clock seconds]
+   set DUT(testNo)       $testNo
+   set DUT(title)        $title
+
+   result_h1         "$DUT(module) $testNo $title"
+   report_start_test "$DUT(module) $testNo $title"
+   return $DUT(fd_res)
+}
+
+################################################################## 
+# Procedure Name: EndTest
+#   
+# Description: Build the test case detail report end
+#
+# Input args:
+#              none    
+#                
+# Output args: none
+#              
+# Typical usage: 
+#             EndTest
+#
+# Category: setup
+##################################################################
+
+##############################################################################
+##############################################################################
+##############################################################################
+proc EndTest {} {
+   global DUT
+
+   set t  [clock seconds]
+   set fd_res $DUT(fd_res)
+
+   result_p "*** Time for $DUT(testNo) = [expr $t-$DUT(mystartTime)] secs\n\n"
+   close_result_file 
+   report_end_test ; 
+}
+
+################################################################## 
+# Procedure Name: VLAN_Create_Group
+#   
+# Description: on one or many DUTs, create one or many L2/L3 vlans 
+#              with port, tag number, and ip address.
+#              
+# Input args:
+#              DUT
+#              vlan name
+#              start
+#              end 
+#              port
+#              tag number
+#              ip address
+#                
+# Output args: none
+#              
+# Typical usage: 
+#             [VLAN_Create "all" "vlan1" 1 10 "2:1" "100" "10.10.10.1"]
+#
+# Category: setup
+##################################################################
+
+###############################################################################
+proc VLAN_Create_Group {dut name s e p tag ip {mask 24}} {
+   for {set i $s} {$i <=$e} {incr i} {
+      VLAN_Create $dut [format "%s%s" $name $i] $p $tag $ip $mask
+      if {$ip != "-" } { set ip [IncrIpAddr $ip $mask]  }
+      if {$tag != "-"} { incr tag }
+   }
+}
+
+################################################################## 
+# Procedure Name: VLAN_Create
+#   
+# Description: create one L2/L3 vlans with port, tag number, and ip address on
+#              one or many DUTs
+#
+# Input args:
+#              DUT
+#              vlan name
+#              port
+#              tag number
+#              ip address
+#                
+# Output args: none
+#              
+# Typical usage: 
+#             [VLAN_Create "all" "vlan1" "2:1" "100" "10.10.10.1"]
+#
+# Category: setup
+##################################################################
+
+###############################################################################
+proc VLAN_Create {dut name p tag ip {mask 24}} {
+
+   SendDUT $dut "cre vlan $name"
+   if {$tag != "-" } {
+         SendDUT $dut "config $name tag $tag"
+         SendDUT $dut "config $name add port $p tag"
+   } else {
+         SendDUT $dut "config $name add port $p"
+   }
+   if {$ip != "-" } {
+         SendDUT $dut "config $name ipa $ip/$mask"
+  }
+}
+
+################################################################## 
+# Procedure Name: VLAN_Delete_Group 
+#   
+# Description: Delete vlan(s) from one or many DUTs
+#
+# Input args:
+#              DUT
+#              vlan name
+#              start
+#              end
+#                
+# Output args: none
+#              
+# Typical usage: 
+#             [VLAN_Delete_Group "all" "vlan" 1 10]
+#
+# Category: setup
+##################################################################
+
+###############################################################################
+proc VLAN_Delete_Group {dut name s e} {
+   for {set i $s} {$i <=$e} {incr i} {
+      SendDUT $dut "del vlan [format "%s%s" $name $i]"
+   }
+}
+
+################################################################## 
+# Procedure Name: PortInVlan
+#   
+# Description: Get the port number from any vlan
+#
+# Input args:
+#              none    
+#                
+# Output args: none
+#              
+# Typical usage: 
+#             PortInVlan d v 
+#
+# Category: setup
+##################################################################
+
+################################################################################
+proc PortInVlan {d v {ixia "NULL"}} {
+
+   global DUT
+
+   foreach vlan $DUT($d,vlans) {
+      set name [lindex $vlan 0]
+      set ip   [lindex $vlan 1]
+      set port [lindex $vlan 2]
+
+      switch $name {
+         "ixia1" {   set port [MapDUTPortId  [expr ($d * 2 - 1)] $d]   } 
+         "ixia2" {   set port [MapDUTPortId  [expr $d * 2] $d]         } 
+         default {   set port [GetATrunkPort [string index $port 0] [string index $port 1] [string index $port 2]]  }
+      }      
+
+      if {$name == $v} {
+         if {$ixia != "NULL"} {
+            MapIxiaPortId [lindex $vlan 5] c s p
+            return [list $c $s $p]
+         } else {
+            return $port
+         }
+      }
+   }
+   return ERROR
+}
+
+
+################################################################################
+# IncrIpAddr - increase any section of the ip address
+#
+#    Ex.  IncrIpAddr 1.1.1.1    ;  ---- 1.1.1.2
+#    Ex.  IncrIpAddr 1.1.1.1 24 ;  ---- 1.1.2.1
+#
+################################################################################
+proc IncrIpAddr {ip {mask "none"}} {
+      regsub -all \\. $ip " " ip
+
+      set ip1 [lindex $ip 0]
+      set ip2 [lindex $ip 1]
+      set ip3 [lindex $ip 2]
+      set ip4 [lindex $ip 3]
+
+      
+      #could have done switch.... got lazy
+      if {$mask == 24} {         set ip4 254      }
+      if {$mask == 16} {         set ip3 254      }
+      if {$mask == 8}  {         set ip2 254      }
+
+      if {$ip4 == 254} {
+         set ip4 1
+         if {$ip3 == 254} {
+            set ip3 1
+            if {$ip2 == 254} {
+               set ip2 1
+               incr ip1
+            } else {
+               incr ip2
+            }
+         } else {
+            incr ip3  
+         }
+      } else {
+         incr ip4
+      }
+   set ip "$ip1 $ip2 $ip3 $ip4"
+   regsub -all " " $ip \. ip
+   return $ip
+}
+
+
+################################################################## 
+# Procedure Name: IncrIPv4Route
+#   
+# Description: Increment the network portion of an IPv4 route.
+#
+# Input args:
+#       IP address
+#       subnet mask
+#       {value to increment, default 1}
+#                
+# Output args: None.
+#
+# Return value:
+#       IP address
+#
+# Typical usage: 
+#       set new_ip [IncrIPv4Route 20.0.0.0 24];
+#       # new_ip will now be 20.0.1.0.
+#
+#       set new_ip [IncrIPv4Route 20.0.0.1 28];
+#       # new_ip will now be 20.0.0.17.
+#
+# Category: Utility
+################################################################## 
+proc IncrIPv4Route {ip mask {value 1}} {
+    # Range-check the arguments.
+    if {![IsValidIpAddress $ip]} {
+        error "IncrIPv4Route: Invalid format for IPv4 address $ip.";
+    }
+    if {![IsInteger $mask] || $mask < 1 || $mask > 32} {
+        error "IncrIPv4Route: Invalid format for subnet mask $mask.";
+    }
+    if {![IsInteger $value]} {
+        error "IncrIPv4Route: Invalid format for increment value $value.";
+    }
+
+    # Turn the IP address into a list.
+    set ip [split $ip .];
+
+    # First, figure out how many bytes amd bits are in the network portion.
+    # and initialize the pointer.
+    set byte_to_incr [expr $mask / 8];
+    set subnet_bits [expr $mask % 8];
+
+    # If network mask falls on a byte boundary, do some adjustments.
+    if {$subnet_bits == 0} {
+        set subnet_bits 8;
+        incr byte_to_incr -1;
+    }
+
+    # Adjust the increment value so it only touches the network portion.
+    set incr_value [expr $value << (8 - $subnet_bits)];
+
+    # Get the lowest order network byte and increment it.
+    set byte [lindex $ip $byte_to_incr];
+    incr byte $incr_value;
+
+    # If we overflowed or underflowed the byte, carry the excess up into the
+    # next bytes.
+    while {$byte > 255 || $byte < 0} {
+        # Drop off the lower byte of the increment value as it's already been
+        # used.
+        set incr_value [expr $byte >> 8];
+        
+        # Then trim down the byte to be byte-size.
+        set byte [expr $byte & 0xFF];
+        
+        # Check if we're working on the highest-order byte.
+        if {$byte_to_incr > 0} {
+            # If not, then put the new value in place and then set the
+            # pointer to the next higher-order byte.
+            set ip [lreplace $ip $byte_to_incr $byte_to_incr $byte];
+            incr byte_to_incr -1;
+        } else {
+            # If so, then get out of the loop.
+            break;
+        }
+    
+        # We still need to process, so get the next high-order byte and
+        # increment it.
+        set byte [lindex $ip $byte_to_incr];
+        incr byte $incr_value;
+    }
+
+    # Either we stopped overflowing or underflowing, or we reached the
+    # highest-order byte.  In either case, put the new value back into the
+    # list.
+    set ip [lreplace $ip $byte_to_incr $byte_to_incr $byte];
+
+    # Then turn the list back into an IP address and return it.
+    return [join $ip .];
+}; # IncrIPv4Route
+################################################################################
+# MakeList
+#
+#  Takes the output from a SendDUT, or any other buffer, and makes a list 
+#  out of the buffer.
+#
+#  Return:  a list of buf
+#
+################################################################################
+proc MakeList {buf} {
+   set   infile   [open "makelist.tmp"  "w"]
+   puts  $infile  $buf
+   close $infile
+   set infile     [open "makelist.tmp" "r"]
+    while {[gets $infile line] != -1} {
+      if {$line != {}} {
+         lappend buflist $line
+      }
+   }
+   close $infile
+   return $buflist
+}
+
+
+###############################################################################
+# MyGets title [func]
+#
+#   Prints the title to the screen, and pauses for a user to hit return.
+#   Can use this proc to put pauses in scripts during developement to check
+#   the status of things during a test.
+#
+#   The global variable DUT(MyGets) set to 0 will cause this proc to do 
+#   nothing.  You would want to set it to 0 not hit these pauses.
+#
+#   Basically, this is a debug tool that allows you to pause your script.
+#   You can turn all these pauses on/off by toggling one global.
+#
+#   The optional parameter funcs can also be passed in.  This is a proc
+#   you pass in to be executed.
+#
+#   Examples:
+#     MyGets "Pausing here before deleteing vlan"
+#     MyGets "Pause after deleteing vlan" "SendACmd $cmd"
+#
+#   Limitations:
+#      You cannot pass " " in the func parameter
+###############################################################################
+proc MyGets {title {func "NULL"}} {
+   global DUT
+
+   if {$DUT(MyGets)} {
+      puts -nonewline "$title: "
+      if {$func != "NULL"} {
+         set rc [eval $func]
+         puts "MyGets:  Ran proc $func, rc = $rc"
+      }  
+      gets stdin z
+   }
+}
+
+################################################################## 
+# Procedure Name: sortedPorts
+#   
+# Description: 
+#   Sorts a given list of ports, supports : specific ports as well.
+#
+# Input args:
+#     portList  - List of ports to be sorted
+#                
+# Output args: none
+#              
+#
+# Typical usage: 
+#
+#   set DUT2TrunkPortList [sortedPorts $DUT2TrunkPortList]
+#
+# Category: 
+##################################################################
+proc sortedPorts {portList} {
+   if {[regexp -nocase ":" $portList]} {
+      set pList ""
+      set portsList ""
+      foreach po $portList {
+         regsub -all {([0-9]+):([0-9]+)} $po {format %03d:%03d \1 \2} p
+         lappend pList [eval $p]
+      }
+      set poList [lsort -increasing $pList]
+      foreach po $poList {
+         regsub -all {([0-9]+):([0-9]+)} $po {format %d:%d [string trimleft \1 0] [string trimleft \2 0]} p
+         lappend portsList [eval $p]
+      }
+      return $portsList
+   } else {
+      return "[lsort -integer $portList]"
+   }
+}
+
+################################################################## 
+# Procedure Name: sortedPortsIndex
+#   
+# Description: 
+#   Sorts a given list of ports, supports : specific ports as well.
+#   It returns a index list
+#
+# Input args:
+#     portList  - List of ports to be sorted
+#                
+# Output args: none
+#              
+#
+# Typical usage: 
+#
+#   set indexList [sortedPortsIndex $DUT2TrunkPortList]
+#
+# Category: 
+##################################################################
+proc sortedPortsIndex {portList} {
+   if {[regexp -nocase ":" $portList]} {
+      set pList ""
+      set portsList ""
+      foreach po $portList {
+         regsub -all {([0-9]+):([0-9]+)} $po {format %03d:%03d \1 \2} p
+         lappend pList [eval $p]
+      }
+      set poList [lsort -increasing $pList]
+      foreach po $poList {
+         regsub -all {([0-9]+):([0-9]+)} $po {format %d:%d [string trimleft \1 0] [string trimleft \2 0]} p
+         lappend portsList [eval $p]
+      }
+      set sortedList $portsList
+   } else {
+      set sortedList [lsort -integer $portList]
+   }
+   set indexList ""
+   foreach port $portList {
+      lappend indexList [lsearch -exact $sortedList $port]
+   }
+   result_debug "portList = $portList, indexList = $indexList";
+   return $indexList
+}
+
+################################################################## 
+# Procedure Name: GetSlotNumType
+#   
+# Description: 
+#   Returns the blade type when a port is passed in
+#
+# Input args:
+#     port
+#                
+# Output args: none
+#              
+#
+# Typical usage: 
+#
+#   set hardware [GetSlotNumType $dut 1:47]
+#
+# Category:  setup
+##################################################################
+proc GetSlotNumType { dut port } {
+    global DUTs_Slot_info
+    global DUTs_info
+   
+#    result_debug "slot info is $DUTs_info(DUT$dut,hwList)"
+    set hwtype "INVALID"
+    set j [split $port :]
+    if {[info exists DUTs_Slot_info(DUT$dut,slot[lindex $j 0],hwModType)]} {
+       set hwtype $DUTs_Slot_info(DUT$dut,slot[lindex $j 0],hwModType)
+    }
+    return $hwtype
+}
+
+################################################################## 
+# Procedure Name: GetSlotType
+#   
+# Description: 
+#   Returns the blade type when a port is passed in
+#
+# Input args:
+#     port
+#                
+# Output args: none
+#              
+#
+# Typical usage: 
+#
+#   set hardware [GetSlotType $dut 1:47]
+#
+# Category:  setup
+##################################################################
+proc GetSlotType { dut port {slotNum ""}} {
+
+    if {$slotNum == ""} {
+       regexp "(.*)(:.*)" $port res0 slot
+    } else {
+       set slot $slotNum
+    }
+
+    set hwtype "INVALID"
+
+    if {[info exists slot]} {
+       result_debug "Slot : $slot"
+       if {([regexp -nocase "BD-12804" [GetPlatform DUT$dut]]) && ($slot > 4)} {
+          set slot [expr $slot - 2]
+          result_debug "New slot : $slot"
+       }
+       return [DutSlotType $dut $slot]
+    } else {
+       return $hwtype
+    }
+}
+
+################################################################## 
+# Procedure Name: GetPortType
+#   
+# Description: 
+#   Returns the port type when a port is passed in
+#
+# Input args:
+#     dutNumber port
+#                
+# Output args: 
+#     porttype
+#
+# Typical usage: 
+#
+#   set port [GetATrunkPort 1 2]
+#
+#   set portType [GetPortType $dutNumber $port]
+#   if {$portType == "T1"} {
+#      setupPPPvlan $dutNumber $portType $port $vlanName $vlanTag
+#   }
+#
+# Category:  setup
+##################################################################
+proc GetPortType { dutNumber port } {
+    global DUTs_info
+    set porttype "INVALID"
+
+    if {![info exists DUTs_info(DUT${dutNumber},$port)]} {
+       Login $DUTs_info(DUT${dutNumber},connect)
+       #Find 1st word to the right of "Type:"
+       lappend parameterList "Type: 1"
+       set porttype [GetKeyValue "show port $port info detail" $parameterList]
+       set DUTs_info(DUT${dutNumber},$port) $porttype
+    } else {
+       set porttype $DUTs_info(DUT${dutNumber},$port)
+    }
+    return $porttype
+}
+
+################################################################## 
+# Procedure Name: setupPPPvlan
+#   
+# Description: 
+#     Puts a T1/E1/T3 PPP link into a tagged vlan and enables the PPP port
+#
+#     A PPP port cannot be added to a vlan unless the vlan is tagged
+#     A PPP port cannot be enabled unless it is in a vlan
+#
+#     to work, the companion DUT must also have it's PPP configuration
+#     setup properly.
+#
+# Input args:
+#     dut porttype port vlanName vlanTag
+#
+# Output args: none
+#
+# Typical usage: 
+#   
+#      #Should have the vlan created and configured with a tag before calling
+#      SendACmd "create vlan $vlanName"
+#      SendACmd "configure vlan $vlanName tag $vlanTag"
+#      ...
+#      set port [GetATrunkPort 1 2 1]
+#      set portType [GetPortType $dutNumber $port]
+#;      if {$portType == "E1" or "T1" or "T3"} {
+#         setupPPPvlan $dutNumber $portType $port $vlanName $vlanTag
+#;      }
+#      #Don't forget to enable the port
+#      SendACmd "enable port $port"
+#
+# Category:  setup
+##################################################################
+proc setupPPPvlan { dutNumber porttype port vlanName vlanTag} {
+    global DUTs_info
+
+    Login $DUTs_info(DUT${dutNumber},connect)
+    if {[IsWAN $porttype]} {
+        SendACmd "configure vlan $vlanName add port $port tagged"
+        #SendACmd "enable port $port"
+    } else {
+        result_debug "setupPPPvlan: the port passed into function is not a PPP port"
+    }
+}
+
+##################################################################
+# Procedure Name: IsWAN
+#  
+# Description: Check if the specified value is a WAN port.
+#
+# Input args:
+#              Port Type
+#
+# Output args:
+#              None.
+#
+# Return value:
+#              1 if the input is true.
+#              0 if the input is false.
+#
+# Typical usage:
+#      if {[IsWAN [GetPorttype $dutNumber [GetATrunkPort 1 2 1]]} ...
+#
+# Category: Utility
+##################################################################
+proc IsWAN {valueToCheck} {
+    if {[regexp {T1|E1|T3} $valueToCheck]} {
+        return 1;
+    } else {
+        return 0;
+    }
+}
+
+
+################################################################## 
+# Procedure Name: AlienWan
+#   
+# Description: 
+#   Add components for non ethernet wans.
+#    1)  Sleep 20 seconds for BCP on pos
+#    2)  Add a L2 PVC for ATM
+#
+# Input args:
+#     vlan on 1st DUT
+#     vlan on 2nd DUT           
+# Output args: none
+#              
+#
+# Typical usage: 
+#
+#   AlienWan default default
+#
+# Category:  setup
+##################################################################
+proc AlienWan {} {
+    global DUT
+    global DUT1_CONNECT
+    global DUT2_CONNECT
+    global DUT3_CONNECT
+    global DUT4_CONNECT
+    global DUT5_CONNECT
+    
+    if {[info exists DUT(trunk,usageList)]} {
+       foreach trunkSide $DUT(trunk,usageList) {
+            set sideWeAreOn [lindex $trunkSide 0]
+            set indexVPI  [lindex $trunkSide 2]
+            set portToAdd [lindex $trunkSide 3]
+            set hdWareType [lindex $trunkSide 4]
+            # puts "###### hdWareType  = $hdWareType "
+            if {([string tolower $hdWareType] == "p3ci") || ([string tolower $hdWareType] == "p12ci")} {
+                
+            } elseif {([string tolower $hdWareType] == "a3ci")} {
+                # -- If it is an ATM connection we need to add an L2 PVC
+                Login [set DUT${sideWeAreOn}_CONNECT]
+                set theVlan [GetVlanOfPort $portToAdd]
+                result_debug "ATM port!! Add the L2 PVC"
+                SendACmd "conf atm add pvc ${indexVPI} / 100 encap L2 vlan $theVlan port $portToAdd"
+            }
+       }
+       if {([string tolower $hdWareType] == "a3ci")} {
+           result_debug "Sleeping while ATM PVC settles"
+           sleep 10
+       }
+       if {([string tolower $hdWareType] == "p3ci") || ([string tolower $hdWareType] == "p12ci")} {
+           result_debug "Sleeping while POS BCP comes UP"
+           sleep 25 ;# If it is a pos link just sleep for 25 seconds
+       }
+    }
+}
+################################################################## 
+# Procedure Name: AlienWanClean
+#   
+# Description: 
+#   Clean up non ethernet wan ports
+#
+# Input args:  none
+# Output args: none
+#              
+#
+# Typical usage: 
+#
+#   AlienWan default default
+#
+# Category:  setup
+##################################################################
+proc AlienWanClean {} {
+    global DUT
+    global DUT1_CONNECT
+    global DUT2_CONNECT
+    global DUT3_CONNECT
+    global DUT4_CONNECT
+    global DUT5_CONNECT
+
+    
+        if {[info exists DUT(trunk,usageList)]} {
+           foreach trunkSide $DUT(trunk,usageList) {
+                set sideWeAreOn [lindex $trunkSide 0]
+                set indexVPI  [lindex $trunkSide 2]
+                set portToAdd [lindex $trunkSide 3]
+                set hdWareType [lindex $trunkSide 4]
+
+
+            if {([string tolower $hdWareType] == "p3ci") || ([string tolower $hdWareType] == "p12ci")} {
+                result_debug "POS No Clean up"
+                
+            } elseif {([string tolower $hdWareType] == "a3ci")} {
+                # -- If it is an ATM connection we need to delete pvcs
+                Login [set DUT${sideWeAreOn}_CONNECT]
+                result_debug "ATM port!! Delete all PVCs"
+                SendACmd "conf atm del pvc all port all"
+            }
+           }
+        }
+      unset DUT(trunk,usageList)
+}
+
+
+################################################################## 
+# Procedure Name: GetVlanOfPort
+#   
+# Description: 
+#   Get the first vlan that a port is in
+#
+# Input args:
+#     port number           
+# Output args:
+#     return vlan name         
+#
+# Typical usage: 
+#
+#   GetVlanOfPort 1:1
+#
+# Category:  setup
+##################################################################
+
+proc GetVlanOfPort {inPort} {
+
+    lappend vlanKey "{VLAN cfg:} 0 1"
+    set vlan [GetKeyValue "show port $inPort info det" $vlanKey]
+    return $vlan
+    
+}
+
+################################################################## 
+# Procedure Name: IsValidIpAddress
+#   
+# Description: Check for correct IP address 
+#
+# Input args:
+#              IP address 
+#                
+# Output args: None.
+#
+# Return value:
+#      0 if argument is not a valid IP address
+#      1 if argument is a valid IP address
+#
+# Typical usage: 
+#      return [IsValidIpAddress $ipAddr]
+#
+# Category: Utility
+################################################################## 
+proc IsValidIpAddress {ipAddress} {
+    if {[regexp {^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$} $ipAddress]} {
+        foreach byte [split $ipAddress .] {
+            if {($byte < 0) || ($byte > 255)} {
+                return 0;
+            }
+        }
+        return 1;
+    } else {
+        return 0;
+    }
+}
+
+################################################################## 
+# Procedure Name: IsInteger
+#   
+# Description: Check if the specified value is an integer number.
+#
+# Input args:
+#              A string value.
+#                
+# Output args: 
+#              None.
+#
+# Return value:
+#              1 if the input is an integer.
+#              0 otherwise.
+#
+# Typical usage: 
+#      if {[IsInteger $number]}...
+#
+# Category: Utility
+################################################################## 
+proc IsInteger {valueToCheck} {
+    if {[regexp {^[+-]?[0-9]+$} $valueToCheck]} {
+        return 1;
+    } else {
+        return 0;
+    }
+}
+
+################################################################## 
+# Procedure Name: IsTrue
+#   
+# Description: Check if the specified value is logically true.
+#
+# Input args:
+#              An integer number or a string.
+#                
+# Output args: 
+#              None.
+#
+# Return value:
+#              1 if the input is true.
+#              0 if the input is false.
+#
+# Typical usage: 
+#      if {[IsTrue $feature]}...
+#
+# Category: Utility
+################################################################## 
+proc IsTrue {valueToCheck} {
+    if {([IsInteger $valueToCheck] && $valueToCheck != 0) ||
+        [regexp {^[tT]} $valueToCheck]} {
+        return 1;
+    } else {
+        return 0;
+    }
+}
+
+################################################################## 
+# Procedure Name: IsFalse
+#   
+# Description: Check if the specified value is logically false.
+#
+# Input args:
+#              An integer number or a string.
+#                
+# Output args: 
+#              None.
+#
+# Return value:
+#              1 if the input is false.
+#              0 if the input is true.
+#
+# Typical usage: 
+#      if {[IsFalse $feature]}...
+#
+# Category: Utility
+################################################################## 
+proc IsFalse {valueToCheck} {
+    if {([IsInteger $valueToCheck] && $valueToCheck == 0) ||
+        [regexp {^[fF]} $valueToCheck]} {
+        return 1;
+    } else {
+        return 0;
+    }
+}
+
+################################################################## 
+# Procedure Name: CheckRxErrorMonitor   
+# Description:  Verify packets are greater or less than specified
+#               numbers for each of 7 rxError categories
+# Input args: port checkList fd_res testNo
+# Output args: none
+# Typical usage: 
+#      lappend checkRxErrorList "RxCRC 1000 minPacket"
+#      lappend checkRxErrorList "RxOver 1000 minPacket"
+#      lappend checkRxErrorList "RxFrag 1000 minPacket"
+#      lappend checkRxErrorList "RxLost 1000 minPacket"
+#      CheckRxErrorMonitor [MapDUTPortId 1 1] $checkRxErrorList $filePt $testFileName      
+# Category: VerifyTraffic
+##################################################################
+proc CheckRxErrorMonitor {port checkList fd_res testNo} {
+
+    set rxErrors { {LinkStatus 0} {RxCRC 1} {RxOver 2} {RxUnder 3}
+    		   {RxFrag 4} {RxJabber 5} {RxAlign 6} {RxLost 7} }
+
+    report_start_test "Checking port $port rxerrors"
+    
+    # -- store display information in the tmp file
+    global spawn_id
+    set pid _[pid]
+    set fd_in [open "Tmp/tmp_$testNo$pid" "w"]
+    SendACmd  "show ports $port rxerrors" $fd_res $fd_in
+    close $fd_in
+    
+    # -- process the information 
+    set fd_in [open "Tmp/tmp_$testNo$pid" "r"]
+    set indexFound -1
+    while {[gets $fd_in line] != -1} {
+	#result_debug "----- Line=|$line|"
+	regsub {H} $line {H } line
+	set index [lsearch -exact $line "$port"]
+	# -- get the last complete line, a cheap way of doing this
+	if {$index >= 0 && ([regexp "5;01H" $line]) && ([regexp "01;55H" $line]) } {
+	    set indexFound $index
+	    set lineFound $line
+	    result_debug "----- Line=|$line|"
+	    #regsub -all {[^A-Z^a-z^0-9^_^-^5;01H^:]} $lineFound " " lineFound
+	}
+    }    
+    close $fd_in
+    
+    # -- if found the value, compare it
+    if {$indexFound >= 0} {
+        # -- check each item
+    	foreach rxCheckItem $checkList {
+   	    set indexName [lindex $rxCheckItem 0]
+   	    set index -1
+   	    foreach rxErrorItem $rxErrors {
+   	    	if {[string compare $indexName [lindex $rxErrorItem 0]] == 0} {
+   	    	    set index [lindex $rxErrorItem 1]
+   	    	    break
+   	    	}
+   	    }
+   	    if {$index >= 0} {
+   	    	set valueWanted [lindex $rxCheckItem 1]
+   	    	set compareFlag [lindex $rxCheckItem 2]
+   	    	set valueFound [lindex $lineFound [expr $indexFound + $index + 1]]
+   	    	switch $compareFlag {
+   	    	    "minPacket" {
+   	    	    	if {$valueWanted <= $valueFound} {
+   	    	    	    result_ok "Checking $indexName minimum value passed. Is over $valueWanted."  
+   	    	    	} else {
+   	    	    	    result_error "Checking $indexName minimum value failed. Wanted $valueWanted BUTGOT $valueFound"
+   	    	    	}
+   	    	    }
+   	    	    "maxPacket" {
+   	    	    	if {$valueWanted > $valueFound} {
+   	    	    	    result_ok "Checking $indexName maximum value passed. Is under $valueWanted."  
+   	    	    	} else {
+   	    	    	    result_error "Checking $indexName maximum value failed. Wanted $valueWanted BUTGOT $valueFound"
+   	    	    	}
+   	    	    }
+   	    	    "exactPacket" -
+   	    	    default {
+   	    	    	if {$valueWanted == $valueFound} {
+   	    	    	    result_ok "Checking $indexName exact value passed. Is exactly $valueWanted."  
+   	    	    	} else {
+   	    	    	    result_error "Checking $indexName exact value failed. Wanted $valueWanted BUTGOT $valueFound"
+   	    	    	}
+   	    	    }
+   	    	}
+   	    } else {
+   	    	result_error "CheckRxErrorMonitor item name $indexName not found"
+  	    	break
+   	    } 
+    	}
+    } else {
+    	result_error "No RxErrors data found for port $port"
+    }
+    report_end_test
+    catch {file delete "Tmp/tmp_$testNo$pid"}
+}
+
+################################################################## 
+# Procedure Name: incrx
+#   
+# Description: Increment hex string value by amount 
+#
+# Input args:
+#              	varName		string of hex value. for example:
+#				"00 01 02 03 04 05"
+#		index		at which hex byte
+#		amount		  
+#                
+# Output args: 
+#              return 	next mac address
+#	
+#	00:a1:f1:00:00:01 -> 00:a1:f1:00:00:02 if increment by 1
+#	00 a1 f1 00 00 ff -> 00 a1 f1 00 01 00 if increment by 1
+# Typical usage: 
+#             set newMac [IncMacByOne $mac ":"]
+#
+# Category: Utility
+##################################################################
+proc incrx {varName {index  0} {amount 1}} {
+    upvar 1 $varName var 
+    if {[info exists var]} {
+    	set residue [expr $amount % 256]
+    	set quotient [expr $amount / 256]
+	set theByte [lindex $var $index]
+	set tmp [expr 0x$theByte + $residue]
+	set theByte [format %02x $tmp]
+	if {$tmp >= 256 } {
+	    set theByte [format %02x [expr $tmp - 256]]
+	    set quotient [expr $quotient + 1]
+	}
+	set var [lreplace $var $index $index $theByte]
+	if {$quotient > 0 && $index > 1} {
+	    set index [expr $index - 1]
+	    set var [incrx var $index $quotient]
+	}
+    } else {
+	set var "$amount"
+    }
+    return $var
+}
+
+################################################################## 
+# Procedure Name: IncMacByOne
+#   
+# Description: Increment the mac address by 1 
+#
+# Input args:
+#              	mac	mac address 
+#		delim	":" or " "	  
+#                
+# Output args: 
+#              return 	next mac address
+#	
+#	00:a1:f1:00:00:01 -> 00:a1:f1:00:00:02
+#	00 a1 f1 00 00 ff -> 00 a1 f1 00 01 00
+# Typical usage: 
+#             set newMac [IncMacByOne $mac ":"]
+#
+# Category: Utility
+##################################################################
+proc IncMacByOne {mac {delim " "}} {
+    set newMac $mac
+    regsub -all $delim $newMac  " " newMac
+    set newMac [incrx newMac 5 1]
+    regsub -all { } $newMac $delim newMac
+    return $newMac
+}
+
+proc RemovePolFromDUT {fileName} {
+   global whichDutNow
+#   EnableDebugMode
+   catch {file delete "Tmp/$fileName"}  ;# remove the temp file
+   global supportedPlatform
+   if {[regexp -nocase $supportedPlatform [GetPlatform DUT$whichDutNow]] || \
+       [regexp -nocase $supportedPlatform [GetSysType DUT${whichDutNow}]]} {
+      SendACmd "rm $fileName.pol"
+   } else {
+      # Fix for PD2-232904551
+#      SendACmd "!rm /root/config/$fileName.pol"
+      SendACmd "rm $fileName.pol"
+   }
+}
+
+##################################################################
+# Procedure Name: EnableDebugModeConsole
+# Description: Enable XOS debug mode on
+# Input args:   none
+# Output args:  none
+# Typical usage:
+#       EnableDebugMode
+# Category: Utility
+##################################################################
+proc EnableDebugModeConsole {console} {
+
+    Login "$console" -CheckOperational 0 -masterCheck 0
+    EnableDebugMode
+
+}
+################################################################## 
+# Procedure Name: EnableDebugMode
+# Description: Enable XOS debug mode
+# Input args:	none
+# Output args:  none
+# Typical usage: 
+# 	EnableDebugMode
+# Category: Utility
+##################################################################
+proc EnableDebugMode {} {
+    global DUTs_info whichDutNow whichMsmNow
+
+    if {![info exists DUTs_info(DUT${whichDutNow}${whichMsmNow},DEBUGENABLED)]} {
+        set DUTs_info(DUT${whichDutNow}${whichMsmNow},DEBUGENABLED) 0;
+    } 
+    if {$DUTs_info(DUT${whichDutNow}${whichMsmNow},DEBUGENABLED)} {
+        result_debug "Debug mode enabled on DUT${whichDutNow} ${whichMsmNow}"
+        return
+    }
+    set counter 1
+    while {$counter<4} {
+        set buf [SendACmd ""]
+        if {[regexp -nocase "debug" $buf]} {
+           result_debug "debug-mode enabled"
+           set DUTs_info(DUT${whichDutNow}${whichMsmNow},DEBUGENABLED) 1;
+           break;
+        } else {
+           set output [SendACmd "enable debug-mode"]
+           sleep 2
+           global whichDutNow DUTs_info
+           set newPass 1
+     
+           if {[info exists DUTs_info(DUT${whichDutNow},version)]} {
+              if {[CompareRelease [GetVersion DUT${whichDutNow}] 15.4.0.1]>=0 } { 
+                   set newPass 18;
+              } elseif {([CompareRelease [GetVersion DUT${whichDutNow}] 15.3.0.0] >= 0) ||
+                  ([CompareRelease [GetVersion DUT${whichDutNow}] 15.2.0.9] == 0 &&
+                   [regexp SDK601 [GetVersion DUT${whichDutNow}]]) ||
+                  ([CompareRelease [GetVersion DUT${whichDutNow}] 15.4.0.6] == 0 &&
+                   [regexp HotSpot [GetVersion DUT${whichDutNow}]])} {
+                   set newPass 17;
+              } elseif {[CompareRelease [GetVersion DUT${whichDutNow}] 15.2.0.0]>=0} {
+                   set newPass 16;
+              } elseif {[CompareRelease [GetVersion DUT${whichDutNow}] 15.1.0.0]>=0} {
+                   set newPass 15
+              } elseif {[CompareRelease [GetVersion DUT${whichDutNow}] 12.7.0.1]>=0} {
+                   set newPass 14
+              } elseif {[CompareRelease [GetVersion DUT${whichDutNow}] 12.6.0.1]>=0} {
+                 set newPass 13
+              } elseif {[CompareRelease [GetVersion DUT${whichDutNow}] 12.5.0.14]>=0} {
+                 set newPass 12
+              } elseif {[CompareRelease [GetVersion DUT${whichDutNow}] 12.4.0.12]>=0} {
+                 set newPass 11
+              } elseif {[CompareRelease [GetVersion DUT${whichDutNow}] 12.3.0.0]>=0} {
+                 set newPass 10
+              } elseif {[CompareRelease [GetVersion DUT${whichDutNow}] 12.2.0.11]>=0} {
+                 set newPass 9
+              } elseif {[CompareRelease [GetVersion DUT${whichDutNow}] 12.1.0.37]>=0} {
+                 set newPass 8
+              } elseif {[CompareRelease [GetVersion DUT${whichDutNow}] 11.7.0.18]>=0} {
+                 set newPass 7
+              } elseif {[CompareRelease [GetVersion DUT${whichDutNow}] 11.6.0.6]>=0} {
+                 set newPass 6
+              } elseif {[CompareRelease [GetVersion DUT${whichDutNow}] 11.5.0.0]>=0} {
+                 set newPass 5
+              } elseif {[CompareRelease [GetVersion DUT${whichDutNow}] 11.4.0.16]>=0} {
+                 set newPass 4
+              } elseif {[CompareRelease [GetVersion DUT${whichDutNow}] 11.3.0.11]>=0} {
+                 set newPass 3
+              } elseif {[CompareRelease [GetVersion DUT${whichDutNow}] 11.2.0.13]>=0} {
+                 set newPass 2
+              } elseif {[CompareRelease [GetVersion DUT${whichDutNow}] 11.1.1.1]>=0} {
+                 set newPass 1
+              } else {
+                 set newPass 0
+              }
+           } else {
+              set newPass 18;
+           }
+
+           puts "new Pass : $newPass"
+
+           switch $newPass {
+              "18" {_tryOneTimePwd $output}
+              "17" {_try15_3Pwd}
+              "16" {_try15_2Pwd}
+              "15" {_tryYukonPwd}
+              "14" {_tryNilePwd}
+              "13" {_tryColoradoPwd}
+              "12" { _try12_5Pwd}
+              "11" { _tryPulcianoPwd}
+              "10" { _tryEdenPwd}
+              "9" { _trySunlightpeakPwd}
+              "8" { _tryZugspitzePwd }
+              "7" { _tryMontebelloPwd }
+              "6" { _tryFujiPwd }
+              "5" { _tryMatterhornPwd }
+              "4" { _tryMckinleyPwd }
+              "3" { _tryRushmorePwd }
+              "2" { _tryShastaPwd }
+              "1" { _tryMontBlancPwd }
+              default { _tryRainierPwd }
+           }
+        }
+        incr counter 1
+    }
+    if {$counter==4} {
+       set module [lindex [split [pwd] /] end]
+       if { [llength [info procs showDebugInfo$module]] == 1 } {
+          result_debug "Could not enable debug-mode in 3 retries"
+       } else {
+          result_error "Could not enable debug-mode in 3 retries"
+       }
+    }
+}
+proc _tryOneTimePwd { challenge } {
+    global DUTs_info
+    global whichDutNow
+    set keyFileList ""
+    if {[file isfile maindiag.tcl]} {
+        set myPath "../main/"
+        foreach match [glob -nocomplain -- "./Keys/*\.key"] {
+            set matchList [split $match "/"]
+            set match [lindex $matchList [expr [llength $matchList] - 1]]
+            set mList [split $match "."]
+            lappend keyFileList [lindex $mList 0]
+        }
+    } elseif {[file isfile ../main/maindiag.tcl]} {
+        set myPath "../main/"
+        foreach match [glob -nocomplain -- "../main/Keys/*\.key"] {
+            set matchList [split $match "/"]
+            set match [lindex $matchList [expr [llength $matchList] - 1]]
+            set mList [split $match "."]
+            lappend keyFileList [lindex $mList 0]
+        }
+    } elseif {[file isfile ../../main/maindiag.tcl]} {
+        set myPath "../../main/"
+        foreach match [glob -nocomplain -- "../../main/Keys/*\.key"] {
+            set matchList [split $match "/"]
+            set match [lindex $matchList [expr [llength $matchList] - 1]]
+            set mList [split $match "."]
+            lappend keyFileList [lindex $mList 0]
+        }
+    } elseif {[file isfile ../../../main/maindiag.tcl]} {
+        set myPath "../../../main/"
+        foreach match [glob -nocomplain -- "../../../main/Keys/*\.key"] {
+            set matchList [split $match "/"]
+            set match [lindex $matchList [expr [llength $matchList] - 1]]
+            set mList [split $match "."]
+            lappend keyFileList [lindex $mList 0]
+        }
+    } else {
+        result_debug "DDDDD"
+        result_debug "Can't find my current location OR key files"
+    }
+    set keyFileList [lsort -decreasing $keyFileList]
+    puts "key list: $keyFileList"
+    set keyLength [llength $keyFileList]
+    set hitAKey 0
+    set keyInt -1
+    set nostr 0
+    set passLoop 1
+    set keyLoop 0
+    while {1} {
+        set cMac ""
+        set cVer ""
+        set cMac ""
+        set cCount 0
+        set cList ""
+        set vList ""
+        result_debug "Pull the challenge string"
+        regsub -all "   " $challenge " " challenge
+        regsub -all "  " $challenge " " challenge
+        set debugList [split $challenge \n]
+        foreach dLine $debugList {
+            set dLine [string trim $dLine]
+            set lineList [split $dLine " "]
+            if {[lindex $lineList 0] == "EXOS" && [lindex $lineList 1] == "version:"} {
+                set cVer [lindex $lineList 2]
+            }
+            if {[lindex $lineList 0] == "System" && [lindex $lineList 1] == "MAC"} {
+                set cMac [lindex $lineList 3]
+            }
+            if {$cCount > 0 || ([lindex $lineList 0] == "Challenge" && [lindex $lineList 1] == ":")} {
+                if {$cCount == 0} {
+                    lappend cList [lindex $lineList 2]
+                    incr cCount;
+                } elseif {[lindex $lineList 0] != "NOTE:"} {
+                    lappend cList [lindex $lineList 0]
+                } else {
+                    break;
+                }
+            }
+        }
+        set vList [split $cVer "."]
+        #set keyFile "[lindex $vList 0]_[lindex $vList 1].key"
+        if {$keyInt < 0} {
+            set keyText [lindex $vList 0]_[lindex $vList 1]
+            set keyInt [lsearch $keyFileList $keyText]
+            set keyFile ${keyText}.key
+        } else {
+            set keyText [lindex $keyFileList $keyInt]
+            set keyFile ${keyText}.key
+        }
+        if {$keyInt < 0} {
+            result_debug "Error - Version has no key file";
+            incr nostr
+            send "\r";
+            expect -re "> |# ";
+            send "\r";
+            expect -re "> |# ";
+            if {$nostr > 2} {
+                SendACmd "enable debug-mode";
+                return [_try15_3Pwd];
+            } else {
+                set challenge [SendACmd "enable debug-mode"]
+                incr keyInt
+                continue
+            }
+        }
+        set cText [join $cList ""]
+        result_debug "keyPath ${myPath}\nOTP parts found - int $keyInt :\nVer: $cVer\nKey File: $keyFile\nMAC: $cMac\nChallenge: $cText"
+
+        set rc [catch {exec ${myPath}dbgPswd ${myPath}Keys/$keyFile $cMac $cText} res]
+        if {$rc} {
+            if {$keyInt < $keyLength} {
+                result_debug "Error getting the password with the challenge text: $res";
+                send "\r";
+                expect -re "> |# ";
+                set challenge [SendACmd "enable debug-mode"]
+                incr keyInt
+                continue
+            } else {
+                return [_try15_3Pwd];
+            }
+        } elseif {[regexp -nocase "ERROR" $res]} {
+            if {$keyInt < $keyLength} {
+                result_debug "Could not open the key file"
+                send "\r";
+                expect -re "> |# ";
+                set challenge [SendACmd "enable debug-mode"]
+                incr keyInt
+                continue
+            } else {
+                return [_try15_3Pwd];
+            }
+        } else {
+            #result_debug "rc = $rc\nres = $res"
+            set oList [split $res " "]
+            set otp [lindex $oList [expr [llength $oList] -1]]
+            result_debug "The OTP is $otp"
+            sleep 1;
+            send "$otp\r";
+            expect -re "> |# ";
+            set buf [SendACmd ""];
+            if {[regexp -nocase "debug" $buf]} {
+                result_debug "debug-mode enabled";
+                return 1;
+            } elseif {$keyInt < $keyLength} {
+                if {$keyLoop>0} {
+                    incr keyInt
+                    result_debug "Password did not work increment key to keyInt $keyInt";
+                } else {
+                    incr keyLoop
+                    result_debug "Password did not work. RETRY keyInt $keyInt";
+                }
+                send "\r";
+                expect -re "> |# ";
+                set challenge [SendACmd "enable debug-mode"]
+                continue
+            } else {
+                result_debug "NEXT - try15_3Pwd"
+                SendACmd "enable debug-mode";
+                return [_try15_3Pwd]
+            }
+        }
+    }
+}
+proc _try15_3Pwd {} {
+    sleep 1;
+    send "YZDEqm/FDD467rSN21T0\n";
+    send "\n";
+    expect "# ";
+    set buf [SendACmd ""];
+    if {[regexp -nocase "\(debug\)" $buf]} {
+         result_debug "debug-mode enabled";
+         return 1;
+    } else {
+        result_debug "NEXT - try15_2Pwd"
+        SendACmd "enable debug-mode";
+        return [_try15_2Pwd];
+    }
+}
+proc _try15_2Pwd {} {
+    sleep 1;
+    send "O2M1Jy3hBwfBFyJ3Zon/\n";
+    send "\n";
+    expect "# ";
+    set buf [SendACmd ""];
+    if {[regexp -nocase "\(debug\)" $buf]} {
+         result_debug "debug-mode enabled";
+         return 1;
+    } else {
+        result_debug "NEXT - tryYukonPwd"
+        SendACmd "enable debug-mode";
+        return [_tryYukonPwd];
+    }
+}
+
+proc _tryYukonPwd {} {
+
+    sleep 1
+    send "D2cq2XntLWTtlyRXYjE.\n"
+    send "\n"
+    expect "# "
+    set buf [SendACmd ""]
+    if {[regexp -nocase "\(debug\)" $buf]} {
+         result_debug "debug-mode enabled"
+         return 1;
+
+    } else {
+        result_debug "NEXT - tryNilePwd"
+        SendACmd "enable debug-mode"
+        return [ _tryNilePwd]
+    }
+
+}
+
+proc _tryNilePwd {} {
+
+    sleep 1
+    send "JK8OJgCApYkJh6st8hw1\n"
+    send "\n"
+    expect "# "
+    set buf [SendACmd ""]
+    if {[regexp -nocase "\(debug\)" $buf]} {
+         result_debug "debug-mode enabled"
+         return 1;
+
+    } else {
+        result_debug "NEXT - tryColoradoPwd"
+        SendACmd "enable debug-mode"
+        return [ _tryColoradoPwd]
+    }
+
+}
+
+proc _tryColoradoPwd {} {
+
+    sleep 1
+    send "/Lgp0w6qn3ugqqRLhM7.\n"
+    send "\n"
+    expect "# "
+    set buf [SendACmd ""]
+    if {[regexp -nocase "\(debug\)" $buf]} {
+         result_debug "debug-mode enabled"
+         return 1;
+
+    } else {
+        #
+        # End support of older debug 2017/9 grant
+        #
+        return 0;
+        SendACmd "enable debug-mode"
+        return [ _try12_5Pwd]
+    }
+
+}
+
+
+proc _try12_5Pwd {} {
+   sleep 1
+   send "88DfwZ80K9oKesSdBQQ1\n"
+   send "\n"
+   expect "# "
+   set buf [SendACmd ""]
+   if {[regexp -nocase "\(debug\)" $buf]} {
+      result_debug "debug-mode enabled"
+      return 1;
+   } else {
+      return 0
+      SendACmd "enable debug-mode"
+      return [_tryPulcianoPwd]
+   }
+}
+
+proc _tryPulcianoPwd {} {
+   sleep 1
+   send "CIYRQQlsapAtVHefZjL.\n"
+   send "\n"
+   expect "# "
+   set buf [SendACmd ""]
+   if {[regexp -nocase "\(debug\)" $buf]} {
+      result_debug "debug-mode enabled"
+      return 1;
+   } else {
+      SendACmd "enable debug-mode"
+      return [_tryEdenPwd]
+   }
+}
+
+
+proc _tryEdenPwd {} {
+   sleep 1
+   send "Z!EY/;.\}+:^*BY\$CI&&@\n"
+   send "\n"
+   expect "# "
+   set buf [SendACmd ""]
+   if {[regexp -nocase "\(debug\)" $buf]} {
+      result_debug "debug-mode enabled"
+      return 1;
+   } else {
+      SendACmd "enable debug-mode"
+      return [_trySunlightpeakPwd]
+   }
+}
+
+proc _trySunlightpeakPwd {} {
+    # h**u$^%$v]h68Hih9#%7
+   send "h**u\$^%\$v]h68Hih9#%7\n"
+   expect "# "
+   set buf [SendACmd ""]
+   if {[regexp -nocase "\(debug\)" $buf]} {
+      result_debug "debug-mode enabled"
+      return 1;
+   } else {
+      SendACmd "enable debug-mode"
+      return [_tryZugspitzePwd]
+   }
+}
+
+proc _tryZugspitzePwd {} {
+   send "&*%HJtyuiOIk5688%jkl\n"
+   expect "# "
+   set buf [SendACmd ""]
+   if {[regexp -nocase "\(debug\)" $buf]} {
+      result_debug "debug-mode enabled"
+      return 1;
+   } else {
+      SendACmd "enable debug-mode"
+      return [_tryMontebelloPwd]
+   }
+}
+
+proc _tryMontebelloPwd {} {
+   send "\"fQ9b9#lOvE49XK1UiwP\n"
+   expect "# "
+   set buf [SendACmd ""]
+   if {[regexp -nocase "\(debug\)" $buf]} {
+      result_debug "debug-mode enabled"
+      return 1;
+   } else {
+      SendACmd "enable debug-mode"
+      return [_tryFujiPwd]
+   }
+}
+
+proc _tryFujiPwd {} {
+   send "2)Jv@ffOc*4hRPwkil54\n"
+   expect "# "
+   set buf [SendACmd ""]
+   if {[regexp -nocase "\(debug\)" $buf]} {
+      result_debug "debug-mode enabled"
+      return 1;
+   } else {
+      SendACmd "enable debug-mode"
+      return [_tryMatterhornPwd]
+   }
+}
+
+proc _tryMatterhornPwd {} {
+   send "WW1l8\$xR42fkwBu!xDEh\n"
+   expect "# "
+   set buf [SendACmd ""]
+   if {[regexp -nocase "\(debug\)" $buf]} {
+      result_debug "debug-mode enabled"
+      return 1;
+   } else {
+      SendACmd "enable debug-mode"
+      return [_tryMckinleyPwd]
+   }
+}
+
+proc _tryMckinleyPwd {} {
+   send "x1RcQo0l%sOWW=w?vDiB\n"
+   expect "# "
+   set buf [SendACmd ""]
+   if {[regexp -nocase "\(debug\)" $buf]} {
+      result_debug "debug-mode enabled"
+      return 1;
+   } else {
+      SendACmd "enable debug-mode"
+      return [_tryRushmorePwd]
+   }
+}
+
+proc _tryRushmorePwd {} {
+   send "93oTKW4.e@uU4h\$vOAb1\n"
+   expect "# "
+   set buf [SendACmd ""]
+   if {[regexp -nocase "\(debug\)" $buf]} {
+      result_debug "debug-mode enabled"
+      return 1;
+   } else {
+      SendACmd "enable debug-mode"
+      return [_tryShastaPwd]
+   }
+}
+proc _tryShastaPwd {} {
+   send "u5BxIi8vL8Wc\n"
+   expect "# "
+   set buf [SendACmd ""]
+   if {[regexp -nocase "\(debug\)" $buf]} {
+      result_debug "debug-mode enabled"
+      return 1;
+   } else {
+      SendACmd "enable debug-mode"
+      return [_tryMontBlancPwd]
+   }
+}
+proc _tryMontBlancPwd {} {
+   send "3xtr3m3\n"
+   expect "# "
+   set buf [SendACmd ""]
+   if {[regexp -nocase "\(debug\)" $buf]} {
+      result_debug "debug-mode enabled"
+      return 1
+   } else {
+      SendACmd "enable debug-mode"
+      return [_tryRainierPwd]
+   }
+}
+proc _tryRainierPwd {} {
+   send "nomoreew\n"
+   return 1
+}
+proc DisableDebugMode {} {
+    SendACmd "disable debug-mode"
+}
+
+##################################################################
+# Procedure Name: SendAFileOld
+# Description: upload the file to tftp server, then download it to
+#	the DUT
+#       Deprecated as does not work w/ certain tftp servers
+# Input args:   
+#	tftpServer: the tftp server
+#	localFile: the file to be sent
+#	remoteFile: the file to be on the remote
+#	dut: the DUT# to send the file to 
+# Output args:  none
+# Typical usage:
+#       SendAFile
+# Category: Utility
+##################################################################
+proc SendAFileOld {tftpServer localFile remoteFile {dut 1} } {
+
+global DUT${dut}_CONNECT
+
+set filePrefix "[set DUT${dut}_CONNECT]"
+#set filePrefix "[set DUT${dut}_CONNECT] 123"   ;# for testing
+regsub -all { } $filePrefix {.} filePrefix
+set tftpFile $filePrefix.$remoteFile
+set platform [GetPlatform DUT${dut}]
+result_debug "$tftpFile, $platform"
+
+# upload the file to tftpserver
+global spawn_id
+
+set current_spawn_id $spawn_id
+result_debug "spawn_id = $spawn_id"
+spawn tftp $tftpServer
+result_debug "spawn_id = $spawn_id"
+SendACmd "put $localFile $tftpFile"
+send "quit\r"
+set spawn_id $current_spawn_id
+
+Login [set DUT${dut}_CONNECT]
+
+# download from tftpServer to DUT
+global switchPort2DefaultRouter
+ConfigGatewayNetwork
+after 5000
+set virtualRouter [GetVrString $dut]
+SendACmd "tftp $tftpServer -v $virtualRouter -g -r $tftpFile -l $remoteFile"
+UnconfigGatewayNetwork
+
+return $tftpFile
+}
+
+##################################################################
+# Procedure Name: SendAFile
+# Description: inturn calls tftp get and put
+#	the DUT
+# Input args:   
+#	tftpServer: the tftp server
+#	localFile: the file to be sent
+#	remoteFile: the file to be on the remote
+#	dut: the DUT# to send the file to 
+# Output args:  none
+# Typical usage:
+#       SendAFile
+# Category: Utility
+##################################################################
+proc SendAFile {tftpServer localFile remoteFile {dut 1} } {
+
+   global DUT${dut}_CONNECT
+   Login [set DUT${dut}_CONNECT]
+
+   set localFileTail [file tail $localFile]
+   CheckTftpPut $localFile
+   CheckTftpGet $localFileTail
+
+   SendACmd "mv $localFileTail.pol $remoteFile"
+}
+
+proc SendAFileToTftp {tftpServer  remoteFile args} {
+    parse_args SendAFileToTftp $args {
+       dut "1"
+       nameFormat "dynamic"
+   }
+
+   global DUT${dut}_CONNECT
+
+#   set localFileTail [file tail $localFile]
+   CheckTftpPut $remoteFile -nameFormat $nameFormat
+#   CheckTftpGet $localFileTail -confGw $Option -nameFormat $nameFormat
+
+   #Login [set DUT${dut}_CONNECT]
+   #SendACmd "mv $localFileTail.pol $remoteFile"
+}
+
+
+##################################################################
+# Procedure Name: DeleteAFile
+# Description: delete a file on the DUT's config directory for Mariner
+#       or on the DUT's bin directory for PCs
+# Input args:
+#       remoteFile: the file to be deleted from the DUT
+#       dut: the DUT# to deleted the file from
+# Output args:  none
+# Typical usage:
+#       DeleteAFile remoteFile dut
+# Category: Utility
+##################################################################
+proc DeleteAFile {remoteFile {dut 1} } {
+global DUT${dut}_CONNECT
+set platform [GetPlatform DUT${dut}]
+set pid _[pid]
+
+Login [set DUT${dut}_CONNECT]
+set result 1
+
+if {0} {
+EnableDebugMode
+set fd_in [open "Tmp/tmp_DeleteAFile$pid" "w"]
+global supportedPlatform
+if {[regexp -nocase "$supportedPlatform" $platform]==1} {
+   SendACmd "!mount -o rw,remount /dev/mtdblock3 /config" $fd_in
+   SendACmd "!rm /config/$remoteFile" $fd_in
+   SendACmd "!mount -o ro,remount /dev/mtdblock3 /config" $fd_in
+} else {
+   SendACmd "!rm $remoteFile" $fd_in
+   SendACmd "!rm /root/config/$remoteFile" $fd_in
+}
+close $fd_in
+DisableDebugMode
+}
+
+set fd_in [open "Tmp/tmp_DeleteAFile$pid" "w"]
+SendACmd "rm $remoteFile"
+close $fd_in
+
+set fd_in [open "Tmp/tmp_DeleteAFile$pid" "r"]
+set rtValue [check_illegality $fd_in]
+close $fd_in
+if { $rtValue == "illegal" } {
+  set result 0
+}
+catch {file delete "Tmp/tmp_DeleteAFile$pid"}
+return $result
+
+}
+
+proc KillEXOSProcess {processName} {
+    #
+    # EY-07-31-2013: Remove global for spawn_id as it wasn't being used.
+
+    #####################################
+    set subTest "Kill $processName"
+    #####################################
+    result_h2 "$subTest"
+    report_start_test "$subTest"
+
+    #
+    # EY-07-31-2013: On chassis platforms, the "show process detail" command
+    #                prints process information for every active control
+    #                node.  This means we have to determine the current node
+    #                first and only display the process info for that node.
+    set cmd "show process $processName detail";
+
+    #
+    # EY-07-31-2013: The current slot is marked by an "*" right after the
+    #                slot name in the output of "show switch".
+    if {[Platform_IsChassis]} {
+        set valList [list {Slot: 0}];
+        set slotLine [GetKeyValue "show switch" $valList 0 1];
+
+        #
+        # Breakdown of regular expression:
+        #
+        # Slot:     Matches "Slot:" at beginning of line.
+        # .*        Match everything up to what follows next.
+        # \w+       Matches the slot name, e.g. MSM, MM, Slot.
+        # -         The separator between the slot name and number.
+        # (.)       The slot number, captured for retrieval.
+        # " \*"     The active slot marker.
+        #
+        # Note: This regexp relies on greedy quantifiers as the default
+        #       behavior.
+        #
+        regexp {Slot:.*\w+-(.) \*} $slotLine notUsed currentSlotNum;
+        append cmd " slot $currentSlotNum";
+    }
+
+    #
+    # EY-07-31-2013: Fixed pattern match to be more specific.
+    lappend pidList "{PID +Path} 1 2";
+    set pid [GetKeyValue $cmd $pidList];
+    regsub -all {main} $pid "" pid;
+    EnableDebugMode;
+    SendACmd "!kill -9 $pid";
+    DisableDebugMode;
+    report_end_test;
+}
+
+proc GetVrString { {DUT 1} } { 
+   global DUTs_info
+   global switchPort2DefaultRouter
+
+   set xos_version [GetVersion DUT$DUT 4]
+   if {[regexp -nocase "mgmt" $switchPort2DefaultRouter]} {
+      if { $xos_version >= "10.2.0" } {
+         set virtualRouter VR-mgmt 
+       } else {
+          set virtualRouter VR-0
+       }
+   } else {
+      if { $xos_version >= "10.2.0" } {
+         if {[info exists DUTs_info(UserVR)] && $DUTs_info(UserVR) != ""} {
+            set virtualRouter $DUTs_info(UserVR)
+         } else {
+            set virtualRouter VR-default
+         }
+      } else {
+         set virtualRouter VR-2
+      }
+   }
+   return $virtualRouter  
+}
+
+##################################################################
+# Procedure Name: convertSlotPortRange
+# Description: Converts a slot port range to EXOS format.
+#              i.e. 2:8-2:12 converts to 2:8-12
+# Input args:
+#       start - start slot:port
+#       end - end slot:port
+# Output args:  Converted range
+# Typical usage:
+#       set range [convertSlotPortRange 2:8 2:10]
+# Category: Utility
+##################################################################
+proc convertSlotPortRange {start end} {
+
+    ;# If they match, just return first i.e. 3:8 3:8 --> returns 3:8
+    if {$start == $end} {
+	return $start
+    }
+
+    if {! [regexp {(^[0-9]+):([0-9]+)} $start matchStart startSlot startPort]} {
+	set startSlot ""
+	set startPort $start
+    }
+
+    if {! [regexp {(^[0-9]+):([0-9]+)} $end matchEnd endSlot endPort]} {
+	set endSlot ""
+	set endPort $end
+    }
+
+    ;# Make sure we return highest to lowest
+    if {$startPort > $endPort} {
+	set tempStart $startPort
+	set startPort $endPort
+	set endPort $tempStart
+    }
+
+    if {$startSlot != $endSlot} {
+	puts "Error: startSlot:$startSlot != endSlot:$endSlot"
+	return ""
+    }
+
+    if {$startSlot != ""} {
+	return "$startSlot:$startPort-$endPort"
+    } else {
+	return "$startPort-$endPort"
+    }
+
+}
+
+proc CatPolOnDUT {fileName} {
+   global whichDutNow
+   global supportedPlatform
+   EnableDebugMode
+   if {[regexp -nocase "$supportedPlatform" [GetPlatform DUT$whichDutNow]]} {
+      SendACmd "!cat /config/$fileName.pol"
+   } else {
+      SendACmd "!cat /root/config/$fileName.pol"
+   }
+}
+
+##################################################################
+# Procedure Name: GetUniqueFileName
+#
+# Description: It returns a unique file name by combining pid,
+#              ip address of machine and the time.
+#
+# Input args: none
+# Output args: file name
+# Typical usage: set filename [ GetUniqueFileName ]
+###################################################################
+
+proc GetUniqueFileName { {suffix ""} } {
+   set fileName "temp_"
+   set sp "_"
+   set pid [pid]
+   set ip [GetLocalIpaddr]
+   set tt [clock second]
+   if { $suffix != "" } {
+      append fileName $pid $sp $tt $sp $ip $sp $suffix ".txt"
+   } else {
+      append fileName $pid $sp $tt $sp $ip ".txt"
+   }
+   return $fileName
+}
+##################################################################
+# Procedure Name: GetLocalIpaddr
+#
+# Description: It returns the ip address of the local machine
+#              It parses outout of 'ifconfig' to get the ipaddress
+#
+# Input args: none
+# Output args:ip address
+# Typical usage: set ipaddr [  GetLocalIpaddr]
+###################################################################
+
+proc GetLocalIpaddr { } {
+         
+
+   if { [catch {exec hostname -i } result]} {
+       puts "error in snmpwalk: $result"
+   } else {
+       set resArr $result
+       #foreach line $resArr {
+       #    result_debug "$line"
+       #}
+       foreach address $resArr {
+           if {$address != "127.0.0.1"} {
+                set addr $address
+                result_debug  "Local Ip Address: $addr"
+                return $addr
+            }
+       }
+   }
+   result_error "Cannot  find local ip addr"
+   return 0
+
+}
+
+
+##################################################################
+# Procedure Name: ldelete
+#
+# Description: Deleting a list element by value
+#
+# Input args: list and value
+# Output args: the list
+# Typical usage: set list [ldelete $list $value]
+###################################################################
+proc ldelete { list  value } {
+   set ix [lsearch -exact $list $value]
+   if {$ix >= 0} {
+      return [lreplace $list $ix $ix]
+   } else {
+      return $list
+   }
+}
+
+########################################################################################################
+#proc : getDutPortSpeed
+# returns the speed of the port  on the dut
+# input args : dut port
+# return : speed 10 100 1000 10000 40000
+#          -1 if speed cannot be found out
+#
+# usage : getDutPortSpeed 1 1:10
+#########################################################################################################
+proc getDutPortSpeed {args } {
+    parse_args getDutPortSpeed $args {
+        dut "1"
+        port "1"
+    }
+
+    global DUTs_info
+    if { ![info exist DUTs_info(DUT${dut},connect)] } {
+         result_error "getDutPortSpeed: Dut $dut doesn't exist"
+         return -1
+    }
+    Login [set DUTs_info(DUT${dut},connect)]
+    set parameterList ""
+    lappend parameterList "{^ *Link State:} 2"
+    set speed [GetKeyValue "show port $port info detail" $parameterList]
+    unset parameterList
+
+    switch $speed {
+        "10Mbps,"   { return 10 }
+        "100Mbps,"  { return 100 }
+        "1Gbps,"    { return 1000 }
+        "2.5Gbps,"  { return 2500 }
+        "5Gbps,"    { return 5000 }
+        "10Gbps,"   { return 10000 }
+        "40Gbps,"   { return 40000 }
+    }
+
+    result_error " Unknown port speed Dut=$dut,  Port=$port Speed=$speed"
+    return -1
+}
+
+########################################################################################################
+#proc : getDutPortAutoNeg
+# returns the AutoNeg status of the port  on the dut
+# input args : dut port
+# return : off on 
+#          -1 if auto negotiation status cannot be found out
+#
+# usage : getDutPortAutoNeg 1 1:10
+#########################################################################################################
+proc getDutPortAutoNeg {args } {
+    parse_args getDutPortSpeed $args {
+        dut "1"
+        port "1"
+    }
+
+    global DUTs_info
+    if { ![info exist DUTs_info(DUT${dut},connect)] } {
+         result_error "getDutPortSpeed: Dut $dut doesn't exist"
+         return -1
+    }
+    Login [set DUTs_info(DUT${dut},connect)]
+    set parameterList ""
+    lappend parameterList "{^$port } 4"
+    set autoNeg [GetKeyValue "show port $port configuration no-refresh" $parameterList]
+    unset parameterList
+
+    switch $autoNeg {
+        "ON"  { 
+              return "on" 
+             }
+        "OFF" { 
+              return "off" 
+         }
+    }
+
+    result_error " Unknown port autoneg Dut=$dut,  Port=$port AutoNeg=$autoNeg"
+    return -1
+}
+
+##################################################################
+# Procedure Name: GetDutMemory
+#
+# Description: It returns the dut memory information 
+#
+# Input args: memory size 
+# Output args: DUT memory
+# Typical usage: set dutno [GetDutMemory 256mb]
+###################################################################
+
+proc GetDutMemory {ramSize} {
+   set firstSubStr "DUT"
+   set lastSubStr "_CONNECT"
+   set dutList ""
+   global chassis
+
+   if { $ramSize == "" } {
+      return -1
+   }
+
+   for {set i 1} {$i <=5} {incr i 1} {
+      global $firstSubStr$i$lastSubStr
+      if [info exists $firstSubStr$i$lastSubStr] {
+         lappend DUTList $i
+      }
+   }
+
+   foreach testDUT $DUTList {
+      Login  [expr $$firstSubStr$testDUT$lastSubStr]
+      set parameterList ""
+      if {[regexp -nocase "$chassis" [GetPlatform DUT$i]]} {
+      lappend parameterList "{A.*Free} 2"
+      } else {
+      lappend parameterList "{Free} 2"
+      }
+      set totalMemory [GetKeyValue "show memory" $parameterList]
+      unset parameterList
+      #set totalMemory [string range $totalMemory 1 5]
+      #result_debug "Afer range The mem: $totalMemory"
+      #if {[string tolower $ramSize] == [string tolower $totalMemory]}
+         #result_debug "The dut no. $testDUT"
+
+      set totalMemory [lindex $totalMemory 0]
+        result_debug "the total free memory is $totalMemory"
+       set freememory [expr $totalMemory/1024]
+        result_debug "the free memory is $freememory"
+       if {$totalMemory >= $ramSize} {
+          lappend dutList $testDUT
+      }
+      result_debug "The dut list length. $dutList"
+   }
+        set number [llength $dutList]
+        result_debug "The number is $number"
+         return $number
+}
+
+##################################################################
+# Procedure Name: GetDutNumber
+#
+# Description: It returns the dut no. with the memory size and
+#              number of DUTs
+#
+# Input args: memory size and number of DUTs with this memory
+# Output args: DUT numbers
+# Typical usage: set dutno [GetDutNumber 256mb 2]
+###################################################################
+
+proc GetDutNumber {ramSize num} {
+   set firstSubStr "DUT"
+   set lastSubStr "_CONNECT"
+   set dutList ""
+
+   if { $ramSize == "" && $num == "" } {
+      return -1
+   }
+
+   for {set i 1} {$i <=5} {incr i 1} {
+      global $firstSubStr$i$lastSubStr
+      if [info exists $firstSubStr$i$lastSubStr] {
+         lappend DUTList $i
+      }
+   }
+
+   foreach testDUT $DUTList {
+      Login  [expr $$firstSubStr$testDUT$lastSubStr]
+      lappend parameterList "{Total DRAM Size:} 2"
+      set totalMemory [GetKeyValue "show memory" $parameterList]
+      unset parameterList
+      set totalMemory [string range $totalMemory 1 5]
+      #result_debug "Afer range The mem: $totalMemory"
+      if {[string tolower $ramSize] == [string tolower $totalMemory]} {
+         #result_debug "The dut no. $testDUT"
+         lappend dutList $testDUT
+      }
+      #result_debug "The dut list length. $dutList"
+      if {$num == [llength $dutList]} {
+         return $dutList
+      }
+   }
+}
+
+#############################################################################################
+# Procedure Name: checkLACPAggregation
+#
+# Description: This proc checks whether that LACP Aggregation is properly
+# formed between the ports of two DUT's
+#              ip address of machine and the time.
+#
+# Input args: DUT Name, Master Port of the LACP trunk,Ports list that form the trunk and
+#             Port priority
+# Output args: Returns "ok" if success "error" if failure
+# Typical usage: checkLACPAggregation 1 10:1 "10:2 10:3 10:4" 20
+##############################################################################################
+
+proc checkLACPAggregation {DUT masterPort portIdList portPriority} {
+   global DUT${DUT}_CONNECT i386Platform
+   global DUTs_info;
+
+   Login [set DUT${DUT}_CONNECT];
+   if {$DUT == 1} {exSleep 5}  
+   foreach portId $portIdList {
+       if {[regexp -nocase "$i386Platform" $DUTs_info(DUT${DUT},platform)]} {
+           lappend parameterList "{ls_ports_show {loadShareMaster linkState port}} {$masterPort 1 $portId}  exist"
+           CheckDictValue -cmd "show sharing" -parameterList $parameterList -time {s: 0 i: 3 f: 15}
+       } else {
+           lappend parameterList "{$portId.*Current.*Selected.*Collect-Dist.*A-GSCD} exist"
+           CheckKeyValue "show lacp lag $masterPort" $parameterList \
+                          -time {s: 0 i: 3 d: 15 f: 15 r} -comment \
+                         "- Checking LACP Aggregation for the port $portId on DUT$DUT"
+       }
+       unset parameterList
+   }
+}
+
+#############################################################################################
+# Procedure Name: clearCounters
+#
+# Description: This proc clears the counters of the DUT's
+#              
+# Input args: DUT Name List
+# Output args: None 
+# Typical usage: clearCounters "DUT1 DUT2"
+##############################################################################################
+
+proc clearCounters {DUTNameList} {
+
+ global DUTs_info;
+ foreach DUTName $DUTNameList {
+
+         global ${DUTName}_CONNECT;
+         Login [set ${DUTName}_CONNECT];
+         SendACmd "clear counters"
+         SendACmd "clear l2stats"
+         exSleep 5
+
+  }
+
+}
+
+#############################################################################################
+# Procedure Name: CheckLACPTrunkLoadShare
+#  
+# Description: This proc checks the traffic flow load share across LACP trunk
+#
+# Input args:
+# 
+#  -txPortId           - Port that sends traffic into LACP trunk
+#  -rxTrunkPortIdList  - List of ports in the trunk
+#  -DUTName            - DUT Name
+#
+# Output args: None
+#
+# Typical usage: CheckLACPTrunkLoadShare 1 "2 3 4" DUT1
+##############################################################################################
+
+
+proc CheckLACPTrunkLoadShare {txPortId rxTrunkPortIdList DUTName {comment ""}} {
+
+   set percent_tolerance 1.5;
+   set txRate [GetNumFramesSent $txPortId];
+   result_debug "<<<<<<<<<<<< txRate of $txPortId : $txRate >>>>>>>>>"
+   report_start_test "Checking Rates $comment";
+   
+   global ${DUTName}_CONNECT;
+   Login [set ${DUTName}_CONNECT];
+
+   foreach var $rxTrunkPortIdList {
+  
+      set rxPort [lindex $var 0];
+      set rxPercent [lindex $var 1];
+      set tag [lindex $var 2];
+      set rtValue "ok";
+
+      set key ""
+      lappend key "$rxPort 4"
+      set txPacketCountToTrim [GetKeyValue "show port $rxPort statistics" $key]
+      set txPacketCount [string trim $txPacketCountToTrim "{} #"]
+      set rxRate $txPacketCount
+
+      report_start_test "Comparing txRate($txPortId)=$txRate and rxRate($rxPort)=$rxRate";
+      result_debug "Comparing txRate($txPortId)=$txRate and rxRate($rxPort)=$rxRate";
+       
+      if { $txRate == 0 } {         
+         if { $rxRate == 0 } {
+            result_error "txRate($txPortId)=rxRate($rxPort)=0";
+            set rtValue "error";
+         } else {
+            result_error "txRate($txPortId)=0 but rxRate($rxPort)=$rxRate";
+            set rtValue "error";
+         }
+      } elseif { $rxRate <= 4 } {
+            result_ok "txRate($txPortId)=rxRate($rxPort)=0"; 
+            set rtValue "ok";        
+      } else {
+         if {$rxPercent == 0} {
+            set rxPercent 100;
+         } 
+         set exp_rxRate [expr abs (double($txRate) * $rxPercent/100)];
+         set diff [expr abs( double($exp_rxRate) - double($rxRate) )];
+         puts "Rate $exp_rxRate Diff $diff";
+         if {$exp_rxRate < 0.0001 } {
+            set pPercent [expr $diff * $percent_tolerance] ;# not sure this is right
+         } else {
+            set pPercent [expr double($diff) / double($exp_rxRate) * 100.0];
+         }         
+         result_debug "--- pPercent=$pPercent";
+         
+         if { $pPercent <= $percent_tolerance } {
+            result_ok "TxRate:$txRate, rxRate:$rxRate check Passed";
+              set rtValue "gotit";
+         } else {
+            set difv 100;
+            if {$txRate > $rxRate} {
+                set difv [expr $txRate - $rxRate]; 
+            } else {
+                set difv [expr $rxRate - $txRate];
+            }
+            if {$difv < 4} {
+                result_ok "TxRate:$txRate, rxRate:$rxRate check Passed";
+                  set rtValue "gotit";
+            } else {
+                result_error "TxRate:$txRate, rxRate:$rxRate check Failed. diff percentage:$pPercent exceeds %tolerance:$percent_tolerance";
+                result_error [format "Difference (%01.2f%%) exceeds tolerance (%01.2f%%). Tx Rate is $txRate, Rx Rate is $rxRate.\n" $pPercent $percent_tolerance];
+                set rtValue "error";
+            }
+         }
+      }
+      report_end_test;    
+      lappend rtList $rtValue; 
+   }
+   result_debug "rtList = $rtList";
+   set i 0;
+   set x 0;
+   set port 0;
+   set temp ""
+   foreach var $rtList {
+       if {$var == "gotit"} {
+           set temp [lindex $rxTrunkPortIdList $x];
+           set port [lindex $temp 0];
+           incr i;
+       }   
+       incr x;
+   }
+   if {$i == 1} {
+       report_start_test "Port ($port) receives the traffic only";
+       result_ok "Port ($port) receives the traffic only";
+       report_end_test;   
+   } else {
+       report_start_test "More than one port received the traffic!";
+       result_error "More than one port received the traffic!"; 
+       report_end_test;    
+       set port 0;
+   }
+   report_end_test;   
+     
+   return $port;
+}
+
+#############################################################################################
+# Procedure Name: getIxiaCardType
+#
+# Description: This proc returns the ixia card type of a ixia port.
+#
+# Input args:
+#
+#  -ixPort             - Ixia port
+#           
+# Output args: Ixia card name
+#
+# Typical usage: getIxiaCardType 8
+##############################################################################################
+
+proc getIxiaCardType {ixPort} {
+      
+MapIxiaPortId $ixPort chasis card port
+set cardName [card cget -typeName]
+return $cardName
+}
+
+#############################################################################################
+# Procedure Name: getIxiaPortLinkState
+#
+# Description: This proc returns the Link state of the ixia port.
+#
+# Input args:
+#
+#  -ixPort             - Ixia port
+#
+# Output args: Ixia Link State
+#  Return Value  Link State
+#  ------------  ----------
+#    0           Link Down
+#    1           Link Up
+#
+#    There are 44 other link states,please refer to ixia documentation for more info
+#
+# Typical usage: getIxiaPortLinkState 8
+##############################################################################################
+
+
+proc getIxiaPortLinkState {ixPort} {
+    
+MapIxiaPortId $ixPort chasis card port
+port get $chasis $card $port
+set linkState [port cget -linkState]
+return $linkState
+}
+
+#############################################################################################
+# Procedure Name: getDUTPortRxPacketCount
+#
+# Description: This proc returns number of packets received on a DUT port.
+#
+# Input args:
+#
+#  -DUT                - DUT Name  
+#  -Port               - DUT Port
+#           
+# Output args: None
+#
+# Typical usage: getDUTPortRxPacketCount DUT1 9
+##############################################################################################
+
+proc getDUTPortRxPacketCount {DUT Port} {
+    
+ set key ""
+ lappend key "$Port 4"
+ set rxPacketCountToTrim [GetKeyValue "show port $Port statistics" $key]
+ set rxPacketCount [string trim $rxPacketCountToTrim "{} #"]
+ return $rxPacketCount
+       
+}
+       
+#############################################################################################
+# Procedure Name: getDUTPortTxPacketCount
+#     
+# Description: This proc returns number of packets sent from a DUT port.
+#
+# Input args:
+# 
+#  -dutNum             - DUT Number
+#  -Port               - DUT Port
+# 
+# Output args: None
+# 
+# Typical usage: getDUTPortTxPacketCount 2  10
+##############################################################################################
+       
+proc getDUTPortTxPacketCount {dutNum Port} {
+   
+ global DUT${dutNum}_CONNECT 
+ Login [set DUT[set dutNum]_CONNECT]
+ set key ""
+ lappend key "$Port 2"
+ set txPacketCountToTrim [GetKeyValue "show port $Port statistics" $key]
+ set txPacketCount [string trim $txPacketCountToTrim "{} #"]
+ return $txPacketCount
+
+}
+
+#############################################################################################
+# Procedure Name: ConfirmLACPTraffic
+#
+# Description: This proc is used to check continous traffic across LACP ports.
+#       
+# Input args:
+#   
+#  -txPort             - Ixia port sending continous traffic 
+#  -verifyPortList     - LACP ports 
+#  -DUT                - DUT number
+#
+# Output args: None
+#
+# Typical usage: [ConfirmLACPTraffic 1 "[GetATrunkPort 2 1 1] [GetATrunkPort 2 1 2]" 2]
+##############################################################################################
+
+
+proc ConfirmLACPTraffic { txPort verifyPortList DUT} {
+    result_debug "Wait 6 seconds for things to settle down..."
+    exSleep 6
+
+    set numFramesSent [GetNumFramesSent $txPort]
+
+    set numFramesRcd 0
+    foreach portnum $verifyPortList {
+        incr numFramesRcd [getDUTPortRxPacketCount $DUT $portnum]
+    }
+    StopPortsTransmit $txPort
+
+    result_debug "numFramesSent=$numFramesSent; numFramesRcd=$numFramesRcd"
+
+    if { $numFramesRcd >= [expr $numFramesSent*0.7] } {
+        # Pass
+        return 1
+    } else {
+        # Fail
+        return 0
+    }
+}
+
+#############################################################################################
+# Procedure Name: isInRange
+#
+# Description: This proc checks given values are with in the tolerance value
+#
+# Input args:
+#
+#  -tolerance          - +/- Tolerance value
+#  -received           -  Value1
+#  -expected           - value2
+#  -updown             - up      above received value
+#                        down    below received value
+#                        updown  above & below received value
+#
+# Output args: None
+#
+# Typical usage: CheckLACPTrunkLoadShare 1 "2 3 4" DUT1
+##############################################################################################
+
+proc isInRange { tolerance received expected updown } {
+  set rslt 0
+  if { $updown == "updown" } {
+    if {($received >= [expr $expected - $tolerance]) && ($received <= [expr $expected + $tolerance])} {
+      set rslt 1
+    }
+  } elseif  { $updown == "down" } {
+    if {$received >= [expr $expected - $tolerance]} {
+      set rslt 1
+    }
+  }  elseif  { $updown == "up" } {
+    if {$received <= [expr $expected + $tolerance]} {
+      set rslt 1
+    }
+  }
+  return $rslt
+}
+
+#############################################################################################
+# Procedure Name: CheckDutPortState
+# 
+# Description: This proc check whether a DUT port is active
+# Input args:
+#
+#  -portList             - List of ports
+#  -DUTName              - DUT of the port
+#  -state                - port state to be checked; active by default
+#
+# Output args: None
+#
+# Typical usage: CheckDutPortState "1 2" "DUT1"
+##############################################################################################
+
+
+proc CheckDutPortState {portList DUTName {state "active"}} {
+    global ${DUTName}_CONNECT
+    global DUTs_info
+    
+    Login [set ${DUTName}_CONNECT];
+     
+    foreach port $portList {
+       lappend parameterList "{.*$port.*$state} exist"
+       CheckKeyValue "show port $port info" $parameterList \
+                      -comment "To check whether port $port of $DUTName is $state"
+       unset parameterList
+    }
+}  
+
+
+##################################################################
+# Procedure Name: SkipTestAfterFailure
+#
+# Description: This function skips the $listOfTests in case of a failure in a testcase 
+#
+# Input args:
+#              listOfTests - List of testcases to skip 
+#
+# Typical usage:
+#      SkipTestAfterFailure "1.2.1 1.2.2"
+# Note : This procedure can only be called after at least one report_end_test.
+# (Because report_end_test increments the fail count)
+#
+# Category: Utility
+##################################################################
+proc SkipTestAfterFailure {listOfTests} {
+   global skipTestsOnFailure
+   global origFailCount
+   global failCount
+
+   if { $origFailCount != $failCount } {
+      result_debug "origFailCount = $origFailCount, failCountAfter = $failCount"
+      set skipTestsOnFailure $listOfTests
+  }
+}
+##################################################################
+# Procedure Name: CheckTestsRemaining
+#
+# Description: This function returns a 1 if the test passed is in the 
+#              list of tests to run
+# Input args:
+#              test case proc name  
+#
+# Typical usage:
+#      if [CheckTestsRemaining 1.2.3] {lappend FilesToUpload "Tmp/tmp_1.2.3"}
+#
+# Category: Utility
+##################################################################
+proc CheckTestsRemaining {testCase} {
+   global TestsRemaining
+   if { [lsearch $TestsRemaining $testCase] >= 0} {
+      return 1;
+   } else {
+      return 0;
+   }
+}
+
+# Determines if two dut's are the same type of platform (GNSS/BCM).
+# Returns 1 if same type, 0 if different.
+proc IsSamePlatformType { dutList } {
+
+    global gnssPlatform bcmPlatform
+
+    result_debug "Verifying that all DUTs in '$dutList' are the same type of platform (GNSS/BCM)"
+
+    if { [llength $dutList] < 2 } {
+	# only one platform supplied, of course it's same as itself!
+	return 1
+    }
+
+    set counter 0
+    foreach firstDut $dutList {
+	incr counter
+	set remainingDuts [lrange $dutList $counter end]
+	foreach secondDut $remainingDuts {
+	    if { ([regexp $gnssPlatform [GetPlatform $firstDut]]) && ([regexp $bcmPlatform [GetPlatform $secondDut]]) } {
+		return 0
+	    }
+	    if { ([regexp $bcmPlatform [GetPlatform $firstDut]]) && ([regexp $gnssPlatform [GetPlatform $secondDut]]) } {
+		return 0
+	    }
+	}
+    }
+
+    return 1
+}
+
+# Takes as input a filename and returns a list containing all lines in that file.
+proc GetFileLinesList { filename } {
+   set fileid [open $filename "r"]
+   set filelineslist ""
+   set count 0
+   set count2 0
+   while { ! [eof $fileid] } {
+        incr count
+	incr count2
+	gets $fileid nextLine
+	set filelineslist "$filelineslist\n[string trim $nextLine]"
+	if { $count2 == 1000 } {
+	   puts "$count Lines read..."
+	   set count2 0
+	}
+   }
+
+   close $fileid
+   set filelineslist [string trim $filelineslist]
+   set filelineslist [split $filelineslist "\n"]
+
+   return $filelineslist
+}
+
+proc get_platform_blade {cfgFile} {
+
+  #puts "get_platform_blade: cfgFile $cfgFile"
+  source ../../main/runReg.cfg
+  global regPath
+  set pwd [pwd]
+  foreach platform_code_this [array names regplatform] {
+      #puts "$platform_code_this == $regplatform($platform_code_this)"
+      set platform_code_lst_this $regplatform($platform_code_this)
+      set platform_this [lindex $platform_code_lst_this 0]
+      set blade_this [lindex $platform_code_lst_this 1]
+      set cfg_this [lindex $platform_code_lst_this 2]
+      set regType [lindex $platform_code_lst_this 3]
+      #puts "blade_this $blade_this,cfg_this $cfg_this"
+
+     if {$cfg_this == $cfgFile && [regexp -nocase $regType [file tail $regPath]]} {
+       return $blade_this
+     } elseif {$cfg_this == $cfgFile && [regexp -- "cli" $regPath]} {
+       return $blade_this
+     }
+  }
+  return "not_found"
+}
+# Determines if two dut's are the same type of platform (GNSS/BCM).
+# Returns 1 if same type, 0 if different.
+proc IsSamePlatformType { dutList } {
+
+    global gnssPlatform bcmPlatform
+
+    result_debug "Verifying that all DUTs in '$dutList' are the same type of platform (GNSS/BCM)"
+
+    if { [llength $dutList] < 2 } {
+	# only one platform supplied, of course it's same as itself!
+	return 1
+    }
+
+    set counter 0
+    foreach firstDut $dutList {
+	incr counter
+	set remainingDuts [lrange $dutList $counter end]
+	foreach secondDut $remainingDuts {
+	    if { ([regexp $gnssPlatform [GetPlatform $firstDut]]) && ([regexp $bcmPlatform [GetPlatform $secondDut]]) } {
+		return 0
+	    }
+	    if { ([regexp $bcmPlatform [GetPlatform $firstDut]]) && ([regexp $gnssPlatform [GetPlatform $secondDut]]) } {
+		return 0
+	    }
+	}
+    }
+
+    return 1
+}
+
+# Takes as input a filename and returns a list containing all lines in that file.
+proc GetFileLinesList { filename } {
+   set fileid [open $filename "r"]
+   set filelineslist ""
+   set count 0
+   set count2 0
+   while { ! [eof $fileid] } {
+        incr count
+	incr count2
+	gets $fileid nextLine
+	set filelineslist "$filelineslist\n[string trim $nextLine]"
+	if { $count2 == 1000 } {
+	   puts "$count Lines read..."
+	   set count2 0
+	}
+   }
+
+   close $fileid
+   set filelineslist [string trim $filelineslist]
+   set filelineslist [split $filelineslist "\n"]
+
+   return $filelineslist
+}
+
+##################################################################
+# Procedure Name: CompareVersion_eware
+#
+# Description: Compare the version with the version on the dut
+#
+# Input args:
+#              version
+#              dut name
+#
+# Output args: none
+#
+#
+# Typical usage:
+#             [CompareVersion $version $DUTName]
+#
+# Category: utility
+##################################################################
+
+proc CompareVersion_eware {version {DUTName "DUT1"}} {
+
+    global DUTs_info;
+
+    result_debug "CompareVersion build($version) with SW($DUTs_info($DUTName,version)) on DUT $DUTName"
+    set vn [GetVersion_eware $DUTName 4];
+    set bn [GetVersion_eware $DUTName 3];
+
+    # ----- Add EXOS 4 digit case 7.3.0.22
+    # Is the version string to compared a 4Digit string?
+    set exos4Digit [regexp -nocase {^[0-9]+.[0-9a-z]+.[0-9]+.([0-9]*)} $version]
+    if {$exos4Digit} {
+        set flag [regexp -nocase {^([0-9]+.[0-9a-z]+.[0-9]+).([0-9]*)} $version vs vn1 bn1]
+    } else {
+        set flag [regexp -nocase {^(.*)b(.*)} $version vs vn1 bn1];
+    }
+    if {$flag} {
+        # -- compare release and build number
+        if {$vn1 > $vn} {
+            return 1;
+        } elseif {$vn1 < $vn} {
+            return -1;
+        } else {
+          result_debug "Build bld($bn1) sw($bn)";
+          if {$bn1 > $bn} {
+              return 1;
+          } elseif {$bn1 < $bn} {
+              return -1;
+          } else {
+              return 0;
+          }
+        }
+    } else {
+        # ---- compare only release number
+        set sw_fullversion $vn; #The version ONLY of software on DUT 1 (7.1.0) ;
+        set lng [string length $version]; #Length of the version to compare with the DUT version ;
+        # If the ver str to compare is > than the ver str on the DUT, temp DUT ver str is not changed
+        if {$lng >= [string length $sw_fullversion]} {
+            set sw_shortversion $sw_fullversion;
+        } else {
+            # If the ver str to compare is < than the ver str on the DUT, make temp DUT ver str same length
+            set sw_shortversion [string range $sw_fullversion 0 [expr $lng-1]];
+        }
+
+        if {($version == "6.2e") && ($sw_shortversion != "6.2e")} {
+            # to prevent s24lc code
+            return 1;
+        } elseif {$version > $sw_shortversion} {
+            return 1;
+        } elseif {$version < $sw_shortversion} {
+            return -1;
+        } else {
+            return 0;
+        }
+    }
+}
+
+
+##################################################################
+# Procedure Name: GetVersion_eware
+#
+# Description: Get EW version on the DUT
+#
+# Input args:
+#              DUTName
+#              level
+#
+# Output args:
+#              return version
+#
+# Typical usage:
+#             [GetVersion "DUT1" 2]
+#
+# Category: Utility
+##################################################################
+
+proc GetVersion_eware {{DUTName "DUT1"} {level "1"} } {
+global DUTs_info
+if {$level == "1" } {
+   # -- return release and build number x.x.xbx
+   return $DUTs_info($DUTName,VERSION)
+} elseif {$level == "2"} {
+   # -- return partly release number x.x
+   set x $DUTs_info($DUTName,version)
+   set ver 0;
+   set match 0;
+#   set flg [regexp -nocase {^([0-9]+.[0-9a-z]+).[0-9].*} $x match ver]
+   set flg [regexp -nocase {^([0-9]+.[0-9]+).*.[0-9].*} $x match ver]
+   if {$flg} {
+      return $ver
+   } else {
+      return $match
+   }
+} elseif {$level == "3"} {
+   # -- return build number
+   set match 0;
+   set build 0;
+   set x $DUTs_info($DUTName,version)
+   # Add EXOS 4 digit case 7.3.0.22
+   set exos4Digit [regexp -nocase {^[0-9]+.[0-9a-z]+.[0-9]+.([0-9]*)} $x]
+   if {$exos4Digit} {
+       set flg [regexp -nocase {^[0-9]+.[0-9a-z]+.[0-9]+.([0-9]*)} $x match build]
+   } else {
+       set flg [regexp -nocase {^[0-9]+.[0-9a-z]+.[0-9]+[a-z]+([0-9]*)} $x match build]
+   }
+   if {$flg} {
+      return $build
+   } else {
+      return $match
+   }
+} elseif {$level == "4"} {
+   # -- return release number x.x.x
+   set match 0;
+   set build 0;
+   set x $DUTs_info($DUTName,version)
+   # Add EXOS 4 digit case 7.3.0.22
+   set exos4Digit [regexp -nocase {^[0-9]+.[0-9a-z]+.[0-9]+.([0-9]*)} $x]
+   if {$exos4Digit} {
+       set flg [regexp -nocase {^([0-9]+.[0-9a-z]+.[0-9]+).[0-9]*} $x match ver]
+   } else {
+       set flg [regexp -nocase {^([0-9]+.[0-9a-z]+.[0-9]+)[a-z]+} $x match ver]
+   }
+   if {$flg} {
+      return $ver
+   } else {
+      return $match
+   }
+}
+
+return $DUTs_info($DUTName,version)
+}
+##################################################################
+# Procedure Name: GetUnUsedPort
+#
+#
+# Description: Get an unused port that is neigher a port ID
+#              or a trunk port.
+#              - This procedure is initially used to find a
+#                loopback port to "burn".  The port does not
+#                need to be active.
+#              - Match Count was added, so the proc can return
+#                more than just the first empty port
+#
+# Input args: DUTNum, MatchCount
+#
+# Output args:
+#              return port number (# or #:#)
+#
+# Typical usage:
+#             - return the first unused port on dut 1
+#             set myPort [GetUnUsedPort 1 1]
+#             - return the second unused port on dut 1
+#             set myPort [GetUnUsedPort 1 2]
+
+#
+# Category: Utility
+##################################################################
+proc GetUnUsedPort {{DUTNum 1} {MatchCount 1} } {
+global portMappingList
+global trunkPortList
+global DUTs_info
+global chassis
+
+    set portsUsed ""
+    set slotsUsed ""
+    set stackable 0
+    #
+    # Gather a list of portId slots and ports in use
+    #
+    if {[info exists portMappingList] && $portMappingList != ""} {
+        foreach portMap $portMappingList {
+            set portId [lindex $portMap 0]
+            set dutNumber [lindex $portMap 2]
+            if {[regexp -nocase "$chassis" $DUTs_info(DUT${DUTNum},platform)]} {
+                if {$dutNumber == "$DUTNum"} {
+                    lappend portsUsed [MapDUTPortId $portId $dutNumber]
+                    lappend slotsUsed [lindex [split [MapDUTPortId $portId $dutNumber] :] 0];
+                }
+            } else {
+                set stackable 1
+                if {$dutNumber == "$DUTNum"} {
+                    lappend portsUsed [MapDUTPortId $portId $dutNumber]
+                }
+            }
+        }
+    }
+    #
+    # Gather a list of trunk port slots and ports in use
+    #
+    if {[info exists trunkPortList] && $trunkPortList != ""} {
+        foreach trunkMap $trunkPortList {
+            set fromDUT [lindex $trunkMap 0]
+            set dutNumber $fromDUT
+            set toDUT [lindex $trunkMap 1]
+            if {[info exists trunkLinkCount($fromDUT,$toDUT)]} {
+                set trunkLinkCount($fromDUT,$toDUT) [expr $trunkLinkCount($fromDUT,$toDUT) + 1]
+            } else {
+                set trunkLinkCount($fromDUT,$toDUT) 1
+            }
+    
+            if {[regexp -nocase "$chassis" $DUTs_info(DUT${dutNumber},platform)]} {
+                if {$dutNumber == "$DUTNum"} {
+                    lappend portsUsed [GetATrunkPort $fromDUT $toDUT $trunkLinkCount($fromDUT,$toDUT)]
+                    lappend slotsUsed [lindex [split [GetATrunkPort $fromDUT $toDUT $trunkLinkCount($fromDUT,$toDUT)] :] 0]
+                }
+            } else {
+                if {$dutNumber == "$DUTNum"} {
+                    set stackable 1
+                    lappend portsUsed [GetATrunkPort $fromDUT $toDUT $trunkLinkCount($fromDUT,$toDUT)]
+                }
+            }
+        }
+    }
+    #
+    # Pick the unused port
+    #
+    set portCount 0
+    if {!$stackable} {
+        # This is a chassis... Pick the first used slot to search for an unused port
+        set mySlot [lindex $slotsUsed 0]
+        for {set i 1} {$i<20} {incr i} {
+            if {[lsearch $portsUsed ${mySlot}:$i] < 0} {
+                incr portCount
+                if {$portCount == $MatchCount} {
+                    result_debug "Found the $portCount Unused Port: ${mySlot}:$i";
+                    return ${mySlot}:$i;
+                }
+            }
+        }
+    } else {
+        for {set i 1} {$i<20} {incr i} {
+            if {[lsearch $portsUsed $i] < 0} {
+                incr portCount
+                if {$portCount == $MatchCount} {
+                    result_debug "Found the $portCount Unused Port: $i";
+                    return $i;
+                }
+            }
+        }
+    }
+    return 0;
+}
+# EY-06-17-2008: Added utility routines to check if functions have run and
+# completed successfully.
+proc ProcStarts {} {
+    global proc_info;
+
+    set procName [lindex [info level -1] 0];
+    if {[info exists proc_info($procName,called)]} {
+        incr proc_info($procName,called);
+    } else {
+        set proc_info($procName,called) 1;
+    }
+}
+
+proc ProcHasRun {procName numTimes} {
+    global proc_info;
+
+    if {[info exists proc_info($procName,finished)]} {
+        return [expr $proc_info($procName,finished) >= $numTimes];
+    } else {
+        return 0;
+    }
+}
+
+proc ProcFinished {} {
+    global proc_info;
+
+    set procName [lindex [info level -1] 0];
+    if {[info exists proc_info($procName,called)]} {
+        if {[info exists proc_info($procName,finished)]} {
+            incr proc_info($procName,finished);
+        } else {
+            set proc_info($procName,finished) 1;
+        }
+    }
+}
+
+proc ProcName {} {
+    return [lindex [info level -1] 0];
+}
+##################################################################
+# Procedure Name: CheckVirtualRouterFeatureSupported
+# Description: If DUT does not support Virtual RouterFeature   
+#              exit the test.
+#
+#
+# Input args: - DUT
+# Output args: none
+# Return value: return
+# Typical usage:
+# to skip a test if DUT1 does not support virtual router use like below
+#       CheckVirtualRouterFeatureSupported 1 "test"
+# to skip a module if DUT1 does not support virtual router use like below
+#       CheckVirtualRouterFeatureSupported 1 "module"
+# to skip a test if DUT 1,2,3 does not support virtual router use like below
+#       CheckVirtualRouterFeatureSupported "1 2 3" "test"
+# to skip a module if DUT 1,2,3 does not support virtual router use like below
+#       CheckVirtualRouterFeatureSupported "1 2 3" "module"
+# Category: Utility
+#####################################################
+proc CheckVirtualRouterFeatureSupported {
+        {dutList "1"}
+        {skipFlag "test"}
+        {testNo ""}
+        {time1 ""}
+        {portType "none"}
+        {ixiaPortIds "1"}
+        {trunkPortIds {"1 2 1"}}
+    } {
+
+    global vrSysTypes MAIN
+    global DUTs_info
+    global trunkPortList
+    global portMappingList
+    global bd8kChassis;
+
+    # - Verify testNo and time1
+    if {$testNo == "" && [info exists MAIN(CURRENTTESTCASE)]} {
+        set testNo $MAIN(CURRENTTESTCASE)
+    }
+    if {$time1 == "" && [info exists MAIN(APPROXTIME1)]} {
+        set time1 $MAIN(APPROXTIME1)
+    } else {
+        set time1 [clock seconds]
+    }
+
+    regsub -all {,} $dutList { } dutMapList
+    set flag "supported"
+    for {set j 0} {$j < [llength $dutMapList]} {incr j 1} {
+        set dut [lindex $dutMapList $j]
+        set tPlatform $DUTs_info(DUT${dut},sysType)
+        result_debug "DUT$dut platform is $tPlatform"
+        if {[regexp -nocase $vrSysTypes $DUTs_info(DUT${dut},sysType)]} {
+            if {($flag == "supported" ) && \
+                ([regexp -nocase $bd8kChassis $DUTs_info(DUT${dut},sysType)])} {
+                if {$portType == "none"} {
+                    puts "BD8K portType set to none. Set not supported"
+                    set flag "non_supported"
+                } elseif {![CheckPortOnAspenC-seriesIO $skipFlag $testNo $time1 $portType $ixiaPortIds $trunkPortIds] } {
+                    puts "BD8K CheckPortOnAspenC-seriesIO returned set not supported"
+                    set flag "non_supported"
+                }
+            }
+            global DUT${dut}_Stacking_msma_slot
+            if {[info exists DUT${dut}_Stacking_msma_slot] && [set DUT${dut}_Stacking_msma_slot] > 0 &&
+                    ![regexp -nocase "vpex" $DUTs_info(DUT${dut},sysType)]} {
+                 set stkStat 0
+                 foreach stackSlotSysType $DUTs_info(DUT${dut},hwList) {
+                    if {$stackSlotSysType == "Empty"} {continue;}
+                    if {![regexp -nocase "$vrSysTypes" $stackSlotSysType]} {
+                        result_skip "Slot ($stackSlotSysType) Does Not Support Virtual Router in DUT $dut Stack"
+                        set flag "non_supported"
+                    } else {
+                        incr stkStat
+                    }
+                 }
+                 if {$stkStat>0 && $flag == "supported"} {
+                     puts "Stack verified $stkStat slots supporting Virtual Routing"
+                 }
+            }
+        } else {
+            set flag "non_supported"
+        }
+        if { $flag == "non_supported" } {
+            result_debug "Skipped Test: DUT $dut Hardware Does Not Support Virtual Router"
+            report_start_test "Skipped Test: DUT $dut Hardware Does Not Support Virtual Router"
+            result_skip "Skipped Test: DUT $dut Hardware Does Not Support Virtual Router"
+            report_end_test
+            set time2 [clock seconds]
+            result_p "Time for $testNo = [expr $time2-$time1] secs\n\n"
+            close_result_file
+            report_end_test
+            if {[regexp -nocase "module" $skipFlag]} {
+                return -code return testSkipped
+            } else {
+                return -code return 0 
+            }
+        }
+    }; # for
+    return 1;
+}; # CheckVirtualRouterFeatureSupported
+
+##################################################################
+# Procedure Name: CheckPortOnAspenC-seriesIO 
+# Description:  return 1  if port is on C series of aspen IO else 0 
+#
+# Input args: - type, dut, portId trunkList testno time1 
+# Output args: none
+# Typical usage:
+# CheckPortOnAspenC-seriesIO "test" "1.init" $time1 "both" "1-2" "1 2 1"
+# Category: Utility
+##################################################################
+proc CheckPortOnAspenC-seriesIO {{skipFlag "test"} { testNo "" } { time1 "" } {portType "both"} {portID "1"} {trunkList {"1 2 1"}} } {
+   global DUTs_info
+   set exitTests 0;
+   if {$portType == "port"} {
+      if {![CheckIxiaPortOnAspenC-seriesIO $portID]} {
+         set exitTests 1;
+      }
+   } elseif {$portType == "trunk"} {
+      if {![CheckTrunkPortOnAspenC-seriesIO $trunkList]} {
+         set exitTests 1;
+      }
+   } elseif {$portType == "skip"} {
+      result_debug "port check skipped for aspen"
+   } else {
+      if {![CheckIxiaPortOnAspenC-seriesIO $portID] || ![CheckTrunkPortOnAspenC-seriesIO $trunkList]} {
+         set exitTests 1;
+      }
+   }
+   if {$exitTests} {
+        result_debug "Skipped Test: Aspen Hardware Does Not Support Virtual Router on Non C series of IO"
+        result_skip "Skipped Test: Aspen Hardware Does Not Support Virtual Router on Non C series of IO"
+        return 0 
+   } else {
+        return 1 
+   }
+}
+
+##################################################################
+# Procedure Name: CheckIxiaPortOnAspenC-seriesIO 
+# Description: Return a 1 if all port IDs are on aspen C series of IO 
+#
+#
+# Input args: - delimited portID range
+# Output args: none
+# Return value: 1 if all CheckIxiaPortOnAspenC-seriesIO, 0 if not
+# Typical usage:
+#       CheckIxiaPortOnAspenC-seriesIO 1-2;
+# Category: Utility
+##################################################################
+proc CheckIxiaPortOnAspenC-seriesIO {{idList "1"}} {
+   global PortID_Info
+   set ok 1
+   set idRange [split $idList -];
+   set rangeLow [lindex $idRange 0];
+     if {[llength $idRange] > 1} {
+      set rangeHigh [lindex $idRange 1]
+      for {set x $rangeLow} {$x<=$rangeHigh} {incr x} {
+         if {![CheckPortId5Thru8] && $x > 4 && $x < 9} {
+            continue;
+         }
+         if {$PortID_Info($x,BcomType) != "Firebolt2"} {
+            result_debug "PortID_Info $x = $PortID_Info($x,BcomType)"
+            set ok 0;
+            break;
+         }
+      }
+   } else {
+      foreach id $idList {
+         if {![CheckPortId5Thru8] && $id > 4 && $id < 9} {
+            continue;
+         }
+         if {$PortID_Info($id,BcomType) != "Firebolt2"} {
+            result_debug "PortID_Info $id = $PortID_Info($id,BcomType)"
+            set ok 0;
+            break;
+         }
+      }
+   }
+   if {$ok} {
+      result_debug "Given ixia Ports are on aspen C series IO Passed"
+   }  else {
+      result_debug "Some Given ixia Ports are NOT on aspen C series IO"
+   }
+   return $ok
+}
+
+##################################################################
+# Procedure Name: CheckTrunkPortOnAspenC-seriesIO 
+# Description: Return a 1 if the trunk port is on aspen C series IO.
+#
+# Input args: - trunk string "1 2 1"
+# Output args: none
+# Return value: 1 if trunk  port is on aspen C series IO, 0 if not
+# Typical usage:
+#       CheckTrunkPortOnAspenC-seriesIO "1 2 1";
+# Category: Utility
+##################################################################
+proc CheckTrunkPortOnAspenC-seriesIO {{trunkList {"1 2 1"}}} {
+   global Trunk_Info
+
+   set ok 1
+   foreach trunk $trunkList {
+      set tMap Map[join $trunk ""];
+      if {$Trunk_Info($tMap,BcomType) != "Firebolt2"} {
+         result_debug "Trunk_Info $tMap = $Trunk_Info($tMap,BcomGen)"
+         set ok 0;
+            break;
+      }
+ }
+   if {$ok} {
+      result_debug "Given Trunk ports are on aspen C series of IO"
+   }  else {
+      result_debug "Some Given Trunk Ports are NOT on aspen C series IO"
+   }
+   return $ok
+}
+
+##################################################################
+# Procedure Name: tftpTest
+# Description: Return "ok" if tftp connectivity test
+#              passes - otherwises returns "error"
+#
+# Input args: none
+# Output args: none
+# Return value: "ok" if tftp connectivity test
+#                passes - otherwises returns "error"
+# Typical usage:
+#       tftpTest
+# Category: Utility
+##################################################################
+proc tftpTest {} {
+
+  global tftpServerList, tftpServerLogin, tftpServerPasswd, tftpServerTftpboot
+  global whichDutNow
+  global DUT1_CONNECT
+  global curAutoRoot
+
+  ################################################
+  set subTest "Checking tftp connectivity of DUT$whichDutNow"
+  ################################################
+  result_h2 "$subTest"
+  report_start_test "$subTest"
+
+  set curAR $curAutoRoot
+  set comm_path [append curAR "/main/cfg/common.cfg"]
+  puts "comm_path $comm_path"
+
+  if [catch {source $comm_path} rea] {
+      puts "*** WARNING: Unable to source common.cfg:$rea............... ***"
+      puts "*** WARNING: Application level variables may not be defined. ***"
+      return "error"
+  }
+
+  set TFTPServerIP [lindex $tftpServerList 0]
+  set pid [pid]
+  set tStartTime [clock seconds]
+  set fd_out [open "Tmp/tftptest_$pid$tStartTime" "w"];
+  puts $fd_out "tftp test"
+  close $fd_out
+  set testFilePath "Tmp/tftptest_$pid$tStartTime"
+  set fd_out [open "Tmp/tftptestcmd_$pid$tStartTime" "w"];
+  puts $fd_out "timeout 5"
+  puts $fd_out "put $testFilePath tftptest_$pid$tStartTime"
+  puts $fd_out "quit"
+  close $fd_out
+  puts "Putting $testFilePath onto tftp Server $TFTPServerIP"
+  if {[catch {exec /usr/bin/tftp $TFTPServerIP < ./Tmp/tftptestcmd_$pid$tStartTime} reason]} {
+    puts "error: $reason"
+    return "error"
+  }
+  file delete ./Tmp/tftptest_$pid$tStartTime
+  file delete ./Tmp/tftptestcmd_$pid$tStartTime
+
+  ConfigGatewayNetwork
+  SendACmd "ping vr [GetVrString $whichDutNow] $TFTPServerIP"
+  SendACmd "tftp $TFTPServerIP -v [GetVrString $whichDutNow] \
+                -g -l tftptest_$pid$tStartTime -r tftptest_$pid$tStartTime"
+
+  set out [SendACmd "ls"]
+  if {[regexp -nocase ".*tftptest_$pid$tStartTime.*" $out]} {
+    set rslt "ok"
+    result_ok "tftptest_$pid$tStartTime found on DUT$whichDutNow"
+    SendACmd "rm tftptest_$pid$tStartTime"
+  } else {
+    set rslt "error"
+    result_error "tftptest_$pid$tStartTime not found on DUT$whichDutNow"
+  }
+  # Verify that the default.xsf is on the switch
+  set out [SendACmd "ls"]
+  if {[regexp -nocase ".*default.*" $out]} {
+      result_ok "default.xsf found on DUT$whichDutNow"
+  } else {
+      result_debug "default.xsf is missing.  Tftp it from the server"
+      SendACmd "tftp $TFTPServerIP -v [GetVrString $whichDutNow] \
+                -g -l default.xsf -r default_do_not_erase"
+      set out [SendACmd "ls"]
+      if {[regexp -nocase ".*default.*" $out]} {
+          set rslt "ok"
+          result_ok "default.xsf found on DUT$whichDutNow"
+      } else {
+          set rslt "error"
+          result_error "default.xsf not found on DUT$whichDutNow"
+      }
+  }
+
+  UnconfigGatewayNetwork
+
+  # Remove files from tftp before exit
+  login_linux $TFTPServerIP $tftpServerLogin $tftpServerPasswd
+  SendACmd "/bin/rm $tftpServerTftpboot/tftptest_$pid$tStartTime" NULL NULL true 1
+
+  report_end_test
+  return $rslt
+}
+
+proc CheckIOPullOutPullInSupported { {dutList "1"} {skipFlag "test"} { testNo "" } { time1 "" } } {
+
+    global chassis
+    global DUTs_info
+    regsub -all {,} $dutList { } dutMapList
+    set flag "supported"
+
+    for {set j 0} {$j < [llength $dutMapList]} {incr j 1} {
+        set dut [lindex $dutMapList $j]
+        result_debug "DUT$dut platform is $DUTs_info(DUT${dut},platform)"
+        if {([regexp -nocase $chassis $DUTs_info(DUT${dut},platform)] == 1) && (!([regexp -nocase "BD-128" $DUTs_info(DUT${dut},platform)] == 1)) && (!([regexp -nocase "stack" $DUTs_info(DUT${dut},platform)] == 1)) } {
+           #  result_debug "DUT $dut Hardware Support IO Pull-out and Pull-In"
+        } else {
+             set flag "non_supported"
+             result_debug "DUT $dut Hardware Does Not Support IO Pull-out and Pull-In"
+        } 
+    }
+    if { $flag == "non_supported" } {
+       result_debug "Skipped Test: One of DUT in given dutList Does Not Support IO Pull-out and Pull-In"
+       report_start_test "Skipped Test: One of DUT in given dutList Does Not Support IO Pull-out and Pull-In"
+       result_skip "Skipped Test: One of DUT in given dutList Does Not Support IO Pull-out and Pull-In"
+       report_end_test
+       
+       set time2 [clock seconds]
+       result_p "Time for $testNo = [expr $time2-$time1] secs\n\n"
+       close_result_file
+       report_end_test
+       
+       if {[regexp -nocase "module" $skipFlag]} {
+          return -code return testSkipped
+       } else {
+          return -code return 0
+       }
+
+    } else {
+         return 1;
+    }
+
+}
+
+proc SimulateIOPullOut { {dut "1"} {slotList "NULL"} } {
+
+    global pioneerPlatform
+    global DUTs_info DUT${dut}_CONNECT DUT${dut}_CONNECTB
+    
+    regsub -all {,} $slotList { } slotMapList 
+    
+    Login $DUTs_info(DUT$dut,connect) -masterCheck 0 -CheckOperational 0 
+    EnableDebugMode
+    if {([regexp -nocase "aspen|bd-88|XCM|BD-X8" $DUTs_info(DUT${dut},platform)] == 1) } {
+        for {set j 0} {$j < [llength $slotMapList]} {incr j 1} {
+            SendACmd "debug hal run platform remove_card [lindex $slotMapList $j]"
+        }
+        DisableDebugMode
+        if { [info exists DUT${dut}_CONNECTB] } {
+            Login [set DUT${dut}_CONNECTB] -masterCheck 0 -CheckOperational 0 
+            EnableDebugMode
+            for {set j 0} {$j < [llength $slotMapList]} {incr j 1} {
+                SendACmd "debug hal run platform remove_card [lindex $slotMapList $j]"
+            }
+            DisableDebugMode
+        }
+   } elseif {([regexp -nocase "$pioneerPlatform" $DUTs_info(DUT${dut},platform)] == 1) } {
+        for {set j 0} {$j < [llength $slotMapList]} {incr j 1} {
+            SendACmd "debug hal show device ucpipe hs_start [lindex $slotMapList $j]"
+        }
+        DisableDebugMode
+        if { [info exists DUT${dut}_CONNECTB] } {
+            Login [set DUT${dut}_CONNECTB] -masterCheck 0 -CheckOperational 0
+            EnableDebugMode
+            for {set j 0} {$j < [llength $slotMapList]} {incr j 1} {
+                SendACmd "debug hal show device ucpipe hs_start [lindex $slotMapList $j]"
+            }
+            DisableDebugMode
+        }
+   } elseif {([regexp -nocase "BD-10808|mariner" $DUTs_info(DUT${dut},platform)] == 1) } {
+        set slotMask 65535 
+        for {set j 0} {$j < [llength $slotMapList]} {incr j 1} {
+            set slotNo  [lindex $slotMapList $j]
+            set slotMask [expr {$slotMask ^ 1 << $slotNo}]
+        }
+        #convert the decimal value into hex
+        set slotMaskInHex [format %x $slotMask]
+        SendACmd "debug hal configure cardPresentMask 0x$slotMaskInHex"
+        DisableDebugMode
+   }
+}
+
+proc SimulateIOPullIn { {dut "1"} {slotList ""} } {
+
+    global pioneerPlatform
+    global DUTs_info DUT${dut}_CONNECT DUT${dut}_CONNECTB
+    
+    regsub -all {,} $slotList { } slotMapList 
+    
+    Login $DUTs_info(DUT$dut,connect) -masterCheck 0 -CheckOperational 0 
+    EnableDebugMode
+    if {([regexp -nocase "aspen|bd-88|XCM|BD-X8" $DUTs_info(DUT${dut},platform)] == 1) } {
+        for {set j 0} {$j < [llength $slotMapList]} {incr j 1} {
+            SendACmd "debug hal run platform insert_card [lindex $slotMapList $j]"
+        } 
+        DisableDebugMode
+        if { [info exists DUT${dut}_CONNECTB] } {
+            Login [set DUT${dut}_CONNECTB] -masterCheck 0 -CheckOperational 0
+            EnableDebugMode
+            for {set j 0} {$j < [llength $slotMapList]} {incr j 1} {
+                SendACmd "debug hal run platform insert_card [lindex $slotMapList $j]"
+            }
+            DisableDebugMode
+        }
+   } elseif {([regexp -nocase "$pioneerPlatform" $DUTs_info(DUT${dut},platform)] == 1) } {
+        for {set j 0} {$j < [llength $slotMapList]} {incr j 1} {
+            SendACmd "debug hal show device ucpipe hs_stop [lindex $slotMapList $j]\r\r"
+        }
+        DisableDebugMode
+        if { [info exists DUT${dut}_CONNECTB] } {
+            Login [set DUT${dut}_CONNECTB] -masterCheck 0 -CheckOperational 0
+            EnableDebugMode
+            for {set j 0} {$j < [llength $slotMapList]} {incr j 1} {
+                SendACmd "debug hal show device ucpipe hs_stop [lindex $slotMapList $j]\r\r"
+            }
+            DisableDebugMode
+        }
+   } elseif {([regexp -nocase "BD-10808|mariner" $DUTs_info(DUT${dut},platform)] == 1) } {
+        SendACmd "debug hal configure cardPresentMask 0xffff"
+        DisableDebugMode
+   }
+}
+
+proc CheckCablePullOutPullInSupported { {dutList "1"} {skipFlag "test"} { testNo "" } { time1 "" } } {
+
+    global bcmPlatform 
+    global DUTs_info
+    regsub -all {,} $dutList { } dutMapList
+    set flag "supported"
+
+    for {set j 0} {$j < [llength $dutMapList]} {incr j 1} {
+        set dut [lindex $dutMapList $j]
+        if {([regexp -nocase $bcmPlatform $DUTs_info(DUT${dut},platform)] == 1) } {
+             set flag "non_supported"
+             result_debug "DUT $dut Hardware does not support Cable Pull-out and Pull-In"
+        } 
+    }
+    if { $flag == "non_supported" } {
+       result_debug "Skipped Test: One of DUT in given dutList Does Not Support Cable Pull-out and Pull-In"
+       report_start_test "Skipped Test: One of DUT in given dutList Does Not Support Cable Pull-out and Pull-In"
+       result_skip "Skipped Test: One of DUT in given dutList Does Not Support Cable Pull-out and Pull-In"
+       report_end_test
+       
+       set time2 [clock seconds]
+       result_p "Time for $testNo = [expr $time2-$time1] secs\n\n"
+       close_result_file
+       report_end_test
+       if {[regexp -nocase "module" $skipFlag]} {
+          return -code return testSkipped
+       } else {
+          return -code return 0
+       }
+    } else {
+         return 1;
+    }
+
+}
+
+
+proc SimulateCablePullOut { {dut "1"} {portList ""} } {
+
+    global gnssPlatform pioneerPlatform
+    global DUTs_info
+    
+    regsub -all {,} $portList { } portMapList
+    
+    Login $DUTs_info(DUT$dut,connect) -masterCheck 0 -CheckOperational 0 
+    EnableDebugMode
+    if {([regexp -nocase $gnssPlatform $DUTs_info(DUT${dut},platform)] == 1) } {
+        for {set j 0} {$j < [llength $portMapList]} {incr j 1} {
+            SendACmd "debug hal configure port [lindex $portMapList $j] linkdown"
+        }
+    } elseif {([regexp -nocase $pioneerPlatform $DUTs_info(DUT${dut},platform)] == 1) } {
+        for {set j 0} {$j < [llength $portMapList]} {incr j 1} {
+            set slotNo [lindex [split [lindex $portMapList $j] :] 0]
+            set portNo [lindex [split [lindex $portMapList $j] :] 1]
+            SendACmd "debug hal show device packet-processor shutofflink $slotNo $portNo"
+        }
+    }
+    DisableDebugMode
+}
+
+proc SimulateCablePullIn { {dut "1"} {portList ""} } {
+
+    global gnssPlatform pioneerPlatform
+    global DUTs_info
+    
+    regsub -all {,} $portList { } portMapList
+    
+    Login $DUTs_info(DUT$dut,connect) -masterCheck 0 -CheckOperational 0 
+    EnableDebugMode
+    if {([regexp -nocase $gnssPlatform $DUTs_info(DUT${dut},platform)] == 1) } {
+        for {set j 0} {$j < [llength $portMapList]} {incr j 1} {
+             SendACmd "debug hal configure port [lindex $portMapList $j] linkup"
+             SendACmd "disable port [lindex $portMapList $j]"
+             SendACmd "enable port [lindex $portMapList $j]"
+        }
+    } elseif {([regexp -nocase $pioneerPlatform $DUTs_info(DUT${dut},platform)] == 1) } {
+         for {set j 0} {$j < [llength $portMapList]} {incr j 1} {
+              set slotNo [lindex [split [lindex $portMapList $j] :] 0]
+              set portNo [lindex [split [lindex $portMapList $j] :] 1]
+              SendACmd "debug hal show device packet-processor enablelink $slotNo $portNo"
+         }
+     }
+    DisableDebugMode
+}
+proc EnableWatchDogTimeoutDumpStack { {wdType "dump_stack"} } {
+    global DUTs_info
+    global numDUT
+    for {set dut 1} {$dut <= $numDUT} {incr dut} {
+      global DUT${dut}_CONNECT
+      global DUT${dut}_CONNECTB
+
+      Login [set DUT${dut}_CONNECT] -masterCheck 0 -CheckOperational 0
+      EnableDebugMode
+      SendACmd "!echo $wdType > /sys/module/watchdog/parameters/watchdog_warn_behavior"
+      DisableDebugMode
+      if { [info exists DUT${dut}_CONNECTB] } {
+            Login [set DUT${dut}_CONNECTB] -masterCheck 0 -CheckOperational 0
+            EnableDebugMode
+            SendACmd "!echo dump_stack > /sys/module/watchdog/parameters/watchdog_warn_behavior"
+            DisableDebugMode
+      }
+    } 
+}
+proc dumpStackUtilizationInfo { } {
+    global DUTs_info
+    global numDUT
+    global currentTestIndex
+    global currentTestNumber
+    if { [info exists DUTs_info] && [info exists numDUT] && [info exists currentTestIndex] && [info exists currentTestNumber]} {
+    if { $currentTestIndex > 2 } {
+        for {set dut 1} {$dut <= $numDUT} {incr dut} {
+          global DUT${dut}_CONNECT
+          global DUT${dut}_CONNECTB
+
+          Login [set DUT${dut}_CONNECT] -masterCheck 0 -CheckOperational 0
+          EnableDebugMode
+          SendACmd "!cat /proc/stack_util_info | grep '\*$'"
+          DisableDebugMode
+          if { [info exists DUT${dut}_CONNECTB] } {
+            Login [set DUT${dut}_CONNECTB] -masterCheck 0 -CheckOperational 0
+            EnableDebugMode
+            SendACmd "!cat /proc/stack_util_info | grep '\*$'"
+            DisableDebugMode
+          }
+        } 
+    }
+   }
+}
+
+################################################################################
+# Procedure Name: checkLinkSpeed
+# Description: Return  1 if speed of all the ports mentioned 
+#              in the portlist are equal to the speed mentioned
+#              in the input arg speed 
+#
+# Input args:  dutlist portlist speed
+# Output args: none
+# Return value: 1 if speed of all the ports mentioned in the
+#               portlist are equal to the speed mentioned in the
+#               input arg speed
+#        
+# Typical usage:
+#    checkLinkSpeed -dutlist "1 2" -portlist "{3 4} {8:1 14:1}" -speed 1000
+# Category: Utility
+##################################################################################
+
+proc checkLinkSpeed {args} {
+  parse_args checkLinkSpeed $args { 
+
+    dutlist "1"
+    portlist "1"
+    speed    "1000"
+
+}
+
+global DUTs_info
+
+set dutlistlen [llength $dutlist]
+set portlistlen [llength $portlist]
+
+   if {$dutlistlen != $portlistlen} {
+      result_error "Mismatch in inputs to the proc======== dutlist length not equal\
+                    to portlist length "
+      return 0
+
+    } else {
+
+      for {set i 0 } {$i < $dutlistlen } {incr i } {
+         set portlistelement [lindex $portlist $i]
+         set portlistelementlen [llength $portlistelement]
+       	 for {set j 0 } {$j < $portlistelementlen } {incr j} {
+            set val  [getDutPortSpeed  -dut [lindex $dutlist $i] -port [lindex $portlistelement $j]]
+                  if { $val == $speed} {
+                    continue  
+                  } else {
+                    return 0
+                  }
+
+         }            
+
+      }
+  } 
+return 1
+}  
+
+################################################################################
+# Procedure Name: checkSlotOperational
+# Description: Returns  1 if all the slots mentioned in the slotlist of a 
+#              given DUT become operational in 200 seconds.
+#             
+#             
+#
+# Input args:  dut slotList 
+# Output args: none
+# Return value: 1 if all the slots mentioned in the slotlist of a 
+#               given DUT are operational.               
+#              
+#        
+# Typical usage:
+#    checkSlotOperational -dut 1 -slotList "1 2" 
+# Category: Utility
+##################################################################################
+
+
+proc checkSlotOperational {args} {
+   parse_args checkSlotOperational $args {
+            dut "1"
+            slotList "1"
+
+   }
+
+ 
+    global DUTs_info
+    if { ![info exist DUTs_info(DUT${dut},connect)] } {
+         result_error "checkSlotOperational: Dut $dut doesn't exist"
+         return -1
+    }   
+
+    Login [set DUTs_info(DUT${dut},connect)]
+    set parameterList ""
+    lappend parameterList "{State:} {Operational} inLine exists"
+    
+
+    foreach slot $slotList {
+        if { [CheckKeyValue "show slot $slot" \
+             $parameterList  -time {s: 51 i: 5  d: 200 f: 400 r}] != "ok" } {
+             return 1
+        } else {
+             result_error "Slot $slot failed to become operational in  200 seconds"
+             return -1
+        }
+           
+   }   
+  
+
+}
+
+
+###############################################################################
+# pauseScriptRun
+#
+# Description:
+#   Prints the comment to the screen, and pauses for a user to hit return.
+#   Can use this proc to put pauses in scripts during developement to
+#   perform manual action like card swap/pull out etc.
+#
+#   The global variable globalPause set to 0 will cause this proc to do
+#   nothing.  You would want to set it to 0 not hit these pauses.
+#   Set it to 1 for pause.
+#
+# Input args: comment
+# Output args: None
+# Return value: None
+#
+#
+# Typical usage:
+#     pauseScriptRun -comment "Pausing here for card swap"
+#     pauseScriptRun
+#
+# Category: Utility
+#   Examples: Same as typical usage   
+#
+#   Limitations: None
+#
+###############################################################################
+
+proc pauseScriptRun {args} {
+   parse_args pauseScriptRun $args {
+        comment "NULL"                 
+   }
+   
+   global globalPause
+   fconfigure stdin -blocking 1
+
+   if {$globalPause} {
+      result_debug "##### SCRIPT PAUSED PRESS ENTER TO CONTINUE #####"
+      if {$comment != "NULL"} {
+         result_debug "##### $comment #####"
+      }
+      gets stdin z
+   }
+}
+
+
+###############################################################################
+# Procedure name: any
+#
+# Description: Evaulate a predicate over every element in a list.  Iteration
+#   over the list stops as soon as the predicate evaluates true.
+#
+# Input args:
+#               pred    The predicate to be evaluated.  It can either be the
+#                       name of a TCL procedure, or it can be a TCL lambda.
+#                       In either case, the predicate takes one argument, an
+#                       element from the list, evaluates it, and then returns
+#                       either a non-zero true value, or a zero false value.
+#               lst     The list of elements to iterate over.
+#
+# Output args:
+#               None
+# Return value:
+#               0       If the predicate evaluates to 0 for all elements in
+#                       the list.
+#               1       If the predicate evaluates to 1 for any single
+#                       list element.
+#
+# Typical usage:
+#               # Check for any odd numbers using a named TCL procedure.
+#               proc isOdd {n} {expr $n % 2 == 1};
+#               set numList [list 2 4 5 6 8];
+#               set result [any isOdd $numList];
+#               ## $result will be 1.
+#
+#               # Check for any even numbers using a lambda.
+#               set result [any {n {expr $n % 2 == 0}} [list 1 3 5 7]];
+#               ## $result will be 0.
+#
+# Category: Utility
+###############################################################################
+proc any {pred lst} {
+    #
+    # Determine if predicate, pred, is a named TCL procedure or a lambda
+    # function.
+    set p [expr {[llength $pred] == 1 ? [list $pred] : [list apply $pred]}];
+
+    #
+    # Iterate over the list and evaluate the predicate for each element.
+    # If the predicate evaluates true, quit right away.
+    foreach e $lst {
+        #
+        # concat is needed in the case of a lambda to unpack the apply
+        # command from the $p string.
+        if {[eval [concat $p $e]]} {
+            return 1;
+        }
+    }
+    return 0;
+};
+
+#############################################################################################
+# checkCustomAlgorithmSupported
+#
+# Description:
+#      Checks whether the platform supports load sharing custom algorithm and skips the
+#   test case if the platform doesn't support custom algorithm
+#
+#
+# Input args: dutNum
+# Output args: portNum
+#
+#
+# Typical Usage:
+#  checkLacpCustomAlgorithmSupported -dutNum 1 -portNum 2
+#
+############################################################################################
+proc  checkLacpCustomAlgorithmSupported {args} {
+
+       parse_args checkLacpCustomAlgorithmSupported $args {
+
+            dutNum "1"
+            portNum "2"
+            testNo "6.1.7"
+            time1  "30"
+
+       }
+
+global bcmChassis
+global bcmx440
+global bcmx430
+
+lappend notSupportedList "$bcmx440|$bcmx430"
+
+set platform [GetPlatform DUT$dutNum]
+
+       if {[regexp -nocase $platform $bcmChassis]} {
+                 set hwType [GetSlotType $dutNum $portNum]
+                 if {[regexp -nocase $hwType $notSupportedList]} {
+
+                      result_skip "Custom algorithm Not supported on this platform"
+                      set time2 [clock seconds]
+                      result_p "Time for $testNo = [expr $time2-$time1] secs"
+                      close_result_file
+                      report_end_test
+                      return -code return
+                 }
+      } else {
+           if {[regexp -nocase $platform $notSupportedList]} {
+
+              result_skip "Custom algorithm Not supported on this platform"
+              set time2 [clock seconds]
+              result_p "Time for $testNo = [expr $time2-$time1] secs"
+              close_result_file
+              report_end_test
+              return -code return
+           }
+
+      }
+
+}
+
+
+###############################################################################
+# Procedure name: xmap
+#
+# Description: Evaulate a function over every element in a list and return a
+#     list of results.
+#
+# Input args:
+#               f       The function to be evaluated.  It can either be the
+#                       name of a TCL procedure, or it can be a TCL lambda.
+#                       In either case, the function takes one argument, an
+#                       element from the list, evaluates it, and then returns
+#                       some value.
+#               l       The list of elements to iterate over.
+#
+# Output args:
+#               None
+#
+# Return value:
+#               A TCL list containing the results of applying the function f
+#               to every element in list l.
+#
+# Typical usage:
+#               # Add "ly" to every word.
+#               proc ly {w} {return "${w}ly";}
+#               set words [xmap ly [list slow quick dark distracting]];
+#               ## $words will be "slowly quickly darkly distractingly"
+#
+#               # Square the numbers in a list.
+#               set nums [xmap {n (expr $n * $n}} [list 1 2 3 4 5]];
+#               ## $nums will be "1 4 9 16 25"
+#
+# Category: Utility
+###############################################################################
+proc xmap {f l} {
+    #
+    # Determine if function, f, is a named TCL procedure or a lambda
+    # function.
+    set cmd [expr {[llength $f] == 1 ? [list $f] : [list apply $f]}];
+
+    #
+    # Iterate over every element in the list, applying f to each one.
+    # Build a list of results in the process.
+    foreach e $l {
+        #
+        # concat is needed in the case of a lambda to unpack the apply
+        # command from the $cmd string.
+        lappend rl [eval [concat $cmd $e]];
+    }
+
+    return $rl;
+};
+
+
+###############################################################################
+# Procedure name: expandPortRange
+#
+# Description:
+#     Expand a "-" separated range of port values into a full list of values.
+#
+# Input args:
+#     pr    A range of port values specified as <port>-<port>.  <port> can
+#           be a simple port number, or a colon-separated slot-port pair,
+#           e.g. 3:5.  When specifying slot:port pairs, the slot: for the
+#           second port in the range may be omitted, and, if so, will be set
+#           to the same slot as the first port, i.e. 7:8-10 is equivalent to
+#           7:8-7:10.  Note that this function currently does not support
+#           inter-slot ranges, e.g. 7:20-8:10 is invalid and will raise an
+#           error.
+#
+# Output args:
+#     None
+#
+# Return value:
+#     A TCL list containing all values between, and including, the end-points
+#     in the range.
+#
+# Typical usage:
+#     set pl [expandPortRange 7-10];
+#     # $pl will be "7 8 9 10"
+#
+#     set pl [expandPortRange 8:12-6];
+#     # $pl will be "8:6 8:7 8:8 8:9 8:10 8:11 8:12"
+#
+# Category: Utility
+###############################################################################
+proc expandPortRange {pr} {
+    #
+    # Notes on the regexp pattern:
+    #   1. (x) groups and captures.
+    #   2. (?:x) groups but does not capture.
+    #   3. \d is a short-cut for [0-9].
+    #   4. \d+ is a positive decimal number.
+    # slotPort will match either a port number or a slot:port pair.
+    # It will capture the entire slot:port pair, the slot, and the port.
+    set slotPort {((?:(\d+):)?(\d+))};
+
+    #
+    # The pattern to match a range is a slotPort pattern followed by an
+    # optional "-" and second slotPort pattern.
+    set pat "${slotPort}(?:-${slotPort})?";
+    
+    #
+    # Capture variables:
+    #   m   The matched string, if there is a match.
+    #   sp1 The first slot:port (or port) in the range.
+    #   s1  The first slot in the range.
+    #   p2  The first port in the range.
+    #   sp2 The second slot:port (or port) in the range.
+    #   s2  The second slot in the range.
+    #   p2  The second port in the range.
+    regexp -- $pat $pr m sp1 s1 p1 sp2 s2 p2;
+
+    #
+    # Bail out if th pattern doesn't match.
+    if {![info exists m] || $m == ""} {
+        error "[ProcName]: Invalid port range, \"$pr\" specified.";
+    }
+
+    #
+    # Range has no second part, so just return the first (single) port.
+    if {$sp2 == ""} {
+        return $sp1;
+    }
+
+    #
+    # Support for inter-slot ranges would require expanding the slot range,
+    # identifying the module type in each slot, and then looking up the
+    # maximum number of ports for each module.  Bail for now.
+    if {$s1 != "" && $s2 != "" && $s1 != $s2} {
+        error "[ProcName]: Inter-slot ranges are currently unsupported.";
+    }
+
+    #
+    # Be friendly and swap the port range if it's reversed.
+    if {$p1 > $p2} {
+        set tmp $p1;
+        set p1 $p2;
+        set p2 $tmp;
+    }
+
+    #
+    # Since slot numbers are guaranteed to be the same (see above), prefix
+    # each port in the range with the slot number and a ":", but only if
+    # the port numbers are in slot:port format.
+    set pfx [expr {$s1 != "" ? "$s1:" : ""}];
+
+    for {set i $p1} {$i <= $p2} {incr i} {
+        lappend pl ${pfx}$i;
+    }
+
+    return $pl;
+}; # proc expandPortRange
+
+
+###############################################################################
+# Procedure name: AssertPortState
+#
+# Description:
+#     Verify if the specified list of ports have transitioned into the
+#     specified link state.
+#
+# Input args:
+#     portList  A list of ports on the DUT to be verified.  The list can be
+#               a normal, space-separated, TCL list, or a commna-separated
+#               list.  Each element in the list can be either an individual
+#               port, or a hyphen-separated port range.
+#     DITId     Specifies which DUT on which the ports to verify reside.
+#               If not specified, it defaults to DUT 1.
+#     state     The link state to check for.  It can be either "up" or
+#               "down".  If not specified, it defaults to "up".
+#     -time     Specifies a set of timing parameters to control how often
+#               the procedure checks the link state and how long until the
+#               procedure should give up and declare a failure.  The time
+#               parameters are the same as those for the CheckKeyValue
+#               procedure.  If not specified, the default is an initial
+#               wait time of 0, an interval of 2 seconds, and a failure time
+#               of 10 seconds.
+#
+# Output args:
+#     None
+#
+# Return value:
+#     badPortList   An empty port list was specified.
+#     badDUTId      A non-integer DUT ID, or an ID less than 1 was specified.
+#     badLinkState  A link state other than "up" or "down" was specified.
+#     ok            The ports achieved the desired link state in the specified
+#                   time.
+#     error         The ports failed to achieve the desired linke state in
+#                   the specified time.
+#
+# Typical usage:
+#     # Check and wait for ports to link-up.
+#     set rc [AssertPortState "1 5-8 10"];
+#     if {$rc != "ok"} {
+#         result_error "Ports failed to link-up!  Reason: $rc";
+#     }
+#
+#     # Check and wait for ports to go link-down.
+#     set portList "3:4,5:10,6:3-9";
+#     Login $DUTs_info(DUT1,connect);
+#     SendACmd "disable ports $portList";
+#     set rc [AssertPortState $portList 1 down];
+#     if {$rc != "ok"} {
+#         result_error "Ports failed to link-down!  Reason: $rc";
+#     }
+#
+# Category: Verification
+###############################################################################
+proc AssertPortState {portList {DUTId 1} {state up} args} {
+    #
+    # Validate the portList.  expandPortRange will do further validation of
+    # the list elements.
+    if {$portList == ""} {
+        return "badPortList";
+    }
+
+    #
+    # Validate the DUTId.
+    if {![IsInteger $DUTId] || $DUTId < 1} {
+        return "badDUTId";
+    }
+
+    #
+    # Validate the state and set the link state string.
+    switch -- $state {
+        up      {set lnkStr A}
+        down    {set lnkStr R}
+        default {return "badLinkState"}
+    }
+
+    #
+    # Check for a time parameter record.
+    parse_args [ProcName] $args {
+        time "start: 0 interval: 2 dummy: 10 fail: 10"
+    }
+
+    #
+    # Turn comma-separated lists into space-separated TCL lists.
+    regsub -all -- , $portList " " pList;
+
+    #
+    # Map over the list and expand any port ranges into discrete port lists.
+    # Since a TCL list will be substituted for the port range, join is used
+    # to flatten out the list of lists.
+    set pList [join [xmap expandPortRange $pList]];
+
+    #
+    # Map over the port list to build the list of patterns for CheckKeyValue.
+    # In this case, an anonymous function, or lambda, is used.  For each port
+    # in the list, it just returns a string containing the pattern to search
+    # for.
+    set chkList [xmap "p {return \"{\$p *.* *\\\[DE\\\] *$lnkStr} exist\";}" $pList];
+
+    #
+    # Call CheckKeyValue and return.
+    return [CheckKeyValue "show ports $portList configuration no-refresh" \
+        $chkList -dut $DUTId -time $time -comment "for link state $lnkStr."];
+}; # proc AssertPortState
+##################################################################
+# Procedure Name: BackupDefaultXsf
+#
+# Description: cp the default.xsf so that it can be restored
+#              at the end of a test case
+#
+# Input args:
+#              dutList - list of duts to backup
+# Output args:
+#              
+# Typical usage:
+#      BackupDefaultXsf "1"
+#
+# Category: Utility
+##################################################################
+proc BackupDefaultXsf {dutList} {
+    foreach d $dutList {
+        result_debug "\nMake a backup of the default.xsf on DUT $d"
+        global DUT${d}_CONNECT
+        Login [set DUT${d}_CONNECT]
+        SendACmd "cp default.xsf default.backup"
+    }
+}
+##################################################################
+# Procedure Name: RestoreDefaultXsf
+#
+# Description: mv the default.bak to default.xsf
+#              BackupDefaultXsf is typically run prior
+#
+# Input args:
+#              dutList - list of duts to restore
+# Output args:
+#              
+# Typical usage:
+#      RestoreDefaultXsf "1"
+#
+# Category: Utility
+##################################################################
+proc RestoreDefaultXsf {dutList} {
+    foreach d $dutList {
+        result_debug "\nRestore the orginal default.xsf on DUT $d"
+        global DUT${d}_CONNECT
+        Login [set DUT${d}_CONNECT]
+        SendACmd "mv default.backup default.xsf"
+    }
+}

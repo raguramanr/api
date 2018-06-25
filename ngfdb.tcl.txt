@@ -1,0 +1,414 @@
+
+################################################################## 
+# Procedure Name: ngfdb_analysis
+#   
+# Description: This procedure is the main function that will try to gather
+#              all the information on the ngfdbDump table. It make sure all the 
+#              ipaddresses in the same bucket. In addition, it will build a random ipaddress
+#              list to store the replacement ipaddress. So later we can check if it replace the
+#              same ipaddress in the ngfdbdump table or not. 
+#
+# Input args:
+#              sIpList     - list of ip address
+#              flag        - To build the array list or not
+#              daMulticast - destination multicast ip address
+#              fd_res      - file descriptor
+#              testNo      - test case number
+#              DUT_C       - console ip address
+#              DUT_IP      - telnet ip address
+#                
+# Output args: none
+#
+# Typical usage: 
+#        ngfdb_analysis $ipList "over" $multicastIP $fd_res $testNo $DUT1_CONNECT $DUT1_IP
+#
+# Category: Utility
+################################################################## 
+proc ngfdb_analysis {sIpList flag daMulticast fd_res testNo DUT_C DUT_IP} {
+
+   global bItem
+   global bCount
+
+   # -- open a tmp file
+   set fd_in [open "Tmp/tmp_$testNo" "w+"]
+   set result "ok"
+   set date [clock format [clock seconds] -format "%m-%d-%Y %I.%M.%S%p"]
+   result_debug "*** date=$date"
+
+   # -- put the ngfdbDump table output to a file 
+   Login $DUT_C
+   SendACmd	"nofeep" $fd_res
+   SendACmd	"\n" $fd_res
+   SendACmd	"ngfdbDump" $fd_res $fd_in
+   SendACmd	"shswitch" $fd_res
+ 
+   # -- check for ip addresses
+   set count 0	;# number of sets of IP addresses to check
+   set bCount 0
+   foreach ipList $sIpList {
+      #result_debug "@@@ ipList=$ipList"
+      incr count 1
+      seek $fd_in 0
+      set rList {}	 ;# random list      
+      # -- loop throught the table for the ipaddresses
+      while {[gets $fd_in line] != -1} {
+         set inList [eSplit $line]
+         #result_debug "--- inList=$inList"
+	 set len [llength $inList]
+	 if { $len >= 13 } {
+             foreach ipAddr $ipList {
+                 #result_debug "--- ipAddr=$ipAddr"
+                 if { ([lindex $inList 1] == "IP") &&
+                      ([lindex $inList 2] == "SA") } {                      
+                     #result_debug "!!!!!!!! IP SA"                     
+                     if { [lindex $inList 9] == $ipAddr } {
+                         # -- store information about each ipaddress in an array
+                         set bCount [expr $bCount + 1]
+                         #result_debug "--- bCount=$bCount"
+	                 set bItem($bCount,saIp)   [lindex $inList 9]
+			 set bItem($bCount,fGroup) [lindex $inList 12]
+                         set tmp [lindex $inList 15]
+			 set bItem($bCount,nh)     [string range $tmp 0 3 ]
+			 set bItem($bCount,nhI)    [string range $tmp 5 end ]
+                         if {$flag == "over"} { 
+                             lappend rList [set bItem($bCount,saIp)] 
+                         }  
+		      }
+		  }   
+	      }
+	  }
+       }
+       #result_debug "@@@ bCount = $bCount  "
+       #for {set i 1} {$i<=$bCount} {incr i 1} {
+       #result_debug "bItem($i,saIp)  =[set bItem($i,saIp)]"
+       #result_debug "bItem($i,fGroup)=[set bItem($i,fGroup)]"
+       #result_debug "bItem($i,nh)    =[set bItem($i,nh)]"
+       #result_debug "bItem($i,nhI)   =[set bItem($i,nhI)]\n"
+       #}
+       # -- build the list of the replaced ip addresses
+       # -- so check_random can use it later
+       if {$flag == "over"} { buildRandomList $ipList $rList	}
+       # -- make sure they are in the same bucket
+       ngfdb_check_same_bucket
+       # -- make sure the next hop point to two groups and the index is from 0-3
+       ngfdb_check_next_hop $fd_in 
+       # -- flow group should be ffff
+       ngfdb_check_flow_group $daMulticast $fd_in 
+   }
+   close $fd_in
+}  
+
+################################################################## 
+# Procedure Name: ngfdb_check_same_bucket
+#   
+# Description: Make sure all the field belong to the same buckets.
+#              There are two buckets and the index is 0 to 3
+#
+# Input args: none
+#                
+# Output args: none
+#
+# Typical usage: 
+#        ngfdb_check_same_bucket
+#
+# Category: Utility
+################################################################## 
+proc ngfdb_check_same_bucket {} {
+
+   #result_debug "--- ngfdb_check_same_bucket"
+   global bItem
+   global bCount
+   set result "ok"
+   if { $bCount < 8 } {
+      # -- if less than 8, then there is a problem
+      set result "error_bCount8"
+   } else {
+      # -- sort them in two buckets
+      set bSaIp $bItem(1,saIp)
+      set bNh1 $bItem(1,nh)
+      set bucket1 {}
+      set bucket2 {}
+      for {set i 1} {$i<=$bCount} {incr i 1} {
+         set nh  [set bItem($i,nh)]
+         set nhI [set bItem($i,nhI)]
+         if { $nh == $bNh1 } {
+            lappend bucket1 $i
+	 } else {
+            #result_debug "--- i=$i, bCount=$bCount, bItem($bCount,nh)=[set bItem($bCount,nh)]"
+            set bNh2 [set bItem($i,nh)]
+            lappend bucket2 $i
+	 }
+      }
+      #result_debug "--- bucket1=$bucket1"
+      #result_debug "--- bucket2=$bucket2"
+
+      for {set j 1} {$j<=2} {incr j 1} {
+         if { ![info exists bNh$j]	} { 
+            result_error "bNh$j doesn't exist"
+            set result "error_bNh$j"
+            continue 
+         }
+	 set iList$j {}
+         foreach i [set bucket$j] {
+	    if { [set bItem($i,nh)] != [set bNh$j] } {
+	       result_error "[set bItem($i,saIp)] is not in the same bucket with others"
+	       set result "error_bucket"
+	    } else {
+	       lappend iList$j [set bItem($i,nhI)]
+	    }
+	 }
+         set tmpList [lsort [set iList$j]]
+         #result_debug "--- tmpList=$tmpList"
+	 if { $tmpList != {0 1 2 3} } {
+	    result_error "Bucket [set bNh$j] is not all right"
+	    set result "error_index"
+	 }
+      }
+   }
+   report_start_test "Bucket checking"
+   switch $result {
+      "ok" { result_ok "Bucket checking pass" }
+	  "error_bCount8" { result_error "Bucket checking failed. Less than 8 entries" }
+	  "error_bNh1" { result_error "Bucket checking failed. bNh1 not available" }
+	  "error_bNh2" { result_error "Bucket checking failed. bNh2 not available" }
+	  "error_bucket" { result_error "Bucket checking failed. Some entry is not in the same bucket" }
+	  "error_index" { result_error "Bucket checking failed. Bucket indexes not all right" }
+   }
+   report_end_test
+   return $result
+}
+
+################################################################## 
+# Procedure Name: buildRandomList
+#   
+# Description: Build the random list. So we can compare later
+#
+# Input args: 
+#              ipList : ip address list
+#              rList  : ip address list
+#                
+# Output args: none
+#
+# Typical usage: 
+#        buildRandomList $ipList $rList
+#
+# Category: Utility
+################################################################## 
+proc buildRandomList {ipList rList} {
+   upvar 2 randomList _randomList
+
+   result_debug "--- buildRandomList"
+   result_debug "****** _randomList=$_randomList"
+   result_debug "****** ipList=$ipList"
+   result_debug "****** rList=$rList"
+
+   # -- if less than 8 ipaddresses then it fail
+   set len [llength $rList]
+   if { $len < 8 } {
+       result_error "buildRandomList with less than 8 IP addresses"
+       return error
+   }
+   # -- find the replacement ipaddress and save it 
+   foreach item [lsort $ipList] {
+       set hit "false"
+       foreach r $rList {
+	     if { $item == $r } {
+	        set hit "true" 
+	        break 
+	     }
+       }
+       if { $hit == "false" } { lappend _randomList $item }
+   }
+   result_debug "****** _randomList=$_randomList"
+}
+
+################################################################## 
+# Procedure Name: check_random
+#   
+# Description: Make sure the ip addresses were replaced randomly
+#              that means the ipaddresses in randomlist is not all the same 
+#
+# Input args: 
+#              randomList : ip address list
+#                
+# Output args: none
+#
+# Typical usage: 
+#        check_random $randomList
+#
+# Category: Utility
+##################################################################
+proc check_random {randomList} {
+
+   result_debug "--- check_random"
+   set passCount 3
+   set count 0
+   set cValue ""
+   report_start_test "Check ngfdb replacement randomly"
+   # -- make sure the ipaddresses in the randonlist variable is not the same
+   foreach r [lsort $randomList] {
+      if { $cValue == "" } { set cValue $r }
+      if { $cValue == $r } {
+         incr count 1
+         # -- should not have too many ipaddresses the same
+         # -- based on variable passcount 
+         if { $count > $passCount } { 
+            result_error "Check random failed"
+            return "error" 
+         } 
+      } else {
+	     set cValue $r
+	     set count 0
+      }
+   }
+   result_ok "Check random passed"
+   report_end_test
+   return "ok"
+}
+
+################################################################## 
+# Procedure Name: ngfdb_check_next_hop
+#   
+# Description: Use the ngfdbdump table to map the ip address to the mac address 
+#              based on index pointer. 
+#
+# Input args:  none
+#                
+# Output args: none
+#
+# Typical usage: 
+#        ngfdb_check_next_hop $fd_in
+#
+# Category: Utility
+##################################################################       
+proc ngfdb_check_next_hop {fd_in} {
+
+   #result_debug "--- ngfdb_check_next_hop"
+   global bItem
+   global bCount
+   #result_debug "--- bCount=$bCount"
+   set result "ok"
+   for {set i 1} {$i<=$bCount} {incr i 1} {
+      set found "false"
+      # -- get next hop and index
+      set nh [set bItem($i,nh)]
+      set nhI [set bItem($i,nhI)]
+      #result_debug "--- nh=$nh"
+      #result_debug "--- nhI=$nhI"
+      # -- get the ipaddress and convert them to hex number
+      set ip [set bItem($i,saIp)]
+      set ipFList [split $ip .]
+      set ipF1 [lindex $ipFList 0]
+      set ipF2 [lindex $ipFList 1]
+      set ipF3 [lindex $ipFList 2]
+      set ipF4 [lindex $ipFList 3]
+      #result_debug "--- ip=$ip"
+      #result_debug "--- ipF1=$ipF1"  
+      #result_debug "--- ipF2=$ipF2"  
+      #result_debug "--- ipF3=$ipF3"  
+      #result_debug "--- ipF4=$ipF4\n"
+      seek $fd_in 0
+      # -- go throught the table 
+      while {[gets $fd_in line] != -1} {
+         set inList [eSplit $line]
+         set len [llength $inList]
+	 if { $len >= 9 } {
+	    if { ([lindex $inList 1] == "MAC") &&
+		 ([lindex $inList 2] == "NH") } {
+	       set tmp [lindex $inList 0]
+	       set aNh    [string range $tmp 0 4 ]
+	       set aNhI   [string range $tmp 6 end ]     
+               #result_debug "--- aNh=$aNh"
+               #result_debug "--- aNh=$aNhI"
+               # -- match the index
+	       if { ([string range $aNh 1 end ]== $nh) && ($aNhI == $nhI) } {
+                  set found "true"
+                  set mac [lindex $inList 9]
+                  #result_debug "--- mac=$mac  "
+	          set macFList [split $mac :]
+	          # -- convert to hex
+                  set xxx [expr "0x[lindex $macFList 2]"]
+                  #result_debug "--- xxx=$xxx"
+                  #result_debug "--- ipF1=$ipF1"
+                  if { ([expr "0x[lindex $macFList 2]"] == $ipF1) &&
+		       ([expr "0x[lindex $macFList 3]"] == $ipF2) &&
+		       ([expr "0x[lindex $macFList 4]"] == $ipF3) &&
+		       ([expr "0x[lindex $macFList 5]"] == $ipF4) } {
+			  set found "true"
+		          break
+	          }
+               }
+            }
+	 }
+      }
+      if { $found == "false" } { set result "error" }
+      report_start_test "Next hop field check for $ip"
+      switch $found {
+         "true" { result_ok "Next hop checking for $ip pass" }
+	 "false" { result_error "Next hop checking for $ip failed" }
+      }
+      report_end_test
+   }
+
+   return $result
+}
+
+################################################################## 
+# Procedure Name: ngfdb_check_flow_group
+#   
+# Description: Make sure the flow group number is the same with the
+#              multicast flow group number
+#
+# Input args:  
+#              daMulticast - destination ip
+#              fd_in       - file descriptor
+#                
+# Output args: none
+#
+# Typical usage: 
+#        ngfdb_check_flow_group $destinationip $fd_in
+#
+# Category: Utility
+##################################################################  
+proc ngfdb_check_flow_group {daMulticast fd_in} {
+
+   result_debug "--- ngfdb_check_flow_group"
+   global bItem
+   global bCount
+
+   set result "ok"
+   for {set i 1} {$i<=$bCount} {incr i 1} {
+      # -- get the group number
+      set ip     [set bItem($i,saIp)]
+      set fGroup [set bItem($i,fGroup)]
+      result_debug "--- fGroup=$fGroup"
+      set found "false"
+      seek $fd_in 0
+      # -- find the multicast line
+      while {[gets $fd_in line] != -1} {
+         set inList [eSplit $line]
+             set len [llength $inList]
+	     if { $len >= 11 } {
+			if { ([lindex $inList 1] == "IPMC") &&
+			     ([lindex $inList 2] == "DA") } {
+			   if { [lindex $inList 9]	== $daMulticast } {
+			      # -- found, check the group number
+			      if { [lindex $inList 14]	== $fGroup } {
+                                  #result_debug "--- flow_group match"
+                                  set found "true"
+				  break
+			      }
+			   }
+			}
+		 }
+	  }
+	  if { $found == "false" } { set result "error" }
+          report_start_test "Flow group field check for $ip"
+          switch $found {
+             "true" { result_ok "Flow group checking for $ip pass" }
+	     "false" { result_error "Flow group checking for $ip failed" }
+          }
+          report_end_test
+   }
+   return $result
+}

@@ -1,0 +1,2675 @@
+
+
+;# This list should match the order as shown in Odyssey Client Manager Window
+set _odysseyClientOffsetList {
+    any
+    e3_1_3
+    e3_1_4
+    e3_1_5
+    e3_2_11
+    e3_2_12
+    e3_2_13
+    e3_2_14
+    e3_2_3
+    e3_2_4
+    open-dot1x-wep128-eaptls
+    open-dot1x-wep128-peap
+    open-dot1x-wep64-eaptls
+    open-dot1x-wep64-peap
+    open-macradius-none
+    open-macradius-wep128
+    open-macradius-wep64
+    open-none-none
+    open-none-wep128
+    open-none-wep64
+    open-wpadyn-aes-eaptls
+    open-wpadyn-aes-peap
+    open-wpadyn-tkip-eaptls
+    open-wpadyn-tkip-peap
+    open-wpadyn-wep128-eaptls
+    open-wpadyn-wep128-peap
+    open-wpadyn-wep64-eaptls
+    open-wpadyn-wep64-peap
+    open-wpapsk-aes
+    open-wpapsk-tkip
+    open-wpapsk-wep128
+    open-wpapsk-wep64
+    shared-macradius-wep128
+    shared-macradius-wep64
+    shared-none-wep128
+    shared-none-wep64
+}
+
+# 0    any
+# 1    open-dot1x-wep128-eaptls
+# 2    open-dot1x-wep128-peap
+# 3    open-dot1x-wep128-peap_3_1_4
+# 4    open-dot1x-wep128-peap_3_1_5
+# 5    open-dot1x-wep128-peap_3_2_11
+# 6    open-dot1x-wep128-peap_3_2_12
+# 7    open-dot1x-wep128-peap_3_2_13
+# 8    open-dot1x-wep128-peap_3_2_14
+# 9    open-dot1x-wep128-peap_3_2_3
+# 10   open-dot1x-wep128-peap_3_2_4
+# 11   open-dot1x-wep64-eaptls-3_1_3
+# 12    open-dot1x-wep64-eaptls
+# 13    open-dot1x-wep64-peap
+# 14   open-macradius-none
+# 15   open-macradius-wep128
+# 16   open-macradius-wep64
+# 17   open-none-none
+# 18   open-none-wep128
+# 19   open-none-wep64
+# 20   open-wpadyn-aes-eaptls
+# 21   open-wpadyn-aes-peap
+# 22   open-wpadyn-tkip-eaptls
+# 23   open-wpadyn-tkip-peap
+# 24   open-wpadyn-wep128-eaptls
+# 25   open-wpadyn-wep128-peap
+# 26   open-wpadyn-wep64-eaptls
+# 27   open-wpadyn-wep64-peap
+# 28   open-wpapsk-aes
+# 29   open-wpapsk-tkip
+# 30   open-wpapsk-wep128
+# 31   open-wpapsk-wep64
+# 32   shared-macradius-wep128
+# 33   shared-macradius-wep64
+# 34   shared-none-wep128
+# 35   shared-none-wep64
+
+########################################
+# WifiUnconfigSwitchAll
+#
+# This one simply performs an "unconfig switch all" command. It
+# assumes that you are logged in on the serial console. This is
+# necessary because we want to return you to the same switch prompt.
+# The telnet session to the terminal server should never go away
+# here because we're using the console.
+#   
+# Input Variables:
+#     rtnTst - return for success/fail of the proc (0 or 1)
+#     sessionId - spawn-id for the console session
+#     loginName - Login Name
+#     loginPassword - Login Password (optional - default "NULL")
+#     prodType - Product type. Determines expected prompt for CLI.
+#
+# Output Variables:
+#     none
+#
+# Return Value:
+#    If success, nothing. If fail, return err string.
+########################################
+#
+proc WifiUnconfigSwitchAll {rtnTst sessionId prodType loginName {loginPassword "NULL"} } {
+
+   upvar $rtnTst booVal
+
+
+   switch -exact -- $prodType {
+      1 { set cliPrompt "Summit300-48(.*)# $" }
+      2 { set cliPrompt "Summit300-48(.*)# $" }
+      3 { set cliPrompt "Summit300-24(.*)# $" }
+      4 { set cliPrompt "Alpine3802(.*)# $" }
+      5 { set cliPrompt "Summit24e3(.*)# $" }
+      6 { set cliPrompt "Summit400-24(.*)# $" }
+      default { set cliPrompt "(.*)# $" }
+   }
+
+# Get back to a prompt in case there was weird lying around
+# at the console. ESC for full-screen displays and a <cr>.
+
+   send -i $sessionId "\x1b\r\r"
+   after 1000
+
+   send -i $sessionId "\r"
+   expect {
+      -i $sessionId
+      -re $cliPrompt {}
+      timeout {
+         set rtnError "Error::\(WifiUnconfigSwitchAll\) Can't find CLI prompt."
+         set booVal 0
+         return $rtnError
+      }
+   }
+
+   set cmd "unconfig switch all"
+   send -i $sessionId "$cmd\r"
+   expect {
+      -i $sessionId
+      $cmd {}
+      timeout { 
+         set rtnError "Error::\(WifiUnconfigSwitchAll\) Can't find echo'd CLI command."
+         set booVal 0
+         return $rtnError
+      }
+   }
+
+   expect {
+      -i $sessionId
+      "\(yes\/no\) $" {}
+      timeout {
+         set rtnError "Error::\(WifiUnconfigSwitchAll\) Timed out waiting for reboot prompt."
+         set booVal 0
+         return $rtnError
+      }
+   }
+
+   send -i $sessionId "y\r"
+
+# this is what gets tricky sometimes...waiting for the login
+# prompt to show up again. I use a for-next loop. If it
+# takes longer than I have coded, just change the loop counter
+# in the "for" line and before the "break" statement below.
+# Using default Expect timeout value of 10 seconds between iterations.
+
+   set backAtLogin 0
+
+   for {set i 1} {$i < 10} {incr i} {
+      expect {
+         -i $sessionId
+         "login: $" {
+            set backAtLogin 1
+            set i 6
+            break
+         }
+         timeout {}
+      }
+   }
+
+   if {!$backAtLogin} {
+      set rtnError "Error::\(WifiUnconfigSwitchAll\) Never returned to login after reboot."
+      set booVal 0
+      return $rtnError
+   }
+
+   send -i $sessionId "\r"
+   after 5000
+   send -i $sessionId "\r"
+   after 2000
+
+   send -i $sessionId "$loginName\r"
+
+   expect {
+      -i $sessionId
+      "password: $" {}
+      timeout {
+         set rtnError "Error::\(WifiUnconfigSwitchAll\) Timed out waiting for password prompt."
+         set booVal 0
+         return $rtnError
+      }
+   }
+
+   if {$loginPassword == "NULL"} {
+      send -i $sessionId "\r"
+   } else {
+      send -i $sessionId "$loginPassword\r"
+   }
+
+   expect {
+      -i $sessionId
+      -re $cliPrompt {}
+      timeout {
+         set rtnError "Error::\(WifiUnconfigSwitchAll\) Timed out waiting for password prompt."
+         set booVal 0
+         return $rtnError
+      }
+   }
+
+   set booVal 1
+}
+
+######################################## 
+# GenProcIndex
+#
+# This proc simply runs the Expect "auto_mkindex" command against the
+# absolute path provided in the argument. Make sure that we have a
+# current tclIndex reference for the lib path that we want to lappend
+# to the Expect "$auto_path" variable.
+#   
+# Input Variables:
+#     rtnTst - return for success/fail of the proc (0 or 1)
+#     pathName - Absolute pathname of directory where tclIndex
+#                will be.
+#
+# Output Variables:
+#     none
+#
+# Return Value:
+#    If success, nothing. If fail, return err string.
+########################################
+#
+proc GenProcIndex {rtnTst pathName} {
+
+   upvar $rtnTst booVal
+
+   set startDir [pwd]
+
+   cd $pathName
+
+   if {[catch {auto_mkindex . *.tcl} errRtn]} {
+      set booVal 0
+      cd $startDir
+      return $errRtn
+   } else {
+      set booVal 1
+   }
+   cd $startDir
+}
+########################################
+# WifiLoadImage
+#
+# This one simply performs a download image..... command to the
+# primary area. It assumes that you are logged in on the serial
+# console.
+#   
+# Input Variables:
+#     rtnTst - return for success/fail of the proc (0 or 1)
+#     sessionId - spawn-id for the telnet/console session
+#     prodType - Product type. Determines expected prompt for CLI.
+#     tftpServer - the TFTP server address. this is usually
+#                  obtained from a config file.
+#     imageName - the name of the image at the top level of the
+#                 tftpboot directory.
+#     priSec - literal "primary" or "secondary"..cli cmd word
+#
+# Output Variables:
+#     none
+#
+# Return Value:
+#    If success, nothing. If fail, return err string.
+########################################
+#
+proc WifiLoadImage {rtnTst sessionId prodType tftpSvr imageName priSec} {
+
+   upvar $rtnTst booVal
+
+   switch -exact -- $prodType {
+      1 { set cliPrompt "Summit300-48(.*)# $" }
+      2 { set cliPrompt "Summit300-48(.*)# $" }
+      3 { set cliPrompt "Summit300-24(.*)# $" }
+      4 { set cliPrompt "Alpine3802(.*)# $" }
+      5 { set cliPrompt "Summit24e3(.*)# $" }
+      6 { set cliPrompt "Summit400-24(.*)# $" }
+      default { set cliPrompt "(.*)# $" }
+   }
+
+   send -i $sessionId "download image $tftpSvr $imageName $priSec\r"
+   expect {
+      -i $sessionId
+      -re "(Y/N)\? $" {
+         send -i $sessionId "y\r"
+      }
+      timeout {
+         set rtnError "Expect timeout waiting for primary-secondary image load prompt!"
+         set booVal 0
+         return $rtnError
+      }
+   }
+
+########################################
+# Temporarily set expect timeout to 300 seconds. That's 5 minutes.
+# It should never take the switch 5 minutes to download an image.
+# If it does, there's something very wrong. There may be more errors
+# than we have below. Add them as we find them.
+########################################
+   set timeout 300
+
+   set flag "ok"
+   expect {
+      -i $sessionId
+      -ex "Error: Access violation" {
+         set rtnError "Error: Access violation!"
+         set booVal 0
+         return $rtnError
+      }
+      -ex "Could not connect" {
+         set rtnError "ERROR: Could not connect with TFTP server!"
+         set booVal 0
+         return $rtnError
+      }
+      -ex "Error: File not found" {
+         set rtnError "ERROR: Could not find file $imageName on TFTP server!"
+         set booVal 0
+         return $rtnError
+      }
+      -re $cliPrompt {
+         set booVal 1
+      }
+      timeout {
+         set rtnError "TCL timeout during image download"
+         set booVal 0
+         return $rtnError
+      }
+   }
+########################################
+# If we haven't returned with an error by now, the download probably
+# succeeded. There is no easy way to check without parsing through a
+# show switch display and that's still no guarantee because we don't
+# have an easy way to determine the version and build number just from
+# the image file name.
+########################################
+}
+
+######################################## 
+# Proc Name: WifiRunSetupCmds
+#   
+# Desc: Runs initial DUT_SETUP commands on the given DUT
+#
+# Input args   : rtnTst - Return value convention. See README in
+#                         this directory
+#              : sessionId - spawn-id for the telnet/console session
+#              : prodType - product type
+#              : setupCmds - setup cmds from the qad-wifi.cfg file.
+# Output args  : none
+#
+# Typical usage:
+#    RunSetupCmds rtnTst $sessionId $prodType $DUT_SETUP
+#
+# NOTE: Most of this was gutted when I moved the procs into the
+#       Wireless area. The unconfig sw all option in the code
+#       was no longer necessary, since it's in an entirely
+#       different proc all it's own.
+########################################
+proc WifiRunSetupCmds {rtnTst sessionId prodType setupCmds} {
+
+   upvar $rtnTst booVal
+
+   puts "\nJUST ENTERED THE WIFIRUNSETUPCMDS PROC\n"
+
+   switch -exact -- $prodType {
+      1 { set cliPrompt "Summit300-48(.*)# $" }
+      2 { set cliPrompt "Summit300-48(.*)# $" }
+      3 { set cliPrompt "Summit300-24(.*)# $" }
+      4 { set cliPrompt "Alpine3802(.*)# $" }
+      5 { set cliPrompt "Summit24e3(.*)# $" }
+      6 { set cliPrompt "Summit400-24(.*)# $" }
+      default { set cliPrompt "(.*)# $" }
+   }
+
+   set timeout 120
+
+   foreach command $setupCmds {
+
+      set rtnVal [WifiSendACmd rtnTst $sessionId \
+                                      $prodType \
+                                      $command]
+      if {!$rtnTst} {
+         set rtnErr "Error:: \(WifiRunSetupCmds\) CLI returned error.\n$rtnVal"
+         set booVal 0
+         set timeout 10
+         return $rtnErr
+      }
+   }
+   set booVal 1
+   set timeout 10
+   return
+}
+
+######################################## 
+# Procedure Name: WifiGetDutInfo
+#   
+# Desc: creates a DUTs_info array after discovering all DUTs
+#        information in the testbed. Fills in all elements of
+#        DUTs_info array with relevant information.
+#
+# Input args   : rtnTst - return success/fail. See README in this directory
+#              : sessionId - spawn-id for console/telnet session
+#              : prodType - product type
+#              : infoFilename - as it says
+#              : tmpdir - temp place for info file
+# Output args  : none
+#
+# Typical usage:
+#    WifiGetDutInfo rtnTst $sessionId $prodType
+#
+# NOTE: Usually we will use the defaults for infoFilename and tmpdir.
+# NOTE: Wifi QAD only tests 1 DUT at a time.
+# NOTE: We're only going to get DUT info once, so we backed out a
+#       bunch of code here in anticipation of changing the
+#       overall architecture a bit later on.
+# NOTE: Also get rid of the "fast" vs. "normal" stuff.
+#
+########################################
+proc WifiGetDutInfo {rtnTst sessionId prodType submitter {infoFilename "info"} {tmpdir "Tmp"}} { 
+   global numDUT
+#   global fast
+   global DUT
+
+########################################
+# Variable to store all the DUTs information
+########################################
+
+   global DUTs_info
+   global DUTs_Slot_info
+   global branch
+
+########################################
+# Note to self: ignore the fd_res stuff for now. Use the following
+# 3 lines after replacing the old send command with ours. Do this
+# against the returned STRING form from our send command. and then
+# "write" the morphed string to the $fd_in file.
+########################################
+
+   set fd_res [open_result_file "$infoFilename"]
+
+   set slotDump 0
+
+########################################
+# Get the system name
+########################################
+
+   set rawShowSwitch [ WifiSendACmd rtnTst $sessionId \
+                                           $prodType \
+                                           "show switch" \
+                                           "L" ]
+
+   if {!$rtnTst} {
+      set rtnErr "Error::\(WifiGetDutInfo\) CLI command error.\n$rawShowSwitch"
+      set booVal 0
+      return $rtnErr
+   } else {
+      set found 0
+      foreach showSwitchLine $rawShowSwitch {
+         if {[regexp -nocase "^SysName:(.*)" $showSwitchLine]} {
+            set sysNameLine $showSwitchLine
+            set found 1
+         }
+      }
+
+      if {$found} {
+         set endOfKeyWord [string first ":" $sysNameLine]
+         set restOfLine [string range $sysNameLine [expr $endOfKeyWord + 1] end]
+         set sysN [string trimleft " \t"]
+         set sysN [string trimright "\n\r"]
+      } else {
+         set $rtnErr "Error:: \(WifiGetDutInfo\) Cannot extract SysName."
+         set booVal 0
+         return $rtnErr
+      }
+   }
+
+   set platFType [string tolower $sysN]
+
+########################################
+# Get Slot info dump if Platform Type is BD or BT or Godzilla etc
+# Only interested in Alpine right now.
+########################################
+
+   set fd_in [open "$tmpdir/tmp_info_DUT-[pid]" "w"]
+
+   set rawShowSwitch [ WifiSendACmd rtnTst $sessionId \
+                                           $prodType \
+                                           "show switch" \
+                                           "S" ]
+
+   puts -nonewline $fd_in $rawShowSwitch
+   result_pre $rawShowSwitch
+
+   set rawShowVer [ WifiSendACmd rtnTst $sessionId \
+                                        $prodType \
+                                        "show version" \
+                                        "S" ]
+
+   puts -nonewline $fd_in $rawShowVer
+   result_pre $rawShowVer
+
+   set rawShowVlanDef [ WifiSendACmd rtnTst $sessionId \
+                                            $prodType \
+                                            "show vlan default" \
+                                            "S" ]
+
+   puts -nonewline $fd_in $rawShowVlanDef
+   result_pre $rawShowVlanDef
+
+   if {[regexp -nocase "Alpine*" $platFType]} {
+      set rawShowSlot [ WifiSendACmd rtnTst $sessionId \
+                                            $prodType \
+                                            "show slot" \
+                                            "S" ]
+
+      puts -nonewline $fd_in $rawShowSlot
+      result_pre $rawShowSlot
+
+      set slotDump 1
+   }
+
+   close $fd_in
+
+########################################
+# Initialize variables to be gathered. We don't initialize
+# the prodType element of the DUTs_info array because we
+# have it as an argument to this proc.
+########################################
+
+   set imageSel "NONE"
+   set priImage "INVALID"
+   set secImage "INVALID"
+   set version "INVALID"
+   set platform "INVALID"
+   set techRel   "INVALID"
+   set sysMAC "INVALID"
+   set bootROM "INVALID"
+   set relMaster "INVALID"
+   set numPorts 0
+   set merge     "INVALID"
+   set numSlots  "0"
+   set version2  "INVALID"
+   set verTime   "INVALID"
+   set dlReqD    "0"
+   set priVer    ""
+   set secVer    ""
+   set showVerVersion ""
+
+   set DUTs_info(DUT,imageSel) $imageSel
+   set DUTs_info(DUT,priImage) $priImage
+   set DUTs_info(DUT,secImage) $secImage
+   set DUTs_info(DUT,version) $version
+   set DUTs_info(DUT,verTime)   $verTime
+   set DUTs_info(DUT,platform) $platform
+   set DUTs_info(DUT,sysMAC) $sysMAC
+   set DUTs_info(DUT,bootROM) $bootROM
+   set DUTs_info(DUT,numSlots)  $numSlots
+   set DUTs_info(DUT,relMaster) $relMaster
+   set DUTs_info(DUT,numPorts) $numPorts
+   set DUTs_info(DUT,techRel)   $techRel
+   set DUTs_info(DUT,merge)    $merge
+   set DUTs_info(DUT,dlReqD)   $dlReqD
+   set DUTs_info(DUT,sysName) $sysN
+   set DUTs_info(DUT,debugFlag) 1
+   set DUTs_info(DUT,sVVersion) $showVerVersion
+   set DUTs_info(DUT,prodType) $prodType
+   set DUTs_info(DUT,submitter) $submitter
+
+   set masterOfsset "17"
+   set masterEnd "28"
+   set isMSM "FALSE"
+   set bList "NULL"
+   set location "NULL"
+   set msmLocation "NULL"
+   set msmMaster   "MSM-B"
+
+   set fd_in [open "$tmpdir/tmp_info_DUT-[pid]" "r"]
+
+   while {[gets $fd_in line] != -1} {
+
+      set cookedLine [WifiCookString $line]
+
+      set aList [split $cookedLine]
+
+      if {$bList != "NULL"} {
+
+########################################
+# Determine location in file search "show switch, slot or version"
+########################################
+
+         if { ([lindex $bList 0] == "sysName:") || ([lindex $bList 0] == "SysName:") } {
+            set location "switch"
+         }
+
+########################################
+# Determine if you are in an msm image section
+########################################
+
+         if { ([lindex $bList 0] == "MSM-A") } {
+            set msmLocation "MSM-A"
+         } elseif {[lindex $bList 0] == "MSM-B"} {
+            set msmLocation "MSM-B"
+         }
+
+         if { ([lindex $bList 0] == "Chassis:")  || \
+              ([lindex $bList 0] == "Chassis")   || \
+              ([lindex $bList 0] == "CPU")   || \
+              ([lindex $bList 0] == "Daughtercard:") || \
+              ([lindex $bList 0] == "Baseboard:")  } {
+             set location "version"
+         }
+
+         if { ([lindex $bList 0] == "Slot") &&    \
+              ([lindex $bList 1] == "1") &&       \
+              ([lindex $bList 2] == "information:") } {
+            set location "slot"
+         }
+
+########################################
+# 6.2.1b10
+########################################
+
+         if { ([lindex $aList 0] == "Current") &&     \
+              ([lindex $aList 1] == "State:") } {
+
+            set masterOffset "29"
+            set masterEnd "40"
+            set isMSM "TRUE"
+            set msmMaster MSM-B
+            if {[string tolower [lindex $aList 2]] == "master" } {
+               set masterOfsset "17"
+               set masterEnd "28"
+               set msmMaster MSM-A
+            }
+         }
+
+########################################
+# Find both image versions Fix for 700b37 new Show switch
+########################################
+
+         if { ([string tolower [lindex $aList 0]] == "primary") && \
+              ([string tolower [lindex $aList 1]] == "ew") && \
+              ([string tolower [lindex $aList 2]] == "ver:") } {
+            set priVer [string tolower [lindex $aList 3]]
+         }
+
+         if { ([string tolower [lindex $aList 0]] == "secondary") &&     \
+              ([string tolower [lindex $aList 1]] == "ew") &&        \
+              ([string tolower [lindex $aList 2]] == "ver:") } {
+            set secVer [string tolower [lindex $aList 3]]
+         }
+
+########################################
+# Find image version selected to boot. Find image version selected
+# on switch
+########################################
+
+         if { ([lindex $bList 0] == "Software") &&     \
+              ([lindex $bList 1] == "image") &&        \
+              ([lindex $bList 2] == "booted:") &&      \
+              ( $location == "switch"        )  } {
+
+            set imageSel [lindex $bList 3]
+            set imageSel [string tolower $imageSel]
+            puts "** This is probably an earlier 6.2 s300 **"
+         }
+
+########################################
+# Fix for ABU new Show Switch 700b44.
+# This should work for the Alpine command
+########################################
+
+         if { ([lindex $bList 0] == "Module") &&     \
+              ([lindex $bList 1] == "Image") &&        \
+              ([lindex $bList 4] == "Booted") &&      \
+              ( $location == "switch"        )  } {
+
+            set imageSel [lindex $aList 2]
+            set imageSel [string tolower $imageSel]
+
+            if {$imageSel == "primary"} {
+               set version $priVer
+            } elseif {$imageSel == "secondary"} {
+               set version $secVer
+            }
+         }
+
+########################################
+# Fix for ABU new Show Switch 700b45 and above
+########################################
+
+         if { ([lindex $bList 0] == "------") &&     \
+              ( $location == "switch"        )  } {
+            set imageSel [lindex $aList 2]
+            set imageSel [string tolower $imageSel]
+
+            if {$imageSel == "primary"} {
+                set version $priVer
+            } elseif {$imageSel == "secondary"} {
+                set version $secVer
+            }
+         }
+
+         if { ([lindex $bList 0] == "Image") &&     \
+              ([lindex $bList 1] == "Selected:") &&      \
+              ( $location == "switch"        )  } {
+            set imageSel [lindex $aList 2]
+            set imageSel [string tolower $imageSel]
+
+            if {$imageSel == "primary"} {
+               set version $priVer
+            } elseif {$imageSel == "secondary"} {
+               set version $secVer
+            }
+
+            puts "** 700 changes for Alpine **"
+         }
+
+########################################
+# for 6.2.1
+########################################
+
+         if { ([lindex $aList 0] == "Image") &&     \
+              ([lindex $aList 1] == "Booted:") } {
+            set imageSel [lindex [string range $line $masterOfsset $masterEnd] 0]
+            set imageSel [string tolower $imageSel]
+            puts "** $imageSel from 621 code **"
+         }
+
+########################################
+# Find name of image version booted. Find image version booted
+# name on MSM
+########################################
+
+         set tmp [lindex $bList 0]
+         set tmp [string tolower $tmp]
+
+         if { ($tmp == $imageSel) && ($location == "switch") &&    \
+              ([string tolower [lindex $bList 1]] == "software") &&        \
+              ([string tolower [lindex $bList 2]] == "version:") } {
+            set version [lindex $bList 3]
+            set slot [lindex $bList 5]
+
+            if { $slot == "MSM-A" } {
+
+               if {$version == "empty"} {
+                  set version [string tolower "[lindex $bList 6]"]
+               } else {
+                  set version [string tolower "[lindex $bList 3]"]
+               }
+            }
+         }
+
+########################################
+# 6.2.1b10
+########################################
+         set tmp [lindex $aList 0]
+         set tmp [string tolower $tmp]
+
+         if { ($tmp == $imageSel) &&     \
+              ([string tolower [lindex $aList 1]] == "ew") &&        \
+              ([string tolower [lindex $aList 2]] == "ver:") &&  \
+              ($msmLocation == "NULL")     } {
+            set version [string tolower [lindex $aList 3]]
+
+            if { $isMSM == "TRUE" } {
+               if {$masterOfsset == "17"} {
+                  set version [string tolower "[lindex [string range $line $masterOfsset $masterEnd] 0]"]
+               } else {
+                  set version [string tolower "[lindex [string range $line $masterOfsset $masterEnd] 0]"]
+               }
+            }
+         }
+
+########################################
+# 7.0.0b39 RTPFixes5
+########################################
+         set tmp [lindex $bList 0]
+         set tmp [string tolower $tmp]
+
+         if { ($tmp == $imageSel) &&     \
+              ([string tolower [lindex $bList 1]] == "ew") &&        \
+              ([string tolower [lindex $bList 2]] == "ver:") &&      \
+              ($msmMaster == $msmLocation)    } {
+            set version [string tolower [lindex $bList 3]]
+         }
+
+         set version1 $version
+
+########################################
+# Find the names of the images load in the 2 MSM spaces..
+########################################
+
+########################################
+# Find primary image
+########################################
+
+         if { ( $location == "switch" ) &&     \
+              ([string tolower [lindex $bList 0]] == "primary") &&     \
+              ([string tolower [lindex $bList 1]] == "software") &&    \
+              ([string tolower [lindex $bList 2]] == "version:") } {
+            set priImage [lindex $bList 3]
+         }
+
+########################################
+# For 6.2.1
+########################################
+
+         if { ([string tolower [lindex $aList 0]] == "primary") &&     \
+              ([string tolower [lindex $aList 1]] == "ew") &&    \
+              ([string tolower [lindex $aList 2]] == "ver:") && \
+              ($msmLocation == "NULL")    } {
+            set priImage [lindex [string range $line $masterOfsset $masterEnd] 0]
+         }
+
+########################################
+# for 700b39 rtpfixes on
+########################################
+
+         if { ([string tolower [lindex $bList 0]] == "primary") &&     \
+              ([string tolower [lindex $bList 1]] == "ew") &&    \
+              ([string tolower [lindex $bList 2]] == "ver:") && \
+              ($msmMaster == $msmLocation)    } {
+
+########################################
+           #fix for 701b4
+########################################
+
+            if {[regexp -nocase "ssh" [lindex $bList 4]]} {
+               set priImage "[lindex $bList 3]"
+            } else {
+               set priImage "[lindex $bList 3] [lindex $bList 4]"
+            }
+         }
+
+########################################
+# find second image
+########################################
+
+         if { ( $location == "switch" ) &&     \
+              ([string tolower [lindex $bList 0]] == "secondary") &&   \
+              ([string tolower [lindex $bList 1]] == "software") &&    \
+              ([string tolower [lindex $bList 2]] == "version:") } {
+            set secImage [lindex $bList 3]
+         }
+
+########################################
+# for 6.2.1
+########################################
+
+         if { ([string tolower [lindex $aList 0]] == "secondary") &&   \
+              ([string tolower [lindex $aList 1]] == "ew") &&    \
+              ([string tolower [lindex $aList 2]] == "ver:") &&  \
+              ($msmLocation == "NULL")    } {
+            set secImage [lindex [string range $line $masterOfsset $masterEnd] 0]
+         }
+
+########################################
+# for 700b39 rtpfixes5 and on
+########################################
+
+         if { ([string tolower [lindex $bList 0]] == "secondary") &&   \
+              ([string tolower [lindex $bList 1]] == "ew") &&    \
+              ([string tolower [lindex $bList 2]] == "ver:") &&  \
+              ($msmMaster == $msmLocation)    } {
+
+########################################
+# fix for 701b4
+########################################
+            if {[regexp -nocase "ssh" [lindex $bList 4]]} {
+                set secImage "[lindex $bList 3]"
+            } else {
+                set secImage "[lindex $bList 3] [lindex $bList 4]"
+            }
+         }
+
+########################################
+# find System Name
+########################################
+
+         if { ([string tolower [lindex $bList 0]] == "sysname:") } {
+            set platform $sysN
+         }
+
+########################################
+# find system MAC
+########################################
+
+         if { ([lindex $bList 0] == "System") &&     \
+              ([lindex $bList 1] == "MAC:") } {
+            set sysMAC [lindex $bList 2]
+         }
+
+########################################
+# find release master, time of the build, and the release master
+########################################
+
+         if { ( $location == "version" ) &&     \
+              ([lindex $bList 0] == "Image") &&     \
+              ([lindex $bList 2] == "Extremeware") &&  \
+              ([lindex $bList 3] == "Version")} {
+
+            set sVVersionBNum  [lindex $bList 6]
+            set sVVersionBNum [string trimright $sVVersionBNum "\)"]
+            set showVerVersion "[lindex $bList 4]b$sVVersionBNum"
+
+########################################
+# Santa Clara base, Tech Release Code, or branch build??????
+# First Case is for IPSERV code. Adjust build # and BuildMaster
+########################################
+
+            if {[lindex $bList 8] == "IP_SERV_TECH_REL"} {
+               set version2 [lindex $bList 9]
+               set relMaster [lindex $bList 11]
+
+########################################
+# Set the build time for this Version of Code (for download comparison
+########################################
+
+               set verTime "[lindex $bList 12] [lindex $bList 13] [lindex $bList 14]"
+            }
+
+########################################
+# Second Case is for Santa Clara built  
+########################################
+
+            if {[lindex $bList 8] != "IP_SERV_TECH_REL"} {
+               set relMaster [lindex $bList 8]
+               set verTime "[lindex $bList 9] [lindex $bList 10] [lindex $bList 11]"
+            }
+
+########################################
+# fix for 6.2.1 build 17 (sandbox)
+########################################
+
+            if {([lindex $bList 4] == "6.2.1") && ([lindex $bList 10] == "on")} {
+               set verTime "[lindex $bList 11] [lindex $bList 12]"
+               set relMaster [lindex $bList 9]
+               set merge [lindex $bList 7]
+               regsub -all {\.} $merge "_" merge
+            }
+
+########################################
+# fix for 6.2.1 build 10 (new linux buildmaster)
+########################################
+
+            if {([lindex $bList 4] == "6.2.1") && ([lindex $bList 10] != "on")} {
+               set verTime "[lindex $bList 10] [lindex $bList 11]"
+            }
+
+########################################
+# fix for 7.0.0 on ncbuild1 FINAL BUILD MASTER?
+########################################
+
+            if {([lindex $bList 4] >= "7.0.0") && ([lindex $bList 11] == "on")} {
+                set verTime "[lindex $bList 12] [lindex $bList 13]"
+                set relMaster [lindex $bList 10]
+                set merge [lindex $bList 7]
+                regsub -all {\.} $merge "_" merge
+                set eight [string trimleft [lindex $bList 8] "\["]
+                set eight [string trimright $eight "\]"]
+                set merge [format %s_%s $merge $eight]
+            }
+
+            if {([lindex $bList 4] >= "7.0.0") && ([lindex $bList 10] == "on")} {
+               set verTime "[lindex $bList 11] [lindex $bList 12]"
+               set relMaster [lindex $bList 9]
+            }
+
+            if {([lindex $bList 4] >= "7.0.0") && ([lindex $bList 9] == "on")} {
+               set verTime "[lindex $bList 10] [lindex $bList 11]"
+               set relMaster [lindex $bList 8]
+            }
+         }
+
+########################################
+# find BootROM
+########################################
+
+         if { ([lindex $bList 0] == "BootROM") } {
+            set bootROM [lindex $bList 2]
+         }
+
+########################################
+# find total ports
+########################################
+
+         if { ([lindex $bList 0] == "Ports:") } {
+            set numPorts [lindex $bList 1]
+         }
+      }
+      set bList $aList
+   }  ;# end while
+
+########################################
+# Add the Technology Release or Merge info to the version
+########################################
+
+   if {$version2 == "INVALID"} {
+      set version "$version1"
+   } else {
+      set version "$version1 $version2"
+   }
+
+########################################
+# get slot info to figure out hardware type
+########################################
+
+   set hardwareType "NEW_GEN"
+   set bladeType "NONE"
+
+   if {[regexp -nocase "bd|bt|godzilla|alpine*" $platform]} {
+      lappend parameterList "{HW Module Type:} 1"
+
+      set HardwareList [GetKeyValue rtnTst $sessionId \
+                                           $prodType \
+                                           "show slot" \
+                                            $parameterList]
+      unset parameterList
+
+      foreach hardware $HardwareList {
+         if {[lsearch -regexp $bladeType $hardware]==-1} {
+            if {$bladeType=="NONE"} {
+               set bladeType ""
+            }
+            if {![regexp -nocase "none|Empty" $hardware]} {
+                  set bladeType "$bladeType$hardware"
+            }
+         }
+
+         switch $hardware {
+            F32T -
+            F24T {
+               set hardwareType "OLD_GEN"
+               }
+         }
+      }
+   } else {
+      if { [regexp -nocase {[0-9|s]i} $platform] == 0 } {
+         set hardwareType "OLD_GEN"
+      }
+   }
+
+###########################################
+# Determine number of slots in the chassis
+###########################################
+
+   switch $platFType {
+      alpine3808 {set numSlots 8}
+      alpine3804 {set numSlots 4}
+      alpine3802 {set numSlots 2}
+      default    {set numSlots 0}
+   }
+
+   puts "** Version $version **"
+
+   set DUTs_info(DUT,imageSel) $imageSel
+   set DUTs_info(DUT,priImage) $priImage
+   set DUTs_info(DUT,secImage) $secImage
+   set DUTs_info(DUT,version) $version
+   set DUTs_info(DUT,verTime) $verTime
+   set DUTs_info(DUT,platform) $platform
+   set DUTs_info(DUT,sysMAC) [string toupper $sysMAC]
+   set DUTs_info(DUT,relMaster) $relMaster
+   set DUTs_info(DUT,bootROM) $bootROM
+   set DUTs_info(DUT,numSlots) $numSlots
+   set DUTs_info(DUT,numPorts) $numPorts
+   set DUTs_info(DUT,HardwareType) $hardwareType
+   set DUTs_info(DUT,bladeType) $bladeType
+   set DUTs_info(DUT,techRel) $version2
+   set DUTs_info(DUT,merge) [string tolower $merge]
+   set DUTs_info(DUT,dlReqD) $dlReqD
+   set DUTs_info(DUT,sVVersion) $showVerVersion
+
+   if { $version2 != "INVALID" } {
+      set buildList [split $version2 "."]
+      set bNum [lindex $buildList 0]
+      set branch "$version1 ipserv[string trimleft $bNum "v"]"
+   } else {
+      set branch "$version1"
+   }
+
+   global _VERSION
+   global VERSION
+   set _VERSION $version
+   set VERSION [string range $_VERSION 0 0]
+   set DUTs_info(DUT,VERSION) $VERSION
+
+   close $fd_in
+
+   close_result_file
+
+########################################
+# Now get the info from the individual slots if platform matches
+########################################
+
+   if {$slotDump} {
+       WifiGetDUTsSlotInfo $tmpdir
+   }
+
+   if {![info exists DUT(LoadImage)]} { ;# Need to turn of when run LoadImage
+       getTECardSpeed
+   }
+
+#   for {set i 1} {$i <= $numDUT} {incr i 1} {
+   file delete "$tmpdir/tmp_info_DUT-[pid]"
+#   }
+}
+
+#######################################
+# Proc Name: WifiAddTestbedInfoToDUTs_info
+# Desc: Append test bed specific information to DUTs_info array
+#
+# Input args   : none
+# Output args  : none
+# Return value : none
+#
+# Typical usage: 
+#    WifiAddTestbedInfoToDUTs_info
+#
+# NOTE: This proc was copied from file "SystemSetup.tcl" that was
+#       originally located in the Lib area of the general automation
+#       suite. mferreri 07-16-2004
+########################################
+proc WifiAddTestbedInfoToDUTs_info {} {
+
+   global defaultRouter tftpServerList switchPort2DefaultRouter \
+          POWERCYCLE_IP POWERCYCLE_PORTS tftpShareName connectionTimeout
+
+   global numDUT DUTs_info
+
+   if {[info exists tftpServerList]} {
+      set DUTs_info(tftpserverlist) $tftpServerList
+   }
+
+   if {[info exists defaultRouter]} {
+      set DUTs_info(defaultRouter) $defaultRouter
+   }
+
+   if {[info exists POWERCYCLE_IP]} {
+      set DUTs_info(powercycle_ip) $POWERCYCLE_IP
+   }
+
+   if {[info exists POWERCYCLE_PORTS]} {
+      set DUTs_info(powercycle_ports) $POWERCYCLE_PORTS
+   }
+
+   if {[info exists tftpShareName]} {
+      set DUTs_info(tftpsharename) $tftpShareName
+   }
+
+   if {[info exists switchPort2DefaultRouter]} {
+      set DUTs_info(switchport2defaultrouter) $switchPort2DefaultRouter
+   }
+
+   if {[info exists connectionTimeout]} {
+      set DUTs_info(connectiontimeout) $connectionTimeout
+   }
+
+
+   global DUT_CONNECT
+   global DUT_IP
+   global DUT_SETUP
+   global DUT_TERMSVRIP
+   global DUT_TERMSVRPORT
+
+   set DUTs_info(DUT,connect) [set DUT_CONNECT]
+   set DUTs_info(DUT,ip) [set DUT_IP]
+   set DUTs_info(DUT,setup) [set DUT_SETUP]
+   set DUTs_info(DUT,termsvrip) [set DUT_TERMSVRIP]
+   set DUTs_info(DUT,termsvrport) [set DUT_TERMSVRPORT]
+
+}
+
+
+######################################## 
+# Proc Name: WifiGetDUTsSlotInfo
+#   
+# Desc: This creates and fills in the array  DUTs_Slot_info with the
+#       help of DUTs_info. All slot specific necessary information
+#       may be obtained from this array. This array may be referred
+#       with known information of DUT and slot number
+#
+# Input args   : tmpdir
+# Output args  : none
+#
+# Typical usage:
+#    WifiGetDUTsSlotInfo $tmpdir
+#
+########################################
+proc WifiGetDUTsSlotInfo {{tmpdir "Tmp"}} {
+
+   global spawn_id
+   global numDUT
+   global fast
+
+   set numSlots 8
+
+########################################
+# Variable to store all the DUTs interested information
+########################################
+
+   global DUTs_info
+
+   global DUTs_Slot_info
+
+   set fd_res [open_result_file "slotinfo"]
+
+########################################
+# We're only doing 1  DUT at a time. Removed or commented out
+# all references to multiple DUTs for now until we get around
+# to re-architecting this portion of the suite.
+# mferreri 07-21-2004
+########################################
+
+   global DUT_CONNECT
+
+   set numSlots $DUTs_info(DUT$i,numSlots)
+   set hwModType "NULL"
+   set confType  "NULL"
+   set state     "NULL"
+   set npRev     "NULL"
+   set npProc1   "NULL"
+   set npProc2   "NULL"
+   set imageSel  "NULL"
+   set priImage  "NULL"
+   set secImage  "NULL"
+   set version   "NULL"
+   set verTime   "NULL"
+   set dlReqD    "0"
+   set category  "NULL"
+
+   for {set j 1} {$j <= $numSlots} {incr j} {
+      # Hardware module type
+      set DUTs_Slot_info(DUT,slot$j,hwModType) $hwModType
+      # Module type set in the configuration
+      set DUTs_Slot_info(DUT,slot$j,confType)  $confType
+      # State of the card (Operational or not)
+      set DUTs_Slot_info(DUT,slot$j,state)     $state
+      # Revision of the C5 Network Processor
+      set DUTs_Slot_info(DUT,slot$j,npRev)     $npRev
+      # Status of each NP on the slot
+      set DUTs_Slot_info(DUT,slot$j,npProc1)   $npProc1
+      # Status of each NP on the slot
+      set DUTs_Slot_info(DUT,slot$j,npProc2)   $npProc2
+      # Image selected to boot from
+      set DUTs_Slot_info(DUT,slot$j,imageSel)  $imageSel
+      # Image in the primary slot
+      set DUTs_Slot_info(DUT,slot$j,priImage)  $priImage
+      # Image in the secondary slot
+      set DUTs_Slot_info(DUT,slot$j,secImage)  $secImage
+      # Image in the slot that is chosen to boot from ASSUMED RUNNING IMAGE
+      set DUTs_Slot_info(DUT,slot$j,version)   $version
+      # Date and Time that the running image was made
+      set DUTs_Slot_info(DUT,slot$j,verTime)   $verTime
+      # For use to determine downloads
+      set DUTs_Slot_info(DUT,slot$j,dlReqD)    $dlReqD
+      # Set category OldGen NewGen NP
+      set DUTs_Slot_info(DUT,slot$j,category)  $category
+
+   }
+
+########################################
+# For the NP Cards we need more than 1 line captured
+########################################
+
+   set bList "NULL"
+   set location "NULL"
+
+   set fd_in [open "$tmpdir/tmp_info_DUT-[pid]" "r"]
+
+   while {[gets $fd_in line] != -1} {
+      set cookedLine [WifiCookString $line]
+
+      set aList [split $cookedLine]
+
+      if {$bList != "NULL"} {
+
+########################################
+# Determine location in file search "show switch, slot or version"
+########################################
+
+         if { ([lindex $bList 0] == "sysName:")} {
+            set location "switch"
+         }
+
+         if { ([lindex $bList 0] == "Chassis:")} {
+            set location "version"
+         }
+
+########################################
+# Loop through slots 
+########################################
+         for {set j 1} {$j <= $numSlots} {incr j} {
+
+            if { ([lindex $bList 0] == "Slot") && \
+                 ([lindex $bList 1] == "$j") &&   \
+                 ([lindex $bList 2] == "information:") } {
+               set location "slot$j"
+            }
+
+########################################
+# Find image version selected to boot
+# Find image version selected on an NP Card
+########################################
+
+
+            if {([lindex $bList 0] == "Software") &&  \
+                ([lindex $bList 1] == "image") &&     \
+                ([lindex $bList 2] == "booted:") &&   \
+                ( $location == "slot$j" ) } {
+               set DUTs_Slot_info(DUT,slot$j,imageSel) [lindex $bList 3]
+               set npImageSel $DUTs_Slot_info(DUT,slot$j,imageSel)
+               set DUTs_Slot_info(DUT,slot$j,imageSel) \
+                  [string tolower $DUTs_Slot_info(DUT,slot$j,imageSel)]
+            }
+
+########################################
+# Find name of image version booted
+# Find image version booted name on an NP Card
+########################################
+
+            set tmp [lindex $bList 0]
+            set tmp [string tolower $tmp]
+
+            if {($tmp == $DUTs_Slot_info(DUT,slot$j,imageSel)) &&   \
+                ([string tolower [lindex $bList 1]] == "software") && \
+                ([string tolower [lindex $bList 2]] == "version:") && \
+                ($location == "slot$j") } {
+               set DUTs_Slot_info(DUT,slot$j,version) \
+                  "[lindex $aList 1] \
+                   [string trimleft [lindex $aList 2] "("] \
+                   [string trimright [lindex $aList 3] ")"] \
+                   [lindex $aList 6]"
+
+               if {[lindex $aList 4] == "Prj"} {
+                  set DUTs_Slot_info(DUT,slot$j,verTime) \
+                     "[lindex $aList 12] [lindex $aList 13] \
+                      [lindex $aList 14] [lindex $aList 15] \
+                      [lindex $aList 16]"
+               }
+
+               if {[lindex $aList 4] == "(Type:"} {
+                  set DUTs_Slot_info(DUT,slot$j,verTime) \
+                     "[lindex $aList 9] [lindex $aList 10] \
+                      [lindex $aList 11] [lindex $aList 12] \
+                      [lindex $aList 13]"
+               }
+
+               if {([lindex $aList 0] == "6.2.1")  && \
+                   ([lindex $aList 4] == "by") } {
+                  set DUTs_Slot_info(DUT,slot$j,verTime) \
+                     "[lindex $aList 7] [lindex $aList 8] \
+                      [lindex $aList 9]"
+                  set DUTs_Slot_info(DUT,slot$j,version) \
+                     "[lindex $aList 0] [string trimleft \
+                      [lindex $aList 1] "("] \
+                      [string trimright [lindex $aList 2] ")"]"
+               }
+
+               if {([lindex $aList 0] >= "7.0.0")  && \
+                   ([lindex $aList 5] == "by") } {
+                  set DUTs_Slot_info(DUT,slot$j,verTime) \
+                     "[lindex $aList 8] [lindex $aList 9] \
+                      [lindex $aList 10]"
+                  set DUTs_Slot_info(DUT,slot$j,version) \
+                     "[lindex $aList 0] [lindex $aList 3]"
+               }
+
+               if {([lindex $aList 0] >= "7.0.0")  && \
+                   ([lindex $aList 4] == "by") } {
+                  set DUTs_Slot_info(DUT,slot$j,verTime) \
+                     "[lindex $aList 7] [lindex $aList 8] \
+                      [lindex $aList 9]"
+                  set DUTs_Slot_info(DUT,slot$j,version) \
+                     "[lindex $aList 0] b[string trimright \
+                      [lindex $aList 2] ")"]"
+               }
+            }
+
+########################################
+# Find the names of the images load in the 2 spaces.. NP cards###
+# Find primary image
+########################################
+
+            if {( $location == "slot$j" ) && \
+                ([string tolower [lindex $bList 0]] == "primary") && \
+                ([string tolower [lindex $bList 1]] == "software") && \
+                ([string tolower [lindex $bList 2]] == "version:") } {
+               set DUTs_Slot_info(DUT,slot$j,priImage) \
+                  "[lindex $aList 1] [string trimleft \
+                   [lindex $aList 2] "("] \
+                   [string trimright [lindex $aList 3] ")"] \
+                   [lindex $aList 6]"
+
+               if {[lindex $aList 0] == "6.2.1"} {
+                  set DUTs_Slot_info(DUT,slot$j,priImage) \
+                     "[lindex $aList 0] [string trimleft \
+                      [lindex $aList 1] "("] [string trimright [lindex $aList 2] ")"]"
+               }
+            }
+
+########################################
+# Find second image
+########################################
+
+            if {($location == "slot$j" ) && \
+                ([string tolower [lindex $bList 0]] == "secondary") && \
+                ([string tolower [lindex $bList 1]] == "software") &&  \
+                ([string tolower [lindex $bList 2]] == "version:") } {
+               set DUTs_Slot_info(DUT,slot$j,secImage) \
+                  "[lindex $aList 1] [string trimleft \
+                   [lindex $aList 2] "("] [string trimright [lindex $aList 3] ")"] \
+                   [lindex $aList 6]"
+
+               if {[lindex $aList 0] == "6.2.1"} {
+                  set DUTs_Slot_info(DUT,slot$j,secImage) \
+                     "[lindex $aList 0] [string trimleft \
+                      [lindex $aList 1] "("] [string trimright [lindex $aList 2] ")"]"
+               }
+            }
+
+########################################
+# Find Hardware module type
+########################################
+
+            if {([lindex $bList 0] == "HW") && \
+                ([lindex $bList 2] == "Type:") && \
+                ($location == "slot$j") } {
+               set DUTs_Slot_info(DUT,slot$j,hwModType) \
+                  [string toupper [lindex $bList 3]]
+            }
+
+########################################
+# Find Slot s/w Configured setting
+########################################
+
+            if {([lindex $bList 0] == "Configured") && \
+                ([lindex $bList 1] == "Type:") && \
+                ($location == "slot$j") } {
+               set DUTs_Slot_info(DUT,slot$j,confType) \
+                  [string toupper [lindex $bList 2]]
+            }
+
+########################################
+# Find find operational state
+########################################
+
+            if {([lindex $bList 0] == "State:") && \
+                ($location == "slot$j") } {
+               set DUTs_Slot_info(DUT,slot$j,state) [lindex $bList 1]
+            }
+
+########################################
+# Find NP Revision
+########################################
+
+            if {([lindex $bList 0] == "NP") &&  \
+                ([lindex $bList 1] == "1:") && \
+                ([lindex $bList 2] == "Rev") && \
+                ($location == "slot$j") } {
+               set DUTs_Slot_info(DUT,slot$j,npRev) [lindex $bList 3]
+            }
+
+########################################
+# Find NP 1 Proc State
+########################################
+
+            if {([lindex $bList 0] == "Network") && \
+                 ([lindex $bList 1] == "Processor") && \
+                 ([lindex $bList 2] == "1") && \
+                 ($location == "slot$j") } {
+               set DUTs_Slot_info(DUT,slot$j,npProc1) [lindex $bList 4]
+            }
+
+########################################
+# Find NP 2 Proc State
+########################################
+
+            if {([lindex $bList 0] == "Network") &&  \
+                ([lindex $bList 1] == "Processor") && \
+                ([lindex $bList 2] == "2") && \
+                ($location == "slot$j") } {
+               set DUTs_Slot_info(DUT,slot$j,npProc2) [lindex $bList 4]
+            }
+         }
+      }
+      set bList $aList
+   }
+
+   for {set j 1} {$j <= $numSlots} {incr j} {
+
+      switch $DUTs_Slot_info(DUT,slot$j,hwModType) {
+         "A3ci"    {set DUTs_Slot_info(DUT,slot$j,category) NP}
+         "P3ci"    {set DUTs_Slot_info(DUT,slot$j,category) NP}
+         "P12ci"   {set DUTs_Slot_info(DUT,slot$j,category) NP}
+         "ARM"     {set DUTs_Slot_info(DUT,slot$j,category) NP}
+         "ASMGM2X" {set DUTs_Slot_info(DUT,slot$j,category) NP}
+         "MPLS"    {set DUTs_Slot_info(DUT,slot$j,category) NP}
+         "SMA"     {set DUTs_Slot_info(DUT,slot$j,category) NP}
+         "G8Xi"    {set DUTs_Slot_info(DUT,slot$j,category) NEW_GEN}
+         "F48Ti"   {set DUTs_Slot_info(DUT,slot$j,category) NEW_GEN}
+         "G12Xi"   {set DUTs_Slot_info(DUT,slot$j,category) NEW_GEN}
+         "F32T"    {set DUTs_Slot_info(DUT,slot$j,category) OLD_GEN}
+         "F24T"    {set DUTs_Slot_info(DUT,slot$j,category) OLD_GEN}
+      }
+
+   }
+
+   close $fd_in
+   close_result_file
+}
+
+########################################
+# WifiSendACmd
+#
+# This one is for sending commands to a "session" and retrieving the
+# output. Only line oriented displays will work with this. Full
+# screen refreshed displays will NOT work. They are a pain in the
+# a&& and require special parsing and processing.
+# 
+# Input Variables:
+#     rtnTst    - return for success (1) or fail (0) of the proc.
+#     sessionId - Session Id (spawn-id from TCL)
+#     prodType  - Prod Type. Determines expected prompt for CLI
+#                 in this proc.
+#     cmd       - Command that we need to execute.
+#     "S or "L" - return the display as single String or List. Each
+#                 display line will be an element of the list
+#                 returned. Default is "S"
+#
+# Output Variables: 
+#     none 
+#
+# Return Value:
+#     If rtnTst 1; Cmd succeeded - no syntax problem. Returns
+#                  display as single string or list of lines
+#                  is returned.
+#     If rtnTst 0; Command failed with syntax error. Return is
+#                  the syntax error message from the CLI.
+#
+# NOTE: If no command string provided we will do a <cr>.
+# NOTE: Syntax error displays are always returned as single string
+#       (minus <cr>'s.
+# NOTE: We use "send_slow" in this routine because we have observed
+#       at various times that command strings get split up, especially
+#       if they are being given to a serial console session.
+#       Using 2 characters every .01 seconds.
+########################################
+proc WifiSendACmd {rtnTst sessionId prodType {cmd ""} {dFormat "S"} } {
+
+   upvar $rtnTst booVal
+
+   switch -exact -- $prodType {
+      1 { set cliPrompt "Summit300-48(.*)# $" }
+      2 { set cliPrompt "Summit300-48(.*)# $" }
+      3 { set cliPrompt "Summit300-24(.*)# $" }
+      4 { set cliPrompt "Alpine3802(.*)# $" }
+      5 { set cliPrompt "Summit24e3(.*)# $" }
+      default { set cliPrompt "(.*)# $" }
+   }
+
+   set send_slow {2 .01}
+
+# send a "seed" <cr> and make sure we're at a prompt.
+
+   send -s -i $sessionId "\r"
+
+   after 500
+
+   expect {
+      -i $sessionId
+      -re $cliPrompt {}
+      timeout {
+         set rtnError "Error::\(WifiSendACmd\) Timeout looking for return to CLI prompt."
+         set booVal 0
+         return $rtnError
+      }
+   }
+
+########################################
+# This is the "meat of the routine.
+# 1. Send the command provided
+# 2. Get the output display.
+# 3. Remove all the <cr>'s
+# 4. Check for syntax error. If found, return immediately with error.
+# 5. If no syntax error, format the return display into a list if the
+#    $dFormat variable is set to "L", else leave as single string.
+# 6. set the booVal for success, re-enable CLI paging and return the
+#    display output.
+########################################
+
+   send -s -i $sessionId "$cmd\r"
+   expect {
+      -i $sessionId
+      -ex $cmd {}
+      timeout {
+         set rtnError "Error::\(WifiSendACmd\) Could not find echo'd command string."
+         set booVal 0
+         return $rtnError
+      }
+   }
+
+   expect {
+      -i $sessionId
+      -re $cliPrompt {
+         set exp_out $expect_out(buffer)
+         regsub -all "\r" $exp_out "" exp_out
+         regsub -all "\t" $exp_out " " exp_out
+
+         if {[regexp "(.*)Syntax error at(.*)" $exp_out]} {
+            set rtnError $exp_out
+            set booVal 0
+            return $rtnError
+         }
+
+         if {[regexp "(.*)Error: (.*)" $exp_out]} {
+            set rtnError $exp_out
+            set booVal 0
+            return $rtnError
+         }
+
+         set booVal 1
+         if {$dFormat == "L"} {
+            regsub -all "\r" $exp_out "" displayList
+            set displayList [string trim $displayList "\n"]
+            set displayList [split $displayList "\n"]
+         }
+      }
+
+      "\\?" {
+         send -i $sessionId "y\r"
+         expect {
+            -i $sessionId
+            -re $cliPrompt {
+               set exp_out $expect_out(buffer)
+               regsub -all "\r" $exp_out "" exp_out
+               regsub -all "\t" $exp_out " " exp_out
+
+               set booVal 1
+               if {$dFormat == "L"} {
+                  regsub -all "\r" $exp_out "" displayList
+                  set displayList [string trim $displayList "\n"]
+                  set displayList [split $displayList "\n"]
+               }
+            }
+         }
+      }
+
+      "n)\\?  " {
+         send -i $sessionId "y\r"
+         expect {
+            -i $sessionId
+            -re $cliPrompt {
+               set exp_out $expect_out(buffer)
+               regsub -all "\r" $exp_out "" exp_out
+               regsub -all "\t" $exp_out " " exp_out
+
+               set booVal 1
+               if {$dFormat == "L"} {
+                  regsub -all "\r" $exp_out "" displayList
+                  set displayList [string trim $displayList "\n"]
+                  set displayList [split $displayList "\n"]
+               }
+            }
+         }
+      }
+
+      timeout {
+         set rtnError "Error::\(WifiSendACmd\) Timeout looking for return to CLI prompt."
+         set booVal 0
+         return $rtnError
+      }
+   }
+
+########################################
+# if we get this far without having already returned an error, we
+# can send back the display output.
+########################################
+
+   if {$dFormat == "L"} {
+      return $displayList
+   } else {
+      return $exp_out
+   }
+}
+
+######################################## 
+# Proc Name: WifiGetDUTName
+#   
+# Desc: Get DUTx based on DUTx_CONNECT 
+#
+# Input args   : IP address 
+# Output args  : DUTx
+#
+# Typical usage: 
+#    [WifiGetDUTName $ip]
+#
+######################################## 
+
+proc WifiGetDUTName {ip} {
+
+   global DUT_CONNECT
+
+   while { [info exists DUT_CONNECT] } {
+      set connect [set DUT_CONNECT]
+      if {$connect == $ip} { return "DUT"}
+
+      global DUT_CONNECT
+   }
+   return "UnknownDUT"
+}
+
+######################################## 
+# Proc Name: WifiGetVersion
+#   
+# Desc: Get EW version on the DUT 
+#
+# Input args   : DUTName 
+#              : level 
+# Output args  : return version
+#
+# Typical usage: 
+#    WifiGetVersion "DUT1" 2
+#
+######################################## 
+
+proc WifiGetVersion {{DUTName "DUT"} {level "1"} } {
+
+   global DUTs_info
+
+   if {$level == "1" } {
+######################################## 
+# return release and build number x.x.xbx
+######################################## 
+      return $DUTs_info($DUTName,VERSION)
+   } elseif {$level == "2"} {
+######################################## 
+# return partly release number x.x
+######################################## 
+      set x $DUTs_info($DUTName,version)
+      set ver 0;
+      set match 0;
+      set flg [regexp -nocase {^([0-9]+.[0-9a-z]+).[0-9].*} $x match ver]
+
+      if {$flg} {
+         return $ver
+      } else {
+         return $match
+      }
+   } elseif {$level == "3"} {
+
+######################################## 
+# return build number  
+######################################## 
+      set x $DUTs_info($DUTName,version)
+      set match 0;
+      set build 0;
+      set flg [regexp -nocase {^[0-9]+.[0-9a-z]+.[0-9]+[a-z]+([0-9]*)} $x match build]
+
+      if {$flg} {
+         return $build
+      } else {
+         return $match
+      }
+   } elseif {$level == "4"} {
+######################################## 
+# return release number x.x.x
+######################################## 
+      set x $DUTs_info($DUTName,version)
+      set ver 0;
+      set match 0;
+      set flg [regexp -nocase {^([0-9]+.[0-9a-z]+.[0-9]+)[a-z]+} $x match ver]
+
+      if {$flg} {
+         return $ver
+      } else {
+         return $match
+      }
+   }
+   return $DUTs_info($DUTName,version)
+}
+
+########################################
+# WifiConsole
+#
+# This one simply logs in to a serial console port and
+# returns a spawn-id
+#
+# Input Variables:
+#    rtnTst        - Success (1) or failure (0) of the proc.
+#    prodType      - Hardware product type.
+#    termSvrIp     - Terminal server IP Address.
+#    termSvrPort   - Terminal server port connected to the console
+#                    serial port.
+#    loginName     - Login name
+#    loginPassword - Login Password (defaults to "null")
+#
+# Output Variables:
+#    none
+#
+# Return Value:
+#    If rtnTst = 1; succesful login..return session ID.
+#    If rtnTst = 0; unsuccesful login...return error string. 
+#
+# NOTE: This proc uses the "rtnTst" and "prodType"conventions.
+#       Please see the README in this sub-directory for a full
+#       explanation of how/why they are used. Default for
+#       loginPassword if none provided is NULL.
+########################################
+#
+proc WifiConsole {rtnTst termSvrIp termSvrPort prodType loginName {loginPassword "NULL"}} {
+
+   upvar $rtnTst booVal
+
+   switch -exact -- $prodType {
+      1 { set cliPrompt "Summit300-48(.*)# $" }
+      2 { set cliPrompt "Summit300-48(.*)# $" }
+      3 { set cliPrompt "Summit300-24(.*)# $" }
+      4 { set cliPrompt "Alpine3802(.*)# $" }
+      5 { set cliPrompt "Summit24e3(.*)# $" }
+      default { set cliPrompt "(.*)# $" }
+   }
+
+   set alreadyLoggedIn 0
+
+   spawn telnet
+   after 1000
+
+   send "\r"
+   after 1000
+
+   expect {
+      "telnet> " {}
+      timeout {
+         set booVal 0
+         set rtnError "Error\(WifiConsole\):: No telnet prompt."
+         return $rtnError
+      }
+   }
+
+   send "open $termSvrIp $termSvrPort\r"
+   after 1000
+
+   send "\r"
+   after 1000
+   send "\r"
+   expect {
+      -ex "login: " {}
+      -re "(.*)Connection refused(.*)" {
+         set rtnError "Telnet connection was refused!!!\n"
+         append rtnError "Terminal Server Port number invalid - or -\n"
+         append rtnError "Another Session is using this port number."
+         set booVal 0
+         return $rtnError
+      }
+      -re "(.*)Connection closed(.*)" {
+         set rtnError "Telnet connection was refused!!!\n"
+         append rtnError "Terminal Server Port number invalid - or -\n"
+         append rtnError "Another Session is using this port number."
+         set booVal 0
+         return $rtnError
+      }
+      -re $cliPrompt {
+         set alreadyLoggedIn 1
+         puts "WARNING: Previous console CLI session was not exited. Continuing.."
+      }
+      timeout {
+         set booVal 0
+         set rtnError "Error\(WifiConsole\):: Connection Timeout - No Login Prompt"
+         return $rtnError
+      }
+   }
+
+
+   if {$alreadyLoggedIn == 0} {
+      send "$loginName\r"
+      after 1000
+
+      expect {
+         -ex "password: " {}
+         timeout {
+            set booVal 0
+            set rtnError "Error\(WifiConsole\):: Timed out looking for Password Prompt"
+            return $rtnError
+         }
+      }
+
+      if {$loginPassword == "NULL"} {
+         send "\r"
+      } else {
+         send "$loginPassword\r"
+      }
+
+      after 1000
+
+      expect {
+         -re $cliPrompt {}
+         timeout {
+            set booVal 0
+            set rtnError "Error\(WifiConsole\):: Timed out trying to get to initial CLI prompt."
+            return $rtnError
+         }
+      }
+
+      set cmd "disable clipaging"
+      send "$cmd\r"
+      expect $cmd
+      expect {
+         -re $cliPrompt {}
+         timeout {
+            set booVal 0
+            set rtnError "Error\(WifiConsole\):: Timed out trying disable paging."
+            return $rtnError
+         }
+      }
+   }
+
+   set booVal 1
+   return $spawn_id
+}
+
+########################################
+# WifiConsoleLogout
+#
+# This one simply logs out of a serial console port session.
+#
+# Input Variables:
+#    rtnTst - Success (1) or failure (0) of the proc.
+#    sessionId - spawn-id from the session we want to close.
+#    prodType - Hardware product type.
+#
+# Output Variables:
+#    none
+#
+# Return Value:
+#    If rtnTst = 1; succesful logout.
+#    If rtnTst = 0; unsuccesful logout. 
+#
+# NOTE: This proc uses the "rtnTst" and "prodType"conventions.
+#       Please see the README in this sub-directory for a full
+#       explanation of how/why they are used.
+########################################
+#
+proc WifiConsoleLogout {rtnTst sessionId prodType} {
+
+   upvar $rtnTst booVal
+
+   set errPrefix "Error \(WifiConsoleLogout\)::"
+   set err1 "No Cli or Login prompt."
+   set err2 "Telnet process associated with console session may not have terminated."
+   set err3 "Console session to network device may still be active."
+
+   switch -exact -- $prodType {
+      1 { set cliPrompt "Summit300-48(.*)# $" }
+      2 { set cliPrompt "Summit300-48(.*)# $" }
+      3 { set cliPrompt "Summit300-24(.*)# $" }
+      4 { set cliPrompt "Alpine3802(.*)# $" }
+      5 { set cliPrompt "Summit24e3(.*)# $" }
+      6 { set cliPrompt "Summit400-24(.*)# $" }
+      default { set cliPrompt "(.*)# $" }
+   }
+
+   send -i $sessionId "\r\r"
+   after 1000
+
+   expect {
+      -i $sessionId
+      -re $cliPrompt {
+         switch -exact -- $prodType {
+            1 { send -i $sessionId "exit\r" }
+            2 { send -i $sessionId "exit\r" }
+            3 { send -i $sessionId "exit\r" }
+            4 { send -i $sessionId "exit\r" }
+            5 { send -i $sessionId "exit\r" }
+            default { send -i $sessionId "exit\r" }
+         }
+      }
+      timeout {
+         set booVal 0
+         set rtnError "$errPrefix $err1"
+         close -i $sessionId
+         return $rtnError
+      }
+   }
+
+   expect {
+      -i $sessionId
+      -ex "(y/n) " {
+         send -i $sessionId "n\r"
+         expect {
+            -i $sessionId
+            -ex "login: " {
+               send -i $sessionId "\x1d"
+               expect {
+                  -i $sessionId
+                  -ex "telnet> " {
+                     send -i $sessionId "quit\r"
+                     expect {
+                        -i $sessionId
+                        -re "(\.*)nection close(\.*)" {
+                           set booVal 1
+                           return
+                        }
+                        timeout {
+                           close -i $sessionId
+                           set booVal 0
+                           set rtnError "$errPrefix $err2"
+                           return $rtnError
+                        }
+                     }
+                  }
+                  timeout {
+                     close -i $sessionId
+                     set booVal 0
+                     set rtnError "$errPrefix $err2"
+                     return $rtnError
+                  }
+               }
+            }
+            timeout {
+               close -i $sessionId
+               set booVal 0
+               set rtnError "$errPrefix $err3"
+               return $rtnError
+            }
+         }
+      }
+      -ex "login: " {
+         send -i $sessionId "\x1d"
+         expect {
+            -i $sessionId
+            -ex "telnet> " {
+               send -i $sessionId "quit\r"
+               expect {
+                  -i $sessionId
+                  -re "(\.*)nection close(\.*)" {
+                     set booVal 1
+                     return
+                  }
+                  timeout {
+                     close -i $sessionId
+                     set booVal 0
+                     set rtnError "$errPrefix $err2"
+                     return $rtnError
+                  }
+               }
+            }
+            timeout {
+               close -i $sessionId
+               set booVal 0
+               set rtnError "$errPrefix $err2"
+               return $rtnError
+            }
+         }
+      }
+      -ex "telnet> " {
+          send -i $sessionId "quit\r"
+          expect {
+             -i $sessionId
+             -re "(\.*)nection close(\.*)" {
+                set booVal 1
+                return
+             }
+             timeout {
+                close -i $sessionId
+                set booVal 0
+                set rtnError "$errPrefix $err2"
+                return $rtnError
+             }
+          }
+      }
+      timeout {
+         close -i $sessionId
+         set booVal 0
+         set rtnError "$errPrefix $err2"
+         return $rtnError
+      }
+   }
+   return
+}
+
+########################################
+# Proc Name: WifiTelnet
+#
+# This one simply logs in to an in-band telnet port and
+# returns a spawn-id
+#
+# Input Variables:
+#    rtnTst - Success (1) or failure (0) of the proc.
+#    switchIp - IP Address of the switch we're telnetting into.
+#    prodType - Hardware product type.
+#    loginName - Login name
+#    loginPassword -  Login Password (defaults to "null")
+#
+# Output Variables:
+#    none
+#
+# Return Value:
+#    If rtnTst = 1; succesful login..return session ID.
+#    If rtnTst = 0; unsuccesful login...return error string.
+#
+# NOTE: This proc uses the "rtnTst" and "prodType"conventions.
+#       Please see the README in this sub-directory for a full
+#       explanation of how/why they are used.
+#       Default for loginPassword if none provided is NULL.
+########################################
+#
+proc WifiTelnet {rtnTst switchIp prodType loginName {loginPassword "NULL"}} {
+
+   upvar $rtnTst booVal
+
+   switch -exact -- $prodType {
+      1 { set cliPrompt "Summit300-48(.*)# $" }
+      2 { set cliPrompt "Summit300-48(.*)# $" }
+      3 { set cliPrompt "Summit300-24(.*)# $" }
+      4 { set cliPrompt "Alpine3802(.*)# $" }
+      5 { set cliPrompt "Summit24e3(.*)# $" }
+      6 { set cliPrompt "Summit400-24(.*)# $" }
+      default { set cliPrompt "(.*)# $" }
+   }
+
+   spawn telnet $switchIp
+   after 1000
+
+   send "\r"
+   after 1000
+
+   expect {
+      -ex "login: " {}
+      -ex "Connection refused" {
+         set rtnError "Error\(WifiTelnet\):: Telnet Connection Refused."
+         set booVal 0
+         return $rtnError
+      }
+      -ex "no available pty" {
+         set rtnError "Error\(WifiTelnet\):: Telnet Connection Refused.\n"
+         append rtnError "Telnet pty's \(8\) max'd out on this switch!!!"
+         set booVal 0
+         return $rtnError
+      }
+      timeout {
+         set booVal 0
+         set rtnError "Error\(WifiTelnet\):: Connection Timeout - No Login Prompt"
+         return $rtnError
+      }
+   }
+
+   send "$loginName\r"
+   after 1000
+
+   expect {
+      -ex "password: " {}
+      timeout {
+         set booVal 0
+         set rtnError "Error\(WifiTelnet\):: Timed out looking for Password Prompt"
+         return $rtnError
+      }
+   }
+
+   if {$loginPassword == "NULL"} {
+      send "\r"
+   } else {
+      send "$loginPassword\r"
+   }
+
+   after 1000
+
+   expect {
+      -re $cliPrompt {}
+      timeout {
+         set booVal 0
+         set rtnError "Error\(WifiTelnet\):: Timed out trying to get to CLI prompt."
+         return $rtnError
+      }
+   }
+
+   set cmd "disable clipaging"
+   send "$cmd\r"
+   expect $cmd
+   expect {
+      -re $cliPrompt {}
+      timeout {
+         set booVal 0
+         set rtnError "Error\(WifiConsole\):: Timed out trying disable paging."
+         return $rtnError
+      }
+   }
+
+   set booVal 1
+   return $spawn_id
+}
+
+################################################################
+# AnalyzeErrors
+# 
+# Scan a log file for reported errors, parsing for the string:
+#    "Error::" followed by any text.
+#   
+# Input Variables:
+#    logFile - log file to search
+#    resultsFile - file to write the Pass/Fail result to.
+#
+# Output Variables:
+#    none
+#
+# Return Value:
+#    none
+################################################################
+#
+proc AnalyzeErrors {logFile resultsFile} {
+   set errorFound 0
+   set fileHandle [open $logFile r]
+   set fileContents [split [read $fileHandle] \n]
+
+   close $fileHandle
+
+   foreach fileLine $fileContents {
+       puts $fileLine
+
+       if {[regexp "(.*)Error::(.*)" $fileLine]} {
+          set errorFound 1
+       }
+   }
+
+   if {$errorFound} {
+      LogIt $resultsFile "Fail"
+   } else {
+      LogIt $resultsFile "Pass"
+   }
+}
+
+################################################################
+# LogIt
+# 
+# Write an entry into the log file with a timestamp at the
+# beginning of the line.
+#   
+# Input Variables:
+#     logFile - name of the log file to write to
+#     output - string to write to the log
+#
+# Output Variables:
+#     none
+#
+# Return Value:
+#     none
+################################################################
+#
+proc LogIt { logFile output } {
+    set logDate [clock format [clock seconds] -format %m/%d/%y]
+    set logTime [clock format [clock seconds] -format %H:%M:%S]
+    set fileHandle [open $logFile a]
+    puts $fileHandle "$logDate $logTime $output"
+    close $fileHandle
+}
+
+################################################################
+# Dump
+# 
+# Write an entry into the log file without a timestamp at the
+# beginning of the line.
+#   
+# Input Variables:
+#     logFile - name of the log file to write to
+#     output - string to write to the log
+#
+# Output Variables:
+#     none
+#
+# Return Value:
+#     none
+################################################################
+#
+proc Dump { logFile output } {
+    set fileHandle [open $logFile a]
+    puts $fileHandle $output
+    close $fileHandle
+}
+
+########################################
+# Proc Name: DoLinuxPing
+# 
+# Desc: Ping to a destination address from a Linux command line for
+# a specific number of pings. Capture the percent loss and return
+# it to calling script. The assumption with this proc is that we
+# are running this proc and our tcl session from the system that
+# we want to ping from. As a result, there is no spawn-id to
+# worry about. The proc just does an "exec" from our tcl session.
+# However, we did add the rtnTst and return value convention.
+#   
+# Input Args   : ipAddress - IP Address of destination
+#              : pingCount - Number of times to ping (default = 5)
+#
+# Return Value:
+#    Percent loss for entire ping count.
+#     
+# Typical Usage:
+#    set pingLoss [DoLinuxPing 10.10.10.10 100]
+#
+########################################
+proc DoLinuxPing {rtnTst ipAddress {pingCount "5"}} {
+
+   upvar $rtnTst booVal
+
+   puts "\n================"
+   puts "Ping $ipAddress $pingCount times from Linux host"
+   puts "================"
+
+   catch {exec ping -c $pingCount $ipAddress} resultOut
+
+   set pingOutList [split $resultOut "\n"]
+
+   foreach pingLine $pingOutList {
+      puts $pingLine
+
+      if {[string match "*errors,*" $pingLine]} {
+         set booVal 0
+         set rtnErr "Problem encountered doing the pings!\n$pingOutList"
+         return $rtnErr
+      } else {
+         if {[string match "*received, *" $pingLine]} {
+            set pIndex1 [expr [string first "received, " $pingLine] + 10]
+            set pIndex2 [expr [string first "%" $pingLine] -1]
+
+            if {($pIndex1 != -1) && ($pIndex2 != -1)} {
+               set pingLoss [string range $pingLine $pIndex1 $pIndex2]
+               set booVal 1
+               puts "From doPings proc, Ping Loss = $pingLoss"
+               return $pingLoss
+            } else {
+               set booVal 0
+               set rtnErr "Problem encountered doing the pings!"
+               return $rtnErr
+            }
+         }
+      }
+   }
+########################################
+# If we don't return with a ping loss percent number, the percent
+# fail/success never showed up....probably a catastrophic error of
+# some sort. Return FAIL to the calling proc. We can't return a 0
+# or 1 because that may be the actual ping loss percentage.
+########################################
+   set booVal 0
+   set rtnErr "Problem encountered doing the pings!"
+   return $rtnErr
+}
+
+########################################
+# Proc Name: DoSwitchPing
+# 
+# Desc: Ping to a destination address from a switch command line.
+# Capture the percent loss and return it to calling script.
+#   
+# Input Args    : rtnTst - return success/fail for the proc 
+#               : sessionId - spawn-id for this terminal session
+#               : prodType - product type number for the switch
+#               : ipAddress - IP Address of destination
+#
+# Return Value  : Percent loss for entire ping count.
+#     
+# Typical Usage:
+#    set pingLoss [DoSwitchPing rtnTst $sessionId $prodType 10.10.10.10]
+#
+########################################
+proc DoSwitchPing {rtnTst sessionId prodType ipAddress} {
+
+   upvar $rtnTst booVal
+
+   puts "\n======================"
+   puts "Ping AP from the switch."
+   puts "======================"
+
+   set pingOutList [WifiSendACmd rtnTst $sessionId $prodType "ping $ipAddress" "L"]
+
+   foreach pingLine $pingOutList {
+      puts "Ping Line = $pingLine"
+
+      if {[string match "*received, *" $pingLine]} {
+         puts "Found ping loss percentage line."
+         set pIndex1 [expr [string last ", " $pingLine] + 2]
+         puts "pIndex1 value = $pIndex1"
+         set pIndex2 [expr [string first "%" $pingLine] -1]
+         puts "pIndex2 value = $pIndex2"
+
+         if {($pIndex1 != -1) && ($pIndex2 != -1)} {
+            set pingLoss [string range $pingLine $pIndex1 $pIndex2]
+            puts "Ping Loss value = $pingLoss"
+            set booVal 1
+            return $pingLoss
+         } else {
+            set rtnErr "Error:: \(DoSwitchPing\) Abnormal ping failure!\n$pingOutList"
+            set booVal 0
+            return $rtnErr
+         }
+      }
+   }
+
+########################################
+# See comment at this position for proc "DoLinuxPing"
+########################################
+   set rtnErr "Error:: \(DoSwitchPing\) Abnormal ping failure!\n$pingOutList"
+   set booVal 0
+   return $rtnErr
+}
+
+proc Wifi_PingTheClient {clientIp {testComment ""} {retry 4} {retryTime 20}\
+	{lossThreshold 50} {numPingPackets 10} } {
+    
+    set status "error"
+
+    report_start_test "Check ping to client $clientIp: $testComment"
+
+    result_debug " - Pinging Client $clientIp from Linux Host $numPingPackets times"
+ 
+    set i 0
+    while {$i < $retry} {
+
+	set pingLoss [DoLinuxPing rtnTst $clientIp $numPingPackets]
+	if { ($rtnTst) && ($pingLoss <= $lossThreshold) } {
+	    result_ok " - Ping Loss from Linux Test Host to Client = $pingLoss percent."
+	    set status "ok"
+	    break;
+	} else {
+	    result_warning "Client Ping check $i of $retry failed." 
+	    incr i 1
+	    exSleep $retryTime
+	    continue
+	}
+    }
+  
+
+    if {$status == "error" } {
+	if {!$rtnTst} {
+	    result_error "Error:  $pingLoss"
+	} elseif {$pingLoss > $lossThreshold} {
+	    result_error "Error: Connectivity issue to Client. Ping Loss = $pingLoss percent."
+	} else {
+	    result_error "Error: Unknown error"
+	}
+    }
+
+    report_end_test
+    
+    return $status
+}
+
+
+;# Description: Telnet to Odyssey Client and position cursor
+proc Wifi_PositionOdysseyClient { ipaddr port up_down numPosition {retry 0}} {
+
+    ########################################
+    # 1. Position the Odyssey client network assignment to the top of
+    #    the list of networks.
+    # 2. Telnet to the socket opened by the perl script on the wired
+    #    side of the client and assign the spawn_id to "sessionId3"
+    ########################################
+
+    if {$numPosition == 0} {
+	result_warning "Wifi_PositionOdysseyClient $ipaddr $port $up_down $numPosition **********"
+	result_warning "numPosition == 0"
+    }
+
+    result_debug "Position the Odyssey Client to the Top of the Network List."
+
+    spawn telnet
+    after 2000
+    
+    send "\r"
+    expect { 
+	"telnet> " {
+	    result_debug " - Found telnet prompt."
+	}
+	timeout {
+	    result_debug "Error:: Trying to set connection to wired side"
+	    result_debug "        of client. No telnet prompt."
+	    result_debug "--- End Time"
+	    return 0
+	}
+    }
+
+    set telnetCmd "open $ipaddr $port"
+    send "$telnetCmd\r"
+    expect {
+	-ex $telnetCmd {}
+	timeout {
+	    result_debug "Can't find echo of the telnet open command."
+	    return 0
+	}
+    }
+
+    expect {
+	-re "Escape(.*)" {
+	    set sessionId3 $spawn_id
+	    result_debug " - Got session Id for the wired side of the wireless client."
+	}
+	timeout {
+	    result_debug "Can't telnet into the wired side of the client." 
+	    if {$retry == 1} {
+		result_debug "Exiting script."
+		return 0
+	    }
+	}
+    }
+    after 2000
+    
+    send -i $sessionId3 "\r"
+    expect "*" {}
+
+    after 1000
+
+    ########################################
+    # loop to make sure we get all the way back to the beginning of the
+    # list of networks that are in the Odyssey client.
+    ########################################
+    global _odysseyClientOffsetList
+    
+    ;# Pad by 5 to make sure we're at the top
+    set listSize [expr [llength $_odysseyClientOffsetList] + 5]
+
+#    send -i $sessionId3 "top $listSize\r"
+#    expect "*" {}
+#    result_debug "Move up - $listSize Positions"
+#    result_debug "Should be at top of network list"
+
+    ;# This sleep is absolutely necessary.  We need to make sure the TOP command
+    ;# completes before executing the next command.  We sleep at least 3 seconds
+    ;# then add 1 second for every 5 positions
+#    set sleepTime [expr ($numPosition / 5) + 3] 
+##    result_debug "Sleep $sleepTime seconds before moving $up_down $numPosition positions"
+#    exSleep $sleepTime
+
+#    for {set i 0} {$i < 32} {incr i} {
+#	send -i $sessionId3 "up\r"
+#	expect "*" {}
+#	result_debug "Move net id up - loop counter id = $i"
+#	after 1000
+#    }
+    
+    ########################################
+    # The general flow from here is as follows:
+    # 1. Move the client network name to the next value we want to
+    #    verify
+    # 2. Disable interface not being used for the specific pass
+    # 3. Configure the interface being used and enable it.
+    #    Enable the wireless port (we only need to do this on the
+    #    the first profile verification.)
+    # 4. Verify port and interface are up.
+    # 5. Verify connectivity from this linux host to client ip.
+    # 6. Disable interface.
+    # 8. Repeat
+    ########################################
+    result_debug " - Moving Down $numPosition Positions to Desired Network on Client."
+    
+    if {$up_down == "up"} {
+       send -i $sessionId3 "top $numPosition\r"
+    } else {
+       send -i $sessionId3 "bottom $numPosition $listSize\r"
+    }
+    expect "*" {}
+
+    set sleepTime [expr ($numPosition / 5) + 3] 
+    result_debug "Sleep $sleepTime seconds before moving $up_down $numPosition positions"
+    exSleep $sleepTime
+
+#    for {set i 1} {$i < [expr $numPosition + 1]} {incr i} {
+#	send -i $sessionId3 "$up_down\r"
+#	expect "*" {}
+#	result_debug "Move net id down - loop counter id = $i"
+#	after 1000
+#    }
+
+    send -i $sessionId3 "quit\r"
+    close; wait
+    after 2000
+
+    return 1
+}
+
+# DESCRIPTION: Wait for a particular wireless port state
+proc Wifi_WaitPortState { wiPort {state "ON"} {msg "Waiting for port"} \
+	{start 20} {interval 10} {duration 110} {timeout 300} } {
+
+    set rc "ok"
+
+    ## Sample Output
+    #
+    # * Summit300-48:44 # sh wireless ports 1:24
+    # Port  HW Version MAC Addr          Serial #   State Last Change              
+    # --------------------------------------------------------------------------------
+    #  1:24 01000001   00:30:F1:92:44:39 A324049232 ON    Thu Nov 11 01:26:43 2004
+    # 
+    # 
+    # State: DIS - Disabled, EN - Enabled, RST - Reset, ADDR - Addressing,
+    #        REG - Register, SYNC - Syncing, ON - Online, ERR - Error
+
+    set timeParam "s: $start i: $interval d: $duration f: $timeout"
+    set parameterList ""
+    lappend parameterList "{$wiPort .* $state} exist"
+    set rc [CheckKeyValue "sh wirel po $wiPort" $parameterList \
+	    -time $timeParam \
+	    -comment "$msg"]
+
+    if {$rc != "ok" } {
+	result_debug "AP Failed to Come Up. Dumping log info..."
+	SendACmd "show log"
+	SendACmd "clear log"
+    }
+
+    return $rc
+}
+
+proc Wifi_PingAPfromSwitch {wiPortIp prodType sessionId} {
+
+    set rc "ok"
+
+    set val [CheckCLIPing "ping $wiPortIp" "pingable" "Ping AP @ $wiPortIp from DUT"]
+
+    if {$val == 0} {
+	set rc "error"
+    }
+    return $rc
+}
+
+proc Wifi_GetOdysseyClientOffset { essName } {
+
+    global _odysseyClientOffsetList
+
+    set val [lsearch $_odysseyClientOffsetList $essName]
+
+    puts "Got $val for $essName"
+    if {$val == -1} {
+	result_warning "$essName not found in  odysseyClientOffsetList"
+	result_warning "$_odysseyClientOffsetList"
+	set val 0
+    }
+
+    return $val
+}
+
+proc Wifi_GetPortChannel { port {interface 1}} {
+
+    set channel 0
+
+    # * Summit300-48:39 # show wireless port 1:24 interface 1 status
+    # Intf    St. Tx Rate Tx Power         Ch  ESS                Max Cl. Last State Change        
+    # ------------------------------------------------------------------------------------------
+    # 1:24:1 EN  54      FULL     (17 dBm) 48  DEFAULT_ESS        100     Sat Jan 8 02:46:40 2005
+    
+    set apIfStatusDisplay [SendACmd "show wireless port $port interface $interface status"] 
+
+    regexp ".*dBm\\)\ *(\[0-9]+)\ *" $apIfStatusDisplay ignore channel		    
+
+    if {! [string is integer $channel] } {
+	result_debug "WARNING: Parsed invalid scan channel $channel"
+	set channel 0
+    }
+
+    return $channel
+}

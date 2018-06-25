@@ -1,0 +1,785 @@
+
+##################################################################
+# Procedure Name: shareDevInit
+#  
+# Description: Initialize the data structures and reserve the ixia
+#              ports using sharing device for a feature. Called 
+#              from Main.tcl
+#
+# Input args: none
+#
+# Output args: none
+#
+# Return Value : 0 on success and -1 on Failure
+#
+# Typical usage: set retVal [shareDevInit]
+#
+# Category: setup
+##################################################################
+proc shareDevInit {} {
+
+################################################################
+    set testNo "L1 Switch Setup"
+    set title $testNo
+################################################################
+
+   global sharingDeviceType
+   
+   set fd_res [open_result_file "$testNo"]
+   set time1 [clock seconds]
+    
+   if {![info exist sharingDeviceType]} {
+      result_debug "No sharing device Found"
+
+      ################################################
+      # Clean up
+      ################################################
+      set time2 [clock seconds]
+      result_p "*** Time for $testNo = [expr $time2-$time1] secs\n\n"
+      close_result_file
+    
+      return 0
+   }
+
+   if {($sharingDeviceType == "Extreme-eware") || ($sharingDeviceType == "extreme-exos")} {
+      set retVal [generateExDevPortMapping];
+      if {$retVal == -1} {
+         ################################################
+         # Clean up
+         ################################################
+         set time2 [clock seconds]
+         result_p "*** Time for $testNo = [expr $time2-$time1] secs\n\n"
+         close_result_file
+    
+         return -1
+      }
+   } else {
+      set retVal [generateEdenTreeTopologyMapping];
+      if {$retVal == -1} {
+         ################################################
+         # Clean up
+         ################################################
+         set time2 [clock seconds]
+         result_p "*** Time for $testNo = [expr $time2-$time1] secs\n\n"
+         close_result_file
+    
+         return -1
+      }
+   }
+
+   set retVal [reserveIxiaPortResource]
+
+   ################################################
+   # Clean up
+   ################################################
+   set time2 [clock seconds]
+   result_p "*** Time for $testNo = [expr $time2-$time1] secs\n\n"
+   close_result_file
+    
+   return $retVal
+}
+
+##################################################################
+# Procedure Name: shareDevDeInit
+#  
+# Description: Deinitialization and release the ixia
+#              ports after completing a feature. Called 
+#              from Main.tcl
+#
+# Input args: none
+#
+# Output args: none
+#
+# Return Value : 0 on success and -1 on Failure
+#
+# Typical usage: set retVal [shareDevDeInit]
+#
+# Category: setup
+##################################################################
+proc shareDevDeInit {} {
+   global sharingDeviceType
+
+   if {![info exist sharingDeviceType]} {
+      result_debug "No sharing device Found"
+      return 0
+   }
+
+   freeIxiaPortResource;
+}
+
+##################################################################
+# Procedure Name: generateEdenTreeTopologyMapping
+#  
+# Description: Initialization of the share device related data 
+#              structure
+#
+# Input args: none
+#
+# Output args: none
+#
+# Return Value : 0 on success and -1 on Failure
+#
+# Typical usage: set retVal [generateEdenTreeTopologyMapping]
+#
+# Category: setup
+##################################################################
+
+proc generateEdenTreeTopologyMapping {} {
+# --- Place Holder for MRV switch port Mapping array generation in case
+#     in future edentree server is bypassed to configure MRV directly
+   global shareDevPortMappingList
+   global exDevPortMap
+   global exDevIxiaPortMap
+   global setupSharingDevice
+   global ixiaCh1
+   global setupName
+   global startCardNum
+   global ixiaTotalPortInSetup
+
+
+# --- Cook the Setup Name from Ixia chasis card and port Info
+   set ixiaStr [split $ixiaCh1 '.']
+   set setupName [join $ixiaStr _]
+   set ixiaStr [split $startCardNum ':']
+   set ixiaStr [join $ixiaStr _]
+
+   append setupName "_" $ixiaStr
+   set  setupName "_$setupName"
+   result_debug "ixia chasis is $ixiaCh1 Card is $startCardNum setupName \
+                 is $setupName"
+   set ixiaTotalPortInSetup [llength $shareDevPortMappingList]
+
+   set ixiaPortId 1
+   foreach link $shareDevPortMappingList {
+
+#     result_debug "link is $link"
+     set ind 1
+
+     result_debug "Ixia $ixiaPortId <---> $link <---> DUT PortId $ixiaPortId"
+     foreach port $link {
+        set portId [lindex $port 3]
+        set tList [lreplace $port 3 3 "I$portId"]
+        if {$ind == 1} {
+           set exDevIxiaPortMap($ixiaPortId) $tList
+        } else {
+           set exDevPortMap($ixiaPortId) $tList
+        }
+        incr ind
+     }
+     incr ixiaPortId
+   }
+  
+   for {set ixiaPortId 1} {$ixiaPortId <= $ixiaTotalPortInSetup} {incr ixiaPortId} {
+        result_debug "exDevIxiaPortMap($ixiaPortId) $exDevIxiaPortMap($ixiaPortId)"
+   }
+
+   for {set ixiaPortId 1} {$ixiaPortId <= $ixiaTotalPortInSetup} {incr ixiaPortId} {
+        result_debug "exDevPortMap($ixiaPortId) $exDevPortMap($ixiaPortId)"
+   }
+
+   return 0
+}
+
+##################################################################
+# Procedure Name: reserveIxiaPortResource
+#  
+# Description: Reserves all the ixia ports required for this setup
+#              to run the given feature. It waits infinitely on
+#              the resource until it is released by any other 
+#              setup sharing the same Ixia ports
+#
+# Input args: none
+#
+# Output args: none
+#
+# Return Value : 0 on success and -1 on Failure
+#
+# Typical usage: set retVal [reserveIxiaPortResource]
+#
+# Category: setup
+##################################################################
+
+proc reserveIxiaPortResource {} {
+
+   global sharingDeviceType
+   global L1DevLockFileLoc
+   global setupName
+   
+# --- If sharing device is not there, then just return free
+   if {![info exist sharingDeviceType]} {
+      return free
+   }
+   set sharingDeviceType [string tolower $sharingDeviceType]
+
+# --- Lock the Ixia resource from others so that other processes wait until
+#     the lock is released or the process ends
+   result_debug " Waiting for IXIA resource......"
+# --- Cook Setup Name from ixia chasis card and Port Info
+   set cookFileName f$setupName
+   set fileName "$L1DevLockFileLoc$cookFileName"
+
+   set fd_res [FileOpen "$fileName" "w" "locking the resource"]
+   if {$fd_res == -1} {
+      return $fd_res
+   }
+   chmod 0777 $fileName
+
+# --- If the setup uses MRV device, call eden tree APIs to reserve Ixia port
+   if {$sharingDeviceType == "mrv"} {
+      set retVal [edenTreeMakeReservation]
+   } elseif {($sharingDeviceType == "extreme-eware") || ($sharingDeviceType == "extreme-exos")} {
+# --- else if the setup uses extreme network device, call extreme networks
+#     automation APIs to reserve Ixia port
+      set retVal [extremeMakeReservation]
+   }
+   
+   if {$retVal == -1} {
+      result_error " Could not aquire IXIA Resource. Exiting Resource \
+                     Initialisation......"
+      return -1
+   }
+
+   result_debug " Aquired IXIA Resource. Proceeding for testing......"
+   return 0
+}
+
+##################################################################
+# Procedure Name: freeIxiaPortResource
+#  
+# Description: Releases all the ixia ports used for this setup
+#              to run the given feature.
+#
+# Input args: none
+#
+# Output args: none
+#
+# Return Value : none
+#
+# Typical usage: freeIxiaPortResource
+#
+# Category: setup
+##################################################################
+
+proc freeIxiaPortResource {} {
+
+   global sharingDeviceType
+   
+# --- If sharing device is not there, then just return free
+   if {![info exist sharingDeviceType]} {
+      return
+   }
+
+# --- If the setup uses MRV device, call eden tree APIs to reserve Ixia port
+   if {$sharingDeviceType == "MRV"} {
+      edenTreeFreeReservation
+   } elseif {($sharingDeviceType == "Extreme-eware") || ($sharingDeviceType == "Extreme-exos")} {
+# --- else if the setup uses extreme network device, call extreme networks
+#     automation APIs to reserve Ixia port
+      extremeFreeReservation
+   }
+}
+
+##################################################################
+# Procedure Name: edenTreeMakeReservation
+#  
+# Description: Reserves all the ixia ports used for this setup
+#              to run the given feature. Used when MRV L1 Switch
+#              is used to share the Ixia ports.
+#
+# Input args: none
+#
+# Output args: none
+#
+# Return Value : 0 on success and -1 on Failure
+#
+# Typical usage: set retVal [edenTreeMakeReservation]
+#
+# Category: setup
+##################################################################
+
+proc edenTreeMakeReservation {} {
+
+   global topology
+   global defaultIxiaResvTime
+   global edenTreeSrvLogin
+   global edenTreeSrvPasswd
+   global edenTreeSrv
+   global topology
+   global exDevIxiaPortMap
+   global exDevPortMap
+   global ixiaTotalPortInSetup
+
+   
+   if {(![info exist exDevIxiaPortMap]) || (![info exist ixiaTotalPortInSetup])} {
+      result_error "Parse exDevIxiaPortMap and initialize ixiaTotalPortInSetup \
+                   global variables"
+      return 0
+   }
+
+   set retVal [client_login $edenTreeSrvLogin $edenTreeSrvPasswd $edenTreeSrv]
+   if {[regexp -nocase "ERROR" $retVal]} {
+         result_error "client_login fails. returns $retVal"
+         return -1
+   }
+
+   set printStat "yes"
+
+   set res_id [make_new_reservation $topology 0 NOW NOW 12 {[0-9]*} -auton]
+
+   if {![regexp -nocase "ERROR" $res_id]} {
+       result_debug "Aquiring IXIA resources....."
+   } else {
+# --- Get which Topology is holding this Ixia Resource and delete the Topology
+#     forcefully to get the IXIA resource
+       for {set ixiaPortId 1} {$ixiaPortId <= $ixiaTotalPortInSetup} {incr ixiaPortId} {
+          set retVal [parseConnectionString $exDevIxiaPortMap($ixiaPortId)]
+          if {$retVal == -1} {
+             return -1
+           } 
+          set retVal [parseConnectionString $exDevPortMap($ixiaPortId)]
+          if {$retVal == -1} {
+             return -1
+          } 
+       }
+
+       result_debug "Aquiring IXIA resources after deleting the reservation \
+                     made by a non-existing or irrelevant process"
+       set res_id [make_new_reservation $topology 0 NOW NOW 12 {[0-9]*} -auton]
+       result_debug "res id is $res_id"
+
+       if {[regexp -nocase "ERROR" $res_id]} {
+           result_error "EdenTree Server failed to reserve the resources"
+           return -1
+       }
+   }
+
+   return 0
+}
+
+##################################################################
+# Procedure Name: edenTreeFreeReservation
+#  
+# Description: Releases all the ixia ports used for this setup
+#              to run the given feature. Used when MRV L1 Switch
+#              is used to share the Ixia ports.
+#
+# Input args: none
+#
+# Output args: none
+#
+# Return Value : none
+#
+# Typical usage: set retVal [edenTreeMakeReservation]
+#
+# Category: setup
+##################################################################
+
+proc edenTreeFreeReservation {} {
+   
+# --- If the reservation status is free, then only free the resource.
+#     Or else assume that some one else in this process has reserved it 
+#     and he needs to free it
+   global edenTreeSrvLogin
+   global edenTreeSrvPasswd
+   global edenTreeSrv
+   global topology
+
+#      client_login $edenTreeSrvLogin $edenTreeSrvPasswd $edenTreeSrv
+   delete_all_reservations $topology 0
+   kick_off_user $edenTreeSrvLogin
+   result_debug "Deleting all Ixia resource Reservation"
+}
+
+##################################################################
+# Procedure Name: extremeMakeReservation
+#  
+# Description: Reserves all the ixia ports used for this setup
+#              to run the given feature. Used when Extreme Switch
+#              is used to share the Ixia ports.
+#
+# Input args: none
+#
+# Output args: none
+#
+# Return Value : 0 on success and -1 on Failure
+#
+# Typical usage: set retVal [edenTreeMakeReservation]
+#
+# Category: setup
+##################################################################
+
+proc extremeMakeReservation {} {
+
+   global exDevVlanMap
+   global exDevPortMap
+   global exDevIxiaPortMap
+   global setupSharingDevice
+   global defaultIxiaResvTime
+   global ixiaPortAlloc
+   global ixiaTotalPortInSetup
+   global sharingDeviceType
+   global numDUT
+
+   result_debug "Trying to login to SharedSetup Device $setupSharingDevice"
+   set numDUT 1
+   Login $setupSharingDevice -CheckOperational 0
+
+   SendACmd "configure default delete port all"
+   SendACmd "enable ports all"
+
+   set availability [getIxiaAvailability]
+
+   if {$availability == "free"} {
+
+      for {set ixiaPortId 1} {$ixiaPortId <= $ixiaTotalPortInSetup} {incr ixiaPortId} {
+         if {$sharingDeviceType == "extreme-eware"} {
+            SendACmd "create vlan $exDevVlanMap($ixiaPortId)"
+         } else {
+            SendACmd "create vman $exDevVlanMap($ixiaPortId)"
+         }
+         SendACmd "configure $exDevVlanMap($ixiaPortId) add port $exDevIxiaPortMap($ixiaPortId),$exDevPortMap($ixiaPortId)"
+         SendACmd "disable igmp snooping $exDevVlanMap($ixiaPortId)"
+     # SendACmd "show vlan $exDevVlanMap($ixiaPortId)"
+      }
+
+   } else {
+      for {set ixiaPortId 1} {$ixiaPortId <= $ixiaTotalPortInSetup} {incr ixiaPortId} {
+#  --- Forcefully delete the vlans and take the Ixia ports
+         SendACmd "delete $exDevVlanMap($ixiaPortId)"
+         if {$sharingDeviceType == "extreme-eware"} {
+            SendACmd "create vlan $exDevVlanMap($ixiaPortId)"
+         } else {
+            SendACmd "create vman $exDevVlanMap($ixiaPortId)"
+         }
+         SendACmd "configure $exDevVlanMap($ixiaPortId) add port $exDevIxiaPortMap($ixiaPortId),$exDevPortMap($ixiaPortId)"
+         SendACmd "disable igmp snooping $exDevVlanMap($ixiaPortId)"
+      }
+   }
+
+#   SendACmd "enable jumbo ports all"
+#   logout
+   return 0
+}
+
+##################################################################
+# Procedure Name: extremeFreeReservation
+#  
+# Description: Releases all the ixia ports used for this setup
+#              to run the given feature. Used when Extreme Switch
+#              is used to share the Ixia ports.
+#
+# Input args: none
+#
+# Output args: none
+#
+# Return Value : none
+#
+# Typical usage: set retVal [extremeFreeReservation]
+#
+# Category: setup
+##################################################################
+
+proc extremeFreeReservation {} {
+   global exDevVlanMap
+   global exDevPortMap
+   global exDevIxiaPortMap
+   global setupSharingDevice
+   global ixiaPortAlloc
+   global ixiaTotalPortInSetup
+
+   Login $setupSharingDevice -CheckOperational 0
+
+   for {set ixiaPortId 1} {$ixiaPortId <= $ixiaTotalPortInSetup} {incr ixiaPortId} {
+      SendACmd "delete $exDevVlanMap($ixiaPortId)"
+   }
+   logout
+}
+
+##################################################################
+# Procedure Name: getIxiaAvailability
+#  
+# Description: Gets the info to the caller whether some other 
+#              setup did not release the resorces and terminated.
+#              Used when Extreme device is used to share the Ixia ports.
+#
+# Input args: none
+#
+# Output args: none
+#
+# Return Value : free or success
+#
+# Typical usage: set retVal [getIxiaAvailability]
+#
+# Category: setup
+##################################################################
+
+proc getIxiaAvailability {} {
+
+   global shareDevPortMappingList
+   global exDevVlanMap
+   global exDevPortMap
+   global setupSharingDevice
+   global ixiaTotalPortInSetup
+   global sharingDeviceType
+
+   Login $setupSharingDevice -CheckOperational 0
+
+   if {$sharingDeviceType == "extreme-eware"} {
+      set tempStr [SendACmd "show vlan"]
+   } else {
+      set tempStr [SendACmd "show vman"]
+   }
+
+   for {set ixiaPortId 1} {$ixiaPortId <= $ixiaTotalPortInSetup} {incr ixiaPortId} {
+      if {[regexp -nocase $exDevVlanMap($ixiaPortId) $tempStr]} {
+         return "occupied"
+      }
+   }
+
+   return "free"
+}
+
+##################################################################
+# Procedure Name: generateExDevPortMapping
+#  
+# Description: Initialises the Port mapping arrays used in an 
+#              extreme device to share the Ixia resource between
+#              different tesbed.
+#
+# Input args: none
+#
+# Output args: none
+#
+# Return Value : 0 success -1 on failure
+#
+# Typical usage: set retVal [generateExDevPortMapping]
+#
+# Category: setup
+##################################################################
+
+proc generateExDevPortMapping {} {
+   global shareDevPortMappingList
+   global exDevVlanMap
+   global exDevPortMap
+   global exDevIxiaPortMap
+   global setupSharingDevice
+   global ixiaCh1
+   global setupName
+   global startCardNum
+   global ixiaTotalPortInSetup
+
+   if {![info exist shareDevPortMappingList]} {
+      return 0
+   }
+
+   set ixiaTotalPortInSetup [llength $shareDevPortMappingList]
+
+# --- Cook the Setup Name from Ixia chasis card and port Info
+   set ixiaStr [split $ixiaCh1 '.']
+   set setupName [join $ixiaStr _]
+   set ixiaStr [split $startCardNum ':']
+   set ixiaStr [join $ixiaStr _]
+   append setupName "_" $ixiaStr
+   set setupName "_$setupName"
+   result_debug "ixia chasis is $ixiaCh1 Card is $startCardNum setupName is $setupName"
+
+   for {set i 0} {$i < $ixiaTotalPortInSetup} {incr i} {
+      set phyLinkList [lindex $shareDevPortMappingList $i]
+
+      if {![info exist phyLinkList]} {
+            result_error "ERROR: Link details for Ixia PortId, Sharing \
+                          Switch and DUT does not exist"
+         return -1
+      }
+
+      set ixiaPortId [expr $i+1]
+      set exDevIxiaPortMap($ixiaPortId) [lindex $phyLinkList 0]
+      set exDevPortMap($ixiaPortId) [lindex $phyLinkList 1]
+
+      set exDevVlanMap($ixiaPortId) "v$ixiaPortId$setupName"
+      result_debug "exDevIxiaPortMap($ixiaPortId) $exDevIxiaPortMap($ixiaPortId)"
+      result_debug "exDevPortMap($ixiaPortId) $exDevPortMap($ixiaPortId)"
+      result_debug "exDevVlanMap($ixiaPortId) $exDevVlanMap($ixiaPortId)"
+
+   }
+   return 0
+}
+
+##################################################################
+# Procedure Name: exDevIxiaPortDisable
+#  
+# Description: Simulates disabling an ixia ports by disabling 
+#              appropriate link in the L1 switch to get the requied
+#              link down on the DUT. Used only when Extreme device
+#              is used to share the ixia ports between setups.
+#
+# Input args: portId - Ixia port id to be disabled
+#
+# Output args: none
+#
+# Return Value : none
+#
+# Typical usage: exDevIxiaPortDisable
+#
+# Category: setup
+##################################################################
+
+proc exDevIxiaPortDisable {args} {
+   parse_args exDevIxiaPortDisable $args {
+      portId ""
+   }
+   
+   global sharingDeviceType
+   global setupSharingDevice
+   global exDevPortMap
+   global whichDutNow
+   global DUT${whichDutNow}_CONNECT
+   
+   set ipAddr [set DUT${whichDutNow}_CONNECT]
+   
+   if {(![info exist sharingDeviceType]) || ($sharingDeviceType == "MRV")} {
+# --- No need to act on the call, the link is transparent
+      return
+   }
+
+   Login $setupSharingDevice -CheckOperational 0
+
+   SendACmd "disable port $exDevPortMap($portId)";
+   logout
+   Login $ipAddr -CheckOperational 0
+}
+
+##################################################################
+# Procedure Name: exDevIxiaPortEnaable
+#  
+# Description: Simulates enabling an ixia ports by enabling 
+#              appropriate link in the L1 switch to get the requied
+#              link up on the DUT. Used only when Extreme device
+#              is used to share the ixia ports between setups.
+#
+# Input args: portId - Ixia port id to be disabled
+#
+# Output args: none
+#
+# Return Value : none
+#
+# Typical usage: exDevIxiaPortEnaable
+#
+# Category: setup
+##################################################################
+
+proc exDevIxiaPortEnable {args} {
+   parse_args exDevIxiaPortEnable $args {
+      portId ""
+   }
+   
+   global sharingDeviceType
+   global setupSharingDevice
+   global exDevPortMap
+   global whichDutNow
+   global DUT${whichDutNow}_CONNECT
+   
+   set ipAddr [set DUT${whichDutNow}_CONNECT]
+   
+   if {(![info exist sharingDeviceType]) || ($sharingDeviceType == "MRV")} {
+# --- No need to act on the call, the link is transparent
+      return
+   }
+
+   Login $setupSharingDevice -CheckOperational 0
+
+   SendACmd "enable port $exDevPortMap($portId)";
+
+   logout
+   Login $ipAddr -CheckOperational 0
+}
+
+##################################################################
+# Procedure Name: exDevDutPortDisable
+#  
+# Description: Simulates disabling an ixia ports by disabling 
+#              appropriate link in the L1 switch to get the requied
+#              link down on the ixia port. Used only when Extreme device
+#              is used to share the ixia ports between setups.
+#
+# Input args: portId - Ixia port id for which the DUT port is 
+#                      brought down
+#
+# Output args: none
+#
+# Return Value : none
+#
+# Typical usage: exDevDutPortDisable
+#
+# Category: setup
+##################################################################
+
+proc exDevDutPortDisable {args} {
+   parse_args exDevIxiaPortDisable $args {
+      portId ""
+   }
+   
+   global sharingDeviceType
+   global setupSharingDevice
+   global exDevIxiaPortMap
+   global whichDutNow;
+   global DUT${whichDutNow}_CONNECT
+
+   set ipAddr [set DUT${whichDutNow}_CONNECT]
+   
+   if {(![info exist sharingDeviceType]) || ($sharingDeviceType == "MRV")} {
+# --- No need to act on the call, the link is transparent
+      return
+   }
+
+   Login $setupSharingDevice -CheckOperational 0
+
+   SendACmd "disable port $exDevIxiaPortMap($portId)";
+   logout
+   Login $ipAddr -CheckOperational 0
+}
+
+##################################################################
+# Procedure Name: exDevDutPortEnable
+#  
+# Description: Simulates enabling an ixia ports by enabling 
+#              appropriate link in the L1 switch to get the requied
+#              link up on the ixia port. Used only when Extreme device
+#              is used to share the ixia ports between setups.
+#
+# Input args: portId - Ixia port id for which the DUT port is 
+#                      brought up
+#
+# Output args: none
+#
+# Return Value : none
+#
+# Typical usage: exDevDutPortEnable
+#
+# Category: setup
+##################################################################
+
+proc exDevDutPortEnable {args} {
+   parse_args exDevIxiaPortEnable $args {
+      portId ""
+   }
+   
+   global sharingDeviceType
+   global setupSharingDevice
+   global exDevIxiaPortMap
+   global whichDutNow;
+   global DUT${whichDutNow}_CONNECT
+
+   set ipAddr [set DUT${whichDutNow}_CONNECT]
+   
+   if {(![info exist sharingDeviceType]) || ($sharingDeviceType == "MRV")} {
+# --- No need to act on the call, the link is transparent
+      return
+   }
+
+   Login $setupSharingDevice -CheckOperational 0
+
+   SendACmd "enable port $exDevIxiaPortMap($portId)";
+   logout
+   Login $ipAddr -CheckOperational 0
+}

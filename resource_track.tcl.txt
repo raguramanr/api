@@ -1,0 +1,828 @@
+package require mysqltcl;
+##################################################################
+#
+#
+#
+##################################################################
+proc OpenTrackingPort {args} {
+
+    package require json::write
+    package require json
+    package forget http 1.0
+    package require http
+    package require uuid
+    global MAIN env
+
+    parse_args OpenTrackingPort $args {
+        user "null"
+        cfg "null"
+        script_name "null"
+        type "script"
+    }
+
+    if {![info exists MAIN(TRACKRESOURCES)] || !$MAIN(TRACKRESOURCES)} {
+        return 0;
+    }
+
+    set myServerIp [_MyServerIp]
+    set main(MYSERVERIP) $myServerIp
+    set myUuid [uuid::uuid generate]
+    set MAIN(uuid) $myUuid
+    if {$user == "null"} {
+        if [info exists env(USER)] {
+            set myName $env(USER);
+        } else {
+            set myName "null"
+        }
+    } else {
+        set myName $user;
+    }
+    set myCfg $cfg;
+
+    set dbStatus [RecordTracking -user "$myName" -cfg "$cfg" \
+          -script_name "$script_name" -uuid "$myUuid" -type "$type" \
+          -server_ip "$myServerIp"]
+
+    switch -exact -- $dbStatus {
+        "inuse" {
+                puts "\n\n\n$cfg In Use\n\n\n";
+                if {[info exists MAIN(ENFORCETRACKING)] && $MAIN(ENFORCETRACKING)} {
+                    exit;
+                } else {
+                    puts "\n\nSleeping 60 seconds so you can kill this run so it doesn't interupt resources\n"
+                    sleep 60
+                    return 0;
+                }
+        }
+        "faildb" { puts "\n\nDB Reservation Connection failed. Continue\n\n"; return 0;}
+        "reservefail" { puts "\n\nDB Reservation Connection failed. Continue\n\n"; return 0;}
+        "reserved" { puts "\n\nDB Reserveration Entr Made. Continue\n\n";}
+        default { puts "\n\nNot sure what happened with the Reservation. Continue\n\n"; return 0;}
+    }
+    package forget http
+    package require http 1.0
+    return 1
+}
+######################################################################################
+#
+#
+######################################################################################
+proc TrackingCleanup {} {
+    global MAIN
+
+    if {[info exists MAIN(uuid)] && [string trim $MAIN(uuid)] != ""} {
+        set ts [clock format [clock seconds] -format "%Y-%m-%d %H.%M.%S"]
+        _updateTrackingDBEntry -where "uuid = '$MAIN(uuid)'" -script_name "" -server_ip "" -update_time "$ts" \
+          -username "" -port "" -text "" -start_time "" -pause "" -pause_by "" -pause_time "" -uuid ""
+    }
+}
+proc UpdateTrackDB {args} {
+    global MAIN
+    parse_args UpdateTrackDB $args {
+        text "none"
+        text2 "none"
+        status "none"
+        pause "none"
+        pause_by "none"
+        pause_time "none"
+        qid "none"
+        teefile "none"
+        testcase "none"
+    }
+    # possible args to build call with.
+    set uList "text text2 status pause pause_by teefile qid testcase pause_time"
+
+    if {[info exists MAIN(uuid)] && [string trim $MAIN(uuid)] != ""} {
+        set ts [clock format [clock seconds] -format "%Y-%m-%d %H.%M.%S"]
+        set myargs ""
+        foreach lv $uList {
+            if {[set $lv] != "none"} {
+                lappend myargs -$lv
+                lappend myargs "[set $lv]"
+            }
+        }
+        switch -- [llength $myargs] \
+            "2"  {
+              _updateTrackingDBEntry -where "uuid = '$MAIN(uuid)'" -update_time $ts \
+                    [lindex $myargs 0] [lindex $myargs 1]
+            } "4"  {
+              _updateTrackingDBEntry -where "uuid = '$MAIN(uuid)'" -update_time $ts \
+                    [lindex $myargs 0] [lindex $myargs 1] [lindex $myargs 2] [lindex $myargs 3]
+            } "6"  {
+              _updateTrackingDBEntry -where "uuid = '$MAIN(uuid)'" -update_time $ts \
+                    [lindex $myargs 0] [lindex $myargs 1] [lindex $myargs 2] [lindex $myargs 3] \
+                    [lindex $myargs 4] [lindex $myargs 5] 
+            } "8"  {
+              _updateTrackingDBEntry -where "uuid = '$MAIN(uuid)'" -update_time $ts \
+                    [lindex $myargs 0] [lindex $myargs 1] [lindex $myargs 2] [lindex $myargs 3] \
+                    [lindex $myargs 4] [lindex $myargs 5] [lindex $myargs 6] [lindex $myargs 7]
+            } "10"  {
+              _updateTrackingDBEntry -where "uuid = '$MAIN(uuid)'" -update_time $ts \
+                    [lindex $myargs 0] [lindex $myargs 1] [lindex $myargs 2] [lindex $myargs 3] \
+                    [lindex $myargs 4] [lindex $myargs 5] [lindex $myargs 6] [lindex $myargs 7] \
+                    [lindex $myargs 8] [lindex $myargs 9]
+            } "12"  {
+              _updateTrackingDBEntry -where "uuid = '$MAIN(uuid)'" -update_time $ts \
+                    [lindex $myargs 0] [lindex $myargs 1] [lindex $myargs 2] [lindex $myargs 3] \
+                    [lindex $myargs 4] [lindex $myargs 5] [lindex $myargs 6] [lindex $myargs 7] \
+                    [lindex $myargs 8] [lindex $myargs 9] [lindex $myargs 10] [lindex $myargs 11]
+            }
+    }
+
+}
+proc UpdateTrackDBTxt {txt} {
+    global MAIN
+
+    if {[info exists MAIN(uuid)] && [string trim $MAIN(uuid)] != ""} {
+        set ts [clock format [clock seconds] -format "%Y-%m-%d %H.%M.%S"]
+        _updateTrackingDBEntry -where "uuid = '$MAIN(uuid)'" -text "$txt" -update_time "$ts"
+    }
+}
+proc UpdateTrackDBStatus {txt} {
+    global MAIN
+
+    if {[info exists MAIN(uuid)] && [string trim $MAIN(uuid)] != ""} {
+        set ts [clock format [clock seconds] -format "%Y-%m-%d %H.%M.%S"]
+        _updateTrackingDBEntry -where "uuid = '$MAIN(uuid)'" -status "$txt" -update_time "$ts"
+    }
+}
+proc UpdateTrackDBLock {txt stat} {
+    global MAIN
+
+    if {[info exists MAIN(uuid)] && [string trim $MAIN(uuid)] != ""} {
+        set ts [clock format [clock seconds] -format "%Y-%m-%d %H.%M.%S"]
+        _updateTrackingDBEntry -where "uuid = '$MAIN(uuid)'" -text "$txt" -status "$stat" -update_time "$ts"
+    }
+}
+proc UpdateTrackDBTxt2 {txt} {
+    global MAIN
+
+    if {[info exists MAIN(uuid)] && [string trim $MAIN(uuid)] != ""} {
+        set ts [clock format [clock seconds] -format "%Y-%m-%d %H.%M.%S"]
+        _updateTrackingDBEntry -where "uuid = '$MAIN(uuid)'" -text2 "$txt" -update_time "$ts"
+    }
+}
+proc _setTrackDBIssue {c} {
+    global MAIN
+
+    if {[info exists MAIN(uuid)] && [string trim $MAIN(uuid)] != ""} {
+        set ts [clock format [clock seconds] -format "%Y-%m-%d %H:%M:%S"]
+        _updateTrackingDBEntry -where "cfg = '$MAIN(cfg)'" -issue "$c" -update_time "$ts"
+    }
+}
+proc UpdateTrackDBPause {{schedule_id "null"}} {
+    global MAIN
+
+    if {[info exists MAIN(SCHEDULE_ID)] && $MAIN(SCHEDULE_ID)>0 && $schedule_id == "null"} {
+        set schedule_id $MAIN(SCHEDULE_ID)
+    }
+
+    if {[info exists MAIN(uuid)] && [string trim $MAIN(uuid)] != ""} {
+        set ts [clock format [clock seconds] -format "%Y-%m-%d %H.%M.%S"]
+        _updateTrackingDBEntry -where "uuid = '$MAIN(uuid)'" -pause "$schedule_id" -update_time "$ts"
+    }
+}
+proc DeleteReservation {} {
+    global MAIN
+
+    if {[info exists MAIN(uuid)] && [string trim $MAIN(uuid)] != ""} {
+        set ts [clock format [clock seconds] -format "%Y-%m-%d %H.%M.%S"]
+        _updateTrackingDBEntry -where "uuid = '$MAIN(uuid)'" -pause "0" -update_time "$ts"
+    }
+    if {[info exists MAIN(RESOURCE_ID)] && [string trim $MAIN(RESOURCE_ID)] > 0} {
+        _deleteReservation;
+    }
+}
+##################################################################
+#
+#
+##################################################################
+proc _getTrackingDBEntry {args} {
+    global TRACKING_DB_IP MAIN
+    parse_args _getTrackingDBEntry $args {
+        where "null"
+        start_time "none"
+        uuid "none"
+        cfg  "none"
+        script_name "none"
+        server_ip "none"
+        port "none"
+        username "none"
+        text "none"
+        text2 "none"
+        condition "none"
+        type "none"
+        status "none"
+        pause "none"
+        pause_by "none"
+        teefile "none"
+        testcase "none"
+        qid "none"
+        pause_time "none"
+        update_time "none"
+    }
+    # Fields in running table to gather info on
+    set uList "start_time cfg script_name server_ip port username text text2 condition type status \
+               pause pause_by teefile testcase qid pause_time update_time"
+
+    foreach lv $uList {
+        if {[set $lv] != "none"} {
+            set sel_clause [append sel_clause "${lv}, "]
+        }
+    }
+    set sel_clause [string trimright $sel_clause]
+    set sel_clause [string trimright $sel_clause ","]
+
+    set sel_clause2 [append sel_clause2 "SELECT "]
+    set sel_clause2 [append sel_clause2 $sel_clause]
+    set sel_clause2 [append sel_clause2 " FROM running "]
+
+    if {$uuid != "null"} {
+        set sel_clause2 [append sel_clause2 " WHERE uuid = '[set uuid]'"]
+    } elseif {$where != "null"} {
+        set sel_clause2 [append sel_clause2 " WHERE $where "]
+    } else {
+        return -1
+    }
+
+    if [catch {mysqlconnect -host $TRACKING_DB_IP -user regression_user -password extreme \
+           -db reservation} mysql_sock] {
+        puts "Not using the reservation database.  Connection failed!";
+        return 0;
+    }
+
+    puts "\nSelect Tracking - $sel_clause2\n"
+    if [catch {mysqlsel $mysql_sock $sel_clause2 -flatlist} getMe] {
+        puts "There was a db issue selecting the record!";
+        mysqlclose $mysql_sock
+        return 0
+    } else {
+        mysqlclose $mysql_sock
+        set oVal "";
+        foreach res $getMe {
+            set oVal [string trim [lindex $res 0]]
+        }
+        return $oVal;
+    }
+}
+##################################################################
+#
+#
+##################################################################
+proc _updateTrackingDBEntry {args} {
+    global TRACKING_DB_IP
+    parse_args _updateTrackingDBEntry $args {
+        where "null"
+        start_time "none"
+        uuid "none"
+        cfg  "none"
+        script_name "none"
+        server_ip "none"
+        port "none"
+        username "none"
+        text "none"
+        text2 "none"
+        issue "none"
+        type "none"
+        status "none"
+        pause "none"
+        pause_by "none"
+        teefile "none"
+        testcase "none"
+        qid "none"
+        pause_time "none"
+        update_time "none"
+    }
+
+    #some cases to auto set status
+    if {[regexp -nocase "adminlock" $text]} {
+        set status "royalblue"
+    } elseif {[regexp -nocase "userlock" $text]} {
+        set status "royalblue"
+    } elseif {[regexp -nocase "autolock" $text]} {
+        set status "red"
+    } 
+
+    # Fields in running table to be updated if not null
+    set uList "start_time uuid cfg script_name server_ip port username text text2 issue type status \
+               pause pause_by teefile testcase qid pause_time update_time"
+
+    foreach lv $uList {
+        if {[set $lv] != "none"} {
+            set update_clause2 [append update_clause2 "$lv = \'[set $lv]\', "]
+        }
+    }
+    set update_clause2 [string trimright $update_clause2]
+    set update_clause2 [string trimright $update_clause2 ","]
+
+    set update_clause [append update_clause "UPDATE running SET "]
+    set update_clause [append update_clause $update_clause2]
+
+    if {$where != "null"} {
+        set update_clause [append update_clause " WHERE $where"]
+    } else {
+        return -1
+    }
+
+    if [catch {mysqlconnect -host $TRACKING_DB_IP -user regression_user -password extreme \
+           -db reservation} mysql_sock] {
+        puts "Not using the reservation database.  Connection failed!";
+        return 0;
+    }
+
+    puts "\nUpdate Tracking - $update_clause \n"
+    if [catch {mysqlexec $mysql_sock $update_clause} checkMe] {
+        puts "There was a db issue updating the record! $checkMe";
+        mysqlclose $mysql_sock
+        return 0
+    } else {
+        mysqlclose $mysql_sock
+        return 1
+    }
+}
+##################################################################
+# Procedure: _updateReservation
+#
+##################################################################
+proc _updateReservation {args} {
+    global TRACKING_DB_IP
+    parse_args _updateReservation $args {
+        where "null"
+        res_id  "none"
+        username "none"
+        request_date "none"
+        request_duration  "none"
+        holds_pause "none"
+    }
+    # Fields in running table to be updated if not null
+    set uList "res_id username request_date request_duration  holds_pause"
+
+    foreach lv $uList {
+        if {[set $lv] != "none"} {
+            set update_clause2 [append update_clause2 "$lv = \"[set $lv]\", "]
+        }
+    }
+    set update_clause2 [string trimright $update_clause2]
+    set update_clause2 [string trimright $update_clause2 ","]
+
+    set update_clause [append update_clause "update reserve set "]
+    set update_clause [append update_clause $update_clause2]
+
+    if {$where != "null"} {
+        set update_clause [append update_clause "  WHERE $where "]
+    } else {
+        return -1
+    }
+
+    if [catch {mysqlconnect -host $TRACKING_DB_IP -user regression_user -password extreme \
+           -db reservation} mysql_sock] {
+        puts "Not using the reservation database.  Connection failed!";
+        return 0;
+    }
+
+    puts "\nUpdate Reservation - $update_clause \n"
+    if [catch {mysqlexec $mysql_sock $update_clause} checkMe] {
+        puts "There was a db issue updating the record!";
+        mysqlclose $mysql_sock
+        return 0
+    } else {
+        mysqlclose $mysql_sock
+        return 1
+    }
+}
+##################################################################
+#
+#
+##################################################################
+proc _deleteReservation {args} {
+    global TRACKING_DB_IP MAIN
+    parse_args _deleteReservation $args {
+        res_id  "none"
+    }
+
+    if {$res_id == "none" && [info exists MAIN(RESOURCE_ID)] && $MAIN(RESOURCE_ID)>0} {
+        set res_id $MAIN(RESOURCE_ID)
+    }
+
+    set delete_clause [append delete_clause "delete FROM reserve "]
+    set delete_clause [append delete_clause "WHERE res_id = '$res_id' "]
+
+    if [catch {mysqlconnect -host $TRACKING_DB_IP -user regression_user -password extreme \
+           -db reservation} mysql_sock] {
+        puts "Not using the reservation database.  Connection failed!";
+        return 0;
+    }
+
+    puts "\nDelete Reservation - $delete_clause \n"
+    if [catch {mysqlexec $mysql_sock $delete_clause} checkMe] {
+        puts "There was a db issue deleting the record!";
+        mysqlclose $mysql_sock
+        return 0
+    } else {
+        mysqlclose $mysql_sock
+        return 1
+    }
+
+}
+##################################################################
+#
+#
+##################################################################
+proc CreateReservation {args} {
+    parse_args CreateReservation $args {
+        resource_id      "null"
+        username         "nobody"
+        request_date     "null"
+        request_duration "1"
+        holds_pause      "yes"
+    }
+    global TRACKING_DB_IP MAIN mysqlIP my_db
+    puts "TRACKING_DB_IP $TRACKING_DB_IP"
+
+    set MAIN(SCHEDULE_ID) ""
+
+    if {$resource_id == "null" && [info exists MAIN(RESOURCE_ID)] && $MAIN(RESOURCE_ID)>0} {
+        set resource_id $MAIN(RESOURCE_ID);
+    }
+    if {$request_date == "null"} {
+        set request_date [clock format [clock seconds] -format "%Y-%m-%d %H.%M.%S"]
+    }
+
+    if [catch {mysqlconnect -host $TRACKING_DB_IP -user regression_user -password extreme \
+                        -db reservation} mysql_sock] {
+        puts "Not using the reservation database.  Connection failed!";
+        return -1;
+    }
+    set insert_clause [append insert_clause "insert into reserve (res_id, "]
+    set insert_clause [append insert_clause "username, "]
+    set insert_clause [append insert_clause "request_date, "]
+    set insert_clause [append insert_clause "request_duration, "]
+    set insert_clause [append insert_clause "holds_pause)"]
+
+    set insert_clause [append insert_clause "values (\"$resource_id\", "]
+    set insert_clause [append insert_clause "\"$username\", "]
+    set insert_clause [append insert_clause "\"$request_date\", "]
+    set insert_clause [append insert_clause "\"$request_duration\", "]
+    set insert_clause [append insert_clause "\"$holds_pause\")"]
+
+    if [catch {mysqlexec  $mysql_sock $insert_clause} out] {
+        mysqlclose $mysql_sock
+        puts "Failed query $insert_clause"
+        return 0;
+    } else {
+        set q "SELECT schedule_id FROM reserve WHERE res_id = '$resource_id' AND request_date = '$request_date'"
+        if [catch {mysqlsel $mysql_sock $q -list} checkId] {
+            puts "There was a db issue looking for my resource id!";
+        }
+        foreach res $checkId {
+            set MAIN(SCHEDULE_ID) [string trim [lindex $res 0]]
+        }
+        mysqlclose $mysql_sock
+        return reserved;
+    }
+}
+##################################################################
+#
+#
+#
+##################################################################
+proc RecordTracking {args} {
+    parse_args RecordTracking $args {
+        user        "null"
+        cfg         "null"
+        script_name "null"
+        server_ip   ""
+        uuid        ""
+        type        "script"
+    }
+    global TRACKING_DB_IP MAIN mysqlIP my_db
+    puts "TRACKING_DB_IP $TRACKING_DB_IP"
+
+    set legalTypes "script daemon wrapper"
+
+    if {[lsearch $legalTypes $type] < 0} {
+        puts "\n@\n@\n@\n  Illegal type passed to tracking daemon \n@\n@\n@"
+    }
+
+    if [catch {mysqlconnect -host $TRACKING_DB_IP -user regression_user -password extreme \
+                        -db reservation} mysql_sock] {
+        puts "Not using the reservation database.  Connection failed!";
+        return faildb;
+    }
+
+    if {$type == "script"} {
+        set goPlat 1
+        if [catch {mysqlconnect -host $mysqlIP -user regression_user -password extreme \
+                            -db $my_db} mysql_sock0] {
+            puts "Reg platforms db.  Connection failed!";
+            set goPlat 0
+        }
+        if {$goPlat} {
+            set q0 "SELECT platform_share_list \
+              FROM platform_table WHERE platform_cfg_file_name = '$cfg' "
+            if [catch {mysqlsel $mysql_sock0 $q0 -list} platRs] {
+                puts "There was a db issue looking for my platform record!";
+            }
+            foreach res $platRs {
+                set sList [list [string trim [lindex $res 0]]]
+                foreach scfg $sList {
+                    set q "SELECT username, script_name, server_ip, port, start_time, pause, text \
+                      FROM running WHERE cfg_file_name = '$scfg' AND type = 'script'"
+                    if [catch {mysqlsel $mysql_sock $q -list} checkMe] {
+                        puts "There was a db issue looking for my record!";
+                    }
+                    set active 0
+                    set chkShare 0
+                    foreach res $checkMe {
+                        set chkShare 1
+                        set susername [string trim [lindex $res 0]]
+                        set sscript_name [string trim [lindex $res 1]]
+                        set sserver_ip [string trim [lindex $res 2]]
+                        set sport [string trim [lindex $res 3]]
+                        set sstart_time [string trim [lindex $res 4]]
+                        set spause [string trim [lindex $res 5]]
+                        set stext [string trim [lindex $res 6]]
+                    }
+                    if {$chkShare} {
+                        # same type is exists as we want to start. check to see if its running
+                        if {[string trim $sserver_ip] != "" && [string trim $sport] != ""} {
+                            set active [Login_Monitor -ip $sserver_ip -port $sport -action "verify"]
+                        }
+                        if {$active} {
+                            puts "\n\n--------------------------------------------------------"
+                            puts "-------          S  H  A  R  E  D          -------------"
+                            puts "-------   T E S T   B E D   I N   U S E    -------------"
+                            puts "--------------------------------------------------------"
+                            puts "This test bed $scfg is in use:"
+                            puts "User: $susername";
+                            puts "Running: $sscript_name";
+                            puts "         $stext";
+                            puts "Server IP Port: $sserver_ip $sport";
+                            puts "Locked Since: $sstart_time";
+                                if {$spause > 0} {
+                                    puts "\nThis ACTIVE Shared test bed is"
+                                    puts "       L O C K E D  "
+                                    puts "\nYour run will continue"
+                                    puts "--------------------------------------------------------"
+                                    puts "--------------------------------------------------------\n\n"
+                                    return reserved
+                                }
+                            puts "--------------------------------------------------------"
+                            puts "--------------------------------------------------------\n\n"
+                            return inuse
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    set q "SELECT uuid, username, script_name, server_ip, port, start_time, type, pause, text, res_id \
+      FROM running WHERE cfg_file_name = '$cfg' "
+    if [catch {mysqlsel $mysql_sock $q -list} checkMe] {
+        puts "There was a db issue looking for my record!";
+    }
+    set step1 0
+    set new 1
+    set active 0
+    set parentpause 0
+    set parentexists 0
+    foreach res $checkMe {
+        set fuuid [string trim [lindex $res 0]]
+        set fusername [string trim [lindex $res 1]]
+        set fscript_name [string trim [lindex $res 2]]
+        set fserver_ip [string trim [lindex $res 3]]
+        set fport [string trim [lindex $res 4]]
+        set fstart_time [string trim [lindex $res 5]]
+        set ftype [string trim [lindex $res 6]]
+        set fpause [string trim [lindex $res 7]]
+        set ftext [string trim [lindex $res 8]]
+        set fres_id [string trim [lindex $res 9]]
+        if {($ftype == "daemon" || $ftype == "wrapper")} {
+            set parentexists 1
+        }
+        if {($ftype == "daemon" || $ftype == "wrapper") && $fpause > 0} {
+            set parentpause 1
+        }
+        if {$type == $ftype} {
+            set step1 1
+            set new   0
+            set duuid $fuuid
+            set dusername $fusername
+            set dscript_name $fscript_name
+            set dserver_ip $fserver_ip
+            set dport $fport
+            set dstart_time $fstart_time
+            set dtype $ftype
+            set dpause $fpause
+            set dtext $ftext
+            set dres_id $fres_id
+        }
+    }
+
+    if {$step1} {
+        # same type is exists as we want to start. check to see if its running
+        if {[string trim $dserver_ip] != "" && [string trim $dport] != ""} {
+            set active [Login_Monitor -ip $dserver_ip -port $dport -action "verify"]
+        }
+        if {[string trim $duuid] == ""} {
+            set active 0
+        }
+        if {$active} {
+            puts "\n\n--------------------------------------------------------"
+            puts "-------   T E S T   B E D   I N   U S E    -------------"
+            puts "--------------------------------------------------------"
+            puts "This test bed $cfg is in use:"
+            puts "User: $dusername";
+            puts "Running: $dscript_name";
+            puts "         $dtext";
+            puts "Server IP Port: $dserver_ip $dport";
+            puts "Locked Since: $dstart_time";
+
+            if {$dpause > 0} {
+                puts "\nThis ACTIVE test bed"
+                puts "       L O C K E D  "
+                puts "\nYour run will continue"
+                puts "--------------------------------------------------------"
+                puts "--------------------------------------------------------\n\n"
+                return reserved
+            }
+
+            puts "--------------------------------------------------------"
+            puts "--------------------------------------------------------\n\n"
+            return inuse
+        }
+        set MAIN(TRACKINGSTARTTIME) [clock format [clock seconds] -format "%Y-%m-%d %H.%M.%S"]
+        set try 1
+        set sockSuccess 0
+        while {$try < 4} {
+            set MAIN(tport) [expr 10000 + [expr {int(rand()*50000)}]]
+            if {[catch {socket -server on_connect_track $MAIN(tport)} why]} {
+                puts "Failed to open Socket server on socket $MAIN(tport)"
+            } else {
+                set sockSuccess 1
+                break;
+            }
+            incr try
+        }
+        if {$sockSuccess} {
+            set res [_updateTrackingDBEntry -where "cfg_file_name = '$cfg' AND type = '$type'" \
+                  -script_name "$script_name" -server_ip "$server_ip" -uuid "$uuid" \
+                  -start_time "$MAIN(TRACKINGSTARTTIME)" \
+                  -port "$MAIN(tport)" -username "$user" -text "Initial start" -type "$type"]
+            if {$res} {
+                set MAIN(RESOURCE_ID) $dres_id
+                return "reserved"
+            } else {
+                return "reservefail"
+            }
+        }
+    }
+
+
+    if {$new} {
+        set MAIN(TRACKINGSTARTTIME) [clock format [clock seconds] -format "%Y-%m-%d %H.%M.%S"]
+        set try 1
+        set sockSuccess 0
+        while {$try < 4} {
+            set MAIN(tport) [expr 10000 + [expr {int(rand()*50000)}]]
+            if {[catch {socket -server on_connect_track $MAIN(tport)} why]} {
+                puts "Failed to open Socket server on socket $MAIN(tport) $why"
+            } else {
+                set sockSuccess 1
+                break;
+            }
+            incr try
+        }
+
+        if {$sockSuccess} {
+            set insert_clause [append insert_clause "insert into running (start_time, "]
+            set insert_clause [append insert_clause "cfg_file_name, "]
+            set insert_clause [append insert_clause "uuid, "]
+            set insert_clause [append insert_clause "server_ip, "]
+            set insert_clause [append insert_clause "port, "]
+            set insert_clause [append insert_clause "username, "]
+            set insert_clause [append insert_clause "script_name, "]
+            set insert_clause [append insert_clause "text, "]
+            set insert_clause [append insert_clause "type)"]
+
+            set insert_clause [append insert_clause "values (\"$MAIN(TRACKINGSTARTTIME)\", "]
+            set insert_clause [append insert_clause "\"$cfg\", "]
+            set insert_clause [append insert_clause "\"$uuid\", "]
+            set insert_clause [append insert_clause "\"$server_ip\", "]
+            set insert_clause [append insert_clause "\"$MAIN(tport)\", "]
+            set insert_clause [append insert_clause "\"$user\", "]
+            set insert_clause [append insert_clause "\"$script_name\", "]
+            set insert_clause [append insert_clause "\"Initial Start\", "]
+            set insert_clause [append insert_clause "\"$type\")"]
+
+            if [catch {mysqlexec  $mysql_sock $insert_clause} out] {
+                mysqlclose $mysql_sock
+                return reservefail;
+            } else {
+                set q "SELECT res_id FROM running WHERE uuid = '$uuid' "
+                if [catch {mysqlsel $mysql_sock $q -list} checkId] {
+                    puts "There was a db issue looking for my resource id!";
+                }
+                foreach res $checkId {
+                    set MAIN(RESOURCE_ID) [string trim [lindex $res 0]]
+                }
+                mysqlclose $mysql_sock
+                return reserved;
+            }
+        } else {
+            return reservefail;
+        }
+    }
+}
+###########################################################################
+#
+#
+###########################################################################
+proc on_connect_track {newsock clientAddress clientPort} {
+    global MAIN
+
+    if {![info exists MAIN(TRACKINGSTARTTIME)]} {
+        set MAIN(TRACKINGSTARTTIME) ""
+    }
+
+    set initsend "ACTIVE: $MAIN(TRACKINGSTARTTIME) You are $clientAddress on port $clientPort. Socket is $newsock"
+    set mySock $newsock
+    fconfigure $newsock -blocking 0 -buffering line
+    puts $newsock "$initsend"
+    fileevent  $newsock readable {}
+}
+proc _checkPidAlive {p {action "quit"}} {
+    global MAIN
+    set psLine [catch {exec ps -p $p | egrep -e "$p" | grep -v grep} psout]
+    #puts "the psLine $psLine and configFile $configFile"
+    if {[lindex $psout 0] == $p} {
+        puts "\n!!\n!!\n!!\n!!\n!!\nHit pid $p\n!!\n!!\n!!\n!!\n!!";
+        return 1;
+    } else {
+        puts "\n!!\n!!\n!!\n!!\n!!\nMISSED MISSED MISSED  pid $p\n!!\n!!\n!!\n!!\n!!";
+        if {$action == "quit"} {
+            catch {handleOutput $MAIN(sPipe) "Kill"} why
+            exit;
+        } else {
+            return 0
+        }
+    }
+}
+
+proc _kill_my_monitor {uuid} {
+    set psLine [catch {exec ps -eafwww | egrep -e "$uuid" | grep -v grep} psout]
+    if {[regexp -nocase {[0-9]+} [lindex $psout 1]]} {
+        set retValue [catch {exec kill -9 [lindex $psout 1]}]
+        set cmd1 "wait [lindex $psout 1]"
+        set outpid1 [catch "$cmd1" reason1]
+        if {$outpid1} {
+            puts "Failed to wait for child return: $reason1\n"
+        }
+        if {$retValue==0} {
+            puts "Failed to kill monitor daemon"
+        }        
+    }
+}
+
+proc Login_Monitor {args} {
+    global MAIN connectionTimeout
+    parse_args spawn_tracker $args {
+        ip      "null"
+        port    "null"
+        action  "verify"
+    }
+
+    if {![info exists connectionTimeout]} {
+        set connectionTimeout 90;
+    }
+    set addr "$ip $port"
+    set cmd "spawn telnet $addr"
+    if [catch "$cmd" rea] {
+        puts "Could not connect to monitor daemon via $cmd - $rea\n"
+        if {[regexp "ACTIVE:" $rea]} {
+            puts "ACTIVE:"
+            return 1;
+        }
+        return 0
+    }
+    set timeout 2
+    puts "Login_Monitor  $ip $port $action,  pid=$spawn_id"
+    expect {
+        -re "ACTIVE:"  {
+             catch {close -i $spawn_id} r
+             set timeout $connectionTimeout
+             return 1
+        }
+        -re "Connection refused" {
+             catch {close -i $spawn_id} r
+             set timeout $connectionTimeout
+             return 0
+        }
+        timeout {
+             catch {close -i $spawn_id} r
+             set timeout $connectionTimeout
+             return 1
+        }
+    }
+}

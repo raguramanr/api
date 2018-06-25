@@ -1,0 +1,296 @@
+#!/usr/bin/tclsh
+
+###############################################################################
+#  Procedure Name: snmpConfigureSharing
+#  
+#  Description:
+#  This procedure configures the loadsharing for the specified group of ports.
+#
+#  Input Variables:
+#    session           - Session identifier which identifies the connection
+#                        with the DUT
+#    masterport        - Load sharing group master port number 
+#    slaveport         - Port(s) that are part of sharing
+#
+#  Optional Args:
+#    algorithm         - Load sharing algorithm to configure. Possible values
+#                        are
+#                             ingressPortOffset (1)
+#                             hash              (2)
+#                             roundRobin        (3)
+#                        **NOTE** - Currently SNMP SET operation is allowed for
+#                                   ingressPortOffset type algorithm
+#                        Default value is ingressPortOffset
+#    status            - Create or delete the load sharing configuration.
+#                        Default value is "create"
+#    fd                - File descriptor of open log file   
+#    comment           - Comments to be logged in log file
+# 
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    0 - On failure 
+#    1 - On success 
+#
+#  Possible Usage:
+#    snmpConfigureSharing -session $sessionid -masterport 1
+#                                     -slaveport 1,5,10
+#                                     -status "create" -fd $fd_res
+###############################################################################
+proc snmpConfigureSharing { args } {
+    parse_args snmpConfigureSharing $args {
+       session         ""
+       masterport      ""
+       slaveport       ""
+       algorithm       "1"
+       status          "create"
+       fd              "NULL"
+       comment         "snmpConfigureSharing"
+    }
+ 
+    set func "snmpConfigureSharing:" 
+
+    if { $session == "" || $masterport == "" || $slaveport == ""} {
+       error "$func SNMP session id, master and slave ports must be specified"
+       return 0
+    }   
+ 
+    # ---- Validate the status parameter. It can be create or delete
+    set status [string tolower $status]
+    
+    if { [string compare $status "create"] == 0 } {
+       set statusVal 5
+    } elseif { [string compare $status "delete"] == 0 } {
+       set statusVal 6
+    } else {
+       error "$func $status is wrong, status should be create or delete"
+       return 0 
+    }
+
+    snmpDebug DEBUG "session-$session, masterport-$masterport, \
+                     slaveport-$slaveport, algorithm-$algorithm,\
+                     status-$status" $fd
+
+    result_debug "\n--- Configuring Loadsharing on master port $masterport \
+                    and slave ports $slaveport ---"
+
+    # ---- Parse the port list
+    set portList [snmpUtilParsePortList $slaveport]
+    snmpDebug LOG "$func parsed slave port list is $portList" $fd
+
+    set masport [snmpUtilParsePortList $masterport]
+    snmpDebug LOG "$func parsed master port is $masport" $fd
+ 
+    if { $statusVal == 6 } {
+
+       # ---- Delete the loadsharing configuration 
+       snmpDebug LOG "$func Deleting the Loadsharing configuration \
+                      for $masport" $fd
+       foreach port $portList {
+
+          # ---- Master port cannot be deleted. So skip the master port
+          if { $port == $masport } { 
+             continue
+          }
+          set result [snmpSet -session $session \
+                              -oid extremePortLoadshare2Status.$masport.$port \
+                               -type i -val $statusVal]
+          snmpDebug DEBUG "$func snmpSet - $result" $fd
+          break
+       }
+
+    } else {
+      
+       # ---- Master port cannot be added in the sharing using SNMP.
+       #      so other than master port, add remaining ports to the sharing
+       foreach port $portList {
+
+          # ---- Skip the master port
+          if { $port == $masport } {
+              continue
+          }
+
+          # ---- Add all the slave ports and make SNMP status as createAndWait
+          snmpDebug  DEBUG "$func adding $port to loadsharing group master \
+                            port $masport" $fd
+          set result [snmpSet -session $session \
+                              -oid extremePortLoadshare2Status.$masport.$port \
+                              -type i -val 5]
+          snmpDebug DEBUG "$func snmpSet - $result" $fd
+
+          if { [regexp -nocase "Error" $result] == 1 } {
+             snmpDebug LOG "$func returns ERROR" $fd
+             return 0
+          }
+
+          # ---- By default, algorithm is "ingressPortOffset". 
+          if { $algorithm != 1 } {
+             set result [snmpSet -session $session \
+                            -oid extremePortLoadshare2Algorithm.$masport.$port\
+                            -type i -val $algorithm]
+             snmpDebug DEBUG "$func snmpSet - $result" $fd
+             
+          }
+       }
+
+       # ---- Now all the ports are added. So make them as active. Making any
+       #      one port active will enable loadsharing for the whole group
+       foreach port $portList {
+
+          # ---- Skip the master port
+          if { $port == $masport } {
+              continue
+          } else {
+              set result [snmpSet -session $session \
+                               -oid extremePortLoadshare2Status.$masport.$port\
+                               -type i -val 1]
+              break
+          }
+       }
+       snmpDebug DEBUG "$func snmpSet - $result" $fd
+    }
+
+    snmpDebug DEBUG "$func - End" $fd
+    return 1
+} 
+
+
+###############################################################################
+#  Procedure Name: snmpCheckLoadSharingConfiguration
+#  
+#  Description:
+#    This procedure checkes whether the given master port exist as a master port
+#    for the group of given slave ports and also checks whether the loadsharing
+#    algorithm is same as the given algorithm.
+#
+#  Input Variables:
+#    session           - Session identifier which identifies the connection
+#                        with the DUT
+#    masterport        - Load sharing group master port number 
+#    slaveport         - Port(s) that are part of sharing
+#
+#  Optional Args:
+#    status            - Informs whether the master port exists or not
+#                        Default value is "exist"
+#    algorithm         - Loadsharing algorithm configured
+#    fd                - File descriptor of open log file   
+#    comment           - Comments to be logged in log file
+# 
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    0 - On failure 
+#    1 - On success 
+#
+#  Possible Usage:
+#    snmpCheckMasterSharingPort -session $sessionid -masterport 1
+#                               -slaveport 1,5,10
+#                               -status "exist" -fd $fd_res
+###############################################################################
+proc snmpCheckLoadSharingConfiguration { args } {
+    parse_args snmpCheckMasterSharingPort $args {
+       session         ""
+       masterport      ""
+       slaveport       ""
+       algorithm       ""
+       status          "exist"
+       fd              "NULL"
+       comment         "snmpCheckLoadSharingConfiguration"
+    }
+ 
+    set func "snmpCheckLoadSharingConfiguration:" 
+
+    set retVal 1
+
+    if { $session == "" || $masterport == "" || $slaveport == ""} {
+       error "$func SNMP session id, master and slave ports must be specified"
+       return 0
+    }   
+ 
+    # ---- Validate the status parameter. It can be exist or exist
+    set status [string tolower $status]
+    
+    if { [string compare $status "exist"] != 0 && \
+         [string compare $status "notexist"] != 0} {
+       error "$func $status is wrong, status should be exist or notexist"
+       return 0 
+    }
+
+    snmpDebug DEBUG "session-$session, masterport-$masterport, \
+                     slaveport-$slaveport, status-$status" $fd
+
+    result_debug "\n--- Checking the Loadsharing master port $masterport \
+                     for the slave ports $slaveport ---"
+ 
+    report_start_test "$comment"
+
+    # ---- Parse the port list
+    set portList [snmpUtilParsePortList $slaveport]
+    snmpDebug LOG "$func parsed slave port list is $portList" $fd
+
+    set masport [snmpUtilParsePortList $masterport]
+    snmpDebug LOG "$func parsed master port is $masport" $fd
+
+    foreach slvport $portList {
+       if { $slvport == $masport } {
+          continue
+       }
+
+       # ---- Get the table entries with master port as index
+       set output [snmpGet -session $session \
+                           -oid extremePortLoadshare2Status.$masport.$slvport]
+       snmpDebug DEBUG "$func snmpGet - $output" $fd
+
+       # ---- If no entry exist. Check for the status. If the status is
+       #      notexist, then pass otherwise fail
+       if { [regexp -nocase "No.*Such.*Instance" $output] == 1 } {
+          if { [string compare $status "exist"] == 0 } {
+             result_error "Loadsharing master port is not $masport among \
+                           slave ports $portList. Expected $status. FAIL"
+             set retVal 0
+             break
+          } else {
+             result_ok "Loadsharing master port is $masport among slave \
+                        ports $portList. Expected $status. PASS"
+                  }
+       } elseif { [string compare $status "notexist"] == 0 } {
+           result_error "Loadsharing master port $masport exist among \
+                         slave ports $portList. Expected notexist. FAIL"
+           set retVal 0
+           break
+       }
+    }
+
+    if { $retVal != 0 } {
+       result_ok "Loadsharing master port is $masport among slave \
+                  ports $portList $status. PASS"
+    }
+
+    if { $algorithm != "" } {
+       foreach slvport $portList {
+          if { $slvport == $masport } {
+             continue
+          }
+          set output [snmpGet -session $session \
+                         -oid extremePortLoadshare2Algorithm.$masport.$slvport]
+          snmpDebug DEBUG "$func snmpGet - $output" $fd
+                
+          set algVal [snmpUtilGetVal enum $output]
+          snmpDebug LOG "Loadsharing algorithm for port $slvport is $algVal" $fd
+          if { $algorithm != $algVal } { 
+             result_error "Loadsharing algorithm for port $slvport \
+                           is $algVal.  Expected $algorithm. FAIL"
+          } else {
+             result_ok "Loadsharing algorithm for port $slvport \
+                        is $algVal. Expected $algorithm. PASS"
+          }
+       }
+    }
+
+    report_end_test
+
+    snmpDebug DEBUG "$func - End" $fd
+    return $retVal
+}

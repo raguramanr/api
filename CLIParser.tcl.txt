@@ -1,0 +1,1023 @@
+
+################################################################## 
+# Procedure Name: Start_Version_Parser
+#   
+# Description: Part of the CLI Parser. Process start version section and 
+#              make sure it process the platform section if there is one. 
+#              Return the command list.
+#
+# Input args: CLICommandList
+# Output args: none
+# Typical usage: 
+#      
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: Utility
+##################################################################
+proc Start_Version_Parser {CLICommandList} {
+
+    set RList "";
+    set listLength [llength $CLICommandList];
+    set idx $listLength;
+    set state 0;
+    ##puts "Length = $idx";
+    ##puts "List = $CLICommandList";
+    set insidePlatformBlock 0
+    while {$listLength} {
+        # -- get the line and change it to lowercase
+        set line [string tolower [lindex $CLICommandList [expr $idx - $listLength]]];
+        set line [string trim $line];
+        set firstword [string tolower [lindex $line 0]];
+
+        if {[string length $firstword] == 0} {
+            incr listLength -1;
+            continue;
+        }
+
+        if {$insidePlatformBlock == 0} {
+          # --- check for start platform section
+          if {[regexp -nocase "start_platform" $line] } {
+            set insidePlatformBlock 1
+          }
+        }
+        if {$insidePlatformBlock == 1} {
+          # --- check for end platform section
+          if {[regexp -nocase "end_platform" $line] } {
+            set insidePlatformBlock 0
+          }
+        }
+
+        # -- if state is not 0, we need to check for recursive
+        # -- and not inside a platform block
+        if {($state == 0) && ($insidePlatformBlock == 0)} {
+            if {[regexp -nocase "<.*>" $firstword]} {
+                regsub -all {>} $firstword {} versionFound;
+                regsub -all {<} $versionFound {} versionFound;
+                regsub -all { } $versionFound {} versionFound;
+                if {$versionFound == "default"} {
+                    set state 1; 
+                } else {
+                    set rval [cliCompareVersion $versionFound];
+                    if {$rval == 0} {
+                        set state 1;
+                    }
+                }                        
+            }
+        } elseif {$state == 1} {
+            if {[regexp -nocase "<.*>" $firstword]} {
+                incr listLength -1;
+                continue;
+            } else {
+                # --- check for start platform 
+                if {[regexp -nocase "start_platform" $line] } {
+                    set buffer "";
+                    incr listLength -1;
+                    set line [string tolower [lindex $CLICommandList [expr $idx - $listLength]]];
+                    set line [string trim $line];
+                    while {(![regexp -nocase "end_platform" $line]) && ($listLength >=0)} {                    
+                        lappend buffer $line;
+                        incr listLength -1;
+                        set line [string tolower [lindex $CLICommandList [expr $idx - $listLength]]];
+                        set line [string trim $line];
+                    }     
+                    # -- parse start platform section
+                    ##result_debug "buffer ===> $buffer";                    
+                    if {[llength $buffer] > 0} {                    
+                        set SPPlist [Start_Platform_Parser $buffer];
+                        foreach command $SPPlist {         
+                            lappend RList [string trim $command " \t"]
+                        }  
+                    }
+                } else {
+                    lappend RList $line;
+                }    
+                set state 2;
+            }
+        } elseif {$state == 2} {
+            if {[regexp -nocase "<.*>" $firstword]} {
+                return $RList;
+            } else {
+                lappend RList $line;
+                set state 2;
+            }
+        }
+        incr listLength -1;
+    }  
+    return $RList;  
+}
+
+################################################################## 
+# Procedure Name: Start_Platform_Parser
+#   
+# Description: Part of the CLI Parser. Process the start platform section and
+#              make sure it process the version section if there is one. 
+#              Return the command list.
+#     
+# Input args: CLICommandList {DUT_number "DUT1"}
+# Output args: none
+# Typical usage: 
+#      
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: Utility
+##################################################################
+proc Start_Platform_Parser {CLICommandList {DUT_number "DUT1"}} {
+        
+    set RList "";
+    set listLength [llength $CLICommandList];
+    set idx $listLength;
+    set state 0;
+    ##puts "Length = $idx";
+    ##puts "List = $CLICommandList";
+    set insideVersionBlock 0
+    while {$listLength > 0} {
+        # -- get the line and change it to lowercase
+        set line [string tolower [lindex $CLICommandList [expr $idx - $listLength]]];
+        set line [string trim $line];
+        set firstword [string tolower [lindex $line 0]];
+        if {[string length $firstword] == 0} {
+            incr listLength -1;
+            continue;
+        }
+
+        if {$insideVersionBlock == 0} {
+          # --- check for start version section
+          if {[regexp -nocase "start_version" $line] } {
+            set insideVersionBlock 1
+          }
+        }
+        if {$insideVersionBlock == 1} {
+          # --- check for end version section
+          if {[regexp -nocase "end_version" $line] } {
+            set insideVersionBlock 0
+          }
+        }
+
+        # -- if state is not 0, we need to check for recursive
+        # -- if we are not inside a VERSION block
+        if {($state == 0) && ($insideVersionBlock == 0)} {
+
+
+            if {[regexp -nocase "<.*>" $firstword]} {
+                regsub -all {>} $firstword {} platformFound;
+                regsub -all {<} $platformFound {} platformFound;
+                regsub -all { } $platformFound {} platformFound;
+                if {$platformFound == "default"} {
+                    set state 1; 
+                } else {
+                    if {$platformFound == [string tolower [GetPlatform]]} {
+                        set state 1;
+                    }
+                }                        
+            }
+        } elseif {$state == 1} {
+            if {[regexp -nocase "<.*>" $firstword]} {
+                incr listLength -1;
+                continue;
+            } else {
+                 # --- check for start version section
+                if {[regexp -nocase "start_version" $line] } {
+                    set buffer "";
+                    incr listLength -1;
+                    set line [string tolower [lindex $CLICommandList [expr $idx - $listLength]]];
+                    set line [string trim $line];
+                    while {(![regexp -nocase "end_platform" $line]) && ($listLength >=0)} {                    
+                        lappend buffer $line;
+                        incr listLength -1;
+                        set line [string tolower [lindex $CLICommandList [expr $idx - $listLength]]];
+                        set line [string trim $line];
+                    }     
+                    result_debug "buffer ===> $buffer";
+                    if {[llength $buffer] > 0} {                    
+                        set SPPlist [Start_Version_Parser $buffer];
+                        foreach command $SPPlist {         
+                            lappend RList [string trim $command " \t"]
+                        }  
+                    }
+                } else {
+                    lappend RList $line;
+                }    
+                set state 2;
+            }
+        } elseif {$state == 2} {
+            if {[regexp -nocase "<.*>" $firstword]} {
+                return $RList;
+            } else {
+                lappend RList $line;
+                set state 2;
+            }
+        }
+        incr listLength -1;
+    }  
+    return $RList;  
+}
+
+################################################################## 
+# Procedure Name: Start_VR_Parser
+#   
+# Description: Part of the CLI Parser. Process the start VR section and not 
+#	       process the version section nor platform section 
+#	       if there is one. 
+#              Return the command list.
+#     
+# Input args: CLICommandList {DUT_number "DUT1"}
+# Output args: none
+# Typical usage: 
+#      
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: Utility
+##################################################################
+proc Start_VR_Parser {CLICommandList {DUT_number "DUT1"}} {
+        
+    set RList "";
+    set listLength [llength $CLICommandList];
+    set idx $listLength;
+    set state 0;
+    ##puts "Length = $idx";
+    ##puts "List = $CLICommandList";
+    while {$listLength} {
+        # -- get the line and change it to lowercase
+        set line [string tolower [lindex $CLICommandList [expr $idx - $listLength]]];
+        set line [string trim $line];
+        set firstword [string tolower [lindex $line 0]];
+        if {[string length $firstword] == 0} {
+            incr listLength -1;
+            continue;
+        }
+        # -- if state is not 0, we need to check for recursive
+        if {$state == 0} {
+            if {[regexp -nocase "<.*>" $firstword]} {
+                regsub -all {>} $firstword {} VrFound;
+                regsub -all {<} $VrFound {} VrFound;
+                regsub -all { } $VrFound {} VrFound;
+                if {$VrFound == "default"} {
+                    set state 1; 
+                } else {
+                    if {$VrFound == [string tolower [GetVrString]]} {
+                        set state 1;
+                    }
+                }                        
+            }
+        } elseif {$state == 1} {
+            if {[regexp -nocase "<.*>" $firstword]} {
+                incr listLength -1;
+                continue;
+            } else {
+                 # --- check for start version section
+                if {[regexp -nocase "start_version" $line] } {
+                    set buffer "";
+                    incr listLength -1;
+                    set line [string tolower [lindex $CLICommandList [expr $idx - $listLength]]];
+                    set line [string trim $line];
+                    while {(![regexp -nocase "end_vr" $line]) && ($listLength >=0)} {                    
+                        lappend buffer $line;
+                        incr listLength -1;
+                        set line [string tolower [lindex $CLICommandList [expr $idx - $listLength]]];
+                        set line [string trim $line];
+                    }     
+                    result_debug "buffer ===> $buffer";
+                    if {[llength $buffer] > 0} {                    
+                        set SPPlist [Start_Version_Parser $buffer];
+                        foreach command $SPPlist {         
+                            lappend RList [string trim $command " \t"]
+                        }  
+                    }
+                } else {
+                    lappend RList $line;
+                }    
+                set state 2;
+            }
+        } elseif {$state == 2} {
+            if {[regexp -nocase "<.*>" $firstword]} {
+                return $RList;
+            } else {
+                lappend RList $line;
+                set state 2;
+            }
+        }
+        incr listLength -1;
+    }  
+    return $RList;  
+}
+
+################################################################## 
+# Procedure Name: FilterAllCommands
+#   
+# Description:  Part of CLI Parser. Get start platform or start version
+#               CLI comands. Then return the command list.
+#     
+# Input args: CLIList
+# Output args: none
+# Typical usage: 
+#      
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: Utility
+##################################################################
+proc FilterAllCommands {CLIList} {
+   set returnList "";
+   set verList "";
+   set listLength [llength $CLIList];
+   for {set i 0}  {$i < $listLength} {incr i} {
+      # -- get the commands that belong to the test platform and release software 
+      set line [lindex $CLIList $i];
+      if {[regexp -nocase "start_platform" $line] } {
+         # -- gather all commands for the tested platform
+         if {[info exist platformArray]} {unset platformArray }
+         while {1} {
+            incr i;
+            set line [lindex $CLIList $i];
+            if {[regexp -nocase "end_platform" $line] } {
+                set rlist [Start_Platform_Parser $platformArray];
+                foreach command $rlist {         
+                    lappend returnList [string trim $command " \t"];
+                }     
+                break;
+            } else {
+               lappend platformArray $line;               
+            }
+         }
+      } elseif {[regexp -nocase "start_version" $line] } {
+         # -- gather all commands for the tested release software
+         if {[info exist versionArray]} {unset versionArray }   
+         while {1} {
+            incr i;
+            set line [lindex $CLIList $i];
+            if {[regexp -nocase "end_version" $line] } { 
+                set rlist [Start_Version_Parser $versionArray];
+                foreach command $rlist {         
+                    lappend returnList [string trim $command " \t"];
+                }               
+                break;
+            } else {
+                lappend versionArray $line;
+            }
+         }
+      } elseif {[regexp -nocase "start_vr" $line] } {
+         # -- gather all commands for the tested virtual router
+         if {[info exist vrArray]} {unset vrArray }   
+         while {1} {
+            incr i;
+            set line [lindex $CLIList $i];
+            if {[regexp -nocase "end_vr" $line] } { 
+                set rlist [Start_VR_Parser $vrArray];
+                foreach command $rlist {         
+                    lappend returnList [string trim $command " \t"];
+                }               
+                break;
+            } else {
+                lappend vrArray $line;
+            }
+         }
+      } elseif {![IsInKeywordList $line]} {
+         lappend returnList [string trimleft $line " \t"];
+      }
+   }
+   ##result_debug "returnList = $returnList";
+   return $returnList;
+}
+
+################################################################## 
+# Procedure Name: RunCommandAndCheck
+#   
+# Description:  Part of CLI Parser. This is the main function. It processes
+#               the CLI commands based on the group.
+#     
+# Input args: CLIList testNumber {flag "first"}
+#	flag : 	first - first pass
+#		firstlast - first and last pass
+#		second - second pass
+#		secondlast - second and last pass
+#		third - thid pass
+#		thirdlast - third and last pass
+# Output args: none
+# Typical usage: 
+#      
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: Utility
+##################################################################
+proc RunCommandAndCheck {CLIList testNumber {optflag "true"}} {
+   global DUT1_DefaultBlade
+
+   set listLength [llength $CLIList];
+   set index 0;
+   set i 1;
+   while {$index < $listLength} {
+      set groupList [GetGroupList $CLIList $listLength index];
+      set keywordLine [lindex $groupList 0];
+      #puts "keywordLine = $keywordLine"
+      #puts "groupList = $groupList"
+      # -- process the command and showcli section
+      #result_debug "groupList: $groupList"
+      #result_debug "keywordLine: $keywordLine"
+      #result_debug "optflag: $optflag"
+      if {[regexp -nocase -- "command:" $keywordLine]} {
+          #result_debug "between filterList"
+          #result_debug "optflag: $optflag"
+          # -- process CLI command section  
+	  if {[regexp -nocase -- "first*" $optflag]} {
+              result_debug "before filterList"
+              set filterList [FilterAllCommands $groupList];    
+              result_debug "command filterList: $filterList"
+              set tmp "$testNumber.$i";
+              ################################################
+              set subTest "$tmp Check commands for legal"
+              ################################################
+              result_h2 "$subTest"
+              report_start_test "$subTest"         
+              ProcessCommand $filterList $tmp;
+              report_end_test          
+              incr i;    
+          }    
+      } elseif {[regexp -nocase "showcli:" $keywordLine]} {
+          #result_debug "before showcli filterList"
+          # -- process CLI show section
+          set filterList [FilterAllCommands $groupList]
+          #result_debug "showcli filterList: $filterList"
+          set idx [lsearch $filterList "output:"];
+          set getshowcommand [lindex $filterList [expr $idx - 1]];
+          set tmp "$testNumber.$i";
+          ################################################
+          set subTest "$tmp Check output ($getshowcommand)";
+          ################################################
+          result_h2 "$subTest";
+          report_start_test "$subTest";
+          ProcessShow $filterList $tmp;
+          report_end_test;
+          incr i;
+      } elseif {[regexp -nocase "showcli_once:" $keywordLine]} {
+          #result_debug "before showcli1 filterList"
+	  if {[regexp -nocase -- "first*" $optflag]} {
+          # -- process CLI show section for pass 1 only
+             set filterList [FilterAllCommands $groupList]
+             #result_debug "showcli1 filterList: $filterList"
+             set idx [lsearch $filterList "output:"];
+             set getshowcommand [lindex $filterList [expr $idx - 1]];
+             set tmp "$testNumber.$i";
+             ################################################
+             set subTest "$tmp Check output ($getshowcommand)";
+             ################################################
+             result_h2 "$subTest";
+             report_start_test "$subTest";
+             ProcessShow $filterList $tmp;
+             report_end_test;
+             incr i;
+	  }
+      } elseif {[regexp -nocase "sendafile:" $keywordLine]} {
+          #result_debug "before sendafile filterList"
+	  if {[regexp -nocase -- "first*" $optflag]} {
+ 	     global tftpServerList;
+	     set tftpServer [lindex $tftpServerList 0]
+          # -- process SendAFile section for pass 1 only
+             set filterList [FilterAllCommands $groupList]
+             #result_debug "sendafile filterList: $filterList"
+	     set pwd [pwd]
+	     set moduleName [file tail $pwd]
+	     set dirName "../../cli-ew/$moduleName/"
+	     foreach SendFileArgs $filterList {
+                #set SendFileArgs [lindex $filterList 0];
+	        set ArgsList [split $SendFileArgs " "]
+	        if {[llength $ArgsList] == 1} {
+	           set localFile [lindex $ArgsList 0]
+	           set remoteFile $localFile
+	        } else {
+	           set localFile [lindex $ArgsList 1]
+	           set remoteFile [lindex $ArgsList 3]
+	        }
+	        set localFile [string trim $localFile {"}]
+	        set localFile "$dirName$localFile"
+                set tmp "$testNumber.$i";
+                ################################################
+                set subTest "$tmp  (SendAFile $tftpServer $localFile $remoteFile)";
+                ################################################
+                result_h2 "$subTest";
+                report_start_test "$subTest";
+                cliSendAFile $tftpServer "$localFile" $remoteFile
+                report_end_test;
+                incr i;
+	     }
+	  }
+      } elseif {[regexp -nocase "deleteafile:" $keywordLine]} {
+	  if {[regexp -nocase -- "last*" $optflag]} {
+          # -- process DeleteAFile section for last pass only
+             set filterList [FilterAllCommands $groupList]
+             #result_debug "deleteafile filterList: $filterList"
+	     foreach SendFileArgs $filterList {
+                #set SendFileArgs [lindex $filterList 0];
+	        set ArgsList [split $SendFileArgs " "]
+	        set remoteFile [lindex $ArgsList 0]
+	        set remoteFile [string trim $remoteFile {"}]
+                set tmp "$testNumber.$i";
+                ################################################
+                set subTest "$tmp  (DeleteAFile $remoteFile)";
+                ################################################
+                result_h2 "$subTest";
+                report_start_test "$subTest";
+                DeleteAFile $remoteFile
+                report_end_test;
+                incr i;
+	     }
+	  }
+      }
+   }
+}
+
+################################################################## 
+# Procedure Name: ProcessCommand
+#   
+# Description: Part of CLI Parser. Process the command part. Make sure 
+#              there is no cli error. Also check for platform and version. 
+#     
+#
+# Input args: filterCommandList testNo
+# Output args: none
+# Typical usage: 
+#      
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: Utility
+##################################################################
+proc ProcessCommand {filterCommandList testNo} {
+    global DUT1_DefaultBlade;
+    global tmpPath;
+    
+    set i 0;
+    #set filterCommand [FilterAllCommands $groupList]       
+    set cmdListLength1 [llength $filterCommandList]
+    result_debug "SendInTheCommand: $filterCommandList"
+    set filterCommandList [ExpandCommands $filterCommandList]
+    set cmdListLength2 [llength $filterCommandList]
+    if {$cmdListLength2 > $cmdListLength1} {
+        result_debug "ExpandedCommand: $filterCommandList"
+    }
+    foreach CLICommand $filterCommandList {
+        if { [regexp -nocase {]} $CLICommand] == 1 ||
+	     [regexp -nocase {\[} $CLICommand] == 1 } {
+            set tmp $testNo;
+            append tmp ".$i";
+            report_start_test "$tmp <$CLICommand> executed"
+            result_error "Command not executed due to format error"
+            report_end_test  
+            incr i;           
+	    continue;
+	}
+	set checkIllegal false
+	set cliCMD	$CLICommand
+	if {[regexp -nocase "illegal" $CLICommand] == 1} {
+	    set checkIllegal true
+	    regsub {illegal} $CLICommand {} CLICommand
+	    result_debug "checkIllegal - $CLICommand"
+	}
+        # -- process command section
+        if {[string range $CLICommand 0 0] == "#" } {
+            # -- take out comment
+            result_debug "comment - $CLICommand"
+            continue;
+        } elseif {[regexp -nocase "sleep *" $CLICommand] } {           
+            # -- process sleep command
+            set wait [lindex $CLICommand 1]
+            result_debug "Sleeping for $wait seconds"
+            sleep $wait
+	    continue
+        } else {
+            # -- check for platform dependent
+            if {[regexp -nocase "<.*>" $CLICommand] } {
+                regsub -all {>} $CLICommand {} CLICommand
+                switch -regexp [GetPlatform] {
+                    "BD" -
+                    "XCM*" {set blade "$DUT1_DefaultBlade:" }
+                    "Asp*" {set blade "$DUT1_DefaultBlade:" }
+                    "Summi*" {set blade "" }
+                    default {set blade "" }
+                }
+                regsub -all {<} $CLICommand $blade CLICommand            
+            }    
+        }      
+       
+        # -- send the command to switch
+        set tmp $testNo;
+        append tmp ".$i";
+        set fd_in [open "$tmpPath/tmp_$tmp" "w"];
+        SendACmd "$CLICommand" NULL $fd_in;
+        close $fd_in;
+
+        # -- check for illegal command
+        set fd_in [open "$tmpPath/tmp_$tmp" "r"];
+        set rtValue [check_illegality $fd_in];
+        close $fd_in;
+        
+        # -- report the execution
+#        report_start_test "$tmp <$CLICommand> executed"
+        report_start_test "$tmp <$cliCMD> executed"
+        if { $rtValue == "illegal" } {
+	    if { $checkIllegal == "true" } {
+                result_ok "Command executed failed as expected"
+	    } else {
+                result_error "Error in executing command"
+	    }
+        } else {
+	    if { $checkIllegal == "true" } {
+                result_error "Command executed successfully but should have failed"
+	    } else {
+                result_ok "Command executed successfully"
+	    }
+        }
+        report_end_test  
+        incr i;           
+    }
+}
+
+################################################################## 
+# Procedure Name: ProcessShow
+#   
+# Description: part of CLI Parser. Process showcli and ouput part.
+#              It also checks for platform and version. 
+#
+# Input args: filterCommandList testNo
+# Output args: none
+# Typical usage: 
+#      
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: Utility
+##################################################################
+proc ProcessShow {filterCommandList testNo} {
+    global DUT1_DefaultBlade;
+    
+    #set versionCommands ""
+    #set filterList [FilterAllCommands $groupList]
+    result_debug "GetTheOutput: $filterCommandList"
+    set checkOutput 0
+    set checkOutputList ""
+    set textBuffer ""
+       
+    # -- process the show section
+    if {[info exist flag]} {unset flag};
+    foreach line $filterCommandList {
+        set line [string trim $line];
+        if {[regexp -nocase "<.*>" $line] } {
+             # -- check for platform dependent
+             regsub -all {>} $line {} line
+             switch -regexp [GetPlatform] {
+                 "BD" -
+                 "XCM*" {set blade "$DUT1_DefaultBlade:" }
+                 "Asp*" {set blade "$DUT1_DefaultBlade:" }
+                 "Summi*" {set blade "" }
+                 default {set blade "" }
+             }
+             regsub -all {;<|<} $line $blade line 
+        }
+        #replace parentheses              
+        regsub -all {\(} $line {.} line
+        regsub -all {\)} $line {.} line
+        #replace bracket         
+        regsub -all {\[} $line {.} line
+        regsub -all {\]} $line {.} line
+        if {[string range $line 0 0] == "#" } {
+            # -- take out comment
+            result_debug "comment - $line"
+        } elseif {[regexp -nocase "sleep*" $line] } {           
+            # -- process sleep time
+            set wait [lindex $line 1]
+            result_debug "Sleeping for $wait seconds"
+            sleep $wait           
+        } elseif {[regexp -nocase "output:" $line ]} {
+            # -- get out the loop and start checking for output
+            set checkOutput 1
+        } elseif {$checkOutput} {
+            # -- change the commands into the script format
+            #result_debug "--line--> $line";              
+            if {[string range $line 0 0] == "\{"} {
+                #result_debug "Process Bracket Line: $line";
+                set str [string trimright $line "\}"];
+                set line [string range $str 1 end];                
+                if {[regexp -nocase "notexist" $line]} {
+                    set notexist [string tolower [lindex $line 1]];
+                    ##puts "what is notexst : $notexist";
+                    ##puts "what is line : $line";
+                    if {$notexist == "notexist"} {
+                        set tmp [lindex $line 0];
+                        lappend checkOutputList "\{$tmp\} 0"; 
+                        lappend flag 1;                            
+                    } else {
+                        set tmp [lindex $line 0];
+                        lappend checkOutputList "\{$tmp\} 0"; 
+                        lappend flag 0;
+                    }                     
+                } elseif {[regexp -nocase "exist" $line]} {
+                    if {[lindex $line 1] == "exist"} {
+                        set tmp [lindex $line 0];
+                        lappend checkOutputList "\{$tmp\} 0"; 
+                        #puts "1) $checkOutputList ";                           
+                        lappend flag 0;
+                    } else {
+                        set tmp [lindex $line 0];
+                        lappend checkOutputList "\{$tmp\} 0";
+                        #puts "2) $checkOutputList ";  
+                        lappend flag 0;
+                    }         
+                } else {
+                   set tmp [lindex $line 0];
+                   lappend checkOutputList "\{$tmp\} 0"; 
+                   lappend flag 0;
+                }                 
+            } else {
+                lappend checkOutputList "\{$line\} 0";
+                lappend flag 0;
+            }
+            #result_debug "--checkOutputList--> $checkOutputList";
+        } else {
+            #SendACmd $line NULL $fd_in
+            set textBuffer "$textBuffer {$line}"  
+        }
+    
+    } 
+          
+    result_debug ">>>textBuffer: $textBuffer"          
+    result_debug ">>>checkOutputList: $checkOutputList"
+    
+    # -- process the show command
+    set showCommand [lindex $textBuffer 0];
+    set nofile 1;
+    set returnList [GetKeyValue $showCommand $checkOutputList $nofile];
+    #result_debug ">>>checkOutputList: $checkOutputList";
+    #result_debug ">>>flag : $flag";
+    
+    # -- check for the output got back from getkeyvalue
+    set i 0;
+    foreach checkOutput $checkOutputList {        
+        set checkOutput [lindex $checkOutput 0]; 
+        set firstword [lindex $checkOutput 0]; 
+        set returnvalue [lindex $returnList $i];
+        #puts "returnvalue ($returnvalue) length ([llength $returnvalue])";
+        if {[llength $returnvalue] > 1} {
+            set returnvalue [lindex $returnvalue 0];
+        }         
+        set rt [regsub -all {[()]} $returnvalue {.} newvalue];
+        if {$rt > 0} {
+            #puts "newvalue($rt) = $newvalue ";
+            set returnvalue $newvalue;
+        } 
+        set flg [lindex $flag $i];      
+        set tmp "$testNo.$i";
+        report_start_test "$tmp <$checkOutput> executed";
+        set tmp1 [string tolower $firstword];
+        set tmp2 [string tolower $returnvalue];
+        set tmp1 [string trim $tmp1];
+        set tmp2 [string trim $tmp2];
+        #set result [regexp -nocase "^$tmp1" "^$tmp2" matchedRange];
+        #result_debug "tmp1 ($tmp1) tmp2 ($tmp2)"
+        if {$flg == 0} {                    
+            if {[string tolower $tmp1] != [string tolower $tmp2]} {
+                result_error "Wanted($firstword) and got($returnvalue)";
+            } else {
+                result_ok "Wanted($firstword) and got($returnvalue)";
+            }
+        } else {
+            if {[string tolower $tmp1] != [string tolower $tmp2]} {
+                result_ok "Did not wanted($firstword) and got($returnvalue)";
+            } else {
+                result_error "Did not wanted($firstword) and got($returnvalue)";
+            }       
+        }    
+        report_end_test 
+        incr i;
+    }
+}
+
+
+################################################################## 
+# Procedure Name: ExpandCommands
+#   
+# Description: Part of CLI Parser. Process the command part. Expand each command
+# 	if include [value ...], [name ....], [string ...] structures
+#     
+# Input args: filterCommandList
+# Output args: none
+# Typical usage: 
+#      
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: Utility
+################################################################## 
+proc ExpandCommands {cmdList} {
+   set returnList ""
+   set listLength [llength $cmdList]
+   for {set i 0 } {$i < $listLength} {incr i} {
+      set match_type 0
+      set match_name 0
+      set match_string 0
+      set match_value 0
+      set line [lindex $cmdList $i]
+#      result_debug "$line"
+      # try to search for string name and value
+      if {[regexp -nocase ".name +(\[0-9a-zA-Z]+) +(\[0-9]+) +(\[0-9]+)]" \
+	$line dummy pattern min max] == 1} {
+         set match_name 1
+	 incr match_type
+#	 result_debug "match_name: $dummy"
+      }
+      if {[regexp -nocase ".string +(\[0-9a-zA-Z]+) +(\[0-9]+) +(\[0-9]+)]" \
+	$line dummy pattern min max] == 1} {
+         set match_string 1
+	 incr match_type
+#	 result_debug "match_string: $dummy"
+      }
+      if {[regexp -nocase ".value +(\[0-9]+) +(\[0-9]+) +(\[0-9]+)]" \
+	$line dummy value min max] == 1} {
+         set match_value 1
+	 incr match_type
+#	 result_debug "match_value: $dummy"
+      }
+      
+      if {$match_type > 1 || $match_type == 0} {
+         lappend returnList $line
+      } else {
+	 set line1 $line
+	 if { $match_name == 1 || $match_string == 1 } {
+	    if { $match_name == 1 } {
+               regsub "(.name) +(\[0-9a-zA-Z]+) +(\[0-9]+) +(\[0-9]+)]" \
+		  $line1 "MYSUB" line1
+	    } else {
+               regsub "(.string) +(\[0-9a-zA-Z]+) +(\[0-9]+) +(\[0-9]+)]" \
+		  $line1 "MYSUB" line1
+	    }
+	    set length [string length $pattern]
+	    set repeat [expr ($min / $length) + 1]
+	    set name [string repeat $pattern $repeat]
+	    set name [string range $name 0 [expr ($min - 1)]]
+            regsub "MYSUB"  $line1 "$name" line2
+	    lappend returnList $line2			;# min 
+	    if { $match_name == 1 } {
+	       regsub "(cre.+?) " $line2 {delete } line2
+	       lappend returnList $line2		;# delete min
+	    }
+	    set name [string range $name 0 [expr ($min - 2)]]
+            regsub "MYSUB" $line1 "$name" line2
+	    set line2 "illegal $line2"
+	    lappend returnList $line2			;# min - 1
+	    set repeat [expr (($max + 1) / $length) + 1]
+	    set name [string repeat $pattern $repeat]
+	    set name [string range $name 0  $max]
+            regsub "MYSUB"  $line1 "$name" line2
+	    set line2 "illegal $line2"
+	    lappend returnList $line2			;# max + 1
+	    set name [string range $name 0  [expr ($max - 1 )]]
+            regsub "MYSUB"  $line1 "$name" line2
+	    lappend returnList $line2			;# max 
+	    if { $match_name == 1 } {
+	       regsub "(cre.+?) " $line2 {delete } line2
+	       lappend returnList $line2		;# delete max
+            }
+	    set middle [expr ($min + $max) / 2]
+	    set repeat [expr ($middle / $length) + 1]
+	    set name [string repeat $pattern $repeat]
+	    set name [string range $name 0 $middle]
+            regsub "MYSUB" $line1 "$name" line2
+	    lappend returnList $line2			;# middle
+	    if { $match_name == 1 } {
+	       regsub "(cre.+?) " $line2 {delete } line2
+	       lappend returnList $line2		;# delete middle
+	    }
+            regsub "MYSUB" $line1 "$pattern" line2
+            lappend returnList $line2			;# pattern
+	    if { $match_name == 1 } {
+	       regsub "(cre.+?) " $line2 {delete } line2
+	       lappend returnList $line2		;# delete pattern
+	    }
+         } elseif { $match_value == 1 } {
+	    set valueList ""
+	    set minList ""
+	    set maxList ""
+	    set idx 0
+	    set line1 $line
+	    while { 1 } {
+#	       result_debug "$line1"
+	       if {[regexp ".value +(\[0-9]+) +(\[0-9]+) +(\[0-9]+)]" \
+        		$line1 dummy value min max] == 1} {
+		  lappend valueList $value
+		  lappend minList $min
+		  lappend maxList $max
+		  regsub ".value +\[0-9]+ +\[0-9]+ +\[0-9]+]" $line1 \
+			"VALUE$idx" line1
+		  incr idx
+	       } else {
+		  break
+	       }
+            }
+#           result_debug "idx: $idx"
+#           result_debug "$line1"
+#	    result_debug "valueList: $valueList"
+#	    result_debug "minList: $minList"
+#	    result_debug "maxList: $maxList"
+            for {set k 0 } { $k < $idx } { incr k } {
+	       set line2 $line1
+	       for { set j 0 } { $j < $idx } { incr j } {
+	          if { $j == $k } {
+		     set lastValue [lindex $valueList $j]
+		     set min [lindex $minList $j]
+		     set max [lindex $maxList $j]
+	          } else {
+		     set subx [lindex $valueList $j]
+	             regsub "VALUE$j" $line2 "$subx" line2
+	          }
+	       }
+#               result_debug "$line2"
+package require Mpexpr
+	       set value [expr ($min - 1 )]
+               regsub "VALUE$k" $line2 "$value" line3
+	       set line3 "illegal $line3"
+               lappend returnList $line3		;# min - 1
+               regsub "VALUE$k" $line2 "$min" line3	;# 
+               lappend returnList $line3		;# min
+	       set value [mpexpr ($max + 1 )]
+               regsub "VALUE$k" $line2 "$value" line3
+	       set line3 "illegal $line3"
+               lappend returnList $line3		;# max + 1
+               regsub "VALUE$k" $line2 "$max" line3	;# 
+               lappend returnList $line3		;# max
+	       set value [mpexpr (($max + $min)/2)]
+               regsub "VALUE$k" $line2 "$value" line3
+               lappend returnList $line3		;# middle
+               regsub "VALUE$k" $line2 "$lastValue" line3
+               lappend returnList $line3		;# default
+	    }
+	 }
+      }
+   }
+   return $returnList
+}
+
+################################################################## 
+# Procedure Name: cliCompareVersion
+#   
+# Description: Compare the version with the version on the dut  
+#
+# Input args:
+#              version 
+#              dut name   
+#                
+# Output args: none
+#              
+#
+# Typical usage: 
+#             [CompareVersion $version $DUTName]
+#
+# Category: utility
+##################################################################
+proc cliCompareVersion {version {DUTName "DUT1"}} {
+
+    global DUTs_info;  
+                
+    result_debug "CompareVersion build($version) and SW($DUTs_info($DUTName,version))"
+    set vn [cliGetVersion $DUTName 4];
+    set bn [cliGetVersion $DUTName 3];      
+    set flag [regexp -nocase {^(.*)b(.*)} $version vs vn1 bn1];
+    if {$flag} {
+        # -- compare release and build number
+        if {$vn1 > $vn} {
+            return 1;
+        } elseif {$vn1 < $vn} {
+            return -1;
+        } else {
+          result_debug "Build bld($bn1) sw($bn)";
+          if {$bn1 > $bn} {
+              return 1;
+          } elseif {$bn1 < $bn} {
+              return -1;
+          } else {
+              return 0;
+          }
+        }    
+    } else {
+        # ---- compare only release number
+        set sw_fullversion $vn;
+        set lng [string length $version];
+        result_debug "CompareVersion build($version) and sw($sw_fullversion)"
+        if {$lng >= [string length $sw_fullversion]} {
+            set sw_shortversion $sw_fullversion;
+        } else {
+            set sw_shortversion [string range $sw_fullversion 0 [expr $lng-1]];   
+        }     
+        
+        if {($version == "6.2e") && ($sw_shortversion != "6.2e")} {
+            # to prevent s24lc code
+            return 1;
+        } elseif {$version > $sw_shortversion} {
+            return 1;
+        } elseif {$version < $sw_shortversion} {
+            return -1;
+        } else {
+            return 0;
+        }        
+    }
+}

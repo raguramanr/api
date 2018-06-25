@@ -1,0 +1,514 @@
+
+##################################################################    
+# Procedure Name: check_Vlan_IGMP_snooping
+# Description:
+#     	This proc is used to check if a vlan's IGMP snooping entries exist
+#	per user-given snoopingList 
+# Input args: vlan snoopingList fd_res testNo {comment ""}
+# Output args: None.
+# Typical usage:
+#	set clientIP1 192.3.3.11
+#	set multicastIP 239.1.2.4
+#	lappend snoopingList "$clientIP1 $multicastIP 0"
+#	check_Vlan_IGMP_snooping vlanOne $snoopingList  $fd_res $testNo
+# Category: VerifySwitchOutput
+##################################################################    
+proc check_Vlan_IGMP_snooping {vlan snoopingList  fd_res testNo {comment ""}} {
+   global spawn_id
+
+   set fd_in [open "Tmp/tmp_$testNo[pid]" "w"]
+   SendACmd "show igmp snooping $vlan" $fd_res $fd_in
+   close $fd_in
+   
+   set fd_in [open "Tmp/tmp_$testNo[pid]" "r"]
+   report_start_test "Checking $vlan IGMP snooping table $comment"
+   set snoopingListFound {}
+   #get all the IPs and Age entries
+   set formats	0
+   while {[gets $fd_in line] != -1} {
+   #result_debug "----- Line=|$line|"
+      if {[regexp -- "Subscribed" $line] == 1} { set formats 1 }
+      #kind of hard-coded here
+
+      if { $formats == 1 } {
+	  set clientIp [lindex $line 1]
+	  if { [IsValidIpAddress $clientIp] } {
+	      if { [lindex $line 2] == "All"} {
+                  set multicastIp "[lindex $line 2]_[lindex $line 3]"
+                  set age [lindex $line 4]
+	      } else {
+                  set multicastIp [lindex $line 2]
+                  set age [lindex $line 3]
+              }
+	      result_debug "Snoop entry Found: |$clientIp|$multicastIp|$age|"
+	      lappend snoopingListFound "$clientIp $multicastIp $age"
+	  }
+      } else {
+	  set clientIp [lindex $line 0]
+	  if { [IsValidIpAddress $clientIp] } {
+	      if { [lindex $line 1] == "All"} {
+                  set multicastIp "[lindex $line 1]_[lindex $line 2]"
+                  set age [lindex $line 3]
+	      } else {
+                  set multicastIp [lindex $line 1]
+                  set age [lindex $line 2]
+              }
+	      result_debug "Snoop entry Found: |$clientIp|$multicastIp|$age|"
+	      lappend snoopingListFound "$clientIp $multicastIp $age"
+	  }
+      }
+   }
+   foreach snoopingInfo $snoopingList {
+      set clientIpWanted [lindex $snoopingInfo 0]
+      set flagFound "notExist"
+      foreach snoopingInfoFound $snoopingListFound {
+         set clientIpFound [lindex $snoopingInfoFound 0]
+         if {$clientIpWanted == $clientIpFound } {
+            set multicastIpWanted [lindex $snoopingInfo 1]
+            set multicastIpFound [lindex $snoopingInfoFound 1]
+            #just ignore subnet mask or other junk appended to end
+            if {[string match "$multicastIpWanted*" $multicastIpFound] == 1} {
+               set ageWanted [lindex $snoopingInfo 2]
+               set ageFound [lindex $snoopingInfoFound 2]
+               if { $ageWanted == "*" } {
+                  #dont care about age
+                  set flagFound "exist"
+                  break
+               } else {
+                  set delAge [expr abs($ageWanted - $ageFound)]
+                  #check aging threshold
+                  if {$delAge <= 15} {
+                     set flagFound "exist"
+                     break
+                  }
+               }
+            }
+         }
+      }
+      set flagWanted [lindex $snoopingInfo 3]
+      #default to exist
+      if {$flagWanted != "notExist"} { set flagWanted "exist" }
+      if {$flagFound == $flagWanted} {
+         result_ok "Criteria passed for: $snoopingInfo"
+      } else {
+         result_error "Criteria failed for: $snoopingInfo"
+         result_debug "Entries Found: $snoopingListFound"
+      }
+   }  
+               
+   report_end_test
+   close $fd_in
+   file delete "Tmp/tmp_$testNo[pid]"
+}
+
+##################################################################    
+# Procedure Name: check_IGMP_Status
+# Description:
+#     	This proc is used to check IGMP disabled/enabled status and IGMP 
+#	snooping flag in the CLI display of "show ipconfig".
+# Input args: statusWanted flagWanted  fd_res testNo
+# Output args: None
+# Typical usage:
+#	check_IGMP_Status "Enabled" "empty" $fd_res $testNo
+# Category: VerifySwitchOutput
+##################################################################
+proc check_IGMP_Status {statusWanted flagWanted  fd_res testNo} {
+   global spawn_id
+
+   set fd_in [open "Tmp/tmp_$testNo[pid]" "w"]
+   SendACmd "show igmp" $fd_res $fd_in
+   close $fd_in
+   
+   set fd_in [open "Tmp/tmp_$testNo[pid]" "r"]
+   report_start_test "Checking IGMP status:$statusWanted Flag:$flagWanted"
+   #get all the IPs and Age entries
+   set IGMPStatusFound "notFound"
+   set IGMPFlagFound "notFound"
+   while {[gets $fd_in line] != -1} {
+      #result_debug "----- Line=|$line|"
+      set IGMPKey [lindex $line 0]
+      if {$IGMPKey == "IGMP" } {
+         set IGMPKey [lindex $line 1]
+         #puts "IGMPKey: |$IGMPKey|"
+         if {$IGMPKey == "Snooping" } {
+            set IGMPKey [lindex $line 2]
+            #puts "IGMPKey: |$IGMPKey|"
+            if {$IGMPKey == ":" } {
+               set IGMPStatusFound [lindex $line 3]
+               #puts "IGMPStatusFound: |$IGMPStatusFound|"
+            }
+         }
+      }
+      #find flag
+      set IGMPKey [lindex $line 0]
+      if {$IGMPKey == "Igmp" } {
+         set IGMPKey [lindex $line 1]
+         if {$IGMPKey == "Snooping" } {
+            set IGMPKey [lindex $line 2]
+            if {$IGMPKey == "Flag:" } {
+               set IGMPFlagFound [lindex $line 3]
+               #puts "IGMPFlagFound: |$IGMPFlagFound|"
+               # after 620b47 the flag vlaue is changed to be "forward-all-router"
+               if {$IGMPFlagFound == "" || $IGMPFlagFound == "forward-all-router"} { 
+                  set IGMPFlagFound "empty"
+               }
+               break;
+            }
+         }
+      }
+   }
+   puts "IGMP: $IGMPStatusFound $IGMPFlagFound"
+   set testResult "good"
+   if { ($IGMPStatusFound == $statusWanted) } {
+      result_debug "IGMP Status passed. Is $IGMPStatusFound"
+   } else {
+      result_debug "IGMP Status failed. Is $IGMPStatusFound BUT EXPECTED $statusWanted"
+      set testResult "bad"
+   }
+   if { ($IGMPFlagFound == $flagWanted) } {
+      result_debug "IGMP Flag passed. Is $IGMPFlagFound or forward-all-router"
+   } else {
+      result_debug "IGMP Flag failed. Is $IGMPFlagFound BUT EXPECTED $flagWanted"
+      set testResult "bad"
+   }
+
+   if {$testResult == "good"} {
+      result_ok "Check IGMP status:$statusWanted Flag:$flagWanted"
+   } else {
+       result_error "Check IGMP status:$statusWanted Flag:$flagWanted"
+   }       
+   report_end_test
+   close $fd_in
+   file delete "Tmp/tmp_$testNo[pid]"
+}
+ 
+##################################################################    
+# Procedure Name: check_ipmc_cache
+# Description:
+#     	This proc is used to check if ipmc cache entries exist
+#	per user-given cacheList
+# Input args: cacheList fd_res testNo
+# Output args: None
+# Typical usage:
+#	lappend cacheList "$destGroup $clientIp $vlan"
+#	check_ipmc_cache $cacheList $fd_res $testNo
+# Category: VerifySwitchOutput
+##################################################################
+proc check_ipmc_cache {cacheList fd_res testNo} {
+   global spawn_id
+
+   set fd_in [open "Tmp/tmp_$testNo[pid]" "w"]
+   SendACmd "show ipmc cache detail" $fd_res $fd_in
+   close $fd_in
+   
+   set fd_in [open "Tmp/tmp_$testNo[pid]" "r"]
+   report_start_test "Checking ipmc cache table"
+   set cacheListFound {}
+   #get all the IPs and Age entries
+   while {[gets $fd_in line] != -1} {
+   #result_debug "----- Line=|$line|"
+      #kind of hard-coded here
+      if { ([string length $line] >  30) } {
+         set destGroup [lindex $line 1]
+         if { [IsValidIpAddress $destGroup] } {
+            set clientIp [lindex $line 2]
+            set vlan [lindex $line 3]
+            result_debug "Cache entry Found: |$destGroup|$clientIp|$vlan|"
+            lappend cacheListFound "$destGroup $clientIp $vlan"
+         }
+      }
+   }
+   foreach cacheInfo $cacheList {
+      set destGroupWanted [lindex $cacheInfo 0]
+      set flag "false"
+      foreach cacheInfoFound $cacheListFound {
+         set destGroupFound [lindex $cacheInfoFound 0]
+         if {$destGroupWanted == $destGroupFound } {
+            set clientIpWanted [lindex $cacheInfo 1]
+            set clientIpFound [lindex $cacheInfoFound 1]
+            if {[string match "$clientIpWanted*" $clientIpFound] == 1} {
+               set vlanWanted [string tolower [lindex $cacheInfo 2]]
+               set vlanFound [string tolower [lindex $cacheInfoFound 2]]
+               #check vlan
+               if {$vlanWanted == $vlanFound} {
+                  set flag "true"
+                  break
+               }
+            }
+         }
+      }
+      if {$flag == "true"} {
+         result_ok "Criteria passed for: $cacheInfo"
+      } else {
+         result_error "Criteria failed for: $cacheInfo"
+         result_debug "Entries Found: $cacheListFound"
+      }
+   }  
+               
+   report_end_test
+   close $fd_in
+   file delete "Tmp/tmp_$testNo[pid]"
+}
+
+##################################################################    
+# Procedure Name: check_learn_multicast_ip
+# Description:
+#     	This proc is used to check if a multicast group IP is learned in the
+#	CLI display of "show ipc vlan $vlan" per user-given multicastIpList
+# Input args: vlan multicastIpList fd_res testNo
+# Output args: None
+# Typical usage:
+#	lappend multicastIpList "$multicastIP1 notLearned"
+#	lappend multicastIpList "$multicastIP2 learned" 
+#	check_learn_multicast_ip vlanOne $multicastIpList $fd_res $testNo
+# Category: VerifySwitchOutput
+##################################################################
+proc check_learn_multicast_ip {vlan multicastIpList fd_res testNo} {
+   global spawn_id
+
+   set fd_in [open "Tmp/tmp_$testNo[pid]" "w"]
+
+   SendACmd "show igmp vlan $vlan" $fd_res $fd_in
+   close $fd_in
+   
+   set fd_in [open "Tmp/tmp_$testNo[pid]" "r"]
+   report_start_test "Checking learned multicast ip for vlan $vlan"
+   while {[gets $fd_in line] != -1} {
+      #result_debug "----- Line=|$line|"
+      set Key [lindex $line 0]
+      if {$Key == "Learned" } {
+         set Key [lindex $line 1]
+         if {$Key == "multicast" } {
+            #get the next line, the Ips are there, expect one line for now
+            gets $fd_in lineIp
+            puts "lineIp ====> $lineIp"
+#            gets $fd_in lineIp ;# not sure why it was there sk
+            puts "lineIp =======> $lineIp" 
+            foreach item $lineIp {
+               if { [IsValidIpAddress $item] } {
+                  lappend IpListFound $item
+               }
+            }
+            break
+         }
+      }
+   }
+   if {[info exists IpListFound] == 0} { set IpListFound {} }
+   puts "IpListFound $IpListFound"
+   set testResult "good"
+   foreach line $multicastIpList {
+      set ipWanted [lindex $line 0]
+      set flagWanted [lindex $line 1]
+      set flagFound "notLearned"
+      foreach ipFound $IpListFound {
+         if {$ipFound == $ipWanted} {
+            set flagFound "learned"
+            break;
+         }
+      }
+      if {$flagWanted == $flagFound} {
+         result_ok "Learned multicast ip criteria passed."
+      } else {
+         set testResult "bad"
+         result_error "Learned multicast ip criteria failed. Wanted $line BUTGOT $flagFound"
+      }
+   }
+   if {$testResult == "good"} {
+      result_ok "Check learned multicast address passed"
+   } else {
+       result_error "Check learned multicast address failed"
+   }       
+   report_end_test
+   close $fd_in
+   file delete "Tmp/tmp_$testNo[pid]"
+}
+
+##################################################################
+# Procedure Name: EnableIgmpProtocolServer
+# Description:
+#       This proc is used to set up IGMP protocol server for a list
+#       ixia ports that thereafter can respond the IGMP queries.
+# Input args: portIdList ipAddressList groupIpList {gwIpList "{0.0.0.0}"}
+# Output args: None
+# Typical usage:
+#       EnableIgmpProtocolServer "2 3" "$clientIP2 $clientIP3" "$multicastIP(1) \
+#       $multicastIP(2)" "$vlanIp1 $vlanIp1"
+# Category: SetupTestTool
+##################################################################
+proc EnableIgmpProtocolServer {portIdList ipAddressList groupIpList {gwIpList "{0.0.0.0}"} { tag 0}} {
+
+	global TrafficGen
+   switch -exact -- $TrafficGen {
+
+		stc {
+                   set error_flag 0
+                   if {$tag == 0} { set tag none }
+                   for {set i 0} {$i < [llength $portIdList]} {incr i} {
+                       set portId [lindex $portIdList $i]
+                       set ipAddress [lindex $ipAddressList $i]
+                       # Bad code, matching Ixia version <kind of>
+                       # set groupIp [lindex $groupIpList $i] ; using the whole list
+                       set gwIp [lindex $gwIpList $i]
+                       setupIgmpServer -gatewayIp $gwIp -ipAddress $ipAddress -numIpAddr "1" -groupIp $groupIpList\
+                              -numGroupIp "1" -txPortId $portId -version "2" -tag $tag
+                       startIgmp 1
+                   }
+                   return $error_flag
+		}
+		ixia -
+                ixvm {
+
+   set error_flag 0
+
+   for {set i 0} {$i < [llength $portIdList]} {incr i} {
+      set portId [lindex $portIdList $i]
+      set ipAddress [lindex $ipAddressList $i]
+      set groupIp [lindex $groupIpList $i]
+      set gwIp [lindex $gwIpList $i]
+
+      MapIxiaPortId $portId chas card port
+      result_debug "EnableIgmpProtocolServer: setting up IGMP server on port $portId"
+      protocolServer            setDefault
+
+      ipAddressTable            clear
+      ipAddressTable            setDefault
+      ipAddressTableItem        setDefault
+      ipAddressTableItem config -fromIpAddress $ipAddress
+      if {$tag != 0} {
+           ipAddressTableItem config -enableVlan true
+           ipAddressTableItem config -vlanId $tag
+      }
+
+      if {[ipAddressTableItem set]} {
+        set error_flag 1
+        result_debug "ERROR: Can't Set IP Addr Table Item"
+      }
+      if {[ipAddressTable addItem]} {
+        set error_flag 1
+        result_debug "ERROR: Can't Add IP Address Table Item"
+      }
+      ipAddressTable config -defaultGateway $gwIp
+      if {[ipAddressTable set $chas $card $port]} {
+      result_debug "here1"
+result_debug "####$portId $chas $card $port"
+        set error_flag 1
+        result_debug "ERROR: Can't Set IP Address Table"
+      }
+
+      set noOfGroupAddr [llength $groupIpList]
+      igmpServer                setDefault
+      igmpAddressTable          clear
+      igmpAddressTableItem setDefault
+      igmpAddressTableItem config -fromClientAddress    $ipAddress
+      igmpAddressTableItem config -fromGroupAddress     $groupIp
+      igmpAddressTableItem config -numClientAddresses   1
+      igmpAddressTableItem config -numGroupAddresses    $noOfGroupAddr
+      if {[igmpAddressTableItem set]} {
+        set error_flag 1
+        result_debug "ERROR: Can't Set IGMP Addr Table Item"
+      }
+      if {[igmpAddressTable addItem]} {
+        set error_flag 1
+        result_debug "ERROR: Can't Add IGMP Address Table Item"
+      }
+      if {[igmpAddressTable set $chas $card $port]} {
+       result_debug "here2"
+        result_debug "ERROR: Can't Set IGMP Address Table"
+      }
+
+      protocolServer config -enableIgmpQueryResponse    true
+      if [protocolServer set $chas $card $port] {
+        set error_flag 1
+        result_debug "ERROR: Can't Set Protocol Server"
+      }
+
+      igmpServer config -enableQueryResponse    true
+      igmpServer config -rate                   10
+      igmpServer config -reportMode             1  ;# igmpReportToAllWhenQueried
+      igmpServer config -sendRouterAlert        false
+      igmpServer config -version                2  ;# igmpVersion2
+      if {[igmpServer set $chas $card $port]} {
+        set error_flag 1
+        result_debug "ERROR: Can't Set IGMP Server"
+      }
+
+      if {[protocolServer write $chas $card $port]} {
+        result_debug "ERROR: Unable to write protocolServer to h/w"
+        set error_flag 1
+      }
+
+      set pList [list [format "%s,%s,%s" $chas $card $port]]
+      if {[ixTransmitIgmpJoin pList]} {
+        result_debug "ERROR: ixServer Can't process ixTransmitIgmpJoin"
+        set error_flag 1
+      }
+   }
+		}
+	}
+
+   return $error_flag
+}
+
+##################################################################    
+# Procedure Name: DisableIgmpProtocolServer
+# Description:
+#     	This proc is used to clean up IGMP protocol server for a list 
+#	ixia ports.
+# Input args: portIdList
+# Output args: None
+# Typical usage:
+#	DisableIgmpProtocolServer {2 3}
+# Category: SetupTestTool
+##################################################################
+proc DisableIgmpProtocolServer {portIdList} {
+
+   global TrafficGen
+   switch -exact -- $TrafficGen {
+
+		stc {
+                   cleanupIgmp $portIdList	
+                   return 1
+		}
+		ixia -
+                ixvm {
+   
+   for {set i 0} {$i < [llength $portIdList]} {incr i} {
+      set portId [lindex $portIdList $i]          
+      MapIxiaPortId $portId chas card port
+      result_debug "Cleaning up IGMP server on port $portId"
+      set  plist [list [list $chas $card $port]]
+      protocolServer get $chas $card $port
+      protocolServer 		setDefault      
+      protocolServer set $chas $card $port
+      ipAddressTable get $chas $card $port
+      ipAddressTable		clear
+      ipAddressTable		setDefault
+      ipAddressTableItem 	setDefault      
+      ipAddressTable set $chas $card $port
+
+      igmpServer get $chas $card $port
+      igmpAddressTable get $chas $card $port
+      igmpAddressTable		clear
+      igmpAddressTable	 	setDefault
+      igmpAddressTableItem 	setDefault      
+      igmpAddressTable set $chas $card $port
+      igmpServer setDefault
+      igmpServer set $chas $card $port
+
+     interfaceTable select $chas $card $port
+     interfaceTable getFirstInterface
+     interfaceTable delInterface
+     interfaceTable write
+
+
+
+      protocolServer write $chas $card $port
+
+      ixWriteConfigToHardware plist
+      
+   }
+
+   return 1
+}
+	}
+}

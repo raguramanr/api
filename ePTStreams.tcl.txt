@@ -1,0 +1,1193 @@
+global CURRENT_STREAM_ARRAY
+global MAX_STREAMS
+
+set MAX_STREAMS 255
+set CURRENT_STREAM_ARRAY(1) 1
+set CURRENT_STREAM_ARRAY(2) 1
+set CURRENT_STREAM_ARRAY(3) 1
+set CURRENT_STREAM_ARRAY(4) 1
+set CURRENT_STREAM_ARRAY(5) 1
+set CURRENT_STREAM_ARRAY(6) 1
+set CURRENT_STREAM_ARRAY(7) 1
+set CURRENT_STREAM_ARRAY(8) 1
+
+
+###########################################################################################
+# Name : saveExisitingStreams { portlist}
+# Description : retrieves the exisiting streams on the port and changes there state to disable
+#              portn: on the given port portn, 
+#              CURRENT_STREAM_ARRAY : global variable which saves current stream for each port
+#              The calling proc will add the new stream at CURRENT_STREAM_ARRAY
+# return value : -1 there is problems in configuring the stream
+#              :  1 the streams are successfully configured
+# typical usage: saveExisitingStreams [list "1 2 3"]
+###########################################################################################
+proc saveExisitngStreams { portlist} {
+    upvar #0 CURRENT_STREAM_ARRAY current_stream_array
+
+    foreach port $portlist {
+        MapIxiaPortId $port ixChassis ixCard ixPort
+        set error 0
+
+        for {set i 1} {$i  <= $current_stream_array($port)} {incr i} {
+
+             if [stream get $ixChassis $ixCard $ixPort $i 1] {
+                 result_error "setStreamOption:: Error in getting stream $i, port=$port"
+                 set error 1
+             }      
+
+             stream  config -enable  false
+             if [stream set $ixChassis $ixCard $ixPort $i] {
+                 result_error "setStreamOption:: Can't set stream  set $ixChassis $ixCard $ixPort $i"
+                 set error 1
+             }
+
+             if [stream write $ixChassis $ixCard $ixPort $i] {
+                 result_error "setStreamOption:: Can't write stream  set $ixChassis $ixCard $ixPort $i"
+                 set error 1
+            }
+        } ;# end for set i
+        set portList [list  $ixChassis,$ixCard,$ixPort]
+        if [ ixWritePortsToHardware portList ] {
+             result_error "setStreamOption:: Error in writing the Config to hardware $ixChassis $ixCard $ixPort"
+             set error 1
+        }
+        if {$error == 0} {
+            incr current_stream_array($port)
+        }
+    } ;# end for
+
+} ;# end procedure
+
+###########################################################################################
+# Name : createStreams { portn startId endId name}
+# Description : Create default streams 
+#              portn: on the given port portn, 
+#              startId, endId: starting from id=startId to id=endId
+#              name: the default stream name is TestStream
+#              type: the type of stream.
+#
+#              type values:
+#                         ipv4_tcp 
+#                         ipv4_udp 
+#                         vlan
+# 
+#              By default the created streams will be disabled
+# return value : -1 there is problems in configuring the stream
+#              :  1 the streams are successfully configured
+# typical usage: createStreams -portn 1 -startId 1 -startId 3 -name Extreme
+###########################################################################################
+proc createStreams { args} {
+    global MAX_STREAMS ixChassis ixCard ixPort
+    parse_args createStreams $args {
+        portn ""
+        startId "1"
+        endId "1"
+        name  "TestStream"
+        type ""
+        writeToHw "1"
+    }
+    
+    if {$portn == "" } {
+        result_error "createStreams:: No port provided to create stream"
+        return -1
+    }
+    if {$startId > $endId} {
+        result_error "createStreams:: startId=$startId must be less than endId= $endId"
+        return -1
+    }
+    if {$endId > $MAX_STREAMS} {
+        result_error "createStreams:: endId=$endId must be less than MAX_STREAMS= $MAX_STREAMS"
+        return -1
+    }
+#     set ixChassis 1
+#     set ixCard 1
+#     set ixPort 1
+    MapIxiaPortId $portn ixChassis ixCard ixPort
+    
+    result_debug "createStreams:: PORT MAP $ixChassis $ixCard $ixPort"
+        switch -exact -- $type {
+            "vlan" {
+                        setStreamDefaultValues_Vlan ; 
+            }
+             
+            "ipv4_tcp" {
+                        setStreamDefaultValues_IPv4_TCP ; 
+            }
+            "ipv4_udp" {
+                        setStreamDefaultValues_IPv4_UDP ; 
+            }
+            "ipv4_icmp" {
+                        setStreamDefaultValues_IPv4_ICMP ; 
+            }
+            "ipv4_igmp" {
+                        setStreamDefaultValues_IPv4_IGMP ; 
+            }
+            "ipv4_dhcp" {
+                        setStreamDefaultValues_IPv4_DHCP ; 
+            }
+            "ipv4_rip" {
+                        setStreamDefaultValues_IPv4_RIP ; 
+            }
+            "ipv4_ospf" {
+                        setStreamDefaultValues_IPv4_OSPF ; 
+            }
+            "ipv4_arp" {
+                        setStreamDefaultValues_IPv4_ARP ; 
+            }
+           default { }
+        } 
+
+        
+       set portList "$ixChassis:$ixCard:$ixPort"
+       if [ixWritePortsToHardware $portList] {
+            result_error "createStreams:: Error in writing the Config to hardware $ixChassis $ixCard $ixPort"
+            return -1
+       }    
+    
+
+
+    return 1
+}
+
+###########################################################################################
+# Name : WriteStreamsToHw { portID }
+# Description : writes streams currently configured on a port to hardware 
+# 
+# return value : -1 there is problems in configuring the stream
+#              :  1 the streams are successfully configured
+# typical usage: createStreams -portn 1 -startId 1 -startId 3 -name Extreme
+###########################################################################################
+proc WriteStreamsToHw { portID } {
+
+   MapIxiaPortId $portID ixChassis ixCard ixPort
+   result_debug "writeStreams:: PORT MAP $ixChassis $ixCard $ixPort "
+
+   set portList "$ixChassis:$ixCard:$ixPort"
+   if [ ixWriteConfigToHardware $portList ] {
+      result_error "writeStreams:: Error in writing the Config to hardware $ixChassis $ixCard $ixPort"
+      return -1
+   }   
+   
+   return 1
+}
+
+###########################################################################################
+# Name : setStreamOptions { portn startId endId optionVal}
+# Description : Configures the option of the already configured stream
+#              on the given port portn, 
+#              starting from id=startId to id=endId
+#              optionVal : list of option Value pairs to be set on the stream
+#              { {name newStream} {dma  advance} {percentPacketRate  23.0} {fpsRate 1488.0952381} ...}
+#
+# return value : -1 there is problems in configuring the stream
+#              :  1 the streams are successfully configured
+# typical usage: setStreamOptions -portn 1 -startId 1 -startId 3
+
+###########################################################################################
+proc setStreamOptions { args} {
+    parse_args setStreamOptions $args {
+        portn ""
+        startId "1"
+        endId "1"
+        optionVal {}
+        type "stream"
+        writeToHw "1"
+    }
+
+    if {$portn == "" } {
+        result_error "setStreamOption:: No port provided to create stream"
+        return -1
+    }
+#    puts "$portn:$ixChassis:$ixCard:$ixPort" 
+    MapIxiaPortId $portn chas card port
+    #result_debug "PORT MAP $ixChassis $ixCard $ixPort "
+
+    ######Variable addded for stacked vlan ##########
+    set stkVlan 0
+    #################################################
+
+#    for {set i $startId} {$i  <= $endId} {incr i} {
+#}
+         foreach pair $optionVal {
+             foreach {option value} $pair {
+                if {[regexp "vlanID" $option] && ([llength $value] > 1)} {
+                    setStreamDefaultValues_QnQ -optionVal $optionVal
+                    stackedVlan set $ixChassis $ixCard $ixPort      
+                    ##########variable incremented for stacked vlan#######
+                    incr stkVlan            
+                    ######################################################
+                } elseif { [regexp -nocase "igmpGroupRecord" $option string ] == 1 } {
+                    setStreamDefaultValues_IGMPv3  -optionVal $optionVal
+                } elseif { [regexp -nocase "igmpGroup" $option string ] == 1 } {
+                    # only parse igmpGroupRecords once
+                } else {   
+                  $type config -$option $value
+                  #result_debug  "setStreamOption:: $type config -$option $value"
+                }
+             }
+         }
+         
+
+         if { [regexp  "stream|protocol" $type] != 1  } {
+            ##loop added to skip the settign if stacked vlan is encountered###
+         }
+        set portList "$chas:$card:$port"
+#        if [ ixWritePortsToHardware $portList ] {
+#            result_error "setStreamOption:: Error in writing the Config to hardware $ixChassis $ixCard $ixPort"
+#            return -1
+#       }    
+    return 1
+}
+
+###########################################################################################
+# gets the configuration of the streams set on the port 
+###########################################################################################
+proc getStreams {portn number} {
+
+    MapIxiaPortId $portn ixChassis ixCard ixPort
+
+    if [card get $ixChassis $ixCard ] {
+            result_error "Error in getting card"
+    }
+    if [port get $ixChassis $ixCard $ixPort ] {
+            result_error "Error in port "
+    }
+
+    for {set i 1} {$i <= $number} {incr i} {
+            if [stream get $ixChassis $ixCard $ixPort $i 1] {
+                result_error "Error in getting stream number $i"
+                break;
+            } else {
+            puts "asyncIntEnable= [stream cget -asyncIntEnable]"     
+            puts "bpsRate= [stream cget  -bpsRate ] "
+            puts "da= [stream cget  -da ] "
+            puts "name= [stream cget  -name ] "
+            puts "dma= [stream cget  -dma ] "
+            } 
+   }
+}
+
+###########################################################################################
+# Name : setStreamToDefaultValues { }
+# Description : Configures the a stream to default values
+#
+# return value :  none
+#              
+# typical usage: setStreamToDefaultValues
+###########################################################################################
+proc setStreamToDefaultValues {} {
+
+#stream                       setDefault        
+global ixChassis ixCard ixPort
+map add $ixChassis $ixCard $ixPort 
+stream                       config            -enable                             true
+stream                       config            -region                             0
+stream                       config            -numBursts                          1
+stream                       config            -numFrames                          1
+stream                       config            -ifg                                666240.0
+stream                       config            -ifgType                            gapFixed
+stream                       config            -ifgMIN                             960.0
+stream                       config            -ifgMAX                             1280.0
+stream                       config            -ibg                                666240.0
+stream                       config            -enableIbg                          false
+stream                       config            -isg                                666240.0
+stream                       config            -enableIsg                          false
+stream                       config            -gapUnit                            gapNanoSeconds
+stream                       config            -percentPacketRate                  1.0
+stream                       config            -fpsRate                            1488.0952381
+stream                       config            -bpsRate                            761904.761905
+stream                       config            -rateMode                           usePercentRate
+stream                       config            -preambleSize                       8
+stream                       config            -sa                                 "00 00 00 00 00 00"
+stream                       config            -saRepeatCounter                    idle
+stream                       config            -saStep                             1
+stream                       config            -saMaskValue                        "00 00 00 00 00 00"
+stream                       config            -saMaskSelect                       "00 00 00 00 00 00"
+stream                       config            -da                                 "00 00 00 00 00 00"
+stream                       config            -daRepeatCounter                    idle
+stream                       config            -daStep                             1
+stream                       config            -daMaskValue                        "00 00 00 00 00 00"
+stream                       config            -daMaskSelect                       "00 00 00 00 00 00"
+stream                       config            -framesize                          128
+stream                       config            -frameSizeType                      sizeAuto
+stream                       config            -frameSizeMIN                       64
+stream                       config            -frameSizeMAX                       64
+stream                       config            -frameSizeStep                      1
+stream                       config            -enableTimestamp                    false
+stream                       config            -fcs                                good
+stream                       config            -patternType                        nonRepeat
+stream                       config            -dataPattern                        x00010203
+stream                       config            -pattern                            "00 01 02 03"
+stream                       config            -frameType                          "FF FF"
+stream                       config            -numDA                              1
+stream                       config            -numSA                              1
+stream                       config            -dma                                advance
+stream                       config            -rxTriggerEnable                    false
+stream                       config            -asyncIntEnable                     false
+stream                       config            -loopCount                          1
+stream                       config            -returnToId                         1
+stream                       config            -enforceMinGap                      12
+#protocol                     setDefault        
+protocol                     config            -name                               mac
+protocol                     config            -appName                            0
+protocol                     config            -ethernetType                       noType
+protocol                     config            -enable802dot1qTag                  false
+protocol                     config            -enableISLtag                       false
+protocol                     config            -dutStripTag                        true
+protocol                     config            -enableMPLS                         false
+#protocolOffset               setDefault        
+protocolOffset               config            -enable                             false
+protocolOffset               config            -offset                             14
+protocolOffset               config            -userDefinedTag                     "00 00"
+}
+###########################################################################################
+# Name : setStreamDefaultValues_Vlan { }
+# Description : Configures default values for a Vlan
+#               This is used to change the properties of exisitng default stream
+#
+# return value :  none 
+#        
+# typical usage: setStreamDefaultValues_Vlan
+###########################################################################################
+proc setStreamDefaultValues_Vlan { } {
+
+global ixChassis ixCard ixPort
+map add $ixChassis $ixCard $ixPort 
+#vlan                         setDefault        
+vlan                         config            -vlanID                             1234
+vlan                         config            -userPriority                       0
+vlan                         config            -cfi                                0
+vlan                         config            -mode                               vIdle
+vlan                         config            -repeat                             10
+vlan                         config            -step                               1
+vlan                         config            -maskval                            "0000XXXXXXXXXXXX"
+
+protocol                     config            -enable802dot1qTag                  true
+
+}
+###########################################################################################
+# Name : setStreamDefaultValues_QnQ { }
+# Description : Configures default values for stacked Vlan
+#               This is used to change the properties of exisitng default stream
+#
+# return value :  none
+#
+# typical usage: setStreamDefaultValues_QnQ
+###########################################################################################
+
+
+proc setStreamDefaultValues_QnQ {args } {
+global ixChassis ixCard ixPort
+map add $ixChassis $ixCard $ixPort 
+  parse_args setStreamDefaultValues_QnQ $args {
+   optionVal {}
+   }
+
+
+foreach pair $optionVal {
+   foreach {option value} $pair {
+      set [set option]1 [lindex $value 0]
+      set [set option]2 [lindex $value 1]
+   }
+}
+
+protocol                     config            -enable802dot1qTag                  vlanStacked
+
+stackedVlan                  setDefault        
+set vlanPosition 1
+#vlan                         setDefault       
+vlan                         config            -vlanID                             $vlanID1
+vlan                         config            -userPriority                       $userPriority1
+vlan                         config            -cfi                                resetCFI
+vlan                         config            -mode                               $mode1
+vlan                         config            -repeat                             $repeat1
+vlan                         config            -step                               $step1
+vlan                         config            -maskval                            "0000XXXXXXXXXXXX"
+vlan                         config            -protocolTagId                      $protocolTagId1
+stackedVlan                  setVlan           $vlanPosition
+
+
+if [stackedVlan setVlan $vlanPosition] { 
+ixPuts $::ixErrorInfo 
+return 1 
+}
+incr                         vlanPosition      
+#vlan                         setDefault        
+vlan                         config            -vlanID                             $vlanID2
+vlan                         config            -userPriority                       $userPriority2
+vlan                         config            -cfi                                resetCFI
+vlan                         config            -mode                               $mode2
+vlan                         config            -repeat                             $repeat2
+vlan                         config            -step                               $step2
+vlan                         config            -maskval                            "0000XXXXXXXXXXXX"
+vlan                         config            -protocolTagId                      $protocolTagId2
+#stackedVlan                  setVlan           $vlanPosition
+
+#f [stackedVlan setVlan $vlanPosition] {
+#ixPuts $::ixErrorInfo
+#return 1
+#}
+
+
+}
+###########################################################################################
+# Name : setStreamDefaultValues__IGMPv3 { }
+# Description : Configures default values for a IGMPv3 stream
+#               This is used to change the properties of exisitng default stream
+#
+# return value :  none
+#
+#  Note:  Use the hex type for the recordType
+#       1-Include
+#       2-Exclude
+#       3-ToInclude
+#       4-ToExcludeMode
+#       5-AllowNewSources
+#       6-BlockOldSources
+#
+# Usage:  This is called internally to setStreamOptions. The example is the options list
+#   lappend optionsList "igmpGroupRecordtype $reportType"
+#   lappend optionsList "igmpGroupmulticastAddress $groupAddr"
+#   lappend optionsList "igmpGroupsourceIpAddressList {\"$srcIpAddr\"}"
+#   setStreamOptions -portn $txPortId -startId 1 -endId 1 -type "igmp" \
+#         -optionVal $optionsList -writeToHw 0
+#
+# typical usage: setStreamDefaultValues_IGMPv3
+###########################################################################################
+
+proc setStreamDefaultValues_IGMPv3 {args} {
+global ixChassis ixCard ixPort
+map add $ixChassis $ixCard $ixPort 
+    parse_args setStreamDefaultValues_IGMPv3 $args {
+       optionVal {}
+    }
+
+    igmp                         clearGroupRecords
+     
+    foreach pair $optionVal {
+       foreach {option value} $pair {
+          if [regexp -nocase "igmpGroupRecord" $option] {
+              regsub -nocase "igmpGroupRecord" $option "" option
+              if {[regexp "type" $option]} { set numGroupAddress [llength $value ];}
+              lappend igmpGroupOption $option
+              lappend igmpGroupValue $value
+          } elseif [regexp -nocase "igmpGroup" $option] {
+              regsub -nocase "igmpGroup" $option "" option
+              if {[regexp "type" $option]} { set numGroupAddress [llength $value ];}
+              lappend igmpGroupOption $option
+              lappend igmpGroupValue $value
+          }
+       }
+    }
+    set j 0
+    foreach option $igmpGroupOption value $igmpGroupValue {
+       set $option [lindex $igmpGroupValue $j]
+       incr j
+    }
+    
+    for {set i 0} {$i < $numGroupAddress } { incr i } {
+#        igmpGroupRecord     setDefault
+        igmpGroupRecord     config         -type                 [lindex $type $i]
+        igmpGroupRecord     config         -no_of_src            [lindex $no_of_src $i]
+        igmpGroupRecord     config         -multicastAddress     [lindex $multicastAddress $i]
+        igmpGroupRecord     config         -sourceIpAddressList  [lindex $sourceIpAddressList $i]
+       igmp                addGroupRecord
+    }
+}
+
+###########################################################################################
+# Name : setStreamDefaultValues_IPv4_TCP { }
+# Description : Configures default values for a IPv4 TCP stream
+#               This is used to change the properties of exisitng default stream
+#
+# return value :  none 
+#        
+# typical usage: setStreamDefaultValues_IPv4_TCP
+###########################################################################################
+proc setStreamDefaultValues_IPv4_TCP { } {
+
+global ixChassis ixCard ixPort
+map add $ixChassis $ixCard $ixPort 
+#protocol                     setDefault        
+protocol                     config            -name                               ip
+protocol                     config            -appName                            0
+protocol                     config            -ethernetType                       ethernetII
+protocol                     config            -enable802dot1qTag                  false
+protocol                     config            -enableISLtag                       false
+protocol                     config            -dutStripTag                        true
+protocol                     config            -enableMPLS                         false
+
+#ip                           setDefault        
+ip                           config            -precedence                         routine
+ip                           config            -delay                              normalDelay
+ip                           config            -throughput                         normalThruput
+ip                           config            -reliability                        normalReliability
+ip                           config            -identifier                         0
+ip                           config            -cost                               0
+ip                           config            -reserved                           0
+ip                           config            -totalLength                        49
+ip                           config            -lengthOverride                     false
+ip                           config            -fragment                           may
+ip                           config            -lastFragment                       last
+ip                           config            -fragmentOffset                     0
+ip                           config            -ttl                                64
+ip                           config            -ipProtocol                         tcp
+ip                           config            -useValidChecksum                   true
+ip                           config            -sourceIpAddr                       "0.0.0.0"
+ip                           config            -sourceIpMask                       "255.0.0.0"
+ip                           config            -sourceIpAddrMode                   ipIdle
+ip                           config            -sourceIpAddrRepeatCount            10
+ip                           config            -sourceClass                        classA
+ip                           config            -enableSourceSyncFromPpp            false
+ip                           config            -destIpAddr                         "0.0.0.0"
+ip                           config            -destIpMask                         "255.0.0.0"
+ip                           config            -destIpAddrMode                     ipIdle
+ip                           config            -destIpAddrRepeatCount              10
+ip                           config            -destClass                          classA
+ip                           config            -destMacAddr                        "00 DE BB 00 00 02"
+ip                           config            -destDutIpAddr                      "0.0.0.0"
+ip                           config            -enableDestSyncFromPpp              false
+ip                           config            -options                            ""
+
+#tcp                          setDefault        
+tcp                          config            -offset                             5
+tcp                          config            -sourcePort                         0
+tcp                          config            -destPort                           0
+tcp                          config            -sequenceNumber                     0
+tcp                          config            -acknowledgementNumber              0
+tcp                          config            -window                             0
+tcp                          config            -urgentPointer                      0
+tcp                          config            -options                            ""
+tcp                          config            -urgentPointerValid                 false
+tcp                          config            -acknowledgeValid                   false
+tcp                          config            -pushFunctionValid                  false
+tcp                          config            -resetConnection                    false
+tcp                          config            -synchronize                        false
+tcp                          config            -finished                           false
+tcp                          config            -useValidChecksum                   true
+
+#protocolOffset               setDefault        
+protocolOffset               config            -enable                             false
+protocolOffset               config            -offset                             14
+protocolOffset               config            -userDefinedTag                     "00 00"
+}
+
+###########################################################################################
+# Name : setStreamDefaultValues_IPv4_UDP { }
+# Description : Configures default values for a IPv4 TCP stream
+#               This is used to change the properties of exisitng default stream
+#
+# return value :  none 
+#        
+# typical usage: setStreamDefaultValues_IPv4_UDP
+###########################################################################################
+proc setStreamDefaultValues_IPv4_UDP { } {
+
+global ixChassis ixCard ixPort
+map add $ixChassis $ixCard $ixPort 
+#protocol                     setDefault        
+protocol                     config            -name                               ip
+protocol                     config            -appName                            0
+protocol                     config            -ethernetType                       ethernetII
+protocol                     config            -enable802dot1qTag                  false
+protocol                     config            -enableISLtag                       false
+protocol                     config            -dutStripTag                        true
+protocol                     config            -enableMPLS                         false
+
+#ip                           setDefault        
+ip                           config            -precedence                         routine
+ip                           config            -delay                              normalDelay
+ip                           config            -throughput                         normalThruput
+ip                           config            -reliability                        normalReliability
+ip                           config            -identifier                         0
+ip                           config            -cost                               0
+ip                           config            -reserved                           0
+ip                           config            -totalLength                        46
+ip                           config            -lengthOverride                     false
+ip                           config            -fragment                           may
+ip                           config            -lastFragment                       last
+ip                           config            -fragmentOffset                     0
+ip                           config            -ttl                                64
+ip                           config            -ipProtocol                         udp
+ip                           config            -useValidChecksum                   true
+ip                           config            -sourceIpAddr                       "0.0.0.0"
+ip                           config            -sourceIpMask                       "255.0.0.0"
+ip                           config            -sourceIpAddrMode                   ipIdle
+ip                           config            -sourceIpAddrRepeatCount            10
+ip                           config            -sourceClass                        classA
+ip                           config            -enableSourceSyncFromPpp            false
+ip                           config            -destIpAddr                         "0.0.0.0"
+ip                           config            -destIpMask                         "255.0.0.0"
+ip                           config            -destIpAddrMode                     ipIdle
+ip                           config            -destIpAddrRepeatCount              10
+ip                           config            -destClass                          classA
+ip                           config            -destMacAddr                        "00 DE BB 00 00 02"
+ip                           config            -destDutIpAddr                      "0.0.0.0"
+ip                           config            -enableDestSyncFromPpp              false
+ip                           config            -options                            ""
+
+#udp                          setDefault        
+udp                          config            -sourcePort                         0000
+udp                          config            -destPort                           0000
+udp                          config            -checksum                           "b6 eb"
+udp                          config            -enableChecksum                     false
+udp                          config            -length                             26
+udp                          config            -lengthOverride                     false
+udp                          config            -enableChecksumOverride             false
+udp                          config            -checksumMode                       validChecksum
+
+#protocolOffset               setDefault        
+protocolOffset               config            -enable                             false
+protocolOffset               config            -offset                             14
+protocolOffset               config            -userDefinedTag                     "00 00"
+}
+
+###########################################################################################
+# Name : setStreamDefaultValues_IPv4_IGMP { }
+# Description : Configures default values for a IPv4 IGMP stream
+#               This is used to change the properties of exisitng default stream
+#
+# return value :  none 
+#        
+# typical usage: setStreamDefaultValues_IPv4_IGMP
+###########################################################################################
+proc setStreamDefaultValues_IPv4_IGMP { } {
+
+global ixChassis ixCard ixPort
+map add $ixChassis $ixCard $ixPort 
+#protocol                     setDefault        
+protocol                     config            -name                               ip
+protocol                     config            -appName                            0
+protocol                     config            -ethernetType                       ethernetII
+protocol                     config            -enable802dot1qTag                  false
+protocol                     config            -enableISLtag                       false
+protocol                     config            -dutStripTag                        true
+protocol                     config            -enableMPLS                         false
+
+#ip                           setDefault        
+ip                           config            -precedence                         routine
+ip                           config            -delay                              normalDelay
+ip                           config            -throughput                         normalThruput
+ip                           config            -reliability                        normalReliability
+ip                           config            -identifier                         0
+ip                           config            -cost                               0
+ip                           config            -reserved                           0
+ip                           config            -totalLength                        28
+ip                           config            -lengthOverride                     false
+ip                           config            -fragment                           may
+ip                           config            -lastFragment                       last
+ip                           config            -fragmentOffset                     0
+ip                           config            -ttl                                64
+ip                           config            -ipProtocol                         igmp
+ip                           config            -useValidChecksum                   true
+ip                           config            -sourceIpAddr                       "0.0.0.0"
+ip                           config            -sourceIpMask                       "255.0.0.0"
+ip                           config            -sourceIpAddrMode                   ipIdle
+ip                           config            -sourceIpAddrRepeatCount            10
+ip                           config            -sourceClass                        classA
+ip                           config            -enableSourceSyncFromPpp            false
+ip                           config            -destIpAddr                         "0.0.0.0"
+ip                           config            -destIpMask                         "255.0.0.0"
+ip                           config            -destIpAddrMode                     ipIdle
+ip                           config            -destIpAddrRepeatCount              10
+ip                           config            -destClass                          classA
+ip                           config            -destMacAddr                        "00 DE BB 00 00 02"
+ip                           config            -destDutIpAddr                      "0.0.0.0"
+ip                           config            -enableDestSyncFromPpp              false
+ip                           config            -options                            ""
+
+#igmp                         setDefault        
+igmp                         config            -type                               16
+igmp                         config            -version                            02
+igmp                         config            -groupIpAddress                     "0.0.0.0"
+igmp                         config            -maxResponseTime                    100
+igmp                         config            -mode                               igmpIdle
+igmp                         config            -repeatCount                        1
+igmp                         config            -useValidChecksum                   true
+
+#igmp                         clearGroupRecords
+
+#protocolOffset               setDefault        
+protocolOffset               config            -enable                             false
+protocolOffset               config            -offset                             14
+protocolOffset               config            -userDefinedTag                     "00 00"
+}
+
+
+###########################################################################################
+# Name : setStreamDefaultValues_IPv4_ICMP { }
+# Description : Configures default values for a IPv4 ICMP stream
+#               This is used to change the properties of exisitng default stream
+#
+# return value :  none 
+#        
+# typical usage: setStreamDefaultValues_IPv4_ICMP
+###########################################################################################
+proc setStreamDefaultValues_IPv4_ICMP { } {
+
+global ixChassis ixCard ixPort
+map add $ixChassis $ixCard $ixPort 
+#protocol                     setDefault        
+protocol                     config            -name                               ip
+protocol                     config            -appName                            0
+protocol                     config            -ethernetType                       ieee8023snap
+protocol                     config            -enable802dot1qTag                  false
+protocol                     config            -enableISLtag                       false
+protocol                     config            -dutStripTag                        true
+protocol                     config            -enableMPLS                         false
+
+#ip                           setDefault        
+ip                           config            -precedence                         routine
+ip                           config            -delay                              normalDelay
+ip                           config            -throughput                         normalThruput
+ip                           config            -reliability                        normalReliability
+ip                           config            -identifier                         0
+ip                           config            -cost                               0
+ip                           config            -reserved                           0
+ip                           config            -totalLength                        38
+ip                           config            -lengthOverride                     false
+ip                           config            -fragment                           may
+ip                           config            -lastFragment                       last
+ip                           config            -fragmentOffset                     0
+ip                           config            -ttl                                64
+ip                           config            -ipProtocol                         icmp
+ip                           config            -useValidChecksum                   true
+ip                           config            -sourceIpAddr                       "0.0.0.0"
+ip                           config            -sourceIpMask                       "255.0.0.0"
+ip                           config            -sourceIpAddrMode                   ipIdle
+ip                           config            -sourceIpAddrRepeatCount            10
+ip                           config            -sourceClass                        classA
+ip                           config            -enableSourceSyncFromPpp            false
+ip                           config            -destIpAddr                         "0.0.0.0"
+ip                           config            -destIpMask                         "255.0.0.0"
+ip                           config            -destIpAddrMode                     ipIdle
+ip                           config            -destIpAddrRepeatCount              10
+ip                           config            -destClass                          classA
+ip                           config            -destMacAddr                        "00 DE BB 00 00 02"
+ip                           config            -destDutIpAddr                      "0.0.0.0"
+ip                           config            -enableDestSyncFromPpp              false
+ip                           config            -options                            ""
+
+#icmp                         setDefault        
+icmp                         config            -type                               echoReply
+icmp                         config            -code                               0
+icmp                         config            -id                                 0
+icmp                         config            -sequence                           0
+
+#protocolOffset               setDefault        
+protocolOffset               config            -enable                             false
+protocolOffset               config            -offset                             14
+protocolOffset               config            -userDefinedTag                     "00 00"
+}
+
+###########################################################################################
+# Name : setStreamDefaultValues_IPv4_RIP { }
+# Description : Configures default values for a IPv4 RIP stream
+#               This is used to change the properties of exisitng default stream
+#
+# return value :  none 
+#        
+# typical usage: setStreamDefaultValues_IPv4_RIP
+###########################################################################################
+proc setStreamDefaultValues_IPv4_RIP { } {
+
+global ixChassis ixCard ixPort
+map add $ixChassis $ixCard $ixPort 
+#protocol                     setDefault        
+protocol                     config            -name                               ip
+protocol                     config            -appName                            Rip
+protocol                     config            -ethernetType                       ethernetII
+protocol                     config            -enable802dot1qTag                  false
+protocol                     config            -enableISLtag                       false
+protocol                     config            -dutStripTag                        true
+protocol                     config            -enableMPLS                         false
+
+#ip                           setDefault        
+ip                           config            -precedence                         routine
+ip                           config            -delay                              normalDelay
+ip                           config            -throughput                         normalThruput
+ip                           config            -reliability                        normalReliability
+ip                           config            -identifier                         0
+ip                           config            -cost                               0
+ip                           config            -reserved                           0
+ip                           config            -totalLength                        46
+ip                           config            -lengthOverride                     false
+ip                           config            -fragment                           may
+ip                           config            -lastFragment                       last
+ip                           config            -fragmentOffset                     0
+ip                           config            -ttl                                64
+ip                           config            -ipProtocol                         udp
+ip                           config            -useValidChecksum                   true
+ip                           config            -sourceIpAddr                       "0.0.0.0"
+ip                           config            -sourceIpMask                       "255.0.0.0"
+ip                           config            -sourceIpAddrMode                   ipIdle
+ip                           config            -sourceIpAddrRepeatCount            10
+ip                           config            -sourceClass                        classA
+ip                           config            -enableSourceSyncFromPpp            false
+ip                           config            -destIpAddr                         "0.0.0.0"
+ip                           config            -destIpMask                         "255.0.0.0"
+ip                           config            -destIpAddrMode                     ipIdle
+ip                           config            -destIpAddrRepeatCount              10
+ip                           config            -destClass                          classA
+ip                           config            -destMacAddr                        "00 DE BB 00 00 02"
+ip                           config            -destDutIpAddr                      "0.0.0.0"
+ip                           config            -enableDestSyncFromPpp              false
+ip                           config            -options                            ""
+
+#rip                          setDefault        
+rip                          config            -command                            1
+rip                          config            -version                            2
+
+#udp                          setDefault        
+udp                          config            -sourcePort                         unassignedPort
+udp                          config            -destPort                           unassignedPort
+udp                          config            -checksum                           "d4 09"
+udp                          config            -enableChecksum                     false
+udp                          config            -length                             26
+udp                          config            -lengthOverride                     false
+udp                          config            -enableChecksumOverride             false
+udp                          config            -checksumMode                       validChecksum
+
+#protocolOffset               setDefault        
+protocolOffset               config            -enable                             false
+protocolOffset               config            -offset                             14
+protocolOffset               config            -userDefinedTag                     "00 00"
+}
+
+###########################################################################################
+# Name : setStreamDefaultValues_IPv4_ARP { }
+# Description : Configures default values for a IPv4 ARP stream
+#               This is used to change the properties of exisitng default stream
+#
+# return value :  none 
+#        
+# typical usage: setStreamDefaultValues_IPv4_ARP
+###########################################################################################
+proc setStreamDefaultValues_IPv4_ARP { } {
+
+#protocol                     setDefault        
+global ixChassis ixCard ixPort
+map add $ixChassis $ixCard $ixPort 
+protocol                     config            -name                               ip
+protocol                     config            -appName                            Arp
+protocol                     config            -ethernetType                       ethernetII
+protocol                     config            -enable802dot1qTag                  false
+protocol                     config            -enableISLtag                       false
+protocol                     config            -dutStripTag                        true
+protocol                     config            -enableMPLS                         false
+
+#arp                          setDefault        
+arp                          config            -sourceProtocolAddr                 "0.0.0.0"
+arp                          config            -destProtocolAddr                   "0.0.0.0"
+arp                          config            -operation                          arpRequest
+arp                          config            -sourceHardwareAddr                 "00 00 00 00 00 00"
+arp                          config            -destHardwareAddr                   "00 00 00 00 00 00"
+arp                          config            -sourceProtocolAddrMode             arpIdle
+arp                          config            -sourceProtocolAddrRepeatCount      1
+arp                          config            -destProtocolAddrMode               arpIdle
+arp                          config            -destProtocolAddrRepeatCount        1
+arp                          config            -sourceHardwareAddrMode             arpIdle
+arp                          config            -sourceHardwareAddrRepeatCount      1
+arp                          config            -destHardwareAddrMode               arpIdle
+arp                          config            -destHardwareAddrRepeatCount        1
+
+#protocolOffset               setDefault        
+protocolOffset               config            -enable                             false
+protocolOffset               config            -offset                             14
+protocolOffset               config            -userDefinedTag                     "00 00"
+}
+
+###########################################################################################
+# Name : setStreamDefaultValues_IPv4_OSPF { }
+# Description : Configures default values for a IPv4 OSPF stream
+#               This is used to change the properties of exisitng default stream
+#
+# return value :  none 
+#        
+# typical usage: setStreamDefaultValues_IPv4_OSPF
+###########################################################################################
+proc setStreamDefaultValues_IPv4_OSPF { } {
+
+global ixChassis ixCard ixPort
+map add $ixChassis $ixCard $ixPort 
+stream                       config            -framesize                          82
+
+#protocol                     setDefault        
+protocol                     config            -name                               ipV4
+protocol                     config            -appName                            0
+protocol                     config            -ethernetType                       ethernetII
+protocol                     config            -enable802dot1qTag                  false
+protocol                     config            -enableISLtag                       false
+protocol                     config            -dutStripTag                        true
+
+#ip                           setDefault        
+ip                           config            -precedence                         routine
+ip                           config            -delay                              normalDelay
+ip                           config            -throughput                         normalThruput
+ip                           config            -reliability                        normalReliability
+ip                           config            -identifier                         0
+ip                           config            -cost                               0
+ip                           config            -reserved                           0
+ip                           config            -totalLength                        110
+ip                           config            -lengthOverride                     false
+ip                           config            -fragment                           may
+ip                           config            -lastFragment                       last
+ip                           config            -fragmentOffset                     0
+ip                           config            -ttl                                64
+ip                           config            -ipProtocol                         89
+ip                           config            -useValidChecksum                   true
+ip                           config            -sourceIpAddr                       "0.0.0.0"
+ip                           config            -sourceIpMask                       "255.0.0.0"
+ip                           config            -sourceIpAddrMode                   ipIdle
+ip                           config            -sourceIpAddrRepeatCount            10
+ip                           config            -sourceClass                        classA
+ip                           config            -enableSourceSyncFromPpp            false
+ip                           config            -destIpAddr                         "0.0.0.0"
+ip                           config            -destIpMask                         "255.0.0.0"
+ip                           config            -destIpAddrMode                     ipIdle
+ip                           config            -destIpAddrRepeatCount              10
+ip                           config            -destClass                          classA
+ip                           config            -destMacAddr                        "00 DE BB 00 00 02"
+ip                           config            -destDutIpAddr                      "0.0.0.0"
+ip                           config            -enableDestSyncFromPpp              false
+ip                           config            -options                            ""
+
+#protocolOffset               setDefault        
+protocolOffset               config            -enable                             false
+protocolOffset               config            -offset                             14
+protocolOffset               config            -userDefinedTag                     "00 00"
+}
+
+###########################################################################################
+# Name : setStreamDefaultValues_IPv4_RIP { }
+# Description : Configures default values for a IPv4 RIP stream
+#               This is used to change the properties of exisitng default stream
+#
+# return value :  none 
+#        
+# typical usage: setStreamDefaultValues_IPv4_RIP
+###########################################################################################
+proc setStreamDefaultValues_IPv4_RIP { } {
+
+global ixChassis ixCard ixPort
+map add $ixChassis $ixCard $ixPort 
+#protocol                     setDefault        
+protocol                     config            -name                               ip
+protocol                     config            -appName                            Rip
+protocol                     config            -ethernetType                       ethernetII
+protocol                     config            -enable802dot1qTag                  false
+protocol                     config            -enableISLtag                       false
+protocol                     config            -dutStripTag                        true
+protocol                     config            -enableMPLS                         false
+
+#ip                           setDefault        
+ip                           config            -precedence                         routine
+ip                           config            -delay                              normalDelay
+ip                           config            -throughput                         normalThruput
+ip                           config            -reliability                        normalReliability
+ip                           config            -identifier                         0
+ip                           config            -cost                               0
+ip                           config            -reserved                           0
+ip                           config            -totalLength                        46
+ip                           config            -lengthOverride                     false
+ip                           config            -fragment                           may
+ip                           config            -lastFragment                       last
+ip                           config            -fragmentOffset                     0
+ip                           config            -ttl                                64
+ip                           config            -ipProtocol                         udp
+ip                           config            -useValidChecksum                   true
+ip                           config            -sourceIpAddr                       "0.0.0.0"
+ip                           config            -sourceIpMask                       "255.0.0.0"
+ip                           config            -sourceIpAddrMode                   ipIdle
+ip                           config            -sourceIpAddrRepeatCount            10
+ip                           config            -sourceClass                        classA
+ip                           config            -enableSourceSyncFromPpp            false
+ip                           config            -destIpAddr                         "0.0.0.0"
+ip                           config            -destIpMask                         "255.0.0.0"
+ip                           config            -destIpAddrMode                     ipIdle
+ip                           config            -destIpAddrRepeatCount              10
+ip                           config            -destClass                          classA
+ip                           config            -destMacAddr                        "00 DE BB 00 00 02"
+ip                           config            -destDutIpAddr                      "0.0.0.0"
+ip                           config            -enableDestSyncFromPpp              false
+ip                           config            -options                            ""
+
+#rip                          setDefault        
+rip                          config            -command                            1
+rip                          config            -version                            2
+
+#udp                          setDefault        
+udp                          config            -sourcePort                         unassignedPort
+udp                          config            -destPort                           unassignedPort
+udp                          config            -checksum                           "d4 09"
+udp                          config            -enableChecksum                     false
+udp                          config            -length                             26
+udp                          config            -lengthOverride                     false
+udp                          config            -enableChecksumOverride             false
+udp                          config            -checksumMode                       validChecksum
+
+#protocolOffset               setDefault        
+protocolOffset               config            -enable                             false
+protocolOffset               config            -offset                             14
+protocolOffset               config            -userDefinedTag                     "00 00"
+}
+
+###########################################################################################
+# Name : setStreamDefaultValues_IPv4_DHCP { }
+# Description : Configures default values for a IPv4 DHCP stream
+#               This is used to change the properties of exisitng default stream
+#
+# return value :  none 
+#        
+# typical usage: setStreamDefaultValues_IPv4_DHCP
+###########################################################################################
+proc setStreamDefaultValues_IPv4_DHCP { } {
+
+global ixChassis ixCard ixPort
+map add $ixChassis $ixCard $ixPort 
+stream                       config            -framesize                          346
+
+#protocol                     setDefault        
+protocol                     config            -name                               ip
+protocol                     config            -appName                            Dhcp
+protocol                     config            -ethernetType                       ethernetII
+protocol                     config            -enable802dot1qTag                  false
+protocol                     config            -enableISLtag                       false
+protocol                     config            -dutStripTag                        true
+protocol                     config            -enableMPLS                         false
+
+#ip                           setDefault        
+ip                           config            -precedence                         routine
+ip                           config            -delay                              normalDelay
+ip                           config            -throughput                         normalThruput
+ip                           config            -reliability                        normalReliability
+ip                           config            -identifier                         0
+ip                           config            -cost                               0
+ip                           config            -reserved                           0
+ip                           config            -totalLength                        494
+ip                           config            -lengthOverride                     false
+ip                           config            -fragment                           may
+ip                           config            -lastFragment                       last
+ip                           config            -fragmentOffset                     0
+ip                           config            -ttl                                64
+ip                           config            -ipProtocol                         udp
+ip                           config            -useValidChecksum                   true
+ip                           config            -sourceIpAddr                       "0.0.0.0"
+ip                           config            -sourceIpMask                       "255.0.0.0"
+ip                           config            -sourceIpAddrMode                   ipIdle
+ip                           config            -sourceIpAddrRepeatCount            10
+ip                           config            -sourceClass                        classA
+ip                           config            -enableSourceSyncFromPpp            false
+ip                           config            -destIpAddr                         "0.0.0.0"
+ip                           config            -destIpMask                         "255.0.0.0"
+ip                           config            -destIpAddrMode                     ipIdle
+ip                           config            -destIpAddrRepeatCount              10
+ip                           config            -destClass                          classA
+ip                           config            -destMacAddr                        "00 DE BB 00 00 02"
+ip                           config            -destDutIpAddr                      "0.0.0.0"
+ip                           config            -enableDestSyncFromPpp              false
+ip                           config            -options                            ""
+
+#dhcp                         setDefault        
+dhcp                         config            -opCode                             dhcpBootRequest
+dhcp                         config            -hwType                             dhcpEthernet10Mb
+dhcp                         config            -hwLen                              6
+dhcp                         config            -hops                               0
+dhcp                         config            -transactionID                      0
+dhcp                         config            -seconds                            0
+dhcp                         config            -flags                              dhcpNoBroadcast
+dhcp                         config            -clientIpAddr                       "0.0.0.0"
+dhcp                         config            -yourIpAddr                         "0.0.0.0"
+dhcp                         config            -serverIpAddr                       "0.0.0.0"
+dhcp                         config            -relayAgentIpAddr                   "0.0.0.0"
+dhcp                         config            -clientHwAddr                       "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00"
+dhcp                         config            -serverHostName                     ""
+dhcp                         config            -bootFileName                       ""
+dhcp                         config            -optionCode                         0
+dhcp                         config            -optionDataLength                   0
+
+#udp                          setDefault        
+udp                          config            -sourcePort                         bootpClientPort
+udp                          config            -destPort                           bootpServerPort
+udp                          config            -checksum                           "43 af"
+udp                          config            -enableChecksum                     false
+udp                          config            -length                             474
+udp                          config            -lengthOverride                     false
+udp                          config            -enableChecksumOverride             false
+udp                          config            -checksumMode                       validChecksum
+
+#protocolOffset               setDefault        
+protocolOffset               config            -enable                             false
+protocolOffset               config            -offset                             14
+protocolOffset               config            -userDefinedTag                     "00 00"
+
+}
+
+
+#############################################################################################
+# Procedure Name: setStreamAdvanceMode
+#
+# Description: This proc configures transmit mode of a ixia port to Advance Streams
+#              and returns 4 for the advance mode
+# Input args:
+#
+#  -ixPort             - Ixia port
+#
+# Output args: Ixia card name
+#
+# Typical usage: setStreamAdvanceMode 8
+
+########################################################################################################
+proc setStreamAdvanceMode {ixPort} {
+
+MapIxiaPortId $ixPort chasis card port
+port     config    -transmitMode   portTxModeAdvancedScheduler
+port                         config            -autonegotiate                      true
+port                         config            -advertise1000FullDuplex            true
+port set $chasis $card $port
+
+set transmitMode [port cget -transmitMode]
+result_debug "TransmitMode for the port -- $transmitMode"
+}
+
+
+
+##################################################################
+# Procedure Name: GetFrameRateUds1
+#
+# Description: Get the rate at which the frames are received on a \
+#              based on user defined statistics 1
+#
+# Input args:
+#              portId - Port Id
+#
+# Output args:
+#              return frames received
+#
+# Typical usage:
+#              [GetFrameRateUds1 $portId]
+#
+# Category: setup
+##################################################################
+proc GetFrameRateUds1 {portId} {
+   MapIxiaPortId $portId chasisId card port
+   stat getRate statAllStats $chasisId $card $port
+   return [stat cget -userDefinedStat1]
+}
+
+
+
+
+proc setPacketStreamsMode {ixPort} {
+
+MapIxiaPortId $ixPort chasis card port
+port     config    -transmitMode   portTxPacketStreams
+port     config    -autonegotiate   true
+port     config    -advertise1000FullDuplex true
+port set $chasis $card $port
+
+set transmitMode [port cget -transmitMode]
+result_debug "TransmitMode for the port -- $transmitMode"
+}
+

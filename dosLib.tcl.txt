@@ -1,0 +1,779 @@
+
+##################################################################
+# Procedure Name: loginDosServer
+# Description:
+#       This proc is used to login to the DosServer using globally
+#       defined user id and password.
+# Input args: None
+# Output args: None
+# Typical usage:
+#       loginDosServer
+# Category: Dos
+##################################################################
+proc loginDosServer { } {
+   global dosServer
+   global dosUser
+   global dosPassword
+   global dosSuPassword
+   global spawn_id
+
+   login_linux $dosServer $dosUser $dosPassword $dosSuPassword
+   #make sure we are in root prompt
+   exp_send "\r"
+   for {set try 0} {$try < 10} {incr try} {
+      expect {
+         "#" {
+            return 1
+         }
+         -ex "$" {
+            send "su\r"
+         }
+         "assword" {
+            send "$dosSuPassword\r"
+         }
+         timeout {
+            send "\r"
+         }
+      }
+   }
+   return 0
+
+}
+
+proc loginDosSwitch { } {
+   global dosSwitch
+   #use login_linux instead of Login because Login is not able to deal with
+   #EW cli
+   login_linux $dosSwitch admin "" NULL
+}
+
+##################################################################
+# Procedure Name: disableCPUDosProtect
+# Description:
+#       This proc is used to config cpu-dos-protect parameters to 
+#       default and then disable cpu-dos-protect
+# Input args: dut - the DUT number
+# Output args: None
+# Typical usage:
+#       disableCPUDosProtect 1
+# Category: Dos
+##################################################################
+proc disableCPUDosProtect { dut } {
+   global DUT1_CONNECT
+   global DUT2_CONNECT
+
+   Login [set DUT${dut}_CONNECT]
+   #SendACmd "unconfigure cpu-dos-protect"
+   SendACmd "disable dos-protect"
+}
+
+proc cleanOsConf { } {
+   global DUT1_CONNECT
+   global DUT2_CONNECT
+   
+   Login $DUT1_CONNECT
+   SendACmd "configure ospf delete dosvlan"
+   SendACmd "delete vlan1"
+   SendACmd "delete vlanbb"
+   SendACmd "disable ospf"
+   SendACmd "delete ospf area all"
+
+   Login $DUT2_CONNECT
+   SendACmd "delete vlanbb"
+   SendACmd "delete vlan2"
+   SendACmd "disable ospf"
+   SendACmd "delete ospf area all"
+}
+
+##################################################################
+# Procedure Name: enableCPUDosProtect
+# Description:
+#       This proc is used to enable cpu-dos-protect on a DUT.
+# Input args: dut - the DUT number
+#             alert - alert-threshold to configure
+#             notify - notify-threshold to configure
+# Output args: None
+# Typical usage:
+#       enableCPUDosProtect 1
+# Category: Dos
+##################################################################
+proc enableCPUDosProtect {dut {alert default} {notify default}} {
+   global DUT1_CONNECT
+   global DUT2_CONNECT
+   
+   set connect [set DUT${dut}_CONNECT]
+   Login $connect
+   #clear the log so show log will not show info from previous test.
+   SendACmd "clear log"
+   #in EXOS there is no unconfig dos-protect command so we have to config the
+   # thresholds explicitly here to avoid left over config from previous test
+   if { $alert == "default" } { set alert 4000 }
+   if { $notify == "default" } { set notify 3500 }
+   SendACmd "enable dos-protect"
+   SendACmd "configure dos-protect type l3-protect alert-threshold $alert"
+   SendACmd "configure dos-protect type l3-protect notify-threshold $notify"
+   return 1
+}
+
+##################################################################
+# Procedure Name: verifyDosProtect
+# Description:
+#       This proc is used to verify dos-protection
+# Input args: testNo - test number
+#             checkFor - acl  - verify ACL is created
+#                        noAcl - verify no ACL is created
+#                        notice - verify notify-threshold is reached
+#                        noNotice - verify notify-threshold is not reached
+#              port    - the port # in show log output
+#              srcIp   - SRCIP address in show log output
+#              destIp  - DESTIP address in show log output
+#              proto   - PROTO protocol type in show log output
+# Output args: None
+# Typical usage:
+#     verifyDosProtect -checkFor "acl notice"
+# Category: Dos
+##################################################################
+proc verifyDosProtect { args } {
+   parse_args verifyDosProtect $args {
+      testNo ""
+      checkFor acl 
+      port default
+      srcIp default
+      destIp default
+      proto default
+   } 
+   global DUT1_CONNECT
+   global DUT2_CONNECT
+   global attackDut
+   global dutDosPort
+   global dutDosIp
+   global dosServerAttackIp
+
+   if ![regexp "acl|noAcl|notice|noNotice" $checkFor] {
+      report_start_test "wrong argument $checkFor given to verifyDosProtect"
+      result_error "wrong argument $checkFor given to verifyDosProtect"
+      report_end_test
+      return 0
+   }
+   if { $port == "default" } { set port $dutDosPort($attackDut) }
+##########
+#set port 1:4
+   if { $srcIp == "default" } { set srcIp $dosServerAttackIp  }
+   if { $destIp == "default" } { set destIp $dutDosIp($attackDut)  }
+   if { $proto == "default" } { set proto udp } 
+
+   if { [CompareRelease [GetVersion DUT1 whole] 11.4.0.21] >= 0 } {
+       # if version >= 11.4.0.21...
+
+       if { $srcIp == "any" } {
+	   set srcIp "0.0.0.0"
+       }
+
+       set pShowLog(acl) "{DOSProt.AddACLOK.*Added an ACL to port $port, srcIP $srcIp to destIP $destIp, protocol $proto} exist"
+       set pShowLog(noAcl) "{DOSProt.AddACLOK.*Added an ACL} notExist"
+       set pShowLog(notice) "{DOSProt.PktCntExcd.*Notify-threshold for L3 Protect} exist"
+       set pShowLog(noNotice) "{DOSProt.PktCntExcd.*Notify-threshold for L3 Protect} notExist"
+   } else {
+       set pShowLog(acl) "{dosprot.info.* CREATE ACL: FROM PHYSPORT $port SRCIP $srcIp TO DESTIP $destIp PROTO $proto} exist"
+       set pShowLog(noAcl) "{dosprot.info.* CREATE ACL} notExist"
+       set pShowLog(notice) "{dosprot.info.* notify-threshold for L3 Protect} exist"
+       set pShowLog(noNotice) "{dosprot.info.* notify-threshold for L3 Protect} notExist"
+   }
+
+##########
+#set port 4
+   
+   if {[GetVersion DUT1 majmin] >= "11.3" } {
+       set pShowAcl(acl) "{$port +.* +ingress} exist"
+       set pShowAcl(noAcl) "{$port +.* +ingress} notExist"
+   } else {
+       set pShowAcl(acl) "{$port +DOSpolicy.* +ingress} exist"
+       set pShowAcl(noAcl) "{$port +DOSpolicy.* +ingress} notExist"
+   }
+   set pShowAcl(notice) ""
+   set pShowAcl(noNotice) ""
+
+   set pListShowLog ""
+   set pListShowAcl ""
+   foreach check {acl noAcl notice noNotice} { 
+      if [regexp $check $checkFor ] {
+         lappend pListShowLog $pShowLog($check)
+         lappend pListShowAcl $pShowAcl($check)
+      }
+   }
+
+
+   #sleep for traffic to stabilize
+   sleep 5
+   Login [set DUT${attackDut}_CONNECT ]
+   CheckKeyValue "show log" $pListShowLog -testNo $testNo \
+      -comment $pListShowLog -time {s: 0 i: 2 d: 10 f: 10 r }
+   CheckKeyValue "show access-list" $pListShowAcl -testNo $testNo -comment \
+      $pListShowAcl -time {s: 0 i: 2 d: 10 f: 10 r }
+
+
+   #In EXOS top won't show any meaningful output for DOS
+   ################################################
+   #set subTest "verify tNettask utilization using top command";
+   ################################################
+   #result_h2 "$subTest";
+   #report_start_test "$subTest";
+   #tNetTask CPU% needs a long time to pick up after attack is started
+   #sleep 40
+
+   #Login [set DUT${attackDut}_CONNECT ];
+   #set parameterList "";
+   #lappend parameterList "tNetTask 0-5";
+   # CheckTopStats $parameterList "-Show the top statistics for tNetTask";
+   #ChecktNetTask 0 5 
+   #report_end_test;
+}
+
+proc getCmdOutput { command task} {
+   global spawn_id
+   set pid _[pid]
+   set fileName "Tmp/tmp_getCmdOutput$pid"
+   set fd_in [open $fileName "w"]
+   set match_max 60000
+   SendACmd $command NULL $fd_in
+   close $fd_in
+   set fd_in [open $fileName "r"]
+   set output ""
+   while {[gets $fd_in line] != -1} {
+result_debug "line is $line"
+      if [regexp $task $line ] {
+         set output $line
+      } 
+   }
+   #set output [read $fd_in]
+   close $fd_in
+ #  file delete $fileName
+puts "$output"
+   return $output
+}
+
+proc ChecktNetTask { low high } {
+   report_start_test "Checking top statistics for tNetTask range $low-$high"
+   #look for:
+   #tNetTask      85c58c10        80d33214        PEND          0   69
+   set match 0
+   for {set i 1} { $i <= 5 } {incr i} {
+      set output [getCmdOutput "top" tNetTask]
+      if [regexp \
+         "tNetTask +\[^ ]+ +\[^ ]+ +\[^ ]+ +(\[^ ]+) +\[^ ]+" \
+         $output dummy CPU] {
+         set match 1
+         break 
+      }
+   }
+   if {$match == 0 } {
+      result_error "regexp not matched for tNetTask"
+      result_error "output is:\n$output"
+      report_end_test
+      return 0
+   }
+   if { $CPU > $high || $CPU < $low } {
+      result_error \
+         "Checking range of tNettask failed. Wanted $low-$high, Got $CPU"
+      report_end_test
+      return 0
+   }
+   result_ok "Checking range of tNettask is ok. Wanted $low-$high, Got $CPU"
+   report_end_test
+   return 1
+}
+
+proc CheckAclMonitor { acl } {
+   global spawn_id
+   set pid _[pid]
+   set fd_in [open "Tmp/tmp_CheckACLMonitor$pid" "w"]
+puts "#######################before SendACmd"
+   SendACmd "show access-list-monitor" NULL $fd_in
+puts "#######################after SendACmd"
+   close $fd_in
+   set fd_in [open "Tmp/tmp_CheckACLMonitor$pid" "r"]
+   set aclFound 0
+   while {[gets $fd_in line] != -1} {
+      #result_debug "----- Line=|$line|"
+      if [regexp $acl $line] {
+          set aclFound 1
+          break
+       } else {
+          continue
+       }
+   }
+   close $fd_in
+   file delete "Tmp/tmp_CheckACLMonitor$pid"
+   report_start_test "Checking access-list-monitor for $acl"
+   if {$aclFound == 1 } {
+      result_ok "$acl found in access-list-monitor"
+   } else {
+      result_error "$acl not found in access-list-monitor"
+   }
+   report_end_test
+}
+
+
+
+
+
+#experimental proc
+proc verifyTelnet { destination } {
+   send "telnet $destination\r";
+      expect {
+         "closed" {
+            send "\r\r"
+            return 0
+         }
+         "failed" {
+            send "\r\r"
+            return 0
+         }
+         timeout {
+            #want to get a Login prompt or #
+            send "\r\r"
+            return 0
+         }
+         "login:" {
+            send "admin\r";
+            exp_continue;
+         }
+         "password:" {
+            send "\r";
+            exp_continue;
+         }
+         "#" {
+            send "logout\r";
+            expect {
+               -nocase "? (y/n)" {
+                  send "n\r";
+                  exp_continue;
+               }
+               "closed" {
+                  send "\r"
+                  return 1
+               }
+               timeout {
+                  send "\r\r"
+                  return 0
+               }
+            }
+         }
+      }
+}
+##################################################################
+# Procedure Name: setupOSPFVlans
+# Description:
+#       This proc is used to config OSPF on vlans
+# Input args: 
+#        DUT1Vlan1_IP   ip address on vlan1 of DUT1
+#        DUT1vlan1_2_IP ip address on vlanBB of DUT1
+#        DUT2vlan1_2_IP ip address on vlanBB of DUT2
+#        DUT2vlan2_IP   ip address on vlan2 of DUT2
+#              
+# Output args: None
+# Typical usage:
+#       setupOSPFVlans 1.1.1.1 11.11.11.1 11.11.11.2 22.22.22.1
+#
+# Category: Dos
+##################################################################
+
+proc setupOSPFVlans {DUT1Vlan1_IP DUT1vlan1_2_IP DUT2vlan1_2_IP DUT2vlan2_IP} {
+   global DUT1_CONNECT;
+   global DUT2_CONNECT
+   
+   Login $DUT1_CONNECT
+   SendACmd "configure ospf add dosvlan area 0.0.0.0"
+   set portList "[MapDUTPortId 1]"
+   SetupSingleOSPFVlan $DUT1Vlan1_IP "0.0.0.0" $portList 1 "vlan1"
+   set portList "[GetATrunkPort 1 2]"
+   SetupSingleOSPFVlan $DUT1vlan1_2_IP "0.0.0.0" $portList 1 "vlanBB"
+
+   Login $DUT2_CONNECT
+   set portList "[GetATrunkPort 2 1]"
+   SetupSingleOSPFVlan $DUT2vlan1_2_IP "0.0.0.0" $portList 1 "vlanBB" "false"
+
+   set portList "[MapDUTPortId 9 2]"
+   SetupSingleOSPFVlan $DUT2vlan2_IP "0.0.0.0" $portList 1 "vlan2"
+}
+
+##################################################################
+# Procedure Name: CheckWithOSPF
+# Description:
+#       This proc is used to config OSPF on the DUTs.
+# Input args: dutMac - Mac address of DUT
+# Output args: None
+# Typical usage:
+#       CheckWithOSPF
+# Category: Dos
+##################################################################
+proc CheckWithOSPF {dutMac} {
+   global dutDosIp
+   set DUT1Vlan1_IP 1.1.1.1
+   set DUT1vlan1_2_IP 11.11.11.1
+   set DUT2vlan1_2_IP 11.11.11.2
+   set DUT2vlan2_IP 22.22.22.1
+   set clientIP2 22.22.22.2
+   set clientIP1 1.1.1.3
+   set txPort 9
+   set rxPort 1
+
+   setupOSPFVlans $DUT1Vlan1_IP $DUT1vlan1_2_IP $DUT2vlan1_2_IP $DUT2vlan2_IP
+   result_debug "Wait for 60 secs for ospf convergance"
+   sleep 45
+
+   set checkPortList ""
+   lappend checkPortList "9 notForwarded"
+   lappend checkPortList "1 forwarded"
+   CheckForwarding -txPortId $txPort -checkPortList $checkPortList \
+                    -protocol "ip" -gIpAddr $DUT2vlan2_IP \
+                    -dIpAddr $clientIP1 -sIpAddr $clientIP2 \
+                    -rxPortId $rxPort -ttlDecr 2
+
+   report_start_test "Transmit IP packets continusouly";
+   ClearPortsStats "$txPort $rxPort";
+   set frameSent [SendIpFrame -protocol "ip" -txPortId $txPort -sourceIp $clientIP2 \
+                  -destIp $clientIP1 -destMac $dutMac \
+                  -streamType "contPacket" -percentage .1];
+   report_end_test
+   return 0  
+}
+
+
+proc CheckRatesAndCounts { } {
+   set txPort 9
+   set rxPort 1
+
+
+   ################################################
+   set subTest "Verify the transmitted and received rates and packet counts via ospf";
+   ################################################
+   result_h2 "$subTest";
+   report_start_test "$subTest";
+
+   result_debug "Check receive and transmit rates"
+   set checkRateList ""
+   lappend checkRateList "$rxPort 100"
+   CheckRates $txPort $checkRateList "Check receive rate 100%" 2
+
+   report_end_test;
+
+   ClearPortsStats "$txPort $rxPort";
+   sleep 10
+
+   StopPortsTransmit $txPort;
+
+   sleep 10
+   set numSent [GetNumFramesSent $txPort];
+   set numRece [GetNumFramesReceived $rxPort];
+   result_debug "###Send = $numSent : Receive = $numRece";
+
+   set diff [expr $numSent-$numRece];
+   if {$diff < 250} {
+       report_start_test "Number of transmitted frames on first path is <$numSent> and recieved frames is <$numRece>";
+       result_ok "Number of transmitted frames on first path is <$numSent> and recieved frames is <$numRece>";
+   } else {
+       report_start_test "Warning : Number of transmitted frames on first path <$numSent> is different than recieved frames <$numRece>";   
+       result_error "Warning : Number of transmitted frames on first path <$numSent> is different than recieved frames <$numRece>";   
+   }
+   report_end_test
+}
+
+##################################################################
+# Procedure Name: ConfigDosNetwork
+# Description:
+#       This proc is used to config the Dos networks according to the
+#       following topology drawings. The dosSwitch is used to isolate DOS 
+#       attack traffic from the rest of the regression testbeds. 
+#
+#       Topology 1 is used if we are testing a blade type that cannot
+#       be directly connected with the dosSwitch. e.g. we want to test
+#       G48X such that attack is coming into this blade, but we run out of 
+#       fiber port on the dosSwitch.
+# 
+#       Topology 2 is used if the blade type under test can be directly
+#       connected to the dosSwitch. or in case of PC as the DUT2, the PC
+#       cannot route DOS traffic fast enough to trigger dos protection. We
+#       want to connect DUT1 directly to dosSwitch.
+#
+# Topology 1
+# ===========
+#
+#       DOS attack traffic is routed by dosSwitch to DUT2 then to DUT1
+#
+#       Note that this topology exist together with the OSPF topology
+#       but we are using a different trunk here between DUT1 and DUT2
+# EXOS note:
+#       Note that in EW the DOS switch is connected to DUT1 and DUT2 is under
+#       attack. In EXOS we connect the DOS switch to DUT2  and DUT1 is under
+#       attack. This is because in EXOS testbeds DUT1 and DUT2 can be different
+#       platforms(e.g. DUT1 is Mariner and DUT2 is PC ). DUT1 is the platform
+#       that we want to test. We also want the attack traffic coming in from
+#       the trunk between DUT1 and 2 (e.g g60T, g60X etc) so the correct blade
+#       is under attack.
+#
+#
+#           network
+#            |
+#        +-----------------+
+#        |  eth0           |
+#        | DOS  Server     |
+#        |  eth1           |
+#        +-----------------+
+#        123.123.1.4
+#            |
+#            | 
+#     $dosSwitchPortToDosServer 123.123.1.3
+#        +-----------------+
+#        |                 |
+#        |   DOS switch    |
+#        |                 |
+#        +-----------------+
+#      $dosSwitchPortToDut  124.124.$testbedId.3
+#            |
+#            |
+#      $dutDosPort(2) 124.124.$testbedId.2
+#        +-----------------+
+#        |                 |
+#        |       DUT2      |
+#        |                 |
+#        +-----------------+
+#    125.125.$testbedId.2
+#            |
+#            |
+#      $dutDosPort(1) 125.125.$testbedId.1
+#        +-----------------+
+#        |                 |
+#        |       DUT1      |
+#        |                 |
+#        +-----------------+
+#
+# Topology 2
+# ==========
+#           network
+#            |
+#        +-----------------+
+#        |  eth0           |
+#        | DOS  Server     |
+#        |  eth1           |
+#        +-----------------+
+#        123.123.1.4
+#            |
+#            | 
+#     $dosSwitchPortToDosServer 123.123.1.3
+#        +-----------------+
+#        |                 |
+#        |   DOS switch    |
+#        |                 |
+#        +-----------------+
+#      $dosSwitchPortToDut  124.124.$testbedId.3
+#            |
+#            |
+#      $dutDosPort(1) 124.124.$testbedId.1
+#        +-----------------+
+#        |                 |
+#        |       DUT1      |
+#        |                 |
+#        +-----------------+
+#
+#
+# Input args: dosTopology  1 - use topology 1
+#                          2 - use topology 2 
+# Output args: None
+# Typical usage:
+#       configDosNetwork
+# Category: Dos
+##################################################################
+proc configDosNetwork { } {
+    global dosSwitch
+    global dosServer
+    global dosServerAttackIp
+    global dutDosPort
+    global dutDosIp
+    global dosSwitchPortToDut
+    global dosSwitchPortToDosServer
+    global dosTestbedId
+    global DUT1_CONNECT
+    global DUT2_CONNECT
+    global dosTopology
+
+ 
+    result_debug "\nconfigDosNetwork{}: set up DOS Network"
+    set dosServerAttackIp 123.123.1.4
+
+    if { $dosTopology != 2 } {
+       set dutDosIp(1) 125.125.$dosTestbedId.1
+       set dutDosIp(2) 124.124.$dosTestbedId.2
+    } else {
+       set dutDosIp(1) 124.124.$dosTestbedId.1
+    }
+    #######################
+    # DOS Switch config
+    #######################
+    #set up routing between the DOS server and DUT using the DOS
+    #switch
+    loginDosSwitch
+    SendACmd "configure default delete port all"
+    SendACmd "create vlan dosvlanServer"
+    SendACmd "enable port $dosSwitchPortToDosServer"
+    SendACmd "configure dosvlanServer add port $dosSwitchPortToDosServer"
+    SendACmd "configure dosvlanServer ipaddress 123.123.1.3/24"
+    SendACmd "create vlan dosvlan$dosTestbedId"
+    SendACmd "enable port $dosSwitchPortToDut"
+    SendACmd "configure dosvlan$dosTestbedId add port $dosSwitchPortToDut"
+    SendACmd "configure dosvlan$dosTestbedId ipaddress 124.124.$dosTestbedId.3/24"
+    if { $dosTopology != 2 } {
+       SendACmd "configure iproute add 125.125.$dosTestbedId.0/24 $dutDosIp(2)"
+    }
+    SendACmd "enable ipforwarding dosvlanServer"
+    SendACmd "enable ipforwarding broadcast dosvlanServer"
+    SendACmd "enable ipforwarding dosvlan$dosTestbedId"
+    SendACmd "enable ipforwarding broadcast dosvlan$dosTestbedId"
+    #there's a chance that max number of telnet sessions at the dosSwitch got 
+    #used up better logout after use.
+    logout
+
+    #######################
+    # DOS Server config
+    #######################
+    #dosServer eth0 for regular communication traffic
+    #          eth1 for DOS traffic 
+    #Don't configure default route here for regular traffic. Instead
+    #configure prefix 10 going to default router. in case dosServer doesn't
+    #know where DOS traffic should go it has no default route to leak to the
+    #rest of the company.
+    #configure static route to 124 and 125 prefix going to dosswitch for
+    #DOS traffic
+    loginDosServer
+    linuxSendACmd "/sbin/ifconfig eth1 $dosServerAttackIp/24"
+    linuxSendACmd "/sbin/route add -net 124.0.0.0/8 gw 123.123.1.3"
+    linuxSendACmd "/sbin/route add -net 125.0.0.0/8 gw 123.123.1.3"
+    linuxSendACmd "/sbin/route"
+
+    if { $dosTopology != 2 } {
+       #######################
+       # Topology 1 DUT2 config
+       #######################
+       Login $DUT2_CONNECT
+       SendACmd    "enable port $dutDosPort(2)"
+       SendACmd    "create vlan dosvlan"
+       SendACmd    "configure dosvlan add port $dutDosPort(2)"
+       SendACmd    "configure dosvlan ipaddress $dutDosIp(2)/24"
+       #use 2nd trunk for DOS attack traffic. 1st trunk is used for
+       #ixia traffic with ospf routing
+       set port [GetATrunkPort 2 1 2]
+       SendACmd    "enable port  $port"
+       SendACmd    "create vlan dosvlan2"
+       SendACmd    "configure dosvlan2 add port $port"
+       SendACmd    "configure dosvlan2 ipaddress 125.125.$dosTestbedId.2/24"
+       SendACmd    "configure iproute add $dosServerAttackIp/32 124.124.$dosTestbedId.3"
+       SendACmd    "enable ipforwarding dosvlan"
+       SendACmd    "enable ipforwarding broadcast dosvlan"
+       SendACmd    "enable ipforwarding dosvlan2"
+       SendACmd    "enable ipforwarding broadcast dosvlan2"
+   
+       #######################
+       # Topology 1 DUT1 config
+       #######################
+       Login $DUT1_CONNECT
+       set dutDosPort(1)  [GetATrunkPort 1 2 2]
+       SendACmd    "enable port $dutDosPort(1)"
+       SendACmd    "create vlan dosvlan"
+       SendACmd    "configure dosvlan add port $dutDosPort(1)"
+       SendACmd    "configure dosvlan ipaddress $dutDosIp(1)/24"
+       SendACmd \
+          "configure iproute add $dosServerAttackIp/32 125.125.$dosTestbedId.2"
+       SendACmd \
+      "configure iproute add 124.124.$dosTestbedId.0/24 125.125.$dosTestbedId.2"
+    } else {
+       #######################
+       # Topology 2 DUT1 config
+       #######################
+       Login $DUT1_CONNECT
+       #set dutDosPort(1)  [GetATrunkPort 1 2 2]
+       SendACmd    "enable port $dutDosPort(1)"
+       SendACmd    "create vlan dosvlan"
+       SendACmd    "configure dosvlan add port $dutDosPort(1)"
+       SendACmd    "configure dosvlan ipaddress $dutDosIp(1)/24"
+       SendACmd \
+          "configure iproute add $dosServerAttackIp/32 124.124.$dosTestbedId.3"
+    }
+}
+
+################################################################################
+# Procedure Name: unconfigDosNetwork
+# Description:
+#       This proc is used to unconfig the DOS topology
+# Input args: None
+# Output args: None
+# Typical usage:
+#      unconfigDosNetwork
+# Category: Dos
+##################################################################
+proc unconfigDosNetwork {} {
+    global dosServer
+    global dosServerAttackIp
+    global dosSwitch
+    global dutDosIp
+    global dosTestbedId
+    global DUT1_CONNECT
+    global DUT2_CONNECT
+    global dosTopology
+
+    result_debug "\nUnconfigDosNetwork{}: unconfig DOS network"
+
+    Login $DUT2_CONNECT
+    SendACmd    "delete dosvlan"
+    SendACmd    "delete dosvlan2"
+    SendACmd    "configure iproute delete $dosServerAttackIp/32 124.124.$dosTestbedId.3"
+
+    Login $DUT1_CONNECT
+    SendACmd    "delete dosvlan"
+    SendACmd    "configure iproute delete $dosServerAttackIp/32 125.125.$dosTestbedId.2"
+    SendACmd    "configure iproute delete $dosServerAttackIp/32 124.124.$dosTestbedId.3"
+
+    loginDosServer
+    #donot unconfig anything on dosServer since some other testbed maybe running
+    #DOS too
+    linuxSendACmd "/sbin/route"
+
+    loginDosSwitch
+    #donot unconfig anything on the dosServer port
+    SendACmd "delete dosvlan$dosTestbedId"
+    SendACmd "configure iproute delete 125.125.$dosTestbedId.0/24 124.124.$dosTestbedId.2"
+    #there's a chance that max number of telnet sessions at the dosSwitch got 
+    #used up better logout after use.
+    logout
+}
+
+################################################################################
+# Procedure Name: killOldAttacks
+# Description:
+#       This proc is used to kill all dos attacks to the DUTs
+#       It's for cleaning up and attack processes left by previous tests.
+# Input args: None
+# Output args: None
+# Typical usage:
+#      killOldAttacks
+# Category: Dos
+##################################################################
+proc killOldAttacks { } {
+    #clean up any zombie dos attack if there's any
+    loginDosServer
+    lappend parameterList "123.123. 1 0"
+    lappend parameterList "124.124. 1 0"
+    lappend parameterList "125.125. 1 0"
+puts "debug 0a"
+    set value [GetKeyValue "ps -eaf | egrep '123|124|125'" $parameterList 0 0 ""]
+puts "debug 0b"
+    unset parameterList;
+
+    foreach retVal $value {
+	if {![regexp -nocase "key_not_found" $retVal]} {
+	    result_debug "found zombies with '$retVal' pids, killing them all..."
+	    foreach val [join $retVal] {
+		linuxSendACmd "kill -9 $val"
+	    }
+	}
+    }
+}

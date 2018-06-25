@@ -1,0 +1,443 @@
+proc getImagePath {args} {
+    parse_args getImagePath $args {
+        platform ""
+        version ""
+        majMin ""
+        Image "exos"
+    }
+    global DUTs_info
+    global bcmx870 bcmxOnieX86 
+    global whichDutNow
+    global bcmStackable bcmChassis gnssChassis stacking pioneerChassis bcmx430
+    global releaseManagerPath releaseManagerList
+    set HOST [exec hostname -s]
+    set builder "release-manager"
+    #find out the path to the given module
+    if {[string compare $DUTs_info(DUT$whichDutNow,relMaster) "release-manager"]!=0} {
+        set builder "$DUTs_info(DUT$whichDutNow,relMaster)"
+    }
+
+    #find out the path of the image
+    if {$platform == ""} {
+        set platform [string tolower $DUTs_info(DUT$whichDutNow,platform)]
+    }
+    if {$version == ""} {
+        set version $DUTs_info(DUT$whichDutNow,version)
+    }
+    if {$majMin == ""} {
+        set majMin [GetVersion DUT$whichDutNow majmin]
+    }
+    if {[regexp -nocase "patch" $version]} {
+        # this piece of code deals with patch releases where extra info has to be removed
+        # version ex: v1162b9- from  11.6.2.9-v1162b9-patch1-6
+        # that is being removed here
+        #  OR
+        # Catch corrupted DUTs_info(DUT1,version)
+        #  16.1.2.14-16.1.2.14-patch1-4
+        set isOldFormat 0
+        set newRelList ""
+        set elmList [split $version -]
+        set eLength [llength $elmList]
+        set ec 0
+        foreach el $elmList {
+            if {$ec == 1 && [regexp (^v\[b0-9\]+$|^\[0-9\]+\.\[0-9\]\.\[0-9\]\.\[0-9\]+$) $el]} {
+                # --  Don't add. v151234 or 16.1.1.1
+                if {[CompareRelease "16.1" $majMin]} {
+                    set isOldFormat 1
+                }
+            } else {
+                lappend newRelList $el
+            }
+            incr ec
+        }
+        set version [join $newRelList  "-"]
+        if {$isOldFormat} {
+            regsub -all {\.} $version _ dir
+            set versionDir "v$dir"
+            puts  "version: $version"
+            puts "versionDir: $versionDir"
+        } else {
+            puts  "version: $version"
+            set versionDir $version
+            puts "versionDir: $version"
+        }
+    } else {
+        set versionDir $version
+    }
+
+    puts "platform $platform"
+    if {[regexp -nocase "stack|vpex" $platform]} {
+        result_debug "Using GetSysType proc as platform is equal to \"Stack\" string "
+        if {[regexp -nocase "vpex" $platform]} {
+             set platform "[GetSysName DUT${whichDutNow}]"
+        } else {
+        set platform "[GetSysType DUT${whichDutNow}]"
+        }
+        puts "Now platform $platform"
+    }
+    if {[regexp -nocase $bcmStackable|$stacking|vpex $platform] && 
+            ![regexp -nocase "x430" $platform] && ![regexp -nocase "nwi" $platform] && \
+                           ![regexp -nocase "$bcmxOnieX86" $DUTs_info(DUT$whichDutNow,sysType)] } {
+        result_debug "The current image is $DUTs_info(DUT$whichDutNow,version)"
+        set platformName summitX
+        if { $majMin >= 15.6 } {
+            result_debug "The build is above 15.6"
+            if {[regexp -nocase "x480" $DUTs_info(DUT$whichDutNow,platform)] || \
+                  [regexp -nocase "x480" $DUTs_info(DUT$whichDutNow,sysType)]} {
+                result_debug "As per the change after 15.6, X480s will use a different image \
+                              ie summitX480-build.xos"
+                set platformName summitX480
+            }
+
+        }
+        if { $majMin <= 12.6 } {
+            set platformName summitX450
+        }
+        set platformDir1 cougar
+        set platformDir2 cougar
+    } elseif {[regexp -nocase "olympic|bd-128" $platform]} {
+        set platformName bd12K
+        set platformDir1 olympic_msm
+        set platformDir2 olympic_msm
+
+    } elseif {[regexp -nocase "nwi" $platform]} {
+        set platformName nwi
+        set platformDir1 summit_sibyte
+        set platformDir2 summit_sibyte
+
+    } elseif {[regexp -nocase "viper|x430|$bcmx430" $platform]} {
+        set platformName summitlite
+        set platformDir1 summitlite
+        set platformDir2 summitlite
+   } elseif {[regexp -nocase "$bcmxOnieX86" $platform]} {
+        set platformName onie
+        set platformDir1 onie_x86
+        set platformDir2 onie_x86
+    } elseif {[regexp -nocase $pioneerChassis $platform]} {
+        set platformName bd20K
+        set platformDir1 voyager_mm 
+        set platformDir2 voyager_mm 
+    } elseif {[regexp -nocase BD-X8 $platform]} {
+        if {$majMin>=15.1} {
+            set platformName bdX
+            set platformDir1 everest
+            set platformDir2 everest_mm
+        } else {
+            set platformName everest
+            set platformDir1 everest_mm
+            set platformDir2 everest_mm
+        }
+    } elseif {[regexp -nocase $bcmChassis $platform]} {
+        if {$majMin>=11.3} {
+            set platformName bd8800
+            set platformDir1 aspen
+            set platformDir2 aspen_msm
+        } else {
+            set platformName aspen
+            set platformDir1 aspen_msm
+            set platformDir2 aspen_msm
+        }
+    } elseif {[regexp -nocase 10808 $platform]} {
+        set platformName bd10K
+        if {$majMin>=11.3} {
+            set platformDir1 mariner
+            set platformDir2 mariner_msm
+        } else {
+            set platformDir1 mariner_msm
+            set platformDir2 mariner_msm
+        }
+    } elseif {[regexp -nocase pc $platform]} {
+        set platformName bd10Ki386
+        set platformDir1 i386
+        set platformDir2 i386
+    } else {
+        set platformName INVALID
+        set platformDir1 INVALID
+        set platformDir2 INVALID
+    }
+    global moduleArg ALLXMODS ALLXMODSSTR
+    # ------------------------------------------------------------
+    # if a moduleArg is passed in with an xmod
+    #    return the paths from the moduleArg
+    #
+    # THIS ASSUMES THAT THE XMOD AND XOS IMAGE ARE IN THE SAME DIR
+    # ------------------------------------------------------------
+    if {[info exists moduleArg] && [regexp -nocase "$ALLXMODSSTR" $moduleArg] \
+            && $moduleArg != "" && $builder != "release-manager"} {
+        if {$Image=="exos"} {
+            regsub -all -nocase "$ALLXMODSSTR" $moduleArg {} image1
+            regsub -all -nocase {\.xmod} $image1 ".xos" image2
+            result_debug "Not a release-manager build.  Returning $image2"
+            return $image2
+        } else {
+            result_debug "Not a release-manager build.  Returning $moduleArg"
+            return $moduleArg
+        }        
+    } else {
+        if {$Image=="exos"} {
+            set ImageName "$platformName-$version.xos"
+        } elseif {[lsearch $ALLXMODS $Image] >= 0} {
+            result_debug "XMOD $Image - $platformName-$version-${Image}.xmod"
+            set ImageName "$platformName-$version-${Image}.xmod"
+        } else {
+            result_debug "$Image is not a valid xmod name"
+            set ImageName "invalid"
+        }
+    }
+    if {$builder != "release-manager"} {
+        result_debug "Not a release-manager build.  Returning /home/${builder}/$ImageName"
+        set userImageName "/home/${builder}/$ImageName"
+        if {[file exists $userImageName]} {
+            result_debug "$builder image $userImageName exists"
+            return $userImageName
+        } else {
+            result_debug "$ImageName does not exists.  Grab the release-manager version"
+            if {[regexp -nocase "autoregeni" $HOST]} {
+                set ImagePath "$releaseManagerPath/$ImageName"
+            } else {
+                set ImagePath "$releaseManagerPath/$ImageName"
+                if {[file exists "$ImagePath"]} {
+                    return $ImagePath
+                } elseif {[info exists releaseManagerList]} {
+                    foreach relManPath $releaseManagerList {
+                        set rmImage "$relManPath/$versionDir/$platformDir2/$platformDir2/release/$ImageName"
+                        if {[file exists $rmImage]} {
+                            return $rmImage
+                        }
+                    }
+                    set ImagePath "INVALID"
+                }
+            }
+            return $ImageName
+        }
+    }
+    result_debug "Release Manager Path : $releaseManagerPath"
+    if { $majMin >=12.1} {
+        if {[regexp -nocase "autoregeni" $HOST]} {
+            set ImagePath "$releaseManagerPath/$ImageName"
+        } else {
+            set ImagePath "$releaseManagerPath/$ImageName"
+            if {[file exists "$ImagePath"]} {
+                return $ImagePath
+            } elseif {[info exists releaseManagerList]} {
+                foreach relManPath $releaseManagerList {
+                    set rmImage "$relManPath/$versionDir/$platformDir2/$platformDir2/release/$ImageName"
+                    if {[file exists $rmImage]} {
+                        result_debug "Exists $rmImage"
+                        return $rmImage
+                    }
+                }
+                set ImagePath "INVALID"
+            }
+        }
+    } else {
+        set ImagePath "$releaseManagerPath/$versionDir/$platformDir1/exos/$platformDir2/release/$ImageName"
+    }
+    return $ImagePath
+}
+# ----------------------------------------------------------------------------
+# Procedure: RelManGetImagePath
+#    This procedure is added to support QLoadImage.  All of the required info
+#    for the proc args is helf for each cfg file in the database. ie family.
+# ----------------------------------------------------------------------------
+proc RelManGetImagePath {args} {
+    parse_args RelManGetImagePath $args {
+        family "null"
+        buildtag "null"
+        image "xos"
+    }
+    global DUTs_info
+    global whichDutNow
+    global releaseManagerPath releaseManagerList
+    if {$family == "null" || $buildtag == "null"} {
+        puts "Both family and buildtag must be specified.  xos is the default image"
+        return "INVALID"
+    }
+    set HOST [exec hostname -s]
+    if {[regexp -nocase "aspen" $family]} {
+        set platformName bd8800
+        set platformDir1 aspen_msm
+    } elseif {[regexp -nocase "everest" $family]} {
+        set platformName bdX
+        set platformDir1 everest_mm
+    } elseif {[regexp -nocase "i386" $family]} {
+        set platformName vm
+        set platformDir1 i386
+    } elseif {[regexp -nocase "summitlite" $family]} {
+        set platformName summitlite
+        set platformDir1 summitlite
+    } elseif {[regexp -nocase "summit_sibyte" $family]} {
+        set platformName nwi
+        set platformDir1 summit_sibyte
+    } elseif {[regexp -nocase "summitx480" $family]} {
+        set platformName summitX480
+        set platformDir1 cougar
+    } elseif {[regexp -nocase "summitx" $family]} {
+        set platformName summitX
+        set platformDir1 cougar
+    } elseif {[regexp -nocase "onie_x86" $family]} {
+        set platformName onie
+        set platformDir1 onie_x86
+    } else {
+        set platformName INVALID
+        set platformDir1 INVALID
+    }
+    puts "Looking for family $family buildtag $buildtag found: $platformName $platformDir1"
+    global moduleArg ALLXMODS ALLXMODSSTR
+    if {$image=="xos"} {
+        set ImageName "$platformName-$buildtag.xos"
+    } elseif {[lsearch $ALLXMODS $image] >= 0} {
+        puts "XMOD $image - $platformName-$buildtag-${image}.xmod"
+        set ImageName "$platformName-$buildtag-${image}.xmod"
+    } else {
+        puts "$image is not a valid xmod name"
+        set ImageName "invalid"
+    }
+    puts "Release Manager Path : $releaseManagerPath"
+    if {[regexp -nocase "autoregeni" $HOST]} {
+        set ImagePath "$releaseManagerPath/$ImageName"
+    } else {
+        set ImagePath "$releaseManagerPath/$ImageName"
+        if {[file exists "$ImagePath"]} {
+            return $ImagePath
+        } elseif {[info exists releaseManagerList]} {
+            foreach relManPath $releaseManagerList {
+                set rmImage "$relManPath/$buildtag/$platformDir1/$platformDir1/release/$ImageName"
+                if {[file exists $rmImage]} {
+                    puts "Exists $rmImage"
+                    return $rmImage
+                }
+            }
+            set ImagePath "INVALID"
+        }
+    }
+    return $ImagePath
+}
+proc CopyImageToTftp {args} {
+    parse_args CopyImageToTftp $args {
+        platform ""
+        version ""
+        majMin ""
+        image "exos"
+        userImagePath ""
+    }
+
+    global TFTPMOUNT tftpServerList tftpServerLogin tftpServerPasswd
+    global DUTs_info tftpServerTftpboot
+
+    set imageFile [getImagePath -platform "$platform" -version "$version" -majMin "$majMin" -Image "$image"]
+
+    if { $userImagePath != "" } {
+        result_debug "Different image path given for download: '$userImagePath'"
+        set imageFile $userImagePath
+    }
+
+    result_debug "ImagePath :: $imageFile"
+    if ![file exists $imageFile] {return "invalid"}
+
+    # Start the copy or tftp if CP fails process
+    set tStartTime [clock seconds]
+    set tftpFile [file tail $imageFile]
+    set pid [pid]
+    set q 321
+    set tftpServerFile [format %d%d%s $pid $q $tftpFile]
+
+    set fd_out [open "/tmp/tmp_$pid$tStartTime" "w"];
+    puts $fd_out "put $imageFile $tftpServerFile"
+    puts $fd_out "quit"
+    close $fd_out
+    # If the tftp server is mounted to this regression server, just cp the file
+    if {$TFTPMOUNT != "NULL" && [file exists $TFTPMOUNT/default_do_not_erase]} {
+        if {[catch {exec cp -L $imageFile \
+                $TFTPMOUNT/$tftpServerFile} reason]} {
+            puts "Error to TFTP: Cannot copy $imageFile \n    to \
+                 $TFTPMOUNT/$tftpServerFile ...$reason";
+            foreach TFTPServerIP $tftpServerList {
+                puts "Putting $imageFile \n    onto tftp Server $TFTPServerIP \
+                       as $tftpServerFile"
+                if {[catch {exec /usr/bin/tftp $TFTPServerIP < /tmp/tmp_$pid$tStartTime} reason]} {
+                    puts "error: $reason"
+                    result_error "Download via QLoadImage FAILED"
+                    return 0
+                }
+                puts "SUCCESSFUL"
+            }
+        } else {
+            puts "Copy $imageFile to $tftpServerFile SUCCESSFUL"
+        }
+    } else {
+        foreach TFTPServerIP $tftpServerList {
+            puts "Putting $imageFile onto tftp \n \
+                      Server $TFTPServerIP as $tftpServerFile"
+            if {[catch {exec /usr/bin/tftp $TFTPServerIP < /tmp/tmp_$pid$tStartTime} reason]} {
+                puts "error: $reason"
+                result_error "Copy failed FAILED"
+                return 0
+            }
+            puts "SUCCESSFUL"
+        }
+    }
+    catch {file delete /tmp/tmp_$pid$tStartTime} what
+
+    return $tftpServerFile
+}
+
+
+proc downloadImageToTftp {args} {
+    parse_args downloadImageToTftp $args {
+        platform ""
+        version ""
+        majMin ""
+        Image "exos"
+        userImagePath ""
+    }
+    global tftpServerList tftpServerLogin tftpServerPasswd tftpServerTftpboot
+    global DUTs_info
+
+    if {$Image == "exos"} {
+        set ImagePath [getImagePath -platform "$platform" -version "$version" -majMin "$majMin"]
+    } else {
+        set ImagePath [getImagePath -platform "$platform" -version "$version" -majMin "$majMin" -Image "bootrom"]
+    }
+
+    if { $userImagePath != "" } {
+        result_debug "Different image path given for download: '$userImagePath'"
+        set ImagePath $userImagePath
+    }
+
+    result_debug "ImagePath :: $ImagePath"
+    if ![file exists $ImagePath] {return "invalid"}
+    set ImageName [file tail $ImagePath]
+
+    foreach tftpServer $tftpServerList {
+        if [tftpFileExists $tftpServer $ImageName] {
+            result_debug "Image $ImageName found on TFTP server"
+            return $ImageName
+        }
+        #put the EXOS Image to the TFTP server and download it
+        return $ImageName
+    }
+}
+##################################################################
+# Procedure Name: uniqueName
+# Description:
+#       return a unique filename with pid and timestamp added to the fileName
+# Input args:  fileName
+# Output args: return a unique filename
+# Typical usage:
+#       uniqueName
+# Category: SSH_SCP
+##################################################################
+proc uniqueName { fileName } {
+    set pid [pid]
+    set timeStamp [clock seconds]
+    set f [file tail $fileName]
+    return [format %d%d%s $pid $timeStamp $f]
+}
+
+proc tftpFileExists { tftpServer fileName } {
+    set dummyFile [uniqueName deleteMe]
+    set rc [ regexp -nocase {Received} [exec echo "get $fileName $dummyFile\nquit\n" | /usr/bin/tftp $tftpServer]]
+    file delete $dummyFile
+    return $rc
+}

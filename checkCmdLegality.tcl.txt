@@ -1,0 +1,483 @@
+
+################################################################## 
+# Procedure Name: CheckCmdIllegal
+#   
+# Description: Sets result ok if CLI command sent to the switch 
+#               returns an error
+#     
+#
+# Input args: cmd {fd_res NULL} {testNo "CheckCmdIllegal"}
+# Output args: none
+# Typical usage: 
+#      
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: VerifySwitchOutput
+##################################################################
+proc CheckCmdIllegal {cmd {fd_res NULL} {testNo "CheckCmdIllegal"} {reportResults 1}} {
+   global spawn_id
+   set fd_in [open "Tmp/tmp_$testNo[pid]" "w"]
+   #do not need to show error status, since we know this will cause error
+   SendACmd "$cmd" $fd_res $fd_in false
+   close $fd_in
+
+   set fd_in [open "Tmp/tmp_$testNo[pid]" "r"]
+   set rtValue [check_illegality $fd_in]
+   close $fd_in
+   file delete "Tmp/tmp_$testNo[pid]"
+
+   if {$reportResults==1} {
+      report_start_test "Command <$cmd> should fail"
+      if { $rtValue == "illegal" } {
+         result_ok "Command illegal as expected"
+      } else {
+         result_error "Command should be illegal but accepted"
+      }
+      report_end_test
+   }
+   return $rtValue
+}
+
+################################################################## 
+# Procedure Name: CheckCmdLegal
+#   
+# Description: Test passes if Command sent to switch does not return 
+#               an error
+#     
+#
+# Input args: cmd {fd_res NULL} {testNo "CheckCmdLegal"}
+# Output args: none
+# Typical usage: 
+#      
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: VerifySwitchOutput
+##################################################################
+proc CheckCmdLegal {cmd {fd_res NULL} {testNo "CheckCmdLegal"} {reportResults 1}} {
+   global spawn_id
+   set fd_in [open "Tmp/tmp_$testNo[pid]" "w"]
+   SendACmd "$cmd" $fd_res $fd_in
+   close $fd_in
+
+   set fd_in [open "Tmp/tmp_$testNo[pid]" "r"]
+   set rtValue [check_illegality $fd_in]
+   close $fd_in
+   file delete "Tmp/tmp_$testNo[pid]"
+
+   if {$reportResults==1} {
+      report_start_test "Command <$cmd> executed ok"
+      if { $rtValue == "illegal" } {
+         result_error "Error in executing command"
+      } else {
+         result_ok "Command executed successfully"
+      }
+      report_end_test
+   }
+   return $rtValue
+}
+
+
+################################################################## 
+# Procedure Name:  MakeCmdLegal
+#   
+# Description:  
+# Send the command again until the switch accept it. It will
+# try it three times and stop               
+#     
+#
+# Input args: cmd {fd_res NULL} {testNo "CheckCmdLegal"}
+# Output args: none
+# Typical usage: 
+#      
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: VerifySwitchOutput
+##################################################################
+proc MakeCmdLegal {cmd {fd_res NULL} {testNo "CheckCmdLegal"}} {
+   global spawn_id
+   
+   set rtValue "illegal"
+   for {set i 1} {$i <= 3} {incr i 1} {
+       set fd_in [open "Tmp/tmp_$testNo[pid]" "w"]
+       SendACmd "$cmd" $fd_res $fd_in
+       close $fd_in
+
+       set fd_in [open "Tmp/tmp_$testNo[pid]" "r"]
+       set rtValue [check_illegality $fd_in]
+       close $fd_in
+       file delete "Tmp/tmp_$testNo[pid]"
+
+       if { $rtValue == "illegal" } {
+           sleep 10
+       } else {
+           break  
+       }
+   }
+       
+   return $rtValue
+}
+
+################################################################## 
+# Procedure Name: check_illegality
+#   
+# Description: Used by CheckCmdLegal/Illegal as list of errors 
+#               
+#     
+#
+# Input args: fd_in
+# Output args: warning/legal/illegal
+# Typical usage: 
+#      
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: VerifySwitchOutput
+##################################################################
+proc check_illegality {fd_in} {
+   global validstring
+   set rtValue "legal"
+   while {[gets $fd_in line] != -1} {
+      set valid 0
+      if {[info exists validstring]==1} {
+      foreach {name value} [array get validstring] {
+	if [regexp -nocase "$value" $line] {set valid 1; puts "Matched - Break"; return "legal"}
+	}
+      }
+      # check if line includes word error
+      if {[regexp -nocase "error" $line] } {
+        set valid 0
+      }
+      if {$valid} {continue}
+      set aList [split $line]
+      set lineLength [llength $aList]
+      for {set i 0} {$i < $lineLength} {incr i 1} {
+	set aWord [lindex $aList $i]
+    	# EY-04-20-2010: Remove "default" case from switch statement.
+        switch -- [string tolower $aWord] {
+    	        "warning" 	{ set rtValue "warning"; break }
+    	        "warning:" 	{ set rtValue "warning"; break }
+	        "error"   	{ set rtValue "illegal" }
+	        "error:"   	{ set rtValue "illegal" }
+		"error!"   	{ set rtValue "illegal" }
+	        "error."  	{ set rtValue "illegal" }
+                "error:can't"   { set rtValue "illegal" }
+                "can't"         { set rtValue "illegal" }
+	        "must" 		{ set rtValue "illegal" }
+	        "wrong" 	{ set rtValue "illegal" }
+		"invalid" 	{ set rtValue "illegal" }
+		"illegal" 	{ set rtValue "illegal" }
+		"incomplete" 	{ set rtValue "illegal" }
+		"unreachable" 	{ set rtValue "illegal" }
+		"failed"  	{ set rtValue "illegal" }
+		"only"  	{ set rtValue "illegal" }
+		"failed:"  	{ set rtValue "illegal" }
+		"failed,"  	{ set rtValue "illegal" }
+		"cannot"  	{ set rtValue "illegal" }
+		"out"   	{ set rtValue "illegal" }
+		"already"   	{ set rtValue "illegal" }
+		"reached!!"   	{ set rtValue "illegal" }
+		"conflict" 	{ set rtValue "illegal" }
+		"syntax" 	{ set rtValue "illegal" }
+		"ambiguous" 	{ set rtValue "illegal" }
+		"aborting" 	{ set rtValue "illegal" }
+		"unable" 	{ set rtValue "illegal" }
+                "not"           { set rtValue "illegal" }
+     	}
+        if {[regexp -nocase "Note: Accounts created with this version of EXOS .*" $line]} {
+            set rtValue "legal";
+        }
+        if {[regexp -nocase "Note: Accounts created with EXOS 16.1 and greater .*" $line]} {
+            set rtValue "legal";
+        }
+        if {[regexp -nocase "odo.*" -- $line]} {
+            set rtValue "legal";
+        }
+        if { $rtValue == "illegal" } {
+            result_debug "Illegal Line is $line"
+		    return $rtValue
+	}
+      }
+   }
+   return $rtValue
+}
+
+################################################################## 
+# Procedure Name: check_vlan_ipAddr
+#   
+# Description: Verify that a vlan's ip address is correct 
+#               
+#     
+#
+# Input args: vlanN vlanIpAddr fd_res testNo
+# Output args: none
+# Typical usage: 
+#      
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: VerifySwitchOutput
+##################################################################
+proc check_vlan_ipAddr {vlanN vlanIpAddr fd_res testNo} {
+   global spawn_id
+   global VERSION
+   set found "false"
+
+   set fd_in [open "Tmp/tmp_$testNo[pid]" "w"]
+   SendACmd "sh $vlanN" $fd_res $fd_in
+   close $fd_in
+
+   set fd_in [open "Tmp/tmp_$testNo[pid]" "r"]
+   report_start_test "Check vlan $vlanN Ip address configuration"
+   while {[gets $fd_in line] != -1} {
+      set cookedLine [cookString $line]
+      set aList [split $cookedLine]
+#result_debug "----- cookedLine=$cookedLine"
+      if { [lindex $aList 0] == "IP:" } {
+         set found "true"
+	     set tmpIpAddr [lrange $aList 1 2]
+         set tmpIpAddr [string trimright $tmpIpAddr .]
+		 if { $tmpIpAddr == $vlanIpAddr } {
+            result_ok "$vlanN Ip address, $vlanIpAddr, is expected"
+         } else {
+            result_error "$vlanN Ip address is wrong"
+            result_error "Expect $vlanIpAddr, got $tmpIpAddr"
+         }
+	     break
+      }
+   }
+   if { ($VERSION == 6) && ($found == "false") }	{
+      result_ok "$vlanN Ip address, $vlanIpAddr, is expected"
+   }
+   report_end_test
+   close $fd_in
+   file delete "Tmp/tmp_$testNo[pid]"
+}
+
+################################################################## 
+# Procedure Name: check_ip_forward
+#   
+# Description:  Determine if IPForwarding is enabled or not
+#               
+#     
+#
+# Input args: dList fd_res testNo
+# Output args: none
+# Typical usage: 
+#      
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: VerifySwitchOutput
+##################################################################
+proc check_ip_forward {dList fd_res testNo} {
+   global spawn_id
+   global VERSION
+
+   switch $VERSION {
+      4 { set cmd "sh ipconfig" }
+      5 { set cmd "sh ipconfig" }
+      6 -
+      default { set cmd "sh ipconfig detail" }
+   }
+   set fd_in [open "Tmp/tmp_$testNo[pid]" "w+"]
+   SendACmd "$cmd" $fd_res $fd_in
+   flush $fd_in
+
+   foreach dPair [lsort $dList]	{
+      seek $fd_in 0
+      set goValue "go"
+      set vlan [lindex $dPair 0]
+      set stat [lindex $dPair 1]
+
+      while {[gets $fd_in line] != -1} {
+         set cookedLine [cookString $line]
+         set aList [split $cookedLine]
+
+         if { $vlan == "" } {
+            if { ([lindex $aList 0] == "IP") && ([lindex $aList 1] == "Routing") } {
+               set tmpStat [lindex $aList 3]
+               report_start_test "Check DUT Ip forwarding status"
+               if { $tmpStat == $stat } {
+                  result_ok "Ip forwarding is $stat as expected"
+               } else {
+                  result_error "Ip forwarding is $tmpStat, which is WRONG"
+               }
+               report_end_test
+               set goValue end
+	       break
+            }
+         } else {
+            if { [lindex $aList 4] == $vlan } {
+               while {[gets $fd_in line] != -1} {
+                  set cookedLine [cookString $line]
+                  ;#set aList [split $cookedLine]
+                  set ipfValue [swValueYesNo $stat]
+                  
+                  ;#Change to support sh ipc det o/p change since 700b38-SCFixes3-2
+                  ;#set build [GetVersion DUT1 3];
+                  ;#set image [GetVersion DUT1 2]
+                  ;#set ver [GetVersion DUT1 4];
+                  ;#if {($ver=="7.0.0"&&$build>=38)||($image>="7.0")} {
+                  ;#   set firStr [lindex $aList 2]
+                  ;#   set secStr [lindex $aList 3]
+                  ;#   set tmpStat [lindex $aList 4]
+                  ;#} else {
+                  ;#   set firStr [lindex $aList 0]
+                  ;#   set secStr [lindex $aList 1]
+                  ;#   set tmpStat [lindex $aList 2]
+                  ;#}
+                  ;#if { $firStr=="IP"&&$secStr=="Fwding" }
+                  if {[regexp -nocase "ip fwding *(yes|no)" $cookedLine notUsed tmpStat]} {
+                     report_start_test "Check vlan $vlan Ip forwarding status"
+                     if { $tmpStat == $ipfValue } {
+                        result_ok "$vlan Ip forwarding is $stat as expected"
+                     } else {
+                        result_error "$vlan Ip forwarding is $tmpStat, which is WRONG"
+                     }
+                     report_end_test
+                     set goValue end
+                     break
+                  }
+               } ;# while
+            } ;# if {line == vlan}
+	 } ;# if {vlan != ""}
+         if { $goValue == "end" } {
+            break
+         }
+      } ;# while
+      if { $goValue == "go" } {
+         report_start_test "Check vlan $vlan Ip forwarding status"
+         if { $stat == "Disabled" } {
+            result_ok "$vlan Ip forwarding is $stat as expected"
+         } else {
+            result_error "$vlan Ip forwarding is $tmpStat, which is WRONG"
+         }
+         report_end_test
+      }
+   } ;# foreach
+   close $fd_in
+   file delete "Tmp/tmp_$testNo[pid]"
+} ;# check_ip_forward
+   
+################################################################## 
+# Procedure Name: swValueYesNo
+#   
+# Description: Determine if a status passed in is equal to 
+#                enabled or disabled
+#     
+#
+# Input args: 
+# Output args: none
+# Typical usage: 
+#      
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: VerifySwitchOutput
+##################################################################
+proc swValueYesNo {stat} {
+   switch $stat {
+      Enabled  { set value YES }
+	  enabled  { set value YES }
+	  Disabled { set value NO }
+	  disabled { set value NO }
+   }
+   return $value
+}
+
+################################################################## 
+# Procedure Name: check_multinetting
+#   
+# Description: Verify if IPMultinetting is enabled or disabled 
+#               
+#     
+#
+# Input args: stat DUT fd_res testNo
+# Output args: none
+# Typical usage: 
+#      
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: VerifySwitchOutput
+##################################################################
+proc check_multinetting {stat DUT fd_res testNo} {
+   global spawn_id
+   global VERSION
+
+   set cmd "sh ipconfig"
+   set fd_in [open "Tmp/tmp_$testNo[pid]" "w"]
+   Login $DUT -fd $fd_res
+   SendACmd "$cmd" $fd_res $fd_in
+   close $fd_in
+
+   set fd_in [open "Tmp/tmp_$testNo[pid]" "r"]
+   while {[gets $fd_in line] != -1} {
+      set cookedLine [cookString $line]
+      set aList [split $cookedLine]
+
+      if { [string tolower [lindex $aList 0]] == "multinetting" } {
+         set tmpStat [string tolower [lindex $aList 2]]
+         report_start_test "Check DUT Ip multinetting status"
+         if { $tmpStat	== $stat } {
+            result_ok "Ip multinetting is $stat as expected"
+         } else {
+            result_error "Ip multinetting is $tmpStat, which is WRONG"
+         }
+         report_end_test
+	  }
+	}  
+   close $fd_in
+   file delete "Tmp/tmp_$testNo[pid]"
+}
+
+################################################################## 
+# Procedure Name: check_fdb_aging
+#   
+# Description: Verify if FDB aging is set to an expected valued 
+#               
+#     
+#
+# Input args: ageValue DUT fd_res testNo
+# Output args: none
+# Typical usage: 
+#      
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: VerifySwitchOutput
+##################################################################
+proc check_fdb_aging {ageValue DUT fd_res testNo} {
+   global spawn_id
+   global VERSION
+
+   set cmd "sh fdb"
+   set fd_in [open "Tmp/tmp_$testNo[pid]" "w"]
+   Login $DUT -fd $fd_res
+   SendACmd "$cmd" $fd_res $fd_in
+   close $fd_in
+
+   set fd_in [open "Tmp/tmp_$testNo[pid]" "r"]
+   while {[gets $fd_in line] != -1} {
+      set cookedLine [cookString $line]
+      set aList [split $cookedLine]
+
+      if { ([string tolower [lindex $aList 0]] == "fdb") &&
+           ([string tolower [lindex $aList 1]] == "aging") } {
+         set tmpStat [lindex $aList 3]
+         report_start_test "Check FDB aging time"
+         if { $tmpStat	== $ageValue } {
+            result_ok "FDB aging time is $tmpStat as expected"
+         } else {
+            result_error "FDB aging time is $tmpStat which is WRONG.  Expect $ageValue"
+         }
+         report_end_test
+	  }
+	}  
+   close $fd_in
+   file delete "Tmp/tmp_$testNo[pid]"
+}
+      

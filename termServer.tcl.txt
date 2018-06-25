@@ -1,0 +1,998 @@
+##################################################################
+#
+#
+# If you wish to add additional terminal servers check 
+#  
+#   Add a login expect case
+#   Add login support
+#
+#   Create a proc to handle: 
+#   - Verifying the tcp port to termserver port pulled from the cfg
+#   - verifying port is in use
+#   - Exit if not in use
+#   - Clear console if in use
+#
+##################################################################
+
+##################################################################
+# Procedure Name: ClearConsoleDUT
+#
+# Description:
+#   Clear the termserver console ports on a DUT
+#
+#
+#   Returns 1 on success and -1 on error
+#
+# Input args:
+#     DUT    - DUT number or DUT ip address tcpport
+#
+# Output args: none
+# Return value: 1 on success or -1 on failure
+#
+#
+# Typical usage:
+#
+#    ClearConsoleDUT $dut
+#
+#
+# Category: Setup
+##################################################################
+proc ClearConsoleDUT {DUT {wait "NO"} {showError "true"} } {
+
+    set time1 [clock seconds]
+    global numDUT spawn_id whichDutNow
+
+    result_debug "ClearConsoleDUT $DUT"
+    puts "@@\n@@\n@@\nClearConsole DUT $whichDutNow\n@@\n@@\n@@"
+    if {[llength [split $DUT "."]] > 2} {
+        set connList [split $DUT " "]
+        set term [lindex $connList 0]
+        set port [lindex $connList 1]
+    } else {
+        set firstSubStr "DUT"
+        set lastSubStr "_CONNECT"
+        global $firstSubStr$DUT$lastSubStr
+        global $firstSubStr$DUT${lastSubStr}B ;#global variable for msm-b
+        if [info exists $firstSubStr$DUT$lastSubStr] {
+            puts "DUT $DUT [set $firstSubStr$DUT$lastSubStr]"
+            set termList [split [set $firstSubStr$DUT$lastSubStr] " "]
+            set term [lindex $termList 0]
+            set port [lindex $termList 1]
+            puts "term = $term port = $port"
+        }
+    }
+    # Find the cfg file no matter where you are
+    set myDir [pwd]
+    puts "PATH $myDir"
+    set myDirList [split $myDir "/"]
+    set theDir ""
+    set dCount 0
+    while {$theDir != "automation" && $dCount < 7} {
+       set theDir [lindex $myDirList $dCount]
+       lappend newDirList $theDir
+       incr dCount
+    }
+    set newPath [join $newDirList "/"]
+   
+    result_debug "Source $newPath/main/cfg/termservers.cfg" 
+    if {[file exists $newPath/main/cfg/termservers.cfg]} {
+        source $newPath/main/cfg/termservers.cfg
+    } else {
+        return -1
+    }
+
+    set ip $term
+    set ports $port
+    set pass1 ""
+    set pass2 ""
+    set username ""
+    set usePass1 0
+
+    ;# Seperate out the passwords from the cfg/termservers.cfg file
+    #    If they exist
+    if {[info exists termArray($term)]} {
+        if {[llength $termArray($term)] == 3} {
+            set pass1       [lindex $termArray($term) 0]
+            set pass2       [lindex $termArray($term) 1]
+            set username    [lindex $termArray($term) 2]
+        } elseif {[llength $termArray($term)] == 2} {
+            set pass1      [lindex $termArray($term) 0]
+            set pass2       [lindex $termArray($term) 1]
+        } else {
+            result_error "Not enough elements in termArray($term)"
+        }
+    } else {
+        puts "No static termserver info defined, Try defaults"
+        set pass1 "DEFAULTS"
+    }
+
+    # Log in to the terminal server.  The termserver type is returned
+    #   after the login occurs.  Once login is completed, the termserver
+    #   should be sitting at an enabled prompt
+    result_debug "_login_termserver $ip $pass1 $pass2 $username"
+    set returnCode [_login_termserver $ip "$pass1" "$pass2" "$username"]
+    if {$returnCode=="error"} {
+        puts "Unable to connect to termserver at $ip..."
+        return -1
+    }
+    # Based on the termserver type returned above, call the appropriate
+    #   Termserver clear procedure
+    switch -- $returnCode \
+      "cisco" {
+        _clear_cisco_terms $ports
+        if {$wait == "YES"} {
+            exSleep 5  ;# For PC platform in worst scenario with fsck
+        }
+    } "lantronix" {
+        _clear_lantronix_terms $ports
+        if {$wait == "YES"} {
+            exSleep 5  ;# For PC platform in worst scenario with fsck
+        }
+    } "mrv" {
+        _clear_MRV_terms $ports
+        if {$wait == "YES"} {
+            exSleep 5  ;# For PC platform in worst scenario with fsck
+        }
+    } "xyplex" {
+        _clear_xyplex_terms $ports
+        if {$wait == "YES"} {
+            exSleep 5  ;# For PC platform in worst scenario with fsck
+        }
+    } "ser2net" {
+        _clear_ser2net_terms $ports
+        if {$wait == "YES"} {
+            exSleep 5  ;# For PC platform in worst scenario with fsck
+        }
+    } "default" {
+        result_debug "No termserver identified"
+    }
+    ## Add code to verify that the console is in fact cleared.
+
+    set time2 [clock seconds]
+    result_debug "*** Time for clear terms on $DUT = [expr $time2-$time1] secs\n\n"
+    return 1
+}
+################################################################## 
+# Procedure Name: _login_termserver
+#   
+# Description: 
+#   Internal proc that is used to login to termservers
+#   returns error or ok
+# Input args:
+#     ipAddr - Ip address of the power cycle device used to login
+#     pass1  - first level password
+#     pass2  - second level password (enable password usually)
+#                
+# Output args: none
+# Return value: cisco|xyplex|inreach or error on failure
+#              
+#
+# Typical usage: 
+#
+#    set returnCode [_login_termserver $ipAddr lab lab]
+#
+#
+# Category: Setup
+##################################################################
+proc _login_termserver {ipAddr pass1  pass2 username {numRetry 5}  {backOffTime 10}} {
+    global timeout
+    global numDUT
+    global spawn_id
+
+    # initialize the variable as successful, set to 0 on bad attempts
+    set connectStatus 1
+
+    # Save the expect timeout in case the global is different
+    set init_timeout $timeout
+
+    ;# We try several times to spawn telnet because only 1 telnet session is allowed
+    ;# per termserver.  In the event there is already one connected, we backOff then
+    ;# retry.  
+    set numRetry 3 
+    for {set i 0}  {$i < $numRetry} {incr i} {
+        # open the telnet session to the device
+        if [catch "spawn telnet $ipAddr" reason] {
+            result_debug "failed to spawn program: $reason\n"
+            error "failed to spawn program: $reason\n"
+            return "error"
+        }
+        set timeout 5
+        result_debug "Login telnet $ipAddr,  pid=$spawn_id"
+        # After the session is spawned check for bad as well
+        #   as successful scenerios
+        send "\r"	
+        expect {
+            "?nable to ?onnect" {
+                expect *
+                result_warning "Unable to connect"		
+                return error
+            }
+            "closed by foreign host" {
+                result_warning "Connection closed by foreign host"
+                return error
+            }
+            "Connection refused" {
+                result_warning "Connection refused"
+                return error
+            }
+            "assword: " {
+                # This prompt is a cisco prompt with a first level pass required
+                if {$pass1 == "DEFAULTS"} {
+                    send "lab\r"
+                    expect ">"
+                    send "enable\r"
+                    expect "assword: "
+                    send "extreme\r"
+                    expect {
+                        "#" {
+                            set timeout $init_timeout
+                            return cisco
+                        }
+                        "assword: " {
+                            send "lab\r"
+                            expect {
+                                "#" {
+                                    set timeout $init_timeout
+                                    return cisco
+                                }
+                                timeout {
+                                    set timeout $init_timeout
+                                    result_debug "CISCO Default login did not work: update cfg/termservers.cfg"
+                                    return error
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    send "$pass1\r"
+                    expect ">"
+                    send "enable\r"
+                    expect "assword: "
+                    send "$pass2\r"
+                    expect "#"
+                    # reset the expect timeout before exiting
+                    set timeout $init_timeout
+                    # return from the proc setting the value to cisco
+                    return "cisco"
+                }
+            }
+            "assword : " {
+                # This prompt is a lantronix prompt with a first level pass required
+                #   skip defaults for lantronix
+                puts "This matched a Lantronix"
+                if {$pass1 == "DEFAULTS"} {
+                    send "extreme\r"
+                    expect "> "
+                    send "enable\r"
+                    expect "assword : "
+                    send "extreme\r"
+                    expect {
+                        "#" {
+                            set timeout $init_timeout
+                            return lantronix
+                        }
+                        "assword : " {
+                            send "\r"
+                            expect {
+                                "#" {
+                                    set timeout $init_timeout
+                                    return lantronix
+                            }
+                            timeout {
+                                    set timeout $init_timeout
+                                    result_debug "LANTRONIX Default login did not work: \
+                                                     update cfg/termservers.cfg"
+                                    return error
+                                }
+                            }
+                        }
+                    }
+                } else {
+puts "not defaults"
+                    send "$pass1\r"
+                    expect "> "
+                    send "enable\r"
+                    expect "assword : "
+                    send "$pass2\r"
+                    expect "# "
+                    # reset the expect timeout before exiting
+                    set timeout $init_timeout
+                    # return from the proc setting the value to cisco
+                    return "lantronix"
+                }
+            }
+            ">" {
+                # This prompt is a cisco prompt with a first level pass required
+                if {$pass1 == "DEFAULTS"} {
+                    send "enable\r"
+                    expect {
+                        "assword: " {
+                            send "extreme\r"
+                            expect {
+                                "#" {
+                                    set timeout $init_timeout
+                                    return cisco
+                                }
+                                "assword: " {
+                                    send "lab\r"
+                                    expect {
+                                        "#" {
+                                            set timeout $init_timeout
+                                            return cisco
+                                        }
+                                        timeout {
+                                            result_debug "MRV Default login did not work: update cfg/termservers.cfg"
+                                            return error
+                                        }
+                                    }
+                                }
+                                -re ".*denied*" {
+                                    send "enable\r"
+                                    expect {
+                                        "assword: " {
+                                            send "lab\r"
+                                            expect {
+                                                "#" {
+                                                    set timeout $init_timeout
+                                                    return cisco
+                                                }
+                                                timeout {
+                                                    set timeout $init_timeout
+                                                    result_debug "MRV Default login did not work: update cfg/termservers.cfg"
+                                                    return error
+                                                }
+                                            }
+                                         }
+                                         timeout {
+                                             result_debug "MRV Default login did not work: update cfg/termservers.cfg"
+                                             return error
+                                         }
+                                    }
+                                }
+                            }
+                        }
+                        "In-Reach> " {
+                            # new inreach/xyplex
+                            send "set priv\r";
+                            expect "assword> ";
+                            send "system\r"
+                            set timeout $init_timeout
+                            return xyplex
+                        }
+                        "(enable)#" {
+                            set timeout $init_timeout
+                            return lantronix
+                        }
+                    }
+                } else {
+                    send "$pass1\r"
+                    expect ">"
+                    send "enable\r"
+                    expect "assword: "
+                    send "$pass2\r"
+                    expect "#"
+                    # reset the expect timeout before exiting
+                    set timeout $init_timeout
+                    # return from the proc setting the value to cisco
+                    return "cisco"
+                }
+            }
+            "ogin: " {
+                if {$pass1 == "DEFAULTS"} {
+                    send "InReach\r"
+                    expect -re "Password*"
+                    send "access\r"
+                    expect -re ">"
+                    send "enable\n"
+                    expect "assword:"
+                    send "extreme\n"
+                    expect {
+                        ">>" {
+                            set timeout $init_timeout
+                            return "mrv"
+                        }
+                        -re "assword:" {
+                            send "system\r"
+                            expect {
+                                ">>" {
+                                    set timeout $init_timeout
+                                    return "mrv"
+                                }
+                                timeout {
+                                    result_debug "MRV Default login did not work: update cfg/termservers.cfg"
+                                    return error
+                                }
+                            }
+                        }
+                        -re "failed" {
+                            send "system\r"
+                            expect {
+                                ">>" {
+                                    set timeout $init_timeout
+                                    return "mrv"
+                                }
+                                timeout {
+                                    result_debug "MRV Default login did not work: update cfg/termservers.cfg"
+                                    return error
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    send "$username\r"
+                    expect -re "Password*"
+                    send "$pass1\r"
+                    expect -re ">"
+                    send "enable\n"
+                    expect "assword:"
+                    send "$pass2\n"
+                    expect ">>"
+                    return "mrv"
+                }
+            }
+            timeout {
+                result_debug "Hit timeout after $timeout sec"
+                return error
+                #send "\r"
+            }
+        }
+        # In the case that there 
+        if {$connectStatus == 0} {
+            result_warning "($i) Failed to spawn telnet to powerCycler: $reason...\
+                retrying after $backOffTime secs\n"
+            # Time to wait before another attempt to connect to the termserver
+            exSleep $backOffTime
+        }
+    }
+
+    puts "After $numRetry attempts, we failed to connect to \
+        Terminal Server at $ip: $reason\n"
+    return "error"
+}
+
+################################################################## 
+# Procedure Name: _clear_cisco_terms
+#   
+# Description: 
+#
+# Input args:
+#     units   - ports to be cleared on the cisco term server
+#                
+# Output args: none
+# Return value: none
+#              
+#
+# Typical usage: 
+#
+#    _clear_cisco_terms $destinationPort
+#
+#
+# Category: Setup
+##################################################################
+proc _clear_cisco_terms { units } {
+    set result 0
+    set done 0
+    global expect_out spawn_id timeout
+
+    set units [string trim $units]
+    result_debug "Found TCP Port $units to clear on cisco"
+    set init_timeout $timeout
+    # Get the local port from the TCP port
+    if {[regexp -nocase "2(1\[0-9]\[0-9])" $units m m1]} {
+        #set units [string trimleft $units 2]
+        set units $m1
+        result_debug "match 21xx $units"
+    } elseif {[regexp -nocase "200(\[0-9])" $units m m1]} {
+        #set units [string trimleft $units 200]
+        set units $m1
+        result_debug "match 200x $units"
+    } elseif {[regexp -nocase "20(\[0-9]\[0-9])" $units m m1]} {
+        #set units [string trimleft $units 20]
+        set units $m1
+        result_debug "match 20xx $units"
+    }
+    result_debug "Found port $units to clear on cisco"
+    # Get the local port from the TCP port
+
+    # Initialize the used variable assuming the the port is hung or in use
+    set used 1
+    set unitString $units
+
+    # Check to see if the connection is in use
+    set fC 1
+    set loopCount 1
+    set hitMore 0
+    while {$loopCount < 3} {
+        puts "Checking Cisco"
+        send "show line $unitString\r"; #Status: Ready, Connected, Active
+        expect {
+            " --More-- " {
+                result_debug "HIT MORE"
+                set hitMore 1
+                if {[regexp -nocase "Connected, Active" $expect_out(buffer)] || \
+                    [regexp -nocase "1.*in use" $expect_out(buffer)] } {
+                    result_debug "Hit # and found the used case"
+                    set used 1
+                } else {
+                    result_debug "Hit # and DID NOT find the used case"
+                    if {!$hitMore} {
+                        set used 0
+                    }
+                }
+                exp_send " \r"
+                exp_continue;
+            }
+            -re "More" {
+                result_debug "HIT MORE 2"
+                set hitMore 1
+                if {[regexp -nocase "Connected, Active" $expect_out(buffer)] || \
+                    [regexp -nocase "1.*in use" $expect_out(buffer)] } {
+                    result_debug "Hit # and found the used case"
+                    set used 1
+                } else {
+                    result_debug "Hit # and DID NOT find the used case"
+                    if {!$hitMore} {
+                        set used 0
+                    }
+                }
+                exp_send " \r"
+                exp_continue
+            }
+            "#" {
+                if {[regexp -nocase "Connected, Active" $expect_out(buffer)] || \
+                    [regexp -nocase "1.*in use" $expect_out(buffer)] } {
+                    result_debug "Hit # and found the used case"
+                    set used 1
+                } else {
+                    result_debug "Hit # and DID NOT find the used case"
+                    if {!$hitMore} {
+                        set used 0
+                    }
+                }
+             }
+             timeout {
+                 result_debug "Timed out on  output for show line $unitString"
+                 if {$fC <= 3} {
+                    result_debug "Send Again"
+                    send "show line $unitString\r"
+                    incr fC
+                    exp_continue
+                 }
+                 exp_close
+                 wait
+                 exSleep 2
+                 set result 1
+                 set done 1
+                 set timeout $init_timeout
+                 return "error"
+            }
+        }
+        if {!$used} {
+            result_debug "The port is not in used - NO NEED TO CLEAR Console - Close Cisco session!"
+            exp_close
+            wait
+            exSleep 2
+            set result 1
+            set done 1
+            set timeout $init_timeout
+            return;
+        }
+        exp_send "\r"
+        puts "\nClearing Consoles on Cisco #$units  Expect timeout = $timeout\n"
+        exSleep 1
+        expect {
+            "#" {
+                result_debug "+++ [timestamp -format %T] Clearing line $unitString on Cisco"
+                exp_send "clear line $unitString\r"
+            }
+            "# "  {
+                result_debug "+++ [timestamp -format %T] +++"
+                exSleep 1
+                exp_send "clear line $unitString\r"
+            }
+            timeout {
+                puts "ERROR: All of your expect conditions are wrong dummy"
+            }
+        }
+        expect {
+            -re ".*?" {
+                result_debug "Matched on question mark"
+                exSleep 1
+                send "y\r"
+                expect "#"
+            }
+            "confirm" {
+                result_debug "Matched on question mark"
+                send "y\r"
+                expect "#"
+            }
+            timeout {
+                result_debug "!!!!!!! ERROR: Did not get the expected confirmation"
+            }
+        }
+        incr loopCount
+    }
+    exp_close
+    wait
+    exSleep 2
+    set result 1
+    set done 1
+    set timeout $init_timeout
+}  
+##################################################################
+# Procedure Name: _clear_lantronix_terms
+#
+# Description:
+#
+# Input args:
+#     units   - port numbers on lantronix to be cleared
+#
+# Output args: none
+# Return value: none
+#
+#
+# Typical usage:
+#
+#    _clear_cisco_terms $destinationPort
+#
+#
+# Category: Setup
+##################################################################
+proc _clear_lantronix_terms { units } {
+    set result 0
+    set done 0
+    global expect_out spawn_id timeout
+
+    set units [string trim $units]
+    result_debug "LANTRONIX Found TCP Port $units to clear"
+    set init_timeout $timeout
+    # Get the local port from the TCP port
+    if {[regexp -nocase "1000(\[0-9])" $units m m1]} {
+        set units $m1
+        result_debug "match 1000x $units"
+    } elseif {[regexp -nocase "100(\[0-9]\[0-9])" $units m m1]} {
+        set units $m1
+        result_debug "match 100xx $units"
+    } elseif {[regexp -nocase "2(1\[0-9]\[0-9])" $units m m1]} {
+        set units $m1
+        result_debug "match 21xx $units"
+    } elseif {[regexp -nocase "200(\[0-9])" $units m m1]} {
+        set units $m1
+        result_debug "match 200x $units"
+    } elseif {[regexp -nocase "20(\[0-9]\[0-9])" $units m m1]} {
+        set units $m1
+        result_debug "match 20xx $units"
+    }
+    result_debug "Found port $units to clear on Lantronix"
+    # Get the local port from the TCP port
+
+    # Initialize the used variable assuming the the port is hung or in use
+    set used 1
+    set unitString $units
+
+    # Check to see if the connection is in use
+    set fC 1
+    set loopCount 1
+        send "tunnel $unitString\r"; #Status: Ready, Connected, Active
+        expect "#"
+        send "accept\r"
+        expect "#"
+        after 1000
+        send "show status\r"
+        expect "#"
+        send "show status\r"
+        expect {
+            "#" {
+                if {[regexp -nocase "State.*Active" $expect_out(buffer)]} {
+                    result_debug "Hit # and found the used case"
+                    set used 1
+                } else {
+                    result_debug "NOT IN USE"
+                    set used 0
+                }
+             }
+             timeout {
+                 result_debug "Timed out on  output for show line $unitString"
+                 exp_close
+                 wait
+                 exSleep 2
+                 set result 1
+                 set done 1
+                 set timeout $init_timeout
+                 return "error"
+            }
+        }
+        if {!$used} {
+            result_debug "NO NEED TO CLEAR Console - Close Lantronix session!"
+            exp_close
+            wait
+            exSleep 2
+            set result 1
+            set done 1
+            set timeout $init_timeout
+            return;
+        }
+        exp_send "\r"
+        puts "\nClearing Consoles on Lantronix #$units  Expect timeout = $timeout\n"
+        expect {
+            "#" {
+                result_debug "+++ [timestamp -format %T] Clearing line $unitString on Cisco"
+                exp_send "kill connection\r"
+                expect "#"
+                exp_close
+                wait
+                exSleep 2
+                set result 1
+                set done 1
+                set timeout $init_timeout
+                return;
+            }
+            "# "  {
+                result_debug "+++ [timestamp -format %T] +++"
+                exSleep 1
+                exp_send "kill connection\r"
+                expect "#"
+                exp_close
+                wait
+                exSleep 2
+                set result 1
+                set done 1
+                set timeout $init_timeout
+                return;
+            }
+            timeout {
+                puts "ERROR: All of your expect conditions are wrong dummy"
+            }
+        }
+    exp_close
+    wait
+    exSleep 2
+    set result 1
+    set done 1
+    set timeout $init_timeout
+} 
+################################################################## 
+# Procedure Name: _clear_MRV_terms
+#   
+# Description: 
+#
+# Input args:
+#     units   - port numbers on wti to be power cycled
+#                
+# Output args: none
+# Return value: none
+#              
+#
+# Typical usage: 
+#
+#    _clear_MRV_terms $destinationPort
+#
+#
+# Category: Setup
+##################################################################
+proc _clear_MRV_terms { units } {
+    set result 0
+    set done 0
+    global expect_out spawn_id timeout
+
+    set timeout 10
+    set init_timeout $timeout
+    # Get the local port from the TCP port
+    send "\r"
+    expect ">>"
+    set my_buffer ""
+    send "show port async summary\r"
+    expect {
+        ">>" {
+            append my_buffer $expect_out(buffer)
+            if {[regexp -nocase "(\[0-9]+) *Port_\[0-9]+ *Remote *9600 *$units *\[0-9]+" $my_buffer dummy1 dummy2]} {
+                result_debug "Found the real port number: $dummy2"
+                set units [string trim $dummy2]
+            } elseif {[regexp -nocase "(\[0-9]+) *Port_\[0-9]+ *Remote *115200 *$units *\[0-9]+" $my_buffer dummy1 dummy2]} {
+                result_debug "Found the real port number: $dummy2"
+                set units [string trim $dummy2]
+            } else {
+                result_debug "Can't find real port number"
+                exp_close
+                wait
+                exSleep 2
+                return error
+            }
+        }
+        "quit" {
+            append my_buffer $expect_out(buffer)
+            exp_send "\r"
+            exp_continue;
+        }
+        timeout {
+             result_debug "Can't find real port number"
+             return "Error"
+        }
+    }
+    puts "PORT Value"
+    # Initialize the used variable assuming the the port is hung or in use
+    set used 1
+    set unitString $units
+
+    # Check to see if the connection is in use
+    set loopCount 1
+    while {$loopCount < 4} {
+        send "show port async $unitString status\r"; #63: u
+        expect {
+            ">>" {
+                if {[regexp -nocase "Port.*In Use" $expect_out(buffer)]} {
+                    result_debug "Hit >> and Port $unitString is currently In Use"
+                    set used 1
+                } else {
+                    result_debug "Hit >> and DID NOT find the used case"
+                    set used 0
+                }
+            }
+            timeout {
+                result_debug "Timed out  on show line $unitString"
+                return "Error"
+            }
+        }
+        if {!$used} {
+            result_debug "The port is not in used - NO NEED TO CLEAR!"
+            exp_close
+            wait
+            exSleep 2
+            set result 1
+            set done 1
+            set timeout $init_timeout
+            return;
+        }
+        exp_send "\r"
+        puts "\nClearing Consoles on MRV #$units  Expect timeout = $timeout\n"
+        exSleep 1
+        expect {
+            ">> " {
+                result_debug "+++ [timestamp -format %T] Clearing line $unitString on MRV >>space"
+                exp_send "logout port $unitString\r"
+            }
+            ">>"  {
+                result_debug "+++ [timestamp -format %T] Clearing line $unitString on MRV"
+                exSleep 1
+                exp_send "logout port $unitString\r"
+            }
+            timeout {
+                puts "ERROR: All of your expect conditions are wrong dummy"
+            }
+        }
+        expect {
+            ">>" {
+                result_debug "Port $unitString Cleared"
+                send "\r"
+                expect ">>"
+            }
+            timeout {
+                result_debug "!!!!!!! ERROR: Did not get the expected confirmation"
+            }
+        }
+        incr loopCount
+    }
+    exp_close
+    wait
+    exSleep 2
+    set result 1
+    set done 1
+    set timeout $init_timeout
+}
+################################################################## 
+# Procedure Name: _clear_xyplex_terms
+#   
+# Description: 
+#
+# Input args:
+#     units   - port numbers on wti to be power cycled
+#                
+# Output args: none
+# Return value: none
+#              
+#
+# Typical usage: 
+#
+#    _clear_xyplex_terms $destinationPort
+#
+#
+# Category: Setup
+##################################################################
+proc _clear_xyplex_terms { units } {
+    set result 0
+    set done 0
+    global expect_out spawn_id timeout
+
+    set timeout 5
+    set init_timeout $timeout
+    # Get the local port from the TCP port
+    set units [string trim $units]
+    result_debug "Xyplex Found TCP Port $units to clear"
+    set init_timeout $timeout
+    # Get the local port from the TCP port
+    if {[regexp -nocase "1000(\[0-9])" $units m m1]} {
+        set units $m1
+        result_debug "match 1000x $units"
+    } elseif {[regexp -nocase "100(\[0-9]\[0-9])" $units m m1]} {
+        set units $m1
+        result_debug "match 100xx $units"
+    } elseif {[regexp -nocase "2(1\[0-9]\[0-9])" $units m m1]} {
+        set units $m1
+        result_debug "match 21xx $units"
+    } elseif {[regexp -nocase "200(\[0-9])" $units m m1]} {
+        set units $m1
+        result_debug "match 200x $units"
+    } elseif {[regexp -nocase "20(\[0-9]\[0-9])" $units m m1]} {
+        set units $m1
+        result_debug "match 20xx $units"
+    }
+
+    send "\r"
+    expect "Priv> "
+    # Check to see if the connection is in use
+    set loopCount 1
+    while {$loopCount < 2} {
+        send "show port $units status\r"; #63: u
+        expect {
+            "Priv> " {
+                if {[regexp -nocase "Connected" $expect_out(buffer)]} {
+                    result_debug "Hit Connected and Port $units is currently In Use"
+                    set used 1
+                } else {
+                    result_debug "Hit >> and DID NOT find the used case"
+                    set used 0
+                }
+            }
+            timeout {
+                result_debug "Timed out  on show line $unit"
+                return "Error"
+            }
+        }
+        set used 1
+        if {!$used} {
+            result_debug "The port is not in used - NO NEED TO CLEAR!"
+            exp_close
+            wait
+            exSleep 2
+            set result 1
+            set done 1
+            set timeout $init_timeout
+            return;
+        }
+        exp_send "\r"
+        puts "\nClearing Consoles on Xyplex #$units  Expect timeout = $timeout\n"
+        exSleep 1
+        expect {
+            "Priv> " {
+                result_debug "+++ [timestamp -format %T] Clearing line $units on Xyplex >>space"
+                exp_send "disconnect port $units session all\r"
+            }
+            "Priv>"  {
+                result_debug "+++ [timestamp -format %T] Clearing line $units on Xyplex2"
+                exSleep 1
+                exp_send "disconnect port $units session all\r"
+            }
+            timeout {
+                puts "ERROR: All of your expect conditions are wrong dummy"
+            }
+        }
+        expect {
+            "Priv> " {
+                result_debug "Port $units Cleared"
+                send "\r"
+                expect "priv>"
+            }
+            timeout {
+                result_debug "!!!!!!! ERROR: Did not get the expected confirmation"
+            }
+        }
+        incr loopCount
+    }
+    exp_close
+    wait
+    exSleep 2
+    set result 1
+    set done 1
+    set timeout $init_timeout
+}
+

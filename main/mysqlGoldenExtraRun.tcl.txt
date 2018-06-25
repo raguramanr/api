@@ -1,0 +1,367 @@
+#!/usr/bin/tclsh
+
+
+package require http 1.0;
+package require Tclx
+source ../Lib/mainLib.tcl
+
+set LIB_PATH "../Lib"
+lappend auto_path $LIB_PATH
+
+source ../Lib/parse_args.tcl
+source ../Lib/mainLib.tcl
+load [lindex [glob "/usr/lib/libexpect*so*"] 0]
+set LIB_PATH "../Lib"
+lappend auto_path $LIB_PATH
+gen_index ../Lib
+gen_index .
+
+source ../Lib/mysqlLib.tcl
+source ../Lib/mainLib.tcl
+source ../main/cfg/common.cfg
+
+
+# Default config file
+set cfgFile ../main/runReg.cfg
+
+# Source config file that has Regression PC information
+if [file exists $cfgFile] {
+    puts "Sourcing $cfgFile now"
+    catch {source $cfgFile} reason
+} else {
+    puts "!!! Configuration file $cfgFile not found !!!"
+    return 0
+}
+
+global mysqlIP my_db
+set host $mysqlIP
+set db $my_db
+
+# ------------------------------------------------------------------------------
+# Dump out usage information
+# ------------------------------------------------------------------------------
+proc print_usage {} {
+  puts {Usage: mysqlGoldenExtraRun.tcl -regId <regression_id> -mode <mode> -module <module> -cfg <config file> [-lst <test list>|-tcList] [-regPath <regression Path>] [-cliFlag <cliFlag>] [-build <xos build1>] [-subversion <subversion>] [-obuild <xos build2>] [-moduleArg <module specific arg>] [-debugLevel <error debug level>] [-efence <process list>] [-saveConfigPerTest <yes/no>] [-stopRegOn <condition to abort>] [-heapTracingProcess <process list>]}
+
+}
+
+
+
+    global regId
+    global regType
+    global regSubType
+    global mode
+    global module
+    global cfg
+    global lst
+    global tcList
+    global regPath
+    global cliFlag
+    global build
+    global subversion
+    global obuild
+    global moduleArg
+    global debugLevel
+    global efence
+    global saveConfigPerTest
+    global stopRegOn
+    global heapTracingProcess
+
+    parse_args mysqlGoldenExtraRun $argv {
+        regId ""
+        mode ""
+        module ""
+        cfg ""
+        lst ""
+        tcList ""
+        regPath ""
+        cliFlag ""
+        build ""
+        subversion ""
+        obuild ""
+        moduleArg ""
+        debugLevel ""
+        efence "no"
+        saveConfigPerTest ""
+        stopRegOn ""
+        heapTracingProcess ""
+    }
+
+set regression_id $regId
+
+global randomIndex
+#this is needed to create result directory by main.tcl known to mysqlRunall_monitor
+set range 1000000
+set randomIndex [expr {int(rand()*$range)}]
+
+set mainStr " -mode $mode \
+        -module $module \
+        -cfg $cfg -subversion $subversion \
+         -tcList $tcList \
+        -randomIndex $randomIndex \
+        -efence $efence \
+        -saveConfigPerTest $saveConfigPerTest"
+
+puts "main cmd $mainStr"
+catch { exec {tclsh} main.tcl -mode $mode \
+        -module $module \
+        -cfg $cfg -subversion $subversion \
+         -tcList $tcList \
+        -randomIndex $randomIndex \
+        -efence $efence \
+        -saveConfigPerTest $saveConfigPerTest | \
+        tee   >@stdout } result
+
+puts "DANY result $result"
+
+conn_to_db $host $db
+
+# ----------------------------------------------------------------
+# Post results to autoweb
+# ----------------------------------------------------------------
+puts "CALLING mysqlAutomate WITH:"
+puts "regId $regression_id host $host \
+                                 module $module"
+
+if {[catch { exec {tclsh} mysqlAutomate.tcl -regId $regression_id \
+                             -module $module  } \
+                             result]} {
+puts "mysqlAutomate.tcl returned an error"
+}
+
+puts "RESULTS OF mysqlAutomate: $result"
+# ----------------------------------------------------------------
+# --------------- testing mysqlAutomate.tcl end ------------------
+puts "sleeping for 20 secs to give failAnalysis.php time"
+sleep 20
+
+# re-connect db if needed
+conn_to_db $host $db
+
+
+
+# stats correction.
+
+# get regression data
+set res_list [mysqlsel $mysql_handler "SELECT feature_type, feature_sub_type FROM regression_table WHERE regression_id = \"$regression_id\"" -flatlist]
+set feature_type [lindex $res_list 0]
+set feature_sub_type [lindex $res_list 1]
+puts "got feature_type: $feature_type"
+puts "got feature_sub_type: $feature_sub_type"
+
+# get feature_id
+set sel_clause "SELECT feature_id FROM feature_table WHERE  feature_directory = '$module' AND \
+        feature_type='$feature_type' AND feature_sub_type='$feature_sub_type'"
+puts "sel_clause $sel_clause"
+
+set feature_id_list [mysqlsel $mysql_handler $sel_clause -flatlist]
+set feature_id [lindex $res_list 0]
+
+set feature_id [lindex $feature_id_list end]
+puts "got feature_id: $feature_id"
+
+# get this report_id
+set sel_clause "SELECT report_id FROM report_table WHERE  regression_id = '$regression_id' AND \
+        feature_id ='$feature_id'"
+puts "sel_clause $sel_clause"
+set rslt_list [mysqlsel $mysql_handler $sel_clause -flatlist]
+set report_id_this [lindex $rslt_list end]
+puts "got report_id_this: $report_id_this"
+
+
+# first get report_id of run number 1 
+set sel_clause "SELECT report_id FROM report_table WHERE \
+            regression_id= '$regression_id' AND \
+            run_number= '1' AND \
+            feature_id= '$feature_id'"
+puts "sel_clause $sel_clause"
+
+set report_id_list [mysqlsel $mysql_handler $sel_clause -flatlist]
+set report_id_1 [lindex $report_id_list 0]
+puts "got report_id_1: $report_id_1"
+
+# do we have entry in aux2_report_table, if yes get valid report_id
+set sel_clause "SELECT valid_report_id, valid_aux_report_id FROM aux2_report_table WHERE \
+            regression_id= '$regression_id' AND \
+            feature_id= '$feature_id'"
+puts "sel_clause $sel_clause"
+set rpvld_list [mysqlsel $mysql_handler $sel_clause -flatlist]
+if {[llength $rpvld_list] > 1} {
+  set valid_report_id [lindex $rpvld_list 0]
+  set valid_aux_report_id [lindex $rpvld_list 1]
+  puts "entry in aux2_report_table exists  - got valid_report_id: $valid_report_id"
+  puts "entry in aux2_report_table exists  - got valid_aux_report_id: $valid_aux_report_id"
+} else {
+  set valid_report_id $report_id_1
+  # get valid_aux_report_id
+  set sel_clause "SELECT aux_report_id FROM aux_report_table WHERE \
+            report_id = '$report_id_1'"
+  puts "sel_clause $sel_clause"
+  set rslt_list [mysqlsel $mysql_handler $sel_clause -flatlist]
+  set valid_aux_report_id [lindex $rslt_list 0]
+  puts "entry in aux2_report_table DOESN'T exist  - got valid_report_id: $valid_report_id"
+  puts "entry in aux2_report_table DOESN'T exist  - got valid_aux_report_id: $valid_aux_report_id"
+}
+
+# loop through the test cases
+set number_passed_subtestcases_delta 0
+set number_failed_subtestcases_delta 0
+set number_skipped_subtestcases_delta 0
+
+set number_passed_testcases_delta 0
+set number_failed_testcases_delta 0
+set number_skipped_testcases_delta 0
+
+foreach test_case_nmbr $tcList {
+  # get log_id_this
+  set sel_clause "SELECT \
+                log_id, status \
+                FROM log_table WHERE \
+                report_id = \"$report_id_this\" AND \
+                feature_test_script_name = \"$test_case_nmbr\""
+  puts "sel_clause $sel_clause"
+  set res_list [mysqlsel $mysql_handler $sel_clause -flatlist]
+  set log_id_this [lindex $res_list 0]
+  set status_this [lindex $res_list 1]
+  # get subtestcase stats
+  set sel_clause "SELECT \
+                number_passed_subtestcases, number_failed_subtestcases, number_skipped_subtestcases \
+                FROM aux2_log_table WHERE log_id = \"$log_id_this\""
+  puts "sel_clause $sel_clause"
+  set res_list [mysqlsel $mysql_handler $sel_clause -flatlist]
+  set number_passed_subtestcases_this [lindex $res_list 0]
+  set number_failed_subtestcases_this [lindex $res_list 1]
+  set number_skipped_subtestcases_this [lindex $res_list 2]
+  puts "number_passed_subtestcases_this $number_passed_subtestcases_this"
+  puts "number_failed_subtestcases_this $number_failed_subtestcases_this"
+  puts "number_skipped_subtestcases_this $number_skipped_subtestcases_this"
+
+
+  # get old log_id
+  # let's see if we have old results for this test case
+  set number_passed_subtestcases_old 0
+  set number_failed_subtestcases_old 0
+  set number_skipped_subtestcases_old 0
+  # get old results
+  set old_exists "no"
+  set sel_clause "SELECT \
+                log_id \
+                FROM log_table WHERE \
+                report_id = \"$valid_report_id\" AND \
+                feature_test_script_name = \"$test_case_nmbr\""
+  puts "sel_clause $sel_clause"
+  set res_list [mysqlsel $mysql_handler $sel_clause -flatlist]
+  puts "res_list $res_list"
+  if {[llength $res_list] > 0} {
+    set old_exists "yes"
+    set log_id_old [lindex $res_list 0]
+    # get subtestcase stats
+    set sel_clause "SELECT \
+                  aux2_log_id, number_passed_subtestcases, number_failed_subtestcases, number_skipped_subtestcases \
+                  FROM aux2_log_table WHERE log_id = \"$log_id_old\""
+    puts "sel_clause $sel_clause"
+    set res_list [mysqlsel $mysql_handler $sel_clause -flatlist]
+    set aux2_log_id_this [lindex $res_list 0]
+    set number_passed_subtestcases_old [lindex $res_list 1]
+    set number_failed_subtestcases_old [lindex $res_list 2]
+    set number_skipped_subtestcases_old [lindex $res_list 3]
+    puts "aux2_log_id_this $aux2_log_id_this"
+    puts "number_passed_subtestcases_old $number_passed_subtestcases_old"
+    puts "number_failed_subtestcases_old $number_failed_subtestcases_old"
+    puts "number_skipped_subtestcases_old $number_skipped_subtestcases_old"
+  }
+
+  set number_passed_subtestcases_delta \
+      [expr $number_passed_subtestcases_delta + $number_passed_subtestcases_this - $number_passed_subtestcases_old]
+  set number_failed_subtestcases_delta  \
+      [expr $number_failed_subtestcases_delta + $number_failed_subtestcases_this - $number_failed_subtestcases_old]
+  set number_skipped_subtestcases_delta \
+      [expr $number_skipped_subtestcases_delta + $number_skipped_subtestcases_this - $number_skipped_subtestcases_old]
+
+  puts "number_passed_subtestcases_delta $number_passed_subtestcases_delta"
+  puts "number_failed_subtestcases_delta $number_failed_subtestcases_delta"
+  puts "number_skipped_subtestcases_delta $number_skipped_subtestcases_delta"
+
+  # update the old subtestcase stats if the log exists
+  if {$old_exists == "yes"} {
+    set update_clause "UPDATE  aux2_log_table SET number_passed_subtestcases = \"$number_passed_subtestcases_this\", \
+                         number_failed_subtestcases = \"$number_failed_subtestcases_this\", \
+                         number_skipped_subtestcases = \"$number_skipped_subtestcases_this\" \
+                         WHERE aux2_log_id = \"$aux2_log_id_this\""
+    puts "update_clause $update_clause"
+    mysqlexec $mysql_handler $update_clause
+  }
+
+ 
+  # status of this log
+  if {($status_this == "passed") && ($number_passed_subtestcases_delta  != 0)} {
+    incr number_passed_testcases_delta
+    set number_failed_testcases_delta [expr $number_failed_testcases_delta - 1]
+  }
+  if {($status_this == "failed") && ($number_failed_subtestcases_delta  != 0)} {
+    incr number_failed_testcases_delta
+    set number_passed_testcases_delta [expr $number_passed_testcases_delta - 1]
+  }
+  puts "new number_passed_testcases_delta $number_passed_testcases_delta status_this $status_this"
+  puts "new number_failed_testcases_delta $number_failed_testcases_delta status_this $status_this"
+  
+}
+
+# update subtestcases sums
+# get the old sums
+set sel_clause "SELECT number_passed_tests, number_failed_tests FROM regression_table WHERE \
+        regression_id = '$regression_id'"
+set res_list [mysqlsel $mysql_handler $sel_clause -flatlist]
+set number_passed_subtests_sum [lindex $res_list 0]
+set number_failed_subtests_sum [lindex $res_list 1]
+
+puts "number_passed_subtests_sum $number_passed_subtests_sum"
+puts "number_failed_subtests_sum $number_failed_subtests_sum"
+
+set number_passed_subtests_sum [expr $number_passed_subtests_sum + $number_passed_subtestcases_delta]
+set number_failed_subtests_sum [expr $number_failed_subtests_sum + $number_failed_subtestcases_delta]
+
+puts "new number_passed_subtests_sum $number_passed_subtests_sum"
+puts "new number_failed_subtests_sum $number_failed_subtests_sum"
+
+# update regression_table with new numbers
+set update_clause "UPDATE regression_table SET  number_passed_tests = \"$number_passed_subtests_sum\", \
+                         number_failed_tests = \"$number_failed_subtests_sum\" \
+                         WHERE regression_id = \"$regression_id\""
+puts "update_clause $update_clause"
+mysqlexec $mysql_handler $update_clause
+
+#update test case stats in aux_report_table
+# get the old sums
+set sel_clause "SELECT \
+        number_passed_testcases, number_failed_testcases, number_skipped_testcases FROM aux_report_table WHERE \
+        report_id = '$valid_report_id'"
+puts "sel_clause $sel_clause"
+set res_list [mysqlsel $mysql_handler $sel_clause -flatlist]
+set number_passed_testcases_sum [lindex $res_list 0]
+set number_failed_testcases_sum [lindex $res_list 1]
+set number_skipped_testcases_sum [lindex $res_list 2]
+
+puts "number_passed_testcases_sum $number_passed_testcases_sum"
+puts "number_failed_testcases_sum $number_failed_testcases_sum"
+puts "number_skipped_testcases_sum $number_skipped_testcases_sum"
+
+set number_passed_testcases_sum [expr $number_passed_testcases_sum + $number_passed_testcases_delta]
+set number_failed_testcases_sum [expr $number_failed_testcases_sum + $number_failed_testcases_delta]
+set number_skipped_testcases_sum [expr $number_skipped_testcases_sum + $number_skipped_testcases_delta]
+
+puts "new number_passed_testcases_sum $number_passed_testcases_sum"
+puts "new number_failed_testcases_sum $number_failed_testcases_sum"
+puts "new number_skipped_testcases_sum $number_skipped_testcases_sum"
+
+
+# update aux_report_table with new numbers
+set update_clause "UPDATE aux_report_table SET  number_passed_testcases = \"$number_passed_testcases_sum\", \
+                         number_failed_testcases = \"$number_failed_testcases_sum\", \
+                         number_skipped_testcases = \"$number_skipped_testcases_sum\" \
+                         WHERE report_id = \"$valid_report_id\""
+puts "update_clause $update_clause"
+mysqlexec $mysql_handler $update_clause
+
+
+

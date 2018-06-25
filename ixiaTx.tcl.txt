@@ -1,0 +1,889 @@
+
+################################################################## 
+# Procedure Name: IxiaPortsInit
+#   
+# Description: proc that initializez all ixia ports for auto neg, protocol servers, mac address etc.
+#
+#
+# Input args: none
+# Output args: none
+# Typical usage:
+#             IxiaPortsInit
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc IxiaPortsInit {} {
+
+global portMappingList MAIN
+   globalSetDefault
+global phyMode
+   global TrafficGen
+
+   set MAIN(skipIxInit) 0; set MAIN(IxiaReady) 1;
+
+    switch -exact -- $TrafficGen {
+        
+        stc {
+            return 1;
+        }
+        ixia -
+        ixvm {
+   set TxRxPortList {}
+   set ind 0
+   foreach port $portMappingList {
+     set portId [lindex $port 0]
+     MapIxiaPortId $portId chid c p	 
+     result_debug "Setting portId $portId to factory defaults..."
+     port setFactoryDefaults $chid $c $p
+    #------work around solution from ixia added to automation--- prasanna
+    #if [port isValidFeature $chid $c $p portFeatureLocalCPU]  {
+    #   if [portCpu reset $chid $c $p] {
+    #      ixPuts $::ixErrorInfo
+#	} 
+
+ #   ixPuts "$chid:$c:$p has been reset"
+  #  }
+    #####--- end of work around solution############
+     if {[info exists phyMode]} {
+        if {[llength $phyMode]==1} {
+           if {[regexp -nocase "fiber" $phyMode]} {
+              port setPhyMode $::portPhyModeFiber $chid $c $p
+           }
+           if {[regexp -nocase "fibernoauto" $phyMode]} {
+               port config -autonegotiate false
+               port set $chid $c $p
+           }
+        } else {
+           set portIdPhyMode [lindex [lindex $phyMode $ind] 1]
+           if {[regexp -nocase "fiber" $portIdPhyMode]} {
+              port setPhyMode $::portPhyModeFiber $chid $c $p
+              if {[regexp -nocase "fibernoauto" $portIdPhyMode]} {
+                  result_debug "Setting $c $p to Fiber mode with auto negotiaton off"
+                  port config -autonegotiate false
+                  port set $chid $c $p
+              } else {
+                  result_debug "Setting $c $p to Fiber mode"
+              }
+           } else {
+              port setPhyMode $::portPhyModeCopper $chid $c $p
+              result_debug "Setting $c $p to Copper mode"
+           }
+        }
+     } else {
+         result_debug "No phyMode configured"
+     }
+     StopPortsTransmit $portId  ;# setFactoryDefaults dont stop the xmit.
+     if {[ixPortClearOwnership $chid $c $p force]!=0} {
+        result_error "Can not clear ixia port ownership:$chid $c $p"
+     }
+
+     set retVal1 [port config -MacAddress [GetPortIdMac $portId]]
+     result_debug "Port Mac address config retVal is $retVal1."
+     set retVal2 [port set $chid $c $p]
+     result_debug "Port Mac address set retVal is $retVal2."
+     set retVal3 [port write $chid $c $p]
+     result_debug "Port Mac address write retVal is $retVal3."
+     if {($retVal2 != 0) || ($retVal3 != 0)} {
+        set retVal1 [port config -MacAddress [GetPortIdMac $portId]]
+        result_debug "Port Mac address config retVal is $retVal1."
+        set retVal2 [port set $chid $c $p]
+        result_debug "Port Mac address set retVal is $retVal2."
+        set retVal3 [port write $chid $c $p]
+        result_debug "Port Mac address write retVal is $retVal3."
+     }
+     if {($retVal2 != 0) || ($retVal3 != 0)} {
+        port setFactoryDefaults $chid $c $p
+        set retVal1 [port config -MacAddress [GetPortIdMac $portId]]
+        result_debug "Port Mac address config retVal is $retVal1."
+        set retVal2 [port set $chid $c $p]
+        result_debug "Port Mac address set retVal is $retVal2."
+        set retVal3 [port write $chid $c $p]
+        result_debug "Port Mac address write retVal is $retVal3."
+     }
+     incr ind
+   }
+
+#   ixiaGenMap $numIxiaCd $startCardNum "standard" "2Way" $chid
+
+   # Make sure link is up
+   if [ixInitLinks one2oneArray $TxRxPortList] {
+#      cleanUp 
+      return 1
+   }
+}
+    }
+}
+
+################################################################## 
+# Procedure Name: ixiaConf_groupPorts
+#   
+# Description:
+# Ixia control - for a group of ports, normally used to send mac frames in a group of ports
+#        Called from SendFrameFromMultiplePorts.
+#
+#
+# Input args:
+#      numIxiaCd :		Number of Ixia cards involved (1-16)
+#	   startCardNum :	Starting Ixia card slot number (1-16)
+#      ixMapOption :	Standard or customized Ixia mapping
+#                       For customized mapping, new program may need to
+#                       be added in ixiaGenMap in ixiaMisc.tcl
+#      direction :		uni-direction (1Way) or bi-direction (2Way)
+#      numFrames :		Number of frames to send per Ixia port
+#      frameSize :		Frame size
+#      dataPattern :	Packet data pattern 
+#      streamType :		advance, contBurst, contPacket, firstLoopCount,
+#						gotofirst, stopStream (Note: see Ixia manual)
+#      patternOffset :	For "filterPallette" (Note: see Ixia manual)
+#      fcsError :		good, alignErr, bad, dribbleErr, none
+#						(Note: see Ixia manual)
+#      wTag :			With Tag (true, false)
+#	   tagNo :			Tag number
+#      priority :		Priority for the packet
+#      protocol :		mac, ip, ipx
+#      saMode :			contDecrement, contIncrement, ctrRandom,
+#						decrement, idle, increment (Note: see Ixia manual)
+#      daMode :			contDecrement, contIncrement, ctrRandom,
+#						decrement, idle, increment (Note: see Ixia manual)
+#      percentage :		For TX speed - Percentage of the line rate
+#      sendLearn :		To send learning frames? (true, false)
+#      numLearnFrames :	Number of the learning frames
+#      chid :			Ixia chassis id
+#      applyFilter: Flag to indicate if the filter/filterPallette to be applied in ixia reciving ports
+
+# Output args: none
+# Typical usage:
+#  ixiaConf_groupPorts -numIxiaCd $numIxiaCd  -startCardNum $startCardNum \
+#                       -sendLearn $sendLearn -applyFilter $applyFilter -protocol $protocol \
+#                       -numFrames $numFrames -frameSize $frameSize -frameSizeType $frameSizeType \
+#                       -dataPattern $dataPattern -streamType $streamType -fcsError $fcsError \
+#                       -saMode $saMode -daMode $daMode \
+#                       -percentage $percentage -wTag $wTag -tagNo $tag
+#
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: SendTraffic
+##################################################################
+proc ixiaConf_groupPorts {args} {
+   parse_args ixiaConf_groupPorts $args {
+      numIxiaCd 1
+      startCardNum 1
+      txPortId 1
+      rxPortId 2
+      ixMapOption "standard"
+      direction "2Way"
+      protocol "mac"
+      numFrames "1"
+      frameSize "64"
+      frameSizeType "sizeFixed"
+      dataPattern "0000"
+      streamType "stopStream"
+      patternOffset "32"
+      fcsError "good"
+      priority "0"
+      protocol "mac"
+      saMode "idle"
+      daMode "idle"
+      percentage "100"
+      sendLearn "false"
+      numLearnFrames "1"
+      wTag "false"
+	  tagNo "002"
+	  tagCfi "resetCFI"
+      tagMode "vIdle"
+	  tagRepeat "1"
+      chid "1"
+      applyFilter "0"
+      dontTx "0"
+   }
+
+   global spawn_id
+   global one2oneArray
+   global macBroadcast
+   global preambleSize
+   globalSetDefault
+
+   set macBroadcast	{ff ff ff ff ff ff}
+   set preambleSize	8
+
+   set date [clock format [clock seconds] -format "%m-%d-%Y %I.%M.%S%p"]
+   result_debug "*** date=$date"
+   set time1 [clock seconds]
+
+   set lastCardNum [expr $startCardNum + $numIxiaCd - 1]  
+
+   ixiaGenMap $txPortId $rxPortId $ixMapOption $direction $chid
+
+   if { $sendLearn == "true" } {
+      learn config -numframes $numLearnFrames
+      send_learn_frames one2oneArray
+   }
+   #-----------------------------------------------------------------
+   # Config streams for validation traffic
+   foreach txMap [lsort -dictionary [array names one2oneArray]] {
+
+      # Here we gather information about the first port 
+      scan $txMap					"%d,%d,%d" chid c p
+      port get						$chid $c $p
+      set txSpeed					[port cget -speed]
+      set srcAddr 					[port cget -MacAddress]
+
+      # Here we gather information about the second port
+      set rxMap						$one2oneArray($txMap)
+      scan [join $rxMap]			"%d %d %d" rxch rxc rxp
+      port get						$rxch $rxc $rxp
+      set destAddr					[port cget -MacAddress]
+
+      # Now we configure the stream
+      stream config -numFrames		$numFrames
+      stream config -name 			S_${c}_${p}
+      stream config -framesize		$frameSize
+      #random size
+      if {$frameSizeType == "sizeRandom"} {
+         stream config -frameSizeType		$frameSizeType
+         stream config -frameSizeMAX      1500
+         stream config -frameSizeMIN      64
+      }
+
+      decideLoopCount $numFrames $streamType
+    stream config -rateMode usePercentRate
+      stream config -percentPacketRate $percentage
+
+#      set frameRate [decideFrameRate $txSpeed $frameSize $percentage]
+     # set ifg [calculateGap $frameRate $frameSize $preambleSize $txSpeed]
+      stream config -fcs                       $fcsError
+     # stream config -ifg                       $ifg
+     # stream config -isg                       $ifg
+     # stream config -ibg                       $ifg
+#      stream config -fir                      true            ;# for timestamp
+      stream config -patternType nonRepeat  ;#needed for version 3.1
+      stream config -dataPattern	userpattern -pattern $dataPattern
+      stream config -sa				$srcAddr
+      stream config -da				$destAddr
+
+      stream config -saRepeatCounter	$saMode
+      stream config -daRepeatCounter $daMode
+      if { $saMode != "idle" } { 
+	     stream config -numSA			$numFrames
+      }
+      if { $daMode != "idle" } { 
+	     stream config -numDA			$numFrames
+      }
+
+      protocol setDefault
+      protocol config -name			$protocol
+      protocol config -enable802dot1qTag	$wTag
+
+      vlan config -cfi						$tagCfi
+      vlan config -mode						$tagMode
+      vlan config -repeat					$tagRepeat
+	  vlan config -vlanID					$tagNo
+      vlan set								$chid $c $p
+
+      stream set 					$chid $c $p 1
+
+      filterPallette config -pattern1			$dataPattern
+      filterPallette config -patternOffset1 	$patternOffset
+      filterPallette set						$rxch $rxc $rxp
+
+      filter config -captureFilterEnable		true
+      filter config -captureTriggerEnable		true
+      if {$applyFilter} {
+         filter config -userDefinedStat1Enable true
+         filterPallette config -DA1 				$destAddr
+         filter config -userDefinedStat1DA		addr1
+         filterPallette config -SA1             $srcAddr
+         filter config -userDefinedStat1SA		addr1
+         filterPallette set				$rxch $rxc $rxp
+      } else {
+         filter config -userDefinedStat1Enable false
+      }
+      
+      filter config -userDefinedStat1DA			addr1
+      filter config -captureFilterPattern		anyPattern
+      filter config -captureTriggerPattern		anyPattern
+      filter config -captureTriggerDA			anyAddr
+      filter config -captureFilterDA			anyAddr
+      filter set								$rxch $rxc $rxp
+   }
+   writeConfigToHardware one2oneArray
+   exSleep 1
+   zeroStats one2oneArray
+   startCapture one2oneArray
+   if {!$dontTx} {
+      startTx one2oneArray
+      set time2 [clock seconds]
+      result_debug "*** Time for Ixia TX setup = [expr $time2-$time1] secs"
+
+      # Make sure TX done
+      if { $streamType == "stopStream" } {
+         if { ($saMode != "contIncrement") && ($saMode != "contDecrement") &&   \
+              ($daMode != "contIncrement") && ($daMode != "contDecrement") } {
+            for {set c $startCardNum} {$c<=$lastCardNum} {incr c 1} {
+               set ixiaPortPerCard [findNumPortPerIxiaCard $c]
+               for {set p 1} {$p<=$ixiaPortPerCard} {incr p 1} {
+                  ixiaCheckTxDone $chid $c $p $numFrames $txPortId
+               }
+            }
+         }
+      }
+      set time3 [clock seconds]
+      result_debug "*** Time for Ixia TX done = [expr $time3-$time2] secs\n"
+   }
+}
+
+################################################################## 
+# Procedure Name: ixiaConf_2Ports
+#   
+# Description:
+# Ixia control - TX from a port & RX from another port. 
+# Uni-direction or bi-direction.
+#
+#
+# Input args:
+#      numIxiaCd :		Number of Ixia cards involved (1-16)
+#                       for statistics & capture purpose
+#	   startCardNum :	Starting Ixia card slot number (1-16)
+#      direction :		uni-direction (1Way) or bi-direction (2Way)
+#      txChas :			TX Ixia chassis id
+#      txCard :			TX Ixia card number
+#      txPort :			TX Ixia port number
+#      rxChas :			RX Ixia chassis id
+#      rxCard :			RX Ixia card number
+#      rxPort :			RX Ixia port number
+#      inSaMac :		Input source MAC address
+#      inDaMac :		Input destination MAC address
+#      numFrames :		Number of frames to send per Ixia port
+#      frameSize :		Frame size
+#      dataPattern :	Packet data pattern 
+#      streamType :		advance, contBurst, contPacket, firstLoopCount,
+#						gotofirst, stopStream (Note: see Ixia manual)
+#      patternOffset :	For "filterPallette" (Note: see Ixia manual)
+#      fcsError :		good, alignErr, bad, dribbleErr, none
+#						(Note: see Ixia manual)
+#      wTag :			With Tag (true, false)
+#	   tagNo :			Tag number
+#      priority :		Priority for the packet
+#      protocol :		mac, ip, ipx
+#      saMode :			contDecrement, contIncrement, ctrRandom,
+#						decrement, idle, increment (Note: see Ixia manual)
+#      daMode :			contDecrement, contIncrement, ctrRandom,
+#						decrement, idle, increment (Note: see Ixia manual)
+#      percentage :		For TX speed - Percentage of the line rate
+#      sendLearn :		To send learning frames? (true, false)
+#      numLearnFrames :	Number of the learning frames
+#      chid :			Ixia chassis id
+#      userStatFltrSA1		MAC address filter for user stat 1
+#      userStatFltrDA1		MAC address filter for user stat 1
+#
+# Output args: none
+# Typical usage:
+#   set frameSent [ixiaConf_2Ports -numIxiaCd $numIxiaCd \
+#                  -txChas $txChasisId -txCard $txCard -txPort $txPort -direction "2Way" \
+#                  -rxChas $rxChasisId -rxCard $rxCard -rxPort $rxPort -sendLearn $sendLearn \
+#                  -protocol $protocol -numFrames $numFrames -frameSize $frameSize \
+#                  -frameSizeType $frameSizeType -frameSizeMIN $frameSizeMIN  -frameSizeMAX $frameSizeMAX \
+#                  -dataPattern $dataPattern -streamType $streamType -fcsError $fcsError]
+#
+#
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: SendTraffic
+##################################################################
+
+proc ixiaConf_2Ports {args} {
+   parse_args ixiaConf_2Ports $args {
+      numIxiaCd "1"
+      startCardNum "1"
+      direction "1Way"
+      txChas "1"
+      txCard "1"
+      txPort "1"
+      rxChas "1"
+      rxCard "1"
+      rxPort "2"
+      inSaMac "default"
+      inDaMac "default"
+      numFrames "1"
+      frameSizeType "sizeFixed"
+      frameSizeMAX "1518"
+      frameSizeMIN "64"
+      frameSize "64"
+      dataPattern "0000"
+      ethernetType "noType"
+      frameType "08 00"
+      streamType "stopStream"
+      patternOffset "32"
+      fcsError "good"
+      priority "0"
+      protocol "mac"
+      saMode "idle"
+      daMode "idle"
+      saCount ""
+      daCount ""
+      percentage "100"
+      sendLearn "false"
+      numLearnFrames "1"
+      wTag "false"
+      tagNo "002"
+      tagCfi "resetCFI"
+      tagMode "vIdle"
+      tagRepeat "1"
+      tagPriority "0"	  
+      protocolTagId "null"
+      chid "1"
+      userDefinedStat1SA "00:00:00:00:00:00"
+      userDefinedStat1DA "00:00:00:00:00:00"
+      rate               "null"      
+      udfEnable "false"
+      udfInitval "00"
+      udfOffset "0"
+      udfCountertype "c8"
+      udfContinuousCount "false"
+      udfRepeat "1"
+      protoOffsetEnable "false"
+      protoOffset "14"
+      userDefTag ""
+      dontTx "0"
+      ZeroStats "yes"
+   }
+
+   global spawn_id
+   global one2oneArray
+   global macBroadcast
+   global preambleSize
+   globalSetDefault
+
+   set date [clock format [clock seconds] -format "%m-%d-%Y %I.%M.%S%p"]
+#   result_debug "*** date=$date for <ixiaConf_2Ports> on ($txChas $txCard $txPort)"
+   set time1 [clock seconds]
+ 
+   set macBroadcast	{ff ff ff ff ff ff}
+   set preambleSize	8
+
+   # Create mapping
+   map new -type	one2one
+   map config -type one2one
+   map add $txChas $txCard $txPort $rxChas $rxCard $rxPort  
+   if { $direction == "2Way" } {
+      map add $rxChas $rxCard $rxPort $txChas $txCard $txPort
+   }
+   if { $sendLearn == "true" } {
+      learn config -numframes $numLearnFrames
+      send_learn_frames one2oneArray
+   }
+   #-----------------------------------------------------------------
+   # Config streams for validation traffic
+   set wkTag $wTag
+   set wkTagNo $tagNo
+   set portNo 0
+    
+    ### TK add
+    set portList {}
+   foreach txMap [lsort -dictionary [array names one2oneArray]] {
+      if { $wkTag == "true" } {
+	 set wTag "true"
+	 set tagNo [lindex $wkTagNo $portNo]
+	 incr portNo
+         if { $tagNo == "" } {set tagNo [lindex $wkTagNo 0]}
+	 if { $tagNo == 0 || $tagNo == "none" } {set wTag "false"}
+	 result_debug "wTag = $wTag, tagNo = $tagNo"
+      }
+      scan $txMap					"%d,%d,%d" chid c p
+      port get						$chid $c $p
+      set txSpeed					[port cget -speed]
+      stream config -numFrames		$numFrames
+      stream config -name 			S_${c}_${p}
+      stream config -framesize		$frameSize
+      #random size
+      if {$frameSizeType == "sizeRandom"} {
+         stream config -frameSizeType		$frameSizeType
+         stream config -frameSizeMAX      $frameSizeMAX
+         stream config -frameSizeMIN      $frameSizeMIN
+      }
+      decideLoopCount $numFrames $streamType
+#      set frameRate [decideFrameRate $txSpeed $frameSize $percentage]
+      if { $rate != "null" } {
+         set percentage [decidePercentage $txSpeed $frameSize $rate]
+      }
+      stream config -rateMode usePercentRate
+      stream config -percentPacketRate $percentage
+
+#      set ifg [calculateGap $frameRate $frameSize $preambleSize $txSpeed]
+      # Now we configure the stream
+      stream config -fcs                       $fcsError
+#      stream config -ifg                       $ifg
+#      stream config -isg                       $ifg
+#      stream config -ibg                       $ifg
+#      stream config -fir                       true            ;# for timestamp
+      stream config -patternType nonRepeat  ;#needed for version 3.1
+      stream config -dataPattern	userpattern -pattern $dataPattern
+      stream config -frameType $frameType
+      set srcAddr					[port cget -MacAddress]
+      set rxMap						$one2oneArray($txMap)
+      scan [join $rxMap]			"%d %d %d" rxch rxc rxp
+      port get						$rxch $rxc $rxp
+      set destAddr					[port cget -MacAddress]
+
+      stream config -saRepeatCounter $saMode 
+      stream config -daRepeatCounter $daMode 
+      if {$saMode != "idle"} {
+          if {$saCount == ""} {
+              stream config -numSA $numFrames
+          } else {
+              stream config -numSA $saCount
+          }
+      }
+      if {$daMode != "idle"} {
+          if {$daCount == ""} {
+              stream config -numDA $numFrames
+          } else {
+              stream config -numDA $daCount
+          }
+      }
+
+# Sending traffic, whether it's 1-way or 2-way, first port is always the src port
+# and the second port is always the dest port in an entry in the one2one array
+if { 1 } {
+      if {$direction == "2Way"} {
+          if {($chid == $rxChas) && ($c == $rxCard) && ($p == $rxPort)} {
+              if { $inSaMac == "default" } {
+                  stream config -sa $srcAddr
+              } else { 
+                  stream config -sa $inDaMac 
+              }				    
+              if { $inDaMac == "default" } { 
+                  stream config -da $destAddr
+              } else {                 
+                  stream config -da $inSaMac 
+              }
+
+		    ### TK add
+		    lappend portList [list $txChas $txCard $txPort]
+          } else {
+              if { $inSaMac == "default" } {
+                  stream config -sa $srcAddr
+              } else { 
+                  stream config -sa $inSaMac 
+              }				    
+              if { $inDaMac == "default" } { 
+                  stream config -da $destAddr
+              } else {                 
+                  stream config -da $inDaMac 
+              }
+		    ### TK add
+		    lappend portList [list $txChas $txCard $txPort]
+		    lappend portList [list $rxChas $rxCard $rxPort]
+          }
+      } else {
+          if { $inSaMac == "default" } {
+              stream config -sa $srcAddr
+          } else { 
+              stream config -sa $inSaMac 
+          }				    
+          if { $inDaMac == "default" } { 
+              stream config -da $destAddr
+          } else {                 
+              stream config -da $inDaMac 
+          }
+		### TK add
+		lappend portList [list $txChas $txCard $txPort]
+      }
+} else {
+
+	    ### TK
+	    ixPuts "It should not come to this branch"
+      if { $inSaMac == "default" } {
+              stream config -sa $srcAddr
+          } else { 
+              stream config -sa $inSaMac 
+          }				    
+          if { $inDaMac == "default" } { 
+              stream config -da $destAddr
+          } else {                 
+              stream config -da $inDaMac 
+      }
+}
+      
+      protocol setDefault
+	  protocol config -name					$protocol
+          if {[regexp -nocase "ip" $protocol]} {
+            ip setDefault
+	    ip config -ipProtocol 255
+	    ip set $chid $c $p
+          }
+	  protocol config -ethernetType $ethernetType
+	  protocol config -enable802dot1qTag	$wTag
+	  #ipx
+#	  if { $protocol == "ipx" } {
+#	   puts "NetbiosOOOOOOOOOO"
+#	   ipx config -packetType "typeNetBios"
+#	   ipx config -destSocket "socketNetBios"
+#	   puts [ipx cget -packetType] }
+
+      vlan config -cfi						$tagCfi
+      vlan config -mode						$tagMode
+      vlan config -repeat					$tagRepeat
+      vlan config -vlanID					$tagNo
+      vlan config -userPriority					$tagPriority
+      if {$protocolTagId != "null"} {
+          set decProtoTagId [expr $protocolTagId]
+          vlan config -protocolTagId                            $decProtoTagId
+      }
+      vlan set	 						$chid $c $p
+      # Define UDF package 
+      if {$udfEnable == "true"} {
+          set inter 0
+          foreach udfOffs $udfOffset {
+          udf config -enable "true"
+          udf config -continuousCount [lindex $udfContinuousCount $inter]
+          udf config -initval [lindex $udfInitval $inter]
+          udf config -offset [lindex $udfOffset $inter]
+          udf config -countertype [lindex $udfCountertype $inter]
+          udf config -repeat [lindex $udfRepeat $inter]
+          incr inter
+          udf set $inter
+          }
+      }
+     
+      # define protocolOffset
+      if {$protoOffsetEnable == "true"} {
+         protocolOffset setDefault
+         protocolOffset config -enable true
+         protocolOffset config -offset $protoOffset
+         protocolOffset config -userDefinedTag $userDefTag
+         if [protocolOffset set $txChas $txCard $txPort] {
+            result_debug "Error in protocolOffset set for \
+                          $txChas $txCard $txPort"
+         }
+      } else {
+         protocolOffset setDefault
+         protocolOffset config -enable false
+         protocolOffset set $txChas $txCard $txPort
+      }
+
+      stream set $chid $c $p 1
+
+	# Define filter & capture
+
+	### TK add
+	if  {$direction == "2Way"} {
+      filterPallette config -DA1 			$destAddr
+      filterPallette config -pattern1			$dataPattern
+      filterPallette config -patternOffset1 		$patternOffset
+      filterPallette set				$rxch $rxc $rxp
+
+      filter config -captureFilterEnable		true
+      filter config -captureTriggerEnable		true
+  
+      #user defined stats settings
+      if { ( $userDefinedStat1DA != "00:00:00:00:00:00" ) || \
+           ( $userDefinedStat1SA != "00:00:00:00:00:00" ) }  {
+        filter config -userDefinedStat1Enable		true
+        if { $userDefinedStat1DA != "00:00:00:00:00:00" } {
+          filterPallette config -DA1 			$userDefinedStat1DA
+          filter config -userDefinedStat1DA		addr1
+        }
+        if { $userDefinedStat1SA != "00:00:00:00:00:00" } {
+          filterPallette config -SA1 			$userDefinedStat1SA
+          filter config -userDefinedStat1SA		addr1
+        }
+        filterPallette set				$rxch $rxc $rxp
+      } else {
+        filter config -userDefinedStat1Enable		false
+        filter config -userDefinedStat1DA		addr1
+      }      
+      filter config -captureFilterPattern		anyPattern
+      filter config -captureTriggerPattern		anyPattern
+      filter config -captureTriggerDA			anyAddr
+      filter config -captureFilterDA			anyAddr
+      filter set 					$rxch $rxc $rxp 
+	}; ### TK add
+}
+
+    #### TK modify
+    if {[ixWriteConfigToHardware portList -noProtocolServer]} {
+	ixPuts "failed to do ixWritePortsToHardware.\n$::ixErrorInfo"
+    }
+    #### Wait for the link to come up
+#    if {[ixCheckLinkState portList]} {
+#	ixPuts "failed to do ixCheckLinkState.\n$::ixErrorInfo"
+#    }
+    
+   if {$ZeroStats != "no" } {
+	      zeroPortStats $txChas $txCard $txPort
+      }
+   #for {set c $startCardNum} {$c<=[expr $startCardNum + $numIxiaCd - 1]} {incr c 1} { 
+   #    ixiaConf_clearStat $c
+   #    }
+
+   #just in case some previous function stop capture on these ports
+    ### TK 
+    #   set pList ""
+    #   lappend pList "$txChas $txCard $txPort"
+    #   lappend pList "$rxch $rxc $rxp"
+    ixStartCapture portList
+
+   if {!$dontTx} {
+      startTx one2oneArray
+      set time2 [clock seconds]
+#      result_debug "*** Time for Ixia TX setup = [expr $time2-$time1] secs"
+      #get the stream so we can return it later
+      stream get $txChas $txCard $txPort 1
+      set streamSent [stream cget -packetView]
+
+      # Make sure TX done
+      if { $streamType == "stopStream" } {
+         if { ($saMode != "contIncrement") && ($saMode != "contDecrement") &&   \
+              ($daMode != "contIncrement") && ($daMode != "contDecrement") } {
+            ixiaCheckTxDone $txChas $txCard $txPort $numFrames $txPort
+            if { $direction == "2Way" } {
+               ixiaCheckTxDone $rxChas $rxCard $rxPort $numFrames $txPort
+            }
+         }
+      }
+#   after 500
+   set time3 [clock seconds]
+#   result_debug "*** Time for Ixia TX done = [expr $time3-$time2] secs\n"
+   result_debug "*** Ixia port config time [expr $time2-$time1] secs and TX time [expr $time3-$time2] secs\n"
+
+   if {$inDaMac == "default"} {
+      set inDaMac $destAddr
+   }
+   if {$inSaMac == "default"} {
+      set inSaMac $srcAddr
+   }
+
+   set txPortId [MapIxiaCardnPort $txChas $txCard $txPort]
+   set rxPortId [MapIxiaCardnPort $rxChas $rxCard $rxPort]
+   displayMacPacketFormat -txPortId $txPortId -rxPortId $rxPortId \
+                    -frameSent $streamSent -streamType $streamType \
+                    -destMac $inDaMac -srcMac $inSaMac -numFrames $numFrames \
+                    -protocol $protocol -wTag $wTag -tag $tagNo \
+                    -userPriority $priority -direction $direction -daMode \
+                     $daMode -daCount $daCount -saMode $saMode -saCount $saCount \
+                     -percentage $percentage
+
+   return $streamSent
+   } else {
+      return ""
+   }
+}
+
+##################################################################
+# Procedure Name: EnableFlowControl
+#
+# Description: Set Flow control ability to the following modes -
+#                   none,symmetric,asymmetric and both (both symmetric or asymmetric)
+#
+# Input args:
+#              portIdList - Port list
+#              mode 
+#
+# Output args: none
+#
+#
+# Typical usage:
+#             [EnableAsymmetricFlowControl $portIdList "symmetric"]
+#             [EnableAsymmetricFlowControl $portIdList "asymmetric" 0]  ;# 0 - Do not wait for link up
+#           
+# Category: setup
+##################################################################
+
+proc EnableFlowControl {portIdList mode {maxWait 15}} {
+
+    puts " Setting ports - $portIdList to flow control mode : $mode"
+    foreach portId $portIdList {   
+        MapIxiaPortId $portId chasis card port
+
+        # ----- Get the port before re-writing to avoid messing up the old port info.
+        port get $chasis $card $port
+
+	if {$mode == "asymmetric"} {        
+        port config -flowControl false
+        port config -negotiateMasterSlave 0
+        port config -advertiseAbilities portAdvertiseSend
+        }
+        if {$mode == "symmetric"} {
+        port config -flowControl false
+	port config -negotiateMasterSlave 1
+        port config -advertiseAbilities portAdvertiseSendAndReceive
+        }         
+
+	if {$mode == "none"} {
+        port config -flowControl false
+        port config -negotiateMasterSlave 0
+        port config -advertiseAbilities portAdvertiseNone
+        }
+        if {$mode == "both"} {
+        port config -flowControl true
+        port config -negotiateMasterSlave 1
+        port config -advertiseAbilities portAdvertiseSendAndOrReceive
+        }
+        
+        port config -advertise1000FullDuplex true
+        port set $chasis $card $port
+        port write $chasis $card $port
+            
+        if {$maxWait == 0} {
+            continue
+        }
+         set maxWaitCounter $maxWait
+       
+         while { $maxWaitCounter } {
+            port get $chasis $card $port
+            if {[port cget -linkState] == 1} {
+                result_debug "FOUND LINK UP for portId:$portId!"
+                break
+            } else {
+                result_debug "Waiting for portId:$portId linkUp.."
+                sleep 1
+                incr maxWaitCounter -1 
+            }
+        }
+
+        if {$maxWaitCounter == 0} {   
+            result_warning "WARNING: No linkUp for Ixia portId:$portId"
+        }
+   }
+}
+   
+
+##################################################################
+# Procedure Name: IxiaPortsClear
+#
+# Description: proc that clears ixia port ownership.
+#
+#
+# Input args: none
+# Output args: none
+# Typical usage:
+#             IxiaPortsClear
+#       
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc IxiaPortsClear {} {
+      
+   global portMappingList
+   globalSetDefault
+   set TxRxPortList {}
+ 
+   foreach port $portMappingList {
+      set portId [lindex $port 0]
+      MapIxiaPortId $portId chid c p
+
+      if {[ixPortClearOwnership $chid $c $p force]!=0} {
+        result_error "Can not clear ixia port ownership:$chid $c $p"
+      }
+   }
+
+}
+
+######################################################################
+

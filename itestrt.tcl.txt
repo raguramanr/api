@@ -1,0 +1,439 @@
+#   set ITARPATHDEF /iTest/15.3.1
+#   set MODPATHDEF Enterprise
+#   set NTAFSERVERDEF rtp-itest.extremenetworks.com
+#   set LICSERVERDEF 10.127.8.86
+#   set TOPODIRDEF Spirent
+#   set tbml_sub_dir "Spirent"
+#   set itestrtPath "/iTestRT/itestrt"
+
+
+proc exec_itest {args} {
+    parse_args exec_itest $args {
+        module "L2"
+        tcList "all"
+        list "pass"
+        topoDir "Spirent"
+        cfg "spirent_testbed1_std"
+        category "FunctionalTest"
+        itarPath "/iTest_15.3.1"
+        modPath "Enterprise"
+        version "15.1.1"
+        iplatform "NULL"
+        eplatform "NULL"
+        qId "RTP_121212_232323"
+        resultDir ""
+        jobDir ""
+        ntafServer "sc-regserver.extremenetworks.com"
+        licenseServer "10.127.8.86"
+    }
+    global itestrtPath
+   # global DEVITESTMODS
+   # global DEVITESTMODPATH
+   # global DEVITESTITARPATH
+
+    # Determine if this is a devlopment module that has a different itar path
+   # if {[lsearch $DEVITESTMODS $module] >= 0} {
+   #     set modPath [lindex $DEVITESTMODPATH [lsearch $DEVITESTMODS $module]]
+   #     set itarPath [lindex $DEVITESTITARPATH [lsearch $DEVITESTMODS $module]]
+   #     result_debug "!!! Changing the modPath to : [lindex $DEVITESTMODPATH [lsearch $DEVITESTMODS $module]]";
+   #     result_debug "!!! Changing the itarPath to : [lindex $DEVITESTITARPATH [lsearch $DEVITESTMODS $module]]";
+   # }
+    set ntafUser $cfg
+    set ntafPassword $cfg
+    #global itarPath itestTopoDir
+    puts "pwd [pwd]"
+    set all_modules [get_itest_modules -itarPath "$itarPath" -modPath "$modPath"]
+    set all_tc [get_itest_mod_tests -itarPath "$itarPath" -modPath "$modPath" -module "$module" -category "$category"]
+    puts "all_modules: $all_modules"
+    puts "all_tc: $all_tc"
+    if {[lsearch $all_modules $module] >= 0 && [llength $all_tc] > 0} {
+        #Check to see if a tcList is passed in
+        if {$tcList != "all"} {
+            #100.1.1\\.fftc|1.1.2.10\\.fftc
+            #
+            set newTcList ""
+            foreach mTC $tcList {
+                if {[lsearch $all_tc $mTC] < 0} {
+                    result_debug "Test Case $mTC is not an iTest Case"
+                    continue
+                    #return testSkipped
+                } else {
+                    lappend newTcList $mTC
+                }
+            }
+            if {[llength $newTcList] > 0} {
+                set tcList $newTcList
+            } else {
+                return testSkipped
+            }
+            set l [regexp -inline -all -- {\S+} $tcList]
+            regsub -all " " $l ".fftc|" tcList;
+            append tcList ".fftc"
+            set list "NULL"
+
+        } else {
+            set tcList ".*.fftc"
+        }
+#VR
+        #Check to see if a tcList is passed in
+        if {$list == "NULL"} {
+            set testSuiteList ".*"
+        } elseif {$list == "pass"} {
+            set testSuiteList "pass|sanity|extsanity"
+        } elseif {$list == "quick"} {
+            set testSuiteList "sanity"
+	} elseif {$list == "extsanity"} {
+	    set testSuiteList "sanity|extsanity"
+        } elseif {$list == "devonly"} {          #added on 6/3/2014 by vrao
+	    set testSuiteList "dev"
+        } else {
+            set testSuiteList $list
+        }
+	
+
+        #Create the test suite 
+        create_ts -module "$module" \
+            -category "$category" \
+            -modPath "$modPath" \
+            -version "$version" \
+            -iplatform "$iplatform" \
+            -eplatform "$eplatform" \
+            -itarPath "$itarPath" \
+            -qId "$qId" \
+            -tcList "$tcList" \
+            -list "$testSuiteList" \
+            -resultDir "$jobDir" 
+
+        create_job -cfg "$cfg" \
+            -topoDir "$topoDir" \
+            -itarPath "$itarPath" \
+            -qId "$qId" \
+            -resultDir "$jobDir"
+    } else {
+        puts "No iTest tests to run"
+        return testSkipped
+    }
+    global LICSERVERDEF
+    #catch {set pCheck [exec ping -c 4 $ntafServer | tee /dev/tty]} pout
+    result_debug "Sending: exec $itestrtPath --itar $itarPath --job.logfile file://${jobDir}/log.txt \
+         --job \"file://${jobDir}/job.ffjd\" \
+         --report \"file://${jobDir}/{tcfilename}.html\" --ntaf.server $ntafServer \
+         --ntaf.user $ntafUser --ntaf.password $ntafPassword --licenseServer $licenseServer | tee /dev/tty"
+    catch {set cout2 [exec $itestrtPath --itar $itarPath --job.logfile file://${jobDir}/log.txt --job "file://${jobDir}/job.ffjd" \
+         --report "file://${jobDir}/{tcfilename}.html" --ntaf.server $ntafServer \
+         --ntaf.user $ntafUser --ntaf.password $ntafPassword --licenseServer $licenseServer | tee /dev/tty]} cout
+    #puts "$cout"
+    # Build a list of lines in the job output
+    set jLines [split $cout2 \n]
+    set inData 0
+    foreach l $jLines {
+        set l [string trim $l]
+        if {$l != ""} {
+            set l [regexp -inline -all -- {\S+} $l]
+            set items [split $l " "]
+            if {[lindex $items 0] == "Result" && [lindex $items 1] == "Owner"} {
+                set inData 1
+                puts "In Data"
+                continue;
+            } elseif {$inData} {
+                if {[regexp {(.*)\.fftc} [lindex $items 3] junk tc]} {
+                    puts "$items"
+                    report_start_test "$tc $module iTest [lindex $items 3]";
+                    if {[lindex $items 0] != "Pass" && [lindex $items 0] != "Fail"} {
+                        report_end_test ok
+                    } else {
+                        report_end_test [lindex $items 0]
+                    }
+                    save_incrementally_run_data $tc
+                } elseif {[regexp {(.*)\.fftc} [lindex $items 2] junk tc]} {
+                    puts "$items"
+                    report_start_test "$tc $module iTest [lindex $items 2]";
+                    if {[lindex $items 0] != "Pass" && [lindex $items 0] != "Fail"} {
+                        report_end_test ok
+                    } else {
+                        report_end_test [lindex $items 0]
+                    }
+                    save_incrementally_run_data $tc
+                } elseif {[regexp {(.*)\.fftc} [file tail [string trimleft [lindex $items 7] "project:/"]] junk tc]} {
+                    puts "$items"
+                    report_start_test "$tc $module iTest [lindex $items 2]";
+                    if {[lindex $items 0] != "Pass" && [lindex $items 0] != "Fail"} {
+                        report_end_test ok
+                    } else {
+                        report_end_test [lindex $items 0]
+                    }
+                    save_incrementally_run_data $tc
+                } elseif {[regexp {(.*)\.fftc} [file tail [string trimleft [lindex $items 6] "project:/"]] junk tc]} {
+                    puts "$items"
+                    report_start_test "$tc $module iTest [lindex $items 2]";
+                    if {[lindex $items 0] != "Pass" && [lindex $items 0] != "Fail"} {
+                        report_end_test ok
+                    } else {
+                        report_end_test [lindex $items 0]
+                    }
+                    save_incrementally_run_data $tc
+                }
+                continue;
+            } else {
+                continue;
+            }
+        } else {
+            continue;
+        }
+    }
+    # Move the jobDir files to the resultDir
+    puts "JobDir is $jobDir"
+    set fList [glob -types {f} -path ${jobDir}/ *]
+
+    foreach aFile $fList {
+        puts "Moving $aFile $resultDir"
+        catch {exec mv $aFile $resultDir} output
+    }
+    if [file isdirectory $jobDir] {
+        #catch {exec rm -rf $jobDir} dout
+    }
+    return testCompleted
+}
+proc get_itest_modules {args} {
+    parse_args get_itest_modules $args {
+        itarPath "/iTest_15.3.1"
+        modPath "Enterprise"
+        result_dir "mac"
+        sourceMac "default"
+    }
+    global itestrtPath
+    #global itarPath itestTopoDir
+    #puts "$itestrtPath --itar $itarPath --fileutils.list project://${modPath}"
+    catch {exec $itestrtPath --itar $itarPath --fileutils.list project://${modPath}/} cout
+    set modList ""
+    set pList [split $cout \n]
+    foreach p $pList {
+        set fList [split $p "/"]
+        if {[lindex $fList [expr [llength $fList] -1]] != "" && [lindex $fList [expr [llength $fList] -1]] != ".project"} {
+            lappend modList [lindex $fList [expr [llength $fList] -1]]
+            #puts "Added [lindex $fList [expr [llength $fList] -1]] to the modList"
+        }
+    }
+    return $modList
+}
+proc get_itest_mod_tests {args} {
+    parse_args get_itest_mod_tests $args {
+        module "L2"
+        category "FunctionalTest"
+        itarPath "/iTest_15.3.1"
+        modPath "Enterprise"
+    }
+    global itestrtPath
+    #global itarPath itestTopoDir
+    # itestrt --itar $itarPath --fileutils.list project://${modPath}/
+    catch {exec $itestrtPath --itar $itarPath --fileutils.list project://${modPath}/${module}/${category}} cout
+    set testList ""
+    set tList [split $cout \n]
+    foreach t $tList {
+        set fList [split $t "/"]
+        if {[lindex $fList [expr [llength $fList] -1]] != "" && \
+            [regexp {(.*)\.fftc} [lindex $fList [expr [llength $fList] -1]] a tc]} {
+            lappend testList $tc
+            #puts "Added [lindex $fList [expr [llength $fList] -1]] to the testList"
+        }
+    }
+    return $testList
+}
+proc create_ts {args} {
+    parse_args create_ts $args {
+        module "L2"
+        category "FunctionalTest"
+        modPath "Enterprise"
+        version "15.1.1"
+        iplatform "bcmFamily"
+        eplatform "gnssFamily"
+        itarPath "/iTest_15.3.1"
+        qId "RTP_121212_232323"
+        tcList ".*.fftc"
+        list "sanity"
+        resultDir "/tmp/itestrt"
+    }
+    set ts_template "<?xml version=\"1.0\"?>\n\
+<testSuite version=\"4.2.1.67445\">\n\
+    <testGroups>\n\
+        <item name=\"group1\">\n\
+            <rootFolder>project://@modPath@/@module@/@category@</rootFolder>\n\
+            <filterList>\n\
+                <item name=\"fftc_filter\" type=\"com.fnfr.svt.testsuite.core.filters.TestSuiteFileMatchFilter\" matchType=\"REGEX\">\n\
+                    <pattern>@tcList@</pattern>\n\
+                    <onMatch>INCLUDE</onMatch>\n\
+                    <onNoMatch>EXCLUDE</onNoMatch>\n\
+                </item>\n\
+                <item name=\"list_filter\" type=\"com.fnfr.svt.testsuite.core.filters.TestSuiteParameterMatchFilter\" matchType=\"REGEX\">\n\
+                    <query>list</query>\n\
+                    <pattern>@list@</pattern>\n\
+                    <onMatch>INCLUDE</onMatch>\n\
+                    <onNoMatch>EXCLUDE</onNoMatch>\n\
+                </item>\n\
+                <item name=\"verion_filter\" type=\"com.fnfr.svt.testsuite.core.filters.TestSuiteParameterAssertionFilter\">\n\
+                    <query>version_available</query>\n\
+                    <assertion>\$value&lt;=&quot;@version@&quot;</assertion>\n\
+                    <onNoParameter>INCLUDE</onNoParameter>\n\
+                    <onAssertionTrue>INCLUDE</onAssertionTrue>\n\
+                    <onAssertionFalse>EXCLUDE</onAssertionFalse>\n\
+                </item>\n\
+                <item name=\"exclude\" type=\"com.fnfr.svt.testsuite.core.filters.TestSuiteParameterMatchFilter\" matchType=\"REGEX\">\n\
+                    <query>exclude_platform</query>\n\
+                    <pattern>.*@eplatform@.*</pattern>\n\
+                    <onMatch>EXCLUDE</onMatch>\n\
+                </item>\n\
+                <item name=\"include\" type=\"com.fnfr.svt.testsuite.core.filters.TestSuiteParameterMatchFilter\" matchType=\"REGEX\">\n\
+                    <query>include_platform</query>\n\
+                    <pattern>.*@iplatform@.*</pattern>\n\
+                    <onMatch>INCLUDE</onMatch>\n\
+                </item>\n\
+            </filterList>\n\
+        </item>\n\
+    </testGroups>\n\
+</testSuite>"
+
+   set str $ts_template
+   regsub -all "@tcList@" $str "$tcList" str;
+   regsub -all "@list@" $str "$list" str;
+   regsub -all "@modPath@" $str "$modPath" str;
+   regsub -all "@module@" $str "$module" str;
+   regsub -all "@category@" $str "$category" str;
+   regsub -all "@version@" $str "$version" str;
+   regsub -all "@eplatform@" $str "$eplatform" str;
+   regsub -all "@iplatform@" $str "$iplatform" str;
+   puts "TS = $str"
+   set tsPath "$resultDir"
+   if {![file isdirectory $tsPath]} {
+        file mkdir $tsPath
+   }
+   if {[file isfile ${tsPath}/ts.ffts]} {
+       file delete ${tsPath}/ts.ffts
+   }
+   set fd [open "${tsPath}/ts.ffts" "w"]
+   puts $fd $str
+   close $fd
+   puts "Created TS ${tsPath}/ts.ffts"
+}
+proc create_job {args} {
+    parse_args create_job $args {
+        cfg "spirent_testbed1_std"
+        topoDir "Spirent"
+        itarPath "/iTest_15.3.1"
+        qId "RTP_121212_232323"
+        resultDir "/tmp/itestrt"
+    }
+
+set job_template "<?xml version=\"1.0\" encoding=\"ASCII\"?>\n\
+<jobs:JobDefinition xmi:version=\"2.0\" \
+xmlns:xmi=\"http://www.omg.org/XMI\" \
+xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" \
+xmlns:jobs=\"http://fanfaresoftware.com/itest/3.4/jobs\" \
+onceStartTime=\"1357676040000\" immediate=\"true\" \
+periodEnd=\"1373310578721\" dailyStartTime=\"54840000\" timeLimit=\"3600000\">\n\
+  <data xsi:type=\"jobs:TestJobDefinitionData\" headline=\"\" description=\"\" \
+  test=\"file://@resultDir@/ts.ffts\" testbed=\"file://@resultDir@/@cfg@.tbml\" \
+  paramFile=\"project://common_project/topologies/extreme_parameters.ffpt\"/>\n\
+</jobs:JobDefinition>"
+
+   set str $job_template
+   regsub -all "@resultDir@" $str "$resultDir" str;
+   regsub -all "@topoDir@" $str "$topoDir" str;
+   regsub -all "@cfg@" $str "$cfg" str;
+   puts "Job = $str"
+   set tsPath "$resultDir"
+   if {![file isdirectory $tsPath]} {
+        file mkdir $tsPath
+   }
+   if {[file isfile ${tsPath}/job.ffjd]} {
+       file delete ${tsPath}/job.ffjd
+   }
+   set fd [open "${tsPath}/job.ffjd" "w"]
+   puts $fd $str
+   close $fd
+   puts "Created Job ${tsPath}/job.ffjd"
+}
+proc get_itest_category {args} {
+    parse_args get_itest_category $args {
+        modPath "null"
+    }
+
+    if {[regexp -nocase "func" $modPath]} {
+        return "FunctionalTest"
+    } elseif {[regexp -nocase "diag" $modPath]} {
+        return "DiagnosticTest"
+    } elseif {[regexp -nocase "perf" $modPath]} {
+        return "PerformanceTest"
+    } elseif {[regexp -nocase "scal" $modPath]} {
+        return "ScalabilityTest"
+    } elseif {[regexp -nocase "snmp" $modPath]} {
+        return "SNMPTest"
+    } elseif {[regexp -nocase "stress" $modPath]} {
+        return "StressTest"
+    } elseif {[regexp -nocase "syst" $modPath]} {
+        return "SystemsTest"
+    } elseif {[regexp -nocase "xml" $modPath]} {
+        return "XMLTest"
+    } else {
+        return 0
+    }
+}
+##################################################################
+# Procedure Name: GetCfgTestList
+#
+# Description: This proc verifies and returns the testListFile
+#              Dumps tests if ? entered
+#
+# Input args:
+#             platform - name of the platform
+#             modName  - name of the feature desired
+#             testsList - , separated list of tests
+#             testListFile - out arg to return
+#
+# Output args: returns testListFile on success, -1 if error
+#
+##################################################################
+proc GetCfgTestList {platform testsList release inList1 outList1} {
+   upvar $inList1 inList
+   upvar $outList1 outList
+   if {![file isdirectory Tmp]} {
+        file mkdir Tmp
+   }
+   if {$release==""} {
+      set release "current"
+   }
+   set sourceCompleteTestsDir "completetests.lst"
+   foreach tmptest $testsList {
+      lappend tests [string trim $tmptest]
+   }
+
+   set testsToRunA [calculateTestToRun "dev" $platform]
+   array set testsToRunAll $testsToRunA
+   puts "testsList = $testsList"
+   set strippedAllTestsList [combineAndStripTestList testsToRunAll]
+   if {$testsList==""||$testsList=="?"} {
+      regsub -all " " $strippedAllTestsList ", " comaSeparated
+      puts "$comaSeparated"
+      return -1
+   }
+
+   set arrName [array names testsToRunAll]
+   set initIndex [lsearch -regexp $strippedAllTestsList init]
+   if {$initIndex!=-1} {
+      #puts $fd_out "[lindex $strippedAllTestsList $initIndex]"
+      set oldInitTest [lindex $strippedAllTestsList $initIndex]
+   } else {
+      set oldInitTest ""
+   }
+
+   ### Put check here for valid tests from completetests.lst of $modName
+   set inList ""
+   set outList ""
+   foreach testToRun $tests {
+      if {[lsearch -exact $strippedAllTestsList $testToRun]==-1} {
+         lappend outList $testToRun
+      } else {
+         lappend inList $testToRun
+      }
+   }
+   return 1
+}

@@ -1,0 +1,886 @@
+
+##################################################################
+# Procedure Name: getSlotId
+# Description:
+#       This proc is used to get the Operational slots
+#      and the number of slots used  in stack
+#       
+# Input args:  None
+#
+# Output args: None
+# Typical usage:
+#           
+# Category: 
+##################################################################
+proc getSlotId {args} {
+global DUTs_info
+global whichDutNow
+global maxSlot
+global getSlotId
+
+CheckOperationalStack
+result_debug "Get the number of slots used in stack"
+set parameterList ""
+lappend parameterList "{Operational} -3"
+set getSlot [GetKeyValue "show slot" $parameterList]
+if {[string match "Slot*" [lindex $getSlot 0]]} {
+
+set maxSlot [llength $getSlot]
+result_ok "GETSLOT $getSlot,$maxSlot"
+unset parameterList
+regsub -all Slot- $getSlot "" getSlotId
+result_debug "Slot Ids used for stack -$getSlotId"
+
+
+return $getSlotId
+return $maxSlot
+} else {
+
+result_debug "Get the number of slots used in stack"
+set parameterList ""
+lappend parameterList "{Operational} -2"
+set getSlot [GetKeyValue "show slot" $parameterList]
+
+set maxSlot [llength $getSlot]
+result_ok "GETSLOT $getSlot,$maxSlot"
+unset parameterList
+regsub -all Slot- $getSlot "" getSlotId
+result_debug "Slot Ids used for stack -$getSlotId"
+
+
+return $getSlotId
+return $maxSlot
+
+}
+}
+##################################################################
+# Procedure Name: getStandbyMac
+# Description:
+#       This proc is used to get the list of the Standby mac
+#
+# Input args:  None
+#
+# Output args: None
+# Typical usage:
+#
+# Category:
+##################################################################
+proc getStandbyMac {args} {
+global getStandbyMac 
+global DUT1_CONNECT
+global DUT1_CONNECTB
+
+result_debug "Get the StandbyMac list for the stack"
+Login $DUT1_CONNECT -masterCheck 0
+set parameterList ""
+lappend parameterList "{Factory MAC address} 2"
+set nodeMac [GetKeyValue "show stacking detail" $parameterList]
+set maxSlot [llength $nodeMac]
+result_ok "nodeMac $nodeMac"
+result_ok "No of Slots is $maxSlot"
+
+result_debug "Get the Master Node-Mac"
+set parameterList ""
+lappend parameterList "{Role} 0 2"
+set MasterNodeMac [GetKeyValue "show stacking" $parameterList]
+regsub -all \\* $MasterNodeMac "" MasterNodeMac
+result_ok "MasterNodeMac -$MasterNodeMac"
+
+Login $DUT1_CONNECTB -masterCheck 0 -CheckOperational 0
+result_debug "Get the Backup node mac"
+set parameterList ""
+lappend parameterList "{Role} 0 2"
+set BackupNodeMac [GetKeyValue "show stacking" $parameterList]
+regsub -all \\* $BackupNodeMac "" BackupNodeMac
+result_ok "BackupNodeMac $BackupNodeMac"
+
+Login $DUT1_CONNECT -masterCheck 0
+
+set getStandbyMac ""
+for {set i 0 } {$i < $maxSlot} {incr i } {
+set mac [lindex $nodeMac $i]
+if {($mac == $MasterNodeMac) || ($mac == $BackupNodeMac)} {
+# skipping for master and backup mac
+} else {
+lappend getStandbyMac $mac
+}
+}
+result_ok "getStandbyMac -$getStandbyMac"
+return $getStandbyMac
+}
+
+##################################################################
+
+##################################################################
+# Procedure Name: getStandbySlotId
+# Description:
+#       This proc is used to get the list of Standby lot Id
+#
+# Input args:  None
+#
+# Output args: None
+# Typical usage:
+#
+# Category:
+##################################################################
+
+##################################################################
+# Procedure Name: getSlotMac
+# Description:
+#       This proc is used to get the Slot Mac
+#
+# Input args:  slotId - slot for which mac is required
+#
+# Output args: None
+# Typical usage:getSlotMac 2
+#
+# Category:
+##################################################################
+
+
+proc getSlotMac { { slotId "1" }}  {
+set parameterList ""
+result_ok "slot - $slotId"
+#lappend parameterList "{Configured:} 4 4"
+lappend parameterList "{Factory MAC address} 2"
+set  nodeMac [GetKeyValue "show stacking slot $slotId detail" $parameterList]
+result_ok "NODEMAC $nodeMac"
+return $nodeMac
+
+}
+######################################################
+# Procedure Name: getStackMac
+# Description:
+#       This proc is used to get the Slot Mac
+#
+# Input args:  slotId - slot for which mac is required
+#
+# Output args: None
+# Typical usage:getSlotMac 2
+#
+# Category:
+##################################################################
+
+
+proc getStackMac { { slotId "1" }}  {
+set parameterList ""
+result_ok "slot - $slotId"
+lappend parameterList "{Configured:} 4 4"
+#lappend parameterList "{Stack MAC address} 2"
+set  nodeMac [GetKeyValue "show stacking slot $slotId detail" $parameterList]
+result_ok "NODEMAC $nodeMac"
+return $nodeMac
+
+}
+
+######################################################################
+######################################################################
+
+proc CheckOperationalStack {} {
+
+global DUT1_CONNECT
+global MasterNodeMac
+global BackupNodeMac
+set result "ok"
+
+Login $DUT1_CONNECT -masterCheck 0
+set MasterNodeMac [getMasterNodeMac]
+set BackupNodeMac [getBackupNodeMac]
+
+result_debug "Verify configurations after reboot"
+set parameterList ""
+lappend parameterList "{Active.*Master} exist"
+lappend parameterList "{Active.*Backup} exist"
+lappend parameterList "{Active.*Standby} exist"
+set result [CheckKeyValue "show stacking" $parameterList -time \
+   {s: 1 i: 5 d: 400 f: 400 r}  -comment "Verify stacking configurations after reboot"]
+if {$result != "ok"} { return "error" }
+
+result_debug "Verify show switch after reboot"
+set  parameterList ""
+lappend parameterList "{MASTER} {BACKUP.*In.*Sync} inLine exists"
+set result [CheckKeyValue "show switch" $parameterList -time \
+	{s: 1 i: 5 d: 180 f: 180 r} -comment "Verify show switch after reboot"]
+result_debug "Result after execution is =============> $result"
+#---- FIXME ADDED ESLE STATEMENT TO RETURN VALUE
+if {$result != "ok"} { return 0 } else { return 1}
+
+for {set i 1} {$i<=$maxSlot} {incr i} {
+   set parameterList ""
+   lappend parameterList "Slot-$i Operational inLine exist"
+}
+set result [CheckKeyValue "show slot" $parameterList  -time \
+        {s: 1 i: 5 d: 180 f: 180 r} -comment "check show slot output"]
+if {$result != "ok"} { return "error" }
+return "ok"
+}
+
+################################################################## 
+# Procedure Name :RebootNode
+#   
+# Description: Reboots the current DUT, saves the current config
+#              Reboots multiple DUTs simultaneously provided via duts
+#   ### NOTE: Unfortunately, can not perform waitForReboot on all the DUTs, only the last rebooted is checked.
+#   ###       Login eats up all expect buffer leaving nothing for waitForReboot.
+#     
+#     
+#
+# Input args: duts, save
+# Output args: none
+# Typical usage:
+#             CheckReboot 1,2,3 -save no -slots 6
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc RebootNode {{duts ""} {cmd "reboot"} {node-address ""} args} {
+   global DUT
+   global DUTs_info
+   parse_args RebootNode $args {
+      save "yes"
+      maxWait 30
+      masterCheck 1
+   }
+   DBug 1 "the CheckReboot args vals: duts $duts, save $save, maxWait $maxWait"
+
+   global whichDutNow
+   global hostname
+   if {$duts==""} {
+      set duts $whichDutNow
+   }
+   set dutList [split $duts ,]
+
+   set connect _CONNECT
+   set rebootSuccessful 0
+   set eofEncountered 0
+   set dutMac 00:04:96:20:ad:ba
+   set nodeMac 00:04:96:20:ad:ba
+    if [info exists node-address] {
+    set cmd "reboot node-address $node-address"
+    }
+   set dutMac $DUTs_info(DUT1,sysMAC)
+set dutMac [string tolower $dutMac]
+   foreach dut $dutList {
+      set DUTName [format %s%d DUT $dut]
+      global ${DUTName}_CONNECT ${DUTName}_CONNECTB;
+      global ${DUTName}_IP
+      set telnetIp [set ${DUTName}_IP]
+      #make sure Login will not reuse the lost telnet spawn id after reboot
+      if {[info exists hostname]} {set hostname [ldelete "$hostname" "telnetIp"]}
+      Login [set ${DUTName}_CONNECT] -masterCheck $masterCheck
+      global spawn_id
+      global spawn_ids
+      foreach name $hostname {
+         if { $spawn_id == $spawn_ids($name) } {
+            set ipAddr $name
+         }
+      }
+      result_debug "Rebooting with save $save option..."
+      result_debug "reboot\r"  ;# need to log for debug purposes
+      slow_send "$cmd\r"
+      expect {
+         "\\? " { send "y\n" }
+         "y - save" {
+            if {[regexp -nocase "^n" $save]} {
+               result_debug "Sent n"
+               send "n\n"
+            } else {
+               result_debug "Sent y"
+               send "y\n"
+            }
+         }
+      }
+      expect {
+         " #" {
+            set rebootSuccessful 1
+         }
+         " >" {
+            set rebootSuccessful 1
+         }
+         eof {
+            #the connection is closed because it is not a console connection
+            #make sure Login will not reuse the lost telnet spawn id
+            #after reboot
+            set rebootSuccessful 1
+            set eofEncountered $DUTName$connect
+            result_debug "connection closed by switch."
+	    set hostname [ldelete "$hostname" "$ipAddr"];
+         }
+      }
+      set connectIp $DUTName$connect
+   }
+   if {$eofEncountered!=0} {   ;# one of the connect was a telnet
+      exSleep 275
+      #if it's a console connection, login
+      #if it's not a console connection need to spawn the connection and login
+      #in either case calling Login will take care of it
+      if {[Login [set $eofEncountered]] == 0} {
+         result_error "Unable to login to switch after reboot"
+         return 0
+      } else {
+         return "ok"
+      }
+   }
+if [info exists node-address] {
+
+if {$dutMac == $node-address} {
+   set status [WaitForReboot $maxWait "after sending reboot command to $DUTName" $masterCheck]
+    if {$status == "error"} {
+      report_start_test "Failed to connect to switch after reboot"
+      result_error "Failed to connect to switch after reboot"
+      report_end_test
+      return 0
+   }
+} else {
+# exSleep 60
+ set showSwitchOutput ""
+   lappend showSwitchOutput "{Slot.*Initializing} exist"
+   CheckKeyValue "show slot" $showSwitchOutput -time {s: 1 i: 5 d: 180 f: 180 r} -comment "check show slot output"
+}
+}
+   if {[CheckOperational] != 1} {
+      result_error "Some slot is not operational"
+      error "Some slot is not operational"
+   }
+   result_debug "Successfully login"
+   set status "ok"
+   if {[regexp -nocase "^n" $save]} {
+      sleep 2
+      set buf [SendACmd "config default delete port all"] ;# should not do it for saved config
+      set backupStr "Error: This command can only be executed on Master MSM"
+      if {[regexp -nocase $backupStr $buf]} {
+         set xos_version [GetVersion DUT$whichDutNow 4]
+         if {$xos_version < "11.2.0"} {
+            if { $xos_version >= "10.2.0" } {
+               set virtualRouter VR-Control
+            } else {
+               set virtualRouter VR-1
+            }
+            EnableDebugMode  ;# needed as 11.1.1.3 requires debug-mode
+            global bcmChassis
+            if {[regexp -nocase $bcmChassis $buf]} {
+               SendACmd "telnet vr $virtualRouter 10.0.12.2"
+            } else {
+               SendACmd "telnet vr $virtualRouter 10.0.10.2"
+            }
+         } else {
+           # SendACmd "telnet msm b"
+           if {[info exists DUT${whichDutNow}_CONNECTB]} {
+              Login [set DUT${whichDutNow}_CONNECTB] -CheckOperational 0
+           } else {
+              SendACmd "telnet msm b"
+           }
+         }
+        #---- FIXME
+        #SendACmd "run msm-failover"
+#         logout   ;# do not send logout as vr-control gets kicked out
+         Login $DUTs_info(DUT$whichDutNow,connect)
+      }
+   }
+   return $status
+}
+
+################################################################## 
+# Procedure Name: WaitForReboot
+#   
+# Description: Internal function that performs a login to the current DUT after waiting for wait time
+#              prints the expect_buffer to log file, comment to report file
+#
+# Input args: comment
+# Output args: none
+# Typical usage:
+#                set status [WaitForReboot "after sending reboot command to $DUTName"]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc WaitForRebootStack {wait comment {masterCheck 1}} {
+
+global Stacking
+global stacking
+
+global DUTs_info
+result_debug "In WaitForReboot"
+set expect_out(buffer) "No Output:WaitForReboot"
+set timeout 300
+set flag "true"
+while {$flag == "true"} {
+   expect {
+      timeout {
+         expect "*"
+         SaveOutputBuffer $expect_out(buffer)
+         return "error"
+      }
+      full_buffer {
+         set flag "true"
+         SaveOutputBuffer $expect_out(buffer)
+      }
+      "login:" {
+         set flag "false"
+         if {$wait != 0} {
+            result_debug "Wait for $wait seconds after logging in for ports to come up\n"
+            exSleep $wait
+         }
+         SaveOutputBuffer $expect_out(buffer)
+         global stacking
+         #if {[regexp -nocase $stacking [GetPlatform]]} {
+            exSleep 40 
+         #}
+         if {[try_login_on_switch $comment "admin" "" $masterCheck]!=-1} {
+               return "ok"
+         }
+      }
+      "System RAM Passed" {
+         send "\033"
+         send "\033"
+      }
+      "boot: " {
+         send "\r"
+      }
+      "Removable" {
+         send "\033"
+         send "\033"
+      }
+     }
+}
+return "ok"
+}
+
+proc CheckRebootStack {{duts ""} args} {
+   global DUT
+   global DUTs_info
+
+   parse_args CheckReboot $args {
+      save "yes"
+      maxWait 40 
+      masterCheck 1
+   }
+   DBug 1 "the CheckReboot args vals: duts $duts, save $save, maxWait $maxWait"
+
+   global whichDutNow
+   global hostname
+   if {$duts==""} {
+      set duts $whichDutNow
+   }
+   set dutList [split $duts ,]
+
+   set connect _CONNECT
+   set rebootSuccessful 0
+   set eofEncountered 0
+   foreach dut $dutList {
+      set DUTName [format %s%d DUT $dut]
+      global ${DUTName}_CONNECT ${DUTName}_CONNECTB;
+      global ${DUTName}_IP
+      set telnetIp [set ${DUTName}_IP]
+      #make sure Login will not reuse the lost telnet spawn id after reboot
+      if {[info exists hostname]} {set hostname [ldelete "$hostname" "telnetIp"]}
+      Login [set ${DUTName}_CONNECT] -masterCheck $masterCheck
+      global spawn_id
+      global spawn_ids
+      foreach name $hostname {
+         if { $spawn_id == $spawn_ids($name) } {
+            set ipAddr $name
+         }
+      }
+ result_debug "Rebooting with save $save option..."
+      result_debug "reboot\r"  ;# need to log for debug purposes
+      slow_send "reboot stack-topology\r"
+      expect {
+         "stack\\? " { send "y\n" }
+         #---- Changed from switch\\?
+         "y - save" {
+            if {[regexp -nocase "^n" $save]} {
+               result_debug "Sent n"
+               send "n\n"
+            } else {
+               result_debug "Sent y"
+               send "y\n"
+            }
+         }
+      }
+      expect {
+         " #" {
+            set rebootSuccessful 1
+         }
+         " >" {
+            set rebootSuccessful 1
+         }
+         eof {
+            #the connection is closed because it is not a console connection
+            #make sure Login will not reuse the lost telnet spawn id
+            #after reboot
+            set rebootSuccessful 1
+            set eofEncountered $DUTName$connect
+            result_debug "connection closed by switch."
+            set hostname [ldelete "$hostname" "$ipAddr"];
+         }
+      }
+      set connectIp $DUTName$connect
+   }
+ if {$eofEncountered!=0} {   ;# one of the connect was a telnet
+      exSleep 240
+      #if it's a console connection, login
+      #if it's not a console connection need to spawn the connection and login
+      #in either case calling Login will take care of it
+      if {[Login [set $eofEncountered]] == 0} {
+         result_error "Unable to login to switch after reboot"
+         return 0
+      } else {
+         return "ok"
+      }
+   }
+   set status [WaitForReboot $maxWait "after sending reboot command to $DUTName" $masterCheck]
+   if {$status == "error"} {
+      report_start_test "Failed to connect to switch after reboot"
+      result_error "Failed to connect to switch after reboot"
+      report_end_test
+      return 0
+   }
+
+   #if {[CheckOperationalStack] != 1} { 
+   #---- FIXME 
+   #   result_error "Some slot is not operational"
+   #   error "Some slot is not operational"
+   #}
+   result_debug "Successfully login"
+   set status "ok"
+   if {[regexp -nocase "^n" $save]} {
+      sleep 2
+      set buf [SendACmd "config default delete port all"] ;# should not do it for saved config
+      set backupStr "Error: This command can only be executed on Master MSM"
+      if {[regexp -nocase $backupStr $buf]} {
+         set xos_version [GetVersion DUT$whichDutNow 4]
+         if {$xos_version < "11.2.0"} {
+            if { $xos_version >= "10.2.0" } {
+               set virtualRouter VR-Control
+            } else {
+               set virtualRouter VR-1
+            }
+            EnableDebugMode  ;# needed as 11.1.1.3 requires debug-mode
+ global bcmChassis
+            if {[regexp -nocase $bcmChassis $buf]} {
+               SendACmd "telnet vr $virtualRouter 10.0.12.2"
+            } else {
+               SendACmd "telnet vr $virtualRouter 10.0.10.2"
+            }
+         } else {
+           # SendACmd "telnet msm b"
+           if {[info exists DUT${whichDutNow}_CONNECTB]} {
+              Login [set DUT${whichDutNow}_CONNECTB] -CheckOperational 0
+           } else {
+              SendACmd "telnet msm b"
+           }
+         }
+         #---- FIXME
+         #SendACmd "run msm-failover"
+#         logout   ;# do not send logout as vr-control gets kicked out
+         Login $DUTs_info(DUT$whichDutNow,connect)
+      }
+   }
+   return $status
+}
+
+##################################################################
+# Procedure Name: telnetSlot
+# Description:
+#       This proc is used to telnet slot from the DUT
+#       It assume that the current session is at the DUT prompt
+# Input args:  slotId  - slot to telnet to
+#              logout - logout: logout of the telnet session at the end
+#                       nologout: don't logout. the DUT will be in the telnet
+#                                 session after running this proc
+# Output args: None
+# Typical usage:
+#           telnetSlot 2  ""
+# Category: Telnet
+##################################################################
+
+proc telnetSlot { slotId {logout logout} } {
+   set timeout 20
+   set loginSuccess 0
+   set user admin
+   set password ""
+   exp_send "telnet slot $slotId\r"
+   sleep 2
+   for {set try 0} {$try < 3 } {incr try} {
+      expect {
+          -re "Error: Cannot establish connection to self" {
+         result_debug_expect
+         return 5
+        }
+         -re "Error: No node present configured" {
+         result_debug_expect
+         return 4
+        }
+        -re "No route to host" {
+	result_debug_expect
+	set loginSuccess 0
+	return 3
+	}
+	    -re ".*login:" {
+            exp_send "$user\r"
+         }
+         -re ".*assword:" {
+            set passwordSent 1
+            exp_send "$password\r"
+         }
+	
+
+
+           -re "save your config.*\[#>]" {
+            #see the banner and then system prompt. we are in.
+ 
+           result_debug_expect
+            set loginSuccess 1
+            #break
+         }
+        timeout {
+         expect *
+         result_debug_expect
+         return error
+      }
+
+      }
+result_debug_expect   
+}
+if { $loginSuccess != 1 } {
+      return "error"
+   }
+   #if caller specify nologout, don't logout
+   if { $logout != "logout" } {
+      return 1
+   }
+   exp_send "exit\r"
+   expect {
+      -nocase "y/n" {
+          result_debug_expect
+          send "n\r"
+      }
+   }
+   expect {
+      "Connection closed by foreign host" {
+         result_debug_expect
+         return 1
+      }
+      timeout {
+         expect *
+         result_debug_expect
+         return error
+      }
+   }
+}
+
+##################################################################
+# Procedure Name: getBackupSlotId
+# Description:
+#       This proc is used to get the Backup Slot Id from the Stack
+#       
+# Input args:  None
+#
+# Output args: None
+# Typical usage:
+#
+# Category:
+##################################################################
+
+proc getBackupSlotId {args} {
+global BackupSlotId
+
+result_debug "Get the Backup Slot ID"
+set parameterList ""
+lappend parameterList "{Backup} -2"
+set BackupSlotId [GetKeyValue "show stacking" $parameterList]
+ result_debug "BackupSlotId -$BackupSlotId"
+
+return $BackupSlotId
+}
+##################################################################
+# Procedure Name: getMasterSlotId 
+# Description:
+#       This proc is used to get the Master Slot Id from the Stack
+#
+# Input args:  None
+#
+# Output args: None
+# Typical usage:
+#
+# Category:
+##################################################################
+
+proc getMasterSlotId {args} {
+global MasterSlotId
+
+result_debug "Get the Master Slot ID"
+set parameterList ""
+lappend parameterList "{Active.*Master} -1"
+set MasterSlotId [GetKeyValue "show stacking" $parameterList]
+ result_debug "MasterSlotId -$MasterSlotId"
+return $MasterSlotId
+}
+
+##################################################################
+# Procedure Name: getBackupNodeMac
+# Description:
+#       This proc is used to get the Backup's Node mac
+#
+# Input args:  None
+#
+# Output args: None
+# Typical usage:
+#
+# Category:
+##################################################################
+proc getBackupNodeMac {args} {
+global BackupNodeMac
+global DUTs_info
+global whichDutNow
+
+result_debug "Get the Backup node mac"
+set parameterList ""
+lappend parameterList "{Backup} -3"
+set BackupNodeMac [GetKeyValue "show stacking" $parameterList]
+ result_debug "BackupNodeMac -$BackupNodeMac"
+return $BackupNodeMac
+}
+
+##################################################################
+# Procedure Name: getMasterNodeMac
+# Description:
+#       This proc is used to get the Master's Node mac
+#
+# Input args:  None
+#
+# Output args: None
+# Typical usage:
+#
+# Category:
+##################################################################
+proc getMasterNodeMac {args} {
+global MasterNodeMac
+global DUTs_info
+global whichDutNow
+
+
+result_debug "Get the Master Node-Mac"
+set parameterList ""
+lappend parameterList "{Active.*Master} -2"
+set MasterNodeMac [GetKeyValue "show stacking" $parameterList]
+regsub -all \\* $MasterNodeMac "" MasterNodeMac
+ result_debug "MasterNodeMac -$MasterNodeMac"
+
+
+return $MasterNodeMac
+}
+
+
+##################################################################
+# Procedure Name: telnetAlternateIp
+# Description:
+#       This proc is used to telnet ip from the DUT
+#       It assume that the current session is at the DUT prompt
+# Input args:  ip  - ip to telnet to
+#              logout - logout: logout of the telnet session at the end
+#                       nologout: don't logout. the DUT will be in the telnet
+#                                 session after running this proc
+# Output args: None
+# Typical usage:
+#           telnetAlternateIp 192.1.1.2  ""
+# Category: Telnet
+##################################################################
+
+proc telnetAlternateIp { ip {logout logout} } {
+   set timeout 120
+   set loginSuccess 0
+   set user admin
+   set password ""
+   exp_send "telnet $ip\r"
+   for {set try 0} {$try < 3 } {incr try} {
+   sleep 2
+      expect {
+          -re "Error: Cannot establish connection to self" {
+         result_debug_expect
+         return 5
+        }
+         -re "Error: No node present configured" {
+         result_debug_expect
+         return 4
+        }
+	  -re ".*login:" {
+            exp_send "$user\r"
+         }
+         -re ".*assword:" {
+            set passwordSent 1
+            exp_send "$password\r"
+         }
+         -re "#|>" {
+            result_debug_expect
+            set loginSuccess 1
+            #break
+         }
+        timeout {
+         expect *
+         result_debug_expect
+         return error
+      }
+
+      }
+result_debug_expect
+}
+if { $loginSuccess != 1 } {
+      return "error"
+   }
+   #if caller specify nologout, don't logout
+   if { $logout != "logout" } {
+      return 1
+   }
+   exp_send "exit\r"
+   expect {
+      -nocase "y/n" {
+          result_debug_expect
+          send "n\r"
+      }
+   }
+   expect {
+      "Connection closed by foreign host" {
+         result_debug_expect
+         return 1
+      }
+      timeout {
+         expect *
+         result_debug_expect
+         return error
+      }
+   }
+}
+
+##################################################################
+# Procedure Name: getStandbySlotId
+# Description:
+#       This proc is used to get the list of Standby lot Id
+#
+# Input args:  None
+#
+# Output args: None
+# Typical usage:
+#
+# Category:
+##################################################################
+
+proc getStandbySlotId {args} {
+global StandbySlotId
+
+result_debug "Get the Standby Slot ID"
+set parameterList ""
+lappend parameterList "{Standby} -2"
+set StandbySlotId [GetKeyValue "show stacking" $parameterList]
+ result_debug "StandbySlotId -$StandbySlotId"
+
+return $StandbySlotId
+}
+
+######################################################################
+
+
+

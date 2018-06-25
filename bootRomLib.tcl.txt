@@ -1,0 +1,1572 @@
+proc getSpawnId {ipAddr msmSpawnId} {
+    global spawn_id
+    global hostname
+    global spawn_ids
+    global getSpawnFailCount
+
+    upvar $msmSpawnId msmId
+    set newConnection 1
+
+    if {![info exists getSpawnFailCount($ipAddr)]} {
+        set getSpawnFailCount($ipAddr) 0
+    }
+    #check for existing connection
+    if { [ info exists hostname ] == "1" } {
+        foreach name $hostname {
+            if { $name == $ipAddr } {
+                set msmId $spawn_ids($name)
+                if { $msmId != "INVALID" } {
+                    # --- use it for delay without using sleep
+                    set newConnection 0
+                }
+            }
+        }
+        #if brand new connection, add to host name list
+        if { [lsearch $hostname $ipAddr] == -1 } {
+           lappend hostname $ipAddr
+        }
+    } else {
+        lappend hostname $ipAddr
+    }
+
+
+    #spawn new connection if not exists
+    global connectionTimeout
+    if { $newConnection == 1 } {
+        if [catch "spawn telnet $ipAddr" reason] {
+            result_debug "failed to spawn program: $reason\n"
+            error "failed to spawn program: $reason\n"
+        }
+        #set spawn_ids($ipAddr) $spawn_id
+        #set msmId $spawn_id
+        set timeout $connectionTimeout
+        result_debug "Connect via telnet - no login $ipAddr,  pid=$spawn_id"
+        #wait for connection
+        expect {
+            "?nable to ?onnect" {
+                if {$getSpawnFailCount($ipAddr) < 3} {
+                    puts "Hit Console in Use # $getSpawnFailCount($ipAddr)"
+                    incr getSpawnFailCount($ipAddr)
+                    ClearConsoleDUT "$ipAddr"
+                    set spawn_ids($ipAddr) INVALID
+                    getSpawnId $ipAddr msmId
+                } else {
+                    result_error $expect_out(buffer)
+                    expect *
+                    result_error $expect_out(buffer)
+                    result_error "Unable to connect"
+                    unset getSpawnFailCount($ipAddr)
+                }
+            }
+            "?onnected to" {
+                puts "REALLY Connected via telnet -  $ipAddr,  pid=$spawn_id"
+                set spawn_ids($ipAddr) $spawn_id
+                set msmId $spawn_id
+                unset getSpawnFailCount($ipAddr)
+                #wait for all remaining characters to come
+            }
+        }
+    }
+}
+proc _getGrubMenu {dut {MM "A"} {partition "primary"}} {
+    set msmSpawnId "INVALID"
+    global connectionTimeout DUTs_info
+    global spawn_ids MAIN
+
+    global DUT${dut}_CONNECT
+    global DUT${dut}_CONNECTB
+    global hostname
+    set retValue "error"
+    _setMultiTaskVar MAIN(ATBOOTROM$MM) 0
+
+    if {$MM == "A"} {
+        set MMValue ""
+        set MMDisplay "A"
+    } else {
+        set MMValue "B"
+        set MMDisplay "B"
+    }
+    if {[info exist DUT${dut}_CONNECT${MMValue}]} {
+        getSpawnId [set DUT${dut}_CONNECT${MMValue}] msmSpawnId
+        set spawn_id $msmSpawnId
+    } else {
+        result_debug "EXIT SendSpaces DUT${dut}_CONNECT${MMValue} Does Not Exist"
+        return 1
+    }
+    if {($msmSpawnId == "INVALID") } {
+        result_debug "Error condition reached. Valid Spawn id not set"
+        return -1
+    }
+
+    set t1 [clock seconds];
+    set newT 1
+    set endTime 180
+    puts "At While Value $newT < $endTime"
+    set timeout 1
+    set done 1
+    puts "Waiting for the Grub Menu on $dut $MMDisplay. Second Count: $newT $spawn_id"
+
+    if [catch {send "\r"} reason] {
+        result_debug "failed to send <cr>: $reason\n"
+        result_debug "Reconnect to DUT${dut}_CONNECT${MMValue} [set DUT${dut}_CONNECT${MMValue}]"
+        getSpawnId [set DUT${dut}_CONNECT${MMValue}] msmSpawnId
+        set spawn_id $msmSpawnId
+        exSleep 2
+    }
+    expect {
+        -nocase -re ".*grub.*" {
+            incr grubCount
+            puts "\nGot a Grub Menu DUT $dut  MM $MM Time $newT"
+            after 300
+            send -- "\x1B\[A";
+            expect *
+            after 300
+            send -- "\x1B\[A";
+            expect *
+            after 300
+            send -- "\x1B\[A";
+            expect *
+            after 300
+            send -- "\x1B\[A";
+            expect *
+            after 300
+            send -- "\x1B\[A";
+            expect *
+            after 300
+            send -- "\x1B\[A";
+            expect *
+            after 300
+            send "\r"
+            after 1000
+            _setMultiTaskVar MAIN(ATBOOTROM$MM) 1
+            catch {close -i $spawn_id} myr
+            catch {wait} myr
+            puts "WAIT on closing close -i $msmSpawnId"
+            exSleep 2
+            set timeout $connectionTimeout
+            return
+        }
+        timeout {
+            puts "Sending space -  hit timeout - time $newT - $dut  MM $MM $spawn_id"
+            expect *
+            if {[info exists expect_out(buffer)]} {
+                unset expect_out(buffer)
+            }
+            set t2 [clock seconds];
+            set newT [expr $t2-$t1];
+            if {$newT > $endTime} {
+                result_debug "Hit the end of get a Grub with no luck"
+                catch {close -i $msmSpawnId} myr
+                catch {wait} myr
+                set timeout $connectionTimeout
+                return -1
+            }
+            if [catch {send " \r"} reason] {
+                puts "Send up arrow an issue: $reason"
+            } else {
+            }
+            exp_continue
+        }
+    }
+    result_debug "Hit the end of get a bootrom with no luck"
+    _setMultiTaskVar MAIN(ATBOOTROM$MM) 0
+    catch {close -i $spawn_id} myr
+    catch {wait} myr
+    set timeout $connectionTimeout
+    return -1
+}
+
+# -----------------------------------------------------------------------------
+# proc powerSendSpacesOnDUT
+#
+# Fork PowerCycle to BootRom
+proc powerSendSpacesOnDUT {dut {MM "A"}} {
+
+    set msmSpawnId "INVALID"
+    global connectionTimeout MAIN
+    global spawn_ids
+
+    _setMultiTaskVar MAIN(ATBOOTROM$MM) 0
+    set timeout 1
+    set msmAFlag "FALSE"
+    set msmBFlag "FALSE"
+
+    global DUT${dut}_CONNECT
+    global DUT${dut}_CONNECTB
+    global hostname
+    set retValue "error"
+
+    if {$MM == "A"} {
+        set MMValue ""
+        set MMDisplay "A"
+    } else {
+        set MMValue "B"
+        set MMDisplay "B"
+    }
+    set myIP ""
+    if {[info exist DUT${dut}_CONNECT${MMValue}]} {
+        set myIP "[set DUT${dut}_CONNECT${MMValue}]"
+        getSpawnId [set DUT${dut}_CONNECT${MMValue}] msmSpawnId
+        set spawn_id $msmSpawnId
+    } else {
+        result_debug "EXIT SendSpaces DUT${dut}_CONNECT${MMValue} Does Not Exist"
+        return 1
+    }
+    if {($msmSpawnId == "INVALID") } {
+        result_debug "Error condition reached. Valid Spawn id not set"
+        return -1
+    }
+
+    # Timing.  Move to time instead of random spaces sent count
+    set t1 [clock seconds];
+    set spaceTop 400
+    set endTime 300
+    set newT 1
+    global extraBootRomSpaces
+    if {[info exist extraBootRomSpaces] && $extraBootRomSpaces} {set endTime 300;} else {set endTime 220}
+    puts "At While Value $newT < $endTime"
+    set lspace "\040\040\040\040\040\040"
+    append lspace "\040\040\040\040\040\040\040\040\040\040\040\040\040\040\040\040\040\040"
+    append lspace "\040\040\040\040\040\040\040\040\040\040\040\040\040\040\040\040\040\040"
+    append lspace "\040\040\040\040\040\040\040\040\040\040\040\040\040\040\040\040\040\040"
+    append lspace "\040\040\040\040\040\040\040\040\040\040\040\040\040\040\040\040\040\040"
+    append lspace "\040\040\040\040\040\040\040\040\040\040\040\040\040\040\040\040\040\040"
+    append lspace "\040\040\040\040\040\040\040\040\040\040\040\040\040\040\040\040\040\040"
+    append lspace "\040\040\040\040\040\040\040\040\040\040\040\040\040\040\040\040\040\040"
+
+    set timeout 1
+    # Clear the buffer
+    send "\r"
+    expect *
+    if {[info exists expect_out(buffer)]} {unset expect_out(buffer);}
+
+    while {$newT < $endTime} {
+        puts -nonewline "Sending spaces on DUT $dut $MMDisplay. Second Count: $newT $msmSpawnId"
+        if [catch {send  "\040\040\040\040\040\040\040\r"} reason] {
+            result_debug "failed to send spaces: $reason\n"
+            result_debug "Reconnect to DUT${dut}_CONNECT${MMValue} [set DUT${dut}_CONNECT${MMValue}]"
+            getSpawnId [set DUT${dut}_CONNECT${MMValue}] msmSpawnId
+            exSleep 5
+        }
+        expect {
+            timeout {
+                puts "Timeout -  $spawn_id"
+                if {$newT == [expr $endTime - 1]} {
+                    puts "NEVER GOT A BOOTROM PROMPT DUT${dut} ${MMValue}"
+                    catch {close -i $msmSpawnId} myr
+                    catch {wait} myr
+                    puts "WAIT on closing close -i $msmSpawnId"
+                    exSleep 50
+                    result_debug "Eror condition reached. DUT $dut"
+                    return -1
+                }
+            }
+            "BootRom >" {
+                result_debug "\nGot General BootROM DUT $dut  MM $MM "
+                _setMultiTaskVar MAIN(ATBOOTROM$MM) 1
+                puts "ATBROM = ATBOOTROM$MM "
+                catch {close -i $msmSpawnId} myr
+                catch {wait} myr
+                puts "WAIT on closing close -i $msmSpawnId"
+                exSleep 5
+                set timeout $connectionTimeout
+                return
+            }
+            "login:" {
+                if {$newT < 60} {
+                    result_debug "Hit login, but wait for power cycler"
+                    send "admin\r";
+                    expect "password:"
+                    send "\r";
+                    flush stdout
+                    set t2 [clock seconds];
+                    set newT [expr $t2-$t1];
+                    after 1000
+                    continue
+                }
+                result_debug "Got a login: prompt. Bootrom miss DUT $dut  MM $MM !!!"
+                catch {close -i $msmSpawnId} myr
+                catch {wait} myr
+                puts "WAIT on closing close -i $msmSpawnId"
+                after 2000
+                _setMultiTaskVar MAIN(ATBOOTROM$MM) 0
+                set timeout $connectionTimeout
+                return
+            }
+            "password:" {
+                if {$newT < 60} {
+                    result_debug "Hit password, but wait for power cycler"
+                    send "\r"
+                    flush stdout
+                    set t2 [clock seconds];
+                    set newT [expr $t2-$t1];
+                    after 1000
+                    exp_continue
+                }
+                result_debug "Got a login: prompt. Bootrom miss DUT $dut  MM $MM !!!"
+                catch {close -i $msmSpawnId} myr
+                catch {wait} myr
+                puts "WAIT on closing close -i $msmSpawnId"
+                after 2000
+                _setMultiTaskVar MAIN(ATBOOTROM$MM) 0
+                set timeout $connectionTimeout
+                return
+            }
+            -nocase -re "(\\* )?\[a-z0-9()._-]+(:|\\.)\[0-9]+ (#|>) " {
+                if {$newT < 80} {
+                    puts "\nHit an EXOS prompt, but wait for power cycler DUT $dut  MM $MM"
+                    flush stdout
+                    set t2 [clock seconds];
+                    set newT [expr $t2-$t1];
+                    expect *
+                    after 1000
+                    continue
+                }
+                puts "Got a exos: prompt. Bootrom miss DUT $dut  MM $MM !!!"
+                catch {close -i $msmSpawnId} myr
+                catch {wait} myr
+                puts "WAIT on closing close -i $msmSpawnId"
+                after 2000
+                _setMultiTaskVar MAIN(ATBOOTROM$MM) 0
+                set timeout $connectionTimeout
+                return
+            }
+            "BOOTLOADER>" {
+                result_debug "Got BOOTLOADER DUT $dut  MM $MM "
+                _setMultiTaskVar MAIN(ATBOOTROM$MM) 1
+                catch {close -i $msmSpawnId} myr
+                catch {wait} myr
+                exSleep 5
+                set timeout $connectionTimeout
+                return
+            }
+            "Shell>" {
+                result_debug "Got BootROM DUT $dut  MM $MM "
+                _setMultiTaskVar MAIN(ATBOOTROM$MM) 1
+                catch {close -i $msmSpawnId} myr
+                catch {wait} myr
+                exSleep 5
+                set timeout $connectionTimeout
+                return
+            }
+            "BootStrap >" {
+                result_debug "Got BootStrap - Send boot to get to BootRom "
+                send -i $msmSpawnId "boot\r"
+                exp_continue 
+            }
+            "~>" {
+                result_debug "continue boot if in pacman "
+                send -i $msmSpawnId "c\r"
+                exSleep 50
+                exp_continue
+            }
+            -re "DRAM" {
+                result_debug "Hit DRAM $MM keep looking"
+                send "$lspace\r"
+                set xc 0
+                while {1} {
+                    expect {
+                        timeout {
+                            flush stdout
+                            puts -nonewline "DUT$dut $MM - Sending spaces after hitting DRAM $xc \r"
+                            incr xc
+                            if {$xc > $spaceTop} {puts ">>>> 100"; break;}
+                            send "$lspace\r"
+                            continue
+                        }
+                        "BootRom >" {
+                            result_debug "\nGot Local BootROM DUT $dut  MM $MM"
+                            _setMultiTaskVar MAIN(ATBOOTROM$MM) 1
+                            catch {close -i $msmSpawnId} myr
+                            catch {wait} myr
+                            puts "WAIT on closing close -i $msmSpawnId"
+                            exSleep 5
+                            set timeout $connectionTimeout
+                            return
+                        }
+                        "login:" {
+                               result_debug "Got a login: prompt. Bootrom miss!!!"
+                               _setMultiTaskVar MAIN(ATBOOTROM$MM) 0
+                               catch {close -i $msmSpawnId} myr
+                               catch {wait} myr
+                               puts "WAIT on closing close -i $msmSpawnId"
+                               exSleep 5
+                               set timeout $connectionTimeout
+                               return
+                        }
+                        "Loading EXOS Image" {
+                            result_debug "Got Loading EXOS. Bootrom miss DUT $dut  MM $MM !!!"
+                            _setMultiTaskVar MAIN(ATBOOTROM$MM) 0
+                            catch {close -i $msmSpawnId} myr
+                            catch {wait} myr
+                            puts "WAIT on closing close -i $msmSpawnId"
+                            exSleep 5
+                            set timeout $connectionTimeout
+                            return
+                        }
+                        "Running Image" {
+                            result_debug "Got Running Image. Bootrom miss DUT $dut  MM $MM !!!"
+                            _setMultiTaskVar MAIN(ATBOOTROM$MM) 1
+                            catch {close -i $msmSpawnId} myr
+                            catch {wait} myr
+                            puts "WAIT on closing close -i $msmSpawnId"
+                            exSleep 5
+                            set timeout $connectionTimeout
+                            return
+                        }
+                        -re "\[a-z0-9\.\-_ ]+" {
+                            flush stdout
+                            puts -nonewline "DUT$dut $MM - Sending spaces after hitting DRAM $xc \r"
+                            incr xc
+                            after 300
+                            if {$xc > $spaceTop} {puts ">>>> 100"; break;}
+                            send "$lspace\r"
+                            continue
+                        }
+                    }
+                }
+                exp_continue
+            }
+            -re "Default BootLoader|Using Default image" {
+                result_debug "Hit Default BootLoader $MM "
+                send "$lspace\r"
+                set xc 0
+                while {1} {
+                expect {
+                    timeout {
+                        flush stdout
+                        puts -nonewline "DUT$dut $MM - Sending spaces after hitting Default BootLoader $xc $MM\r"
+                        incr xc
+                        if {$xc > $spaceTop} {puts ">>>> 100"; break;}
+                        send "$lspace\r"
+                        continue
+                    }
+                    "BootRom >" {
+                        result_debug "\nGot MAIN BootROM DUT $dut  MM $MM"
+                        _setMultiTaskVar MAIN(ATBOOTROM$MM) 1
+                        catch {close -i $msmSpawnId} myr
+                        catch {wait} myr
+                        puts "WAIT on closing close -i $msmSpawnId"
+                        after 3000
+                        set timeout $connectionTimeout
+                        return
+                    }
+                    "login:" {
+                        result_debug "Got a login: prompt. Bootrom miss!!!"
+                        _setMultiTaskVar MAIN(ATBOOTROM$MM) 0
+                        catch {close -i $msmSpawnId} myr
+                        catch {wait} myr
+                        puts "WAIT on closing close -i $msmSpawnId"
+                        after 3000
+                        set timeout $connectionTimeout
+                        return
+                    }
+                    "Loading EXOS Image" {
+                        result_debug "Got Loading EXOS. Bootrom miss DUT $dut  MM $MM !!!"
+                        _setMultiTaskVar MAIN(ATBOOTROM$MM) 0
+                        catch {close -i $msmSpawnId} myr
+                        catch {wait} myr
+                        puts "WAIT on closing close -i $msmSpawnId"
+                        after 3000
+                        set timeout $connectionTimeout
+                        return
+                    }
+                    "Running Image" {
+                        result_debug "Got Running Image. Bootrom miss DUT $dut  MM $MM !!!"
+                        _setMultiTaskVar MAIN(ATBOOTROM$MM) 0
+                        catch {close -i $msmSpawnId} myr
+                        catch {wait} myr
+                        puts "WAIT on closing close -i $msmSpawnId"
+                        after 3000
+                        set timeout $connectionTimeout
+                        return
+                    }
+                   -re "\[a-z0-9\.\-_ ]+" {
+                        flush stdout
+                        puts -nonewline "DUT$dut $MM - Sending spaces after hitting Default BootLoader $xc $MM\r"
+                        incr xc
+                        after 300
+                        if {$xc > $spaceTop} {puts ">>>> 100"; break;}
+                        send "$lspace\r"
+                        continue
+                    }
+                }
+                }
+                exp_continue
+            }
+            -re "Self Test" {
+                result_debug "Hit Self Test $MM $expect_out(buffer)"
+                send "$lspace\r"
+                set xc 0
+                while {1} {
+                    expect {
+                        timeout {
+                            flush stdout
+                            puts -nonewline "DUT$dut $MM - Sending spaces after hitting Self Test $xc \r"
+                            incr xc
+                            if {$xc > $spaceTop} {puts ">>>> 100"; break;}
+                            send "$lspace\r"
+                            exp_continue
+                        }
+                        "BootRom >" {
+                            result_debug "\nGot MAIN BootROM DUT $dut  MM $MM"
+                            _setMultiTaskVar MAIN(ATBOOTROM$MM) 1
+                            puts "ATBROM = ATBOOTROM$MM"
+                            catch {close -i $msmSpawnId} myr
+                            catch {wait} myr
+                            puts "WAIT on closing close -i $msmSpawnId"
+                            exSleep 5
+                            set timeout $connectionTimeout
+                            return
+                        }
+                        "login:" {
+                            result_debug "Got a login: prompt. Bootrom miss!!!"
+                            _setMultiTaskVar MAIN(ATBOOTROM$MM) 0
+                            catch {close -i $msmSpawnId} myr
+                            catch {wait} myr
+                            puts "WAIT on closing close -i $msmSpawnId"
+                            exSleep 5
+                            set timeout $connectionTimeout
+                            return
+                        }
+                        "Loading EXOS Image" {
+                            result_debug "Got Loading EXOS. Bootrom miss DUT $dut  MM $MM !!!"
+                            _setMultiTaskVar MAIN(ATBOOTROM$MM) 0
+                            catch {close -i $msmSpawnId} myr
+                            catch {wait} myr
+                            puts "WAIT on closing close -i $msmSpawnId"
+                            exSleep 5
+                            set timeout $connectionTimeout
+                            return
+                        }
+                        "Running Image" {
+                            result_debug "Got Running Image. Bootrom miss DUT $dut  MM $MM !!!"
+                            _setMultiTaskVar MAIN(ATBOOTROM$MM) 0
+                            catch {close -i $msmSpawnId} myr
+                            catch {wait} myr
+                            puts "WAIT on closing close -i $msmSpawnId"
+                            exSleep 5
+                            set timeout $connectionTimeout
+                            return
+                        }
+                    }
+                }
+                exp_continue
+            }
+            -re "Press and h" {
+                result_debug "Hit Press Space Bar $MM "
+                send "$lspace\r"
+                set xc 0
+                while {1} {
+                        expect {
+                            timeout {
+                                   flush stdout
+                                   puts -nonewline "DUT$dut $MM - Sending spaces after hitting Press and h $xc \r"
+                                   incr xc
+                                   if {$xc > $spaceTop} {puts ">>>> 100"; break;}
+                                   send "$lspace\r"
+                                   continue
+                            }
+                            "BootRom >" {
+                                result_debug "\nGot MAIN BootROM DUT $dut  MM $MM"
+                                _setMultiTaskVar MAIN(ATBOOTROM$MM) 1
+                                puts "ATBROM = ATBOOTROM$MM"
+                                catch {close -i $msmSpawnId} myr
+                                catch {wait} myr
+                                puts "WAIT on closing close -i $msmSpawnId"
+                                exSleep 5
+                                set timeout $connectionTimeout
+                                return
+                            }
+                            "login:" {
+                                   result_debug "Got a login: prompt. Bootrom miss!!!"
+                                   _setMultiTaskVar MAIN(ATBOOTROM$MM) 0
+                                   catch {close -i $msmSpawnId} myr
+                                   catch {wait} myr
+                                   puts "WAIT on closing close -i $msmSpawnId"
+                                   exSleep 5
+                                   set timeout $connectionTimeout
+                                   return
+                            }
+                            "Loading EXOS Image" {
+                                result_debug "Got Loading EXOS. Bootrom miss DUT $dut  MM $MM !!!"
+                                _setMultiTaskVar MAIN(ATBOOTROM$MM) 0
+                                catch {close -i $msmSpawnId} myr
+                                catch {wait} myr
+                                puts "WAIT on closing close -i $msmSpawnId"
+                                exSleep 5
+                                set timeout $connectionTimeout
+                                return
+                            }
+                            "Running Image" {
+                                result_debug "Got Running Image. Bootrom miss DUT $dut  MM $MM !!!"
+                                _setMultiTaskVar MAIN(ATBOOTROM$MM) 0
+                                catch {close -i $msmSpawnId} myr
+                                catch {wait} myr
+                                puts "WAIT on closing close -i $msmSpawnId"
+                                exSleep 5
+                                set timeout $connectionTimeout
+                                return
+                            }
+                            -re "\[a-z0-9\.\-_ ]+" {
+                                   flush stdout
+                                   puts -nonewline "DUT$dut $MM - Sending spaces after hitting Press and h $xc \r"
+                                   incr xc
+                                   after 300
+                                   if {$xc > $spaceTop} {puts ">>>> 100"; break;}
+                                   send "$lspace\r"
+                                   continue
+                            }
+                        }
+                }
+                exp_continue
+            }
+            -re "spacebar" {
+                result_debug "Hit Space Bar $MM "
+                send "$lspace\r"
+                set xc 0
+                while {1} {
+                        expect {
+                            timeout {
+                                   flush stdout
+                                   puts -nonewline "DUT$dut $MM - Sending spaces after hitting spacebar $xc \r"
+                                   incr xc
+                                   if {$xc > $spaceTop} {puts ">>>> 100"; break;}
+                                   send "$lspace\r"
+                                   continue
+                            }
+                            "BootRom >" {
+                                result_debug "\nGot MAIN BootROM DUT $dut  MM $MM"
+                                _setMultiTaskVar MAIN(ATBOOTROM$MM) 1
+                                puts "ATBROM = ATBOOTROM$MM "
+                                catch {close -i $msmSpawnId} myr
+                                catch {wait} myr
+                                puts "WAIT on closing close -i $msmSpawnId"
+                                exSleep 1
+                                set timeout $connectionTimeout
+                                return
+                            }
+                            "login:" {
+                                   result_debug "Got a login: prompt. Bootrom miss!!!"
+                                   _setMultiTaskVar MAIN(ATBOOTROM$MM) 0
+                                   catch {close -i $msmSpawnId} myr
+                                   catch {wait} myr
+                                   puts "WAIT on closing close -i $msmSpawnId"
+                                   exSleep 5
+                                   set timeout $connectionTimeout
+                                   return
+                            }
+                            "Loading EXOS Image" {
+                                result_debug "Got Loading EXOS. Bootrom miss DUT $dut  MM $MM !!!"
+                                _setMultiTaskVar MAIN(ATBOOTROM$MM) 0
+                                catch {close -i $msmSpawnId} myr
+                                catch {wait} myr
+                                puts "WAIT on closing close -i $msmSpawnId"
+                                exSleep 5
+                                set timeout $connectionTimeout
+                                return
+                            }
+                            "Running Image" {
+                                result_debug "Got Running Image. Bootrom miss DUT $dut  MM $MM !!!"
+                                _setMultiTaskVar MAIN(ATBOOTROM$MM) 0
+                                catch {close -i $msmSpawnId} myr
+                                catch {wait} myr
+                                puts "WAIT on closing close -i $msmSpawnId"
+                                exSleep 5
+                                set timeout $connectionTimeout
+                                return
+                            }
+                            "*" {
+                                flush stdout
+                                puts -nonewline "DUT$dut $MM - Sending spaces after hitting spacebar $xc \r"
+                                incr xc
+                                after 300
+                                if {$xc > $spaceTop} {puts ">>>> 100"; break;}
+                                send  "$lspace\r"
+                                exp_continue
+                            }
+                        }
+                }
+                exp_continue
+            }
+            eof {
+                result_debug "got EOF on DUT${dut}_CONNECT${MMValue} !!!";
+                catch {close -i $msmSpawnId} myr
+                catch {wait} myr
+                puts "WAIT on closing close -i $msmSpawnId"
+                exSleep 5
+                set spawn_ids([set DUT${dut}_CONNECT${MMValue}]) "INVALID"
+                getSpawnId [set DUT${dut}_CONNECT${MMValue}] msmSpawnId
+                result_debug "New spawnid is $msmSpawnId"
+            }
+        }
+        set t2 [clock seconds];
+        set newT [expr $t2-$t1];
+        after 500
+    }
+    set timeout $connectionTimeout
+    catch {exp_close} myr
+    catch {exp_wait} myr
+    return $retValue
+}
+proc DelayedPowerCycleDUT {DUT {wait "YES"} {showError "true"} {delay "3"} } {
+    #exSleep $delay
+    set varSleep [expr {int(rand()*6)}]
+    exSleep $varSleep
+    _setMultiTaskVar DUTs_info(DUT${DUT},powerCycleStatus) "ok"
+    if {[PowerCycleDUT $DUT $wait $showError] <= 0} {
+        if {[PowerCycleDUT $DUT $wait $showError] <= 0} {
+            _setMultiTaskVar DUTs_info(DUT${DUT},powerCycleStatus) "error"
+        }
+    }
+}
+proc pcToGrub {dut} {
+    global connectionTimeout MAIN
+    global spawn_id spawn_ids
+    global DUT${dut}_CONNECT
+    global DUT${dut}_CONNECTB
+    global whichDutNow
+    set whichDutNow $dut
+
+    set retValue "error"
+    set msmaPresent "TRUE"
+    set msmbPresent "FALSE"
+    set mmList ""
+    set procList ""
+    if {[info exist DUT${dut}_CONNECT]} {
+        set msmaPresent "TRUE"
+        lappend procList "_getGrubMenu $dut A"
+        lappend mmList DUT${dut}_CONNECT
+    } else {
+        set msmaPresent "FALSE"
+    }
+
+    if {[info exist DUT${dut}_CONNECTB]} {
+        set msmbPresent "TRUE"
+        lappend procList "_getGrubMenu $dut B"
+        lappend mmList DUT${dut}_CONNECTB
+    } else {
+        set msmbPresent "FALSE"
+    }
+
+
+    if {($msmaPresent == "TRUE") ||
+        ($msmbPresent == "TRUE")} {
+        lappend procList "DelayedPowerCycleDUT $dut NO false"
+        result_debug "\n@@@\n@@@Calling MultiTask Send Spaces on Consoles and PowerCycle\n@@@\n$procList\n@@@"
+        MultiTask $procList
+    } else {
+        return -1
+    }
+}
+
+proc pcToBootRom {dut} {
+    global connectionTimeout MAIN
+    global spawn_id bcmxOnieX86
+    global spawn_ids DUTs_info
+    global DUT${dut}_CONNECT
+    global DUT${dut}_CONNECTB
+    global LITEBOOTROM
+    global whichDutNow
+    set whichDutNow $dut
+    if {[info exists LITEBOOTROM] && $LITEBOOTROM} {
+        set liteRom 1
+    } else {
+        set liteRom 0
+    }
+    set MAIN(ATBOOTROMA) 0
+    set MAIN(ATBOOTROMB) 0
+    set grub 0
+    set retValue "error"
+    set msmaPresent "TRUE"
+    set msmbPresent "FALSE"
+    set mmList ""
+    set procList ""
+    if {[info exist DUT${dut}_CONNECT]} {
+        set msmaPresent "TRUE"
+        if {[info exists DUTs_info(DUT${dut},sysType)] && \
+               [regexp -nocase "$bcmxOnieX86" $DUTs_info(DUT${dut},sysType)]} {
+            lappend procList "_getGrubMenu $dut A"
+            set grub 1
+        } else {
+            lappend procList "powerSendSpacesOnDUT $dut A"
+        }
+        lappend mmList DUT${dut}_CONNECT
+    } else {
+        set msmaPresent "FALSE"
+    }
+
+    if {[info exist DUT${dut}_CONNECTB]} {
+        set msmbPresent "TRUE"
+        if {[info exists DUTs_info(DUT${dut},sysType)] && \
+               [regexp -nocase "$bcmxOnieX86" $DUTs_info(DUT${dut},sysType)]} {
+            lappend procList "_getGrubMenu $dut B"
+            set grub 1
+        } else {
+            lappend procList "powerSendSpacesOnDUT $dut B"
+        }
+        lappend mmList DUT${dut}_CONNECTB
+    } else {
+        set msmbPresent "FALSE"
+    }
+
+
+    if {($msmaPresent == "TRUE") ||
+        ($msmbPresent == "TRUE")} {
+        lappend procList "DelayedPowerCycleDUT $dut NO false"
+        result_debug "\n@@@\n@@@Calling MultiTask Send Spaces on Consoles and PowerCycle\n@@@\n$procList\n@@@"
+        MultiTask $procList
+        if {$grub} {
+            set timeout $connectionTimeout
+            return "ok"
+        }
+    } else {
+        return -1
+    }
+    if {$msmaPresent == "TRUE" && !$MAIN(ATBOOTROMA)} {
+        result_debug "!!!!\n!!!!\nDUT $dut A is not at BootROM\n!!!!\n!!!!"
+    }
+    if {$msmbPresent == "TRUE" && !$MAIN(ATBOOTROMB)} {
+        result_debug "!!!!\n!!!!\nDUT $dut B is not at BootROM\n!!!!\n!!!!"
+    }
+    set BootSent 0
+    foreach mmConsole $mmList {
+        set f 0
+        if {[info exist $mmConsole]} {
+            getSpawnId [set $mmConsole] msmSpawnId
+        } else {
+            Login [set $mmConsole]
+        }        
+        set timeout 5
+        if {[info exists msmSpawnId]} {
+            set spawn_id $msmSpawnId
+        } else {
+            result_debug "\n@@\n@@\nCould not get spawnId with getSpawnId proc\n@@\n@@";
+            continue;
+        }
+
+        if {!$liteRom} {
+            result_debug ">>>>>>>>\n config none  DONE!\n <<<<<<<<"
+            send "config none\r"
+        } else {
+            send "\r"
+        }
+        expect {
+            "BootRom >" {
+                send "boot 1\r"
+                expect "boot 1"
+                set BootSent 1
+                result_debug ">>>>>>>>\n Now booting image 1 $spawn_id DONE!\n <<<<<<<<"
+                #result_debug "$expect_out(buffer)"
+            }
+            "BootRom>" {
+                send "boot 1\r"
+                expect "boot 1"
+                set BootSent 1
+                result_debug ">>>>>>>>\n Now booting image 1 DONE!\n <<<<<<<<"
+            }
+            "BOOTLOADER>" {
+                send "boot 1\r"
+                expect "boot 1"
+                set BootSent 1
+                result_debug ">>>>>>>>\n Now booting Mariner image 1 DONE!\n <<<<<<<<"
+                result_debug "$expect_out(buffer)"
+            }
+            "Shell>" {
+                # Everest bootrom
+                send "boot 1\r"
+                expect "boot 1"
+                set BootSent 1
+                result_debug ">>>>>>>>\n Now booting Everest image 1 DONE!\n <<<<<<<<"
+                result_debug "$expect_out(buffer)"
+            }
+            timeout {
+                incr f
+                if {$f > 6} { break;}
+                puts "timeout hit"
+                send "\r"
+                exp_continue
+            }
+        }
+        exSleep 3
+    }
+    if {$BootSent} {
+        exSleep 5
+        set retValue "ok"
+    } else {
+        # error reached, failed to get into bootrom prompt
+       result_debug "Error reached, we did not succeed in getting into bootrom"
+       set retValue "error"
+    }
+    if {$msmaPresent == "TRUE" && $msmbPresent == "TRUE" && $MAIN(ATBOOTROMB) && !$MAIN(ATBOOTROMA)} {
+        result_debug "!!!!\n!!!!\nBUMMER!! YOU ARE ABOUT TO HIT A MIS-MATCH - B is primary A unknown\n!!!!\n!!!!"
+    } elseif {$msmaPresent == "TRUE" && $msmbPresent == "TRUE" && !$MAIN(ATBOOTROMB) && $MAIN(ATBOOTROMA)} {
+        result_debug "!!!!\n!!!!\nBUMMER!! YOU ARE ABOUT TO HIT A MIS-MATCH - A is primary B unknown\n!!!!\n!!!!"
+    } else {
+    }
+
+    set timeout $connectionTimeout
+    return $retValue
+}
+
+proc powerCycleToBootRom {dut} {
+
+    set msmaSpawnId "INVALID"
+    set msmbSpawnId "INVALID"
+    global connectionTimeout
+    global spawn_id
+    global spawn_ids
+
+    set timeout 1
+    set msmaFlag "FALSE"
+    set msmbFlag "FALSE"
+    set numPowerCycle 0
+    global DUT${dut}_CONNECT
+    global DUT${dut}_CONNECTB
+    set retValue "error"
+
+    # TEMPORARY VOYAGER DUE TO NO BOOTROM
+    global skipBootRom
+    global LITEBOOTROM
+    if {[info exists LITEBOOTROM] && $LITEBOOTROM} {
+        set liteRom 1
+    } else {
+        set liteRom 0
+    }
+    if {[info exist skipBootRom] && $skipBootRom} {
+        result_debug "\n!!!!!!!\n!!!!!!!\nVoyager Power Cycle to Primary\n!!!!!!!\n!!!!!!!"
+        Login [set DUT${dut}_CONNECT] -CheckOperational "0"
+        SendACmd "use image primary"
+        if {[PowerCycleDUT $dut "YES"]==1} {
+            result_debug "\n-------\nSuccess\n-------"
+            return "ok"
+        } else {
+            result_debug "\n-------\nFailure\n-------"
+            return "error"
+        }
+    }    
+
+    # if msma does not exist then set flag to TRUE
+    if {[info exist DUT${dut}_CONNECT]} {
+        set msmaPresent "TRUE"
+        getSpawnId [set DUT${dut}_CONNECT] msmaSpawnId
+    } else {
+        set msmaPresent "FALSE"
+        set msmaFlag "TRUE"
+        set msmaSpawnId "NOTPRESENT"
+    }
+
+    if {[info exist DUT${dut}_CONNECTB]} {
+        set msmbPresent "TRUE"
+        getSpawnId [set DUT${dut}_CONNECTB] msmbSpawnId
+    } else {
+        set msmbPresent "FALSE"
+        set msmbFlag "TRUE"
+        set msmbSpawnId "NOTPRESENT"
+    }
+
+
+    if {($msmaSpawnId == "INVALID") ||
+        ($msmbSpawnId == "INVALID")} {
+        result_debug "Eror condition reached. Valid Spawn id not set"
+        result_debug "msmaSpawnId: $msmaSpawnId"
+        result_debug "msmbSpawnId: $msmbSpawnId"
+    }
+
+result_debug "the msmbPresent $msmbPresent, msmaPresent $msmaPresent| msmaFlag $msmaFlag, msmbFlag $msmbFlag"
+    if {[PowerCycleDUT $dut "NO"]==1} {
+
+    # while both flags not set loop
+    #while {($msmaFlag == "FALSE") || ($msmbFlag == "FALSE")} {
+    #}
+
+    # Add the option to extend the spaces for new platforms that take a while to boot to the boot rom
+    global extraBootRomSpaces
+    if {[info exist extraBootRomSpaces] && $extraBootRomSpaces} {set spaceLoopCount 300; exSleep 1;} else {set spaceLoopCount 100}
+    for {set i 0} {$i <= $spaceLoopCount} {incr i} {
+
+        # Is flag for msma set if not login
+        if {($msmaFlag == "FALSE") && ($msmaPresent == "TRUE")} {
+            # Connect to msma
+            set spawn_id $msmaSpawnId
+    
+            # Send spaces and CR
+            puts "Now sending spaces"
+            #send "                 \r"
+            if {[catch {exp_send "                 \r"} reason]} {
+                if {  [regexp -nocase "not open" $reason] } {
+                    result_print "\n~~~~~\nexpec send found spawn id not open \
+                        : reconnect\n~~~~~";
+                    # # The connection has been dropped. Clean up the spawnId and hostname entries
+                    _clearDutConnectionVars $dut;
+                    global DUT${dut}_CONNECT
+                    if {[Login [set DUT${dut}_CONNECT] -CheckOperational "0" -masterCheck "0"]<=0} {
+                        result_error "Login is not successful on retry after spawn id not open"
+                        return ""
+                    }
+                }
+            }
+            # Check to see if boot prompt is there
+            expect {
+                "BootRom >" {
+                    # if there set flag
+                    set msmaFlag "TRUE"
+                    result_debug "!!!! HIT BOOTROM DUT$dut: $expect_out(buffer)"
+                }
+                "BOOTLOADER>" {
+                    # if there set flag
+                    set msmaFlag "TRUE"
+                    result_debug "expectbuffer msma DUT$dut: $expect_out(buffer)"
+                }
+                "Shell>" {
+                    # if there set flag (Everest bootrom)
+                    set msmaFlag "TRUE"
+                    result_debug "expectbuffer msma DUT$dut: $expect_out(buffer)"
+                }
+                "BootStrap >" {
+                    result_debug "expectbuffer msma DUT$dut: $expect_out(buffer)"
+                   send "boot\r"
+                }
+                "~>" {
+                    # Pacman prompt
+                    result_debug "continue boot if in pacman"
+                    send "c\r"
+                }
+                "login:" {
+                    # else check to see if login prompt is there
+                    # if there "too late", reboot
+                    PowerCycleDUT $dut "NO"
+                    incr numPowerCycle
+                }
+                eof {
+                    result_debug "got EOF!!!";
+                    exSleep 3
+                    set spawn_ids([set DUT${dut}_CONNECT]) "INVALID"
+	            getSpawnId [set DUT${dut}_CONNECT] msmaSpawnId
+                }
+                timeout {
+                }
+            }
+        }
+    
+        result_debug "DUT$dut msmbPresent $msmbPresent, msmaPresent $msmaPresent| msmaFlag $msmaFlag, msmbFlag $msmbFlag"
+        # Is flag for msmb set if not login
+        if {($msmbFlag == "FALSE") && ($msmbPresent == "TRUE")} {
+            # Connect to msmb
+            set spawn_id $msmbSpawnId
+
+            # Send spaces and CR
+            puts "Now sending spaces"
+            #send "                 \r"
+            if {[catch {exp_send "                 \r"} reason]} {
+                if {  [regexp -nocase "not open" $reason] } {
+                    result_print "\n~~~~~\nexpec send found spawn id not open \
+                        : reconnect\n~~~~~";
+                    # # The connection has been dropped. Clean up the spawnId and hostname entries
+                    _clearDutConnectionVars $dut;
+                    global DUT${dut}_CONNECT
+                    if {[Login [set DUT${dut}_CONNECT] -CheckOperational "0" -masterCheck "0"]<=0} {
+                        result_error "Login is not successful on retry after spawn id not open"
+                        return ""
+                    }
+                }
+            }
+            # Check to see if boot prompt is there
+            expect {
+                "BootRom >" {
+                    # if there set flag
+                    set msmbFlag "TRUE"
+                    result_debug "expectbuffer msmb DUT$dut : $expect_out(buffer)"
+                }
+                "BOOTLOADER>" {
+                    # if there set flag
+                    set msmbFlag "TRUE"
+                    result_debug "expectbuffer msmb DUT$dut : $expect_out(buffer)"
+                }
+                "Shell>" {
+                    # if there set flag (Everest bootrom)
+                    set msmbFlag "TRUE"
+                    result_debug "expectbuffer msmb DUT$dut : $expect_out(buffer)"
+                }
+                "BootStrap >" {
+                    result_debug "expectbuffer msmb: $expect_out(buffer)"
+                   send "boot\r"
+                }
+                "~>" {
+                    # Pacman prompt
+                    result_debug "continue boot if in pacman"
+                    send "c\r"
+                }
+                "login:" {
+                    # else check to see if login prompt is there
+                    # if there "too late", reboot
+                    PowerCycleDUT $dut "NO"
+                    incr numPowerCycle
+                }
+                eof {
+                    result_debug "got EOF!!!";
+                    exSleep 3
+                    set spawn_ids([set DUT${dut}_CONNECTB]) "INVALID"
+	            getSpawnId [set DUT${dut}_CONNECTB] msmbSpawnId
+                }
+                timeout {
+                }
+            }
+        }
+        result_debug "DUT$dut msmbPresent $msmbPresent, msmaPresent $msmaPresent| msmaFlag $msmaFlag, msmbFlag $msmbFlag"
+        if {($msmaFlag == "TRUE") && ($msmbFlag == "TRUE")} {
+            result_debug "Both msms are now in the bootrom prompt"
+            break
+        }
+        if {$numPowerCycle > 2} {
+            result_debug "Too many power cycles.  Can not continue"
+            break
+        }
+    }
+
+    if {($msmaFlag == "TRUE") && ($msmbFlag == "TRUE")} {
+        result_debug ">>>>>>>>\n Now booting image 1 DONE DUT$dut !!!!!\n <<<<<<<<"
+        set timeout 5
+
+        if {($msmaPresent == "TRUE")} {
+            # Connect to msma
+            set spawn_id $msmaSpawnId
+
+            # dis pacman
+            #result_debug ">>>>>>>>\n Turn Off PACMAN\n <<<<<<<<"
+            #send "enable debug-mode\r"
+            #exSleep 2
+            #expect {
+            #   "assword:" {
+            #        result_debug "$expect_out(buffer)"
+            #        exSleep 2
+            #        send "dbgextr\r"
+            #        expect "BootRom >"
+            #        send "cmdline pacman=0\r"
+            #        expect "BootRom >"
+            #        result_debug "$expect_out(buffer)"
+            #   }
+            #   "BOOTLOADER>" {
+            #        send "cmdline pacman=0\r"
+            #        expect "BOOTLOADER>"
+            #        result_debug "$expect_out(buffer)"
+            #   }
+            #   "Shell>" {
+            #        # Everest bootrom
+            #        result_debug "$expect_out(buffer)"
+            #   }
+            #}
+            # Send boot 1
+            result_debug ">>>>>>>>\n Now sending config none MSMA DUT$dut \n <<<<<<<<"
+            if {!$liteRom} {
+                send "config none\r"
+            } else {
+                send ""
+            }
+            expect {
+               "BootRom >" {
+                   send "boot 1\r"
+                   expect "boot 1"
+                   result_debug "DUT$dut $expect_out(buffer)"
+               }
+               "BOOTLOADER>" {
+                   send "boot 1\r"
+                   expect "boot 1"
+                   result_debug "DUT$dut $expect_out(buffer)"
+               }
+               "Shell>" {
+                   # Everest bootrom
+                   send "boot 1\r"
+                   expect "boot 1"
+                   result_debug "DUT$dut $expect_out(buffer)"
+               }
+             }
+        }
+
+        if {($msmbPresent == "TRUE")} {
+            # Connect to msmb
+            set spawn_id $msmbSpawnId
+
+            # dis pacman
+            result_debug ">>>>>>>>\n Turn Off PACMAN\n <<<<<<<<"
+            send "enable debug-mode\r"
+            exSleep 2
+            expect {
+               "assword:" {
+                    result_debug "$expect_out(buffer)"
+                    exSleep 2
+                    send "dbgextr\r"
+                    expect "BootRom >"
+                    send "cmdline pacman=0\r"
+                    expect "BootRom >"
+                    result_debug "$expect_out(buffer)"
+               }
+               "BOOTLOADER>" {
+                    send "cmdline pacman=0\r"
+                    expect "BOOTLOADER>"
+                    result_debug "$expect_out(buffer)"
+               }
+               "Shell>" {
+                    # Everest bootrom
+                    result_debug "$expect_out(buffer)"
+               }
+            }
+            # Send boot 1
+            result_debug ">>>>>>>>\n Now sending config none MSMB DUT$dut \n <<<<<<<<"
+            send "config none\r"
+            expect {
+               "BootRom >" {
+                  send "boot 1\r"
+                  expect "boot 1"
+                  result_debug "DUT$dut $expect_out(buffer)"
+               }
+               "BOOTLOADER>" {
+                  send "boot 1\r"
+                  expect "boot 1"
+                  result_debug "DUT$dut $expect_out(buffer)"
+               }
+               "Shell>" {
+                  # Everest bootrom
+                  send "boot 1\r"
+                  expect "boot 1"
+                  result_debug "DUT$dut $expect_out(buffer)"
+               }
+             }
+        }
+       set retValue "ok"
+    } else {
+        # error reached, failed to get into bootrom prompt
+       result_debug "Error reached, we did not succeed in getting into bootrom"
+       set retValue "error"
+    }
+    }
+    set timeout $connectionTimeout
+   return $retValue
+}
+
+
+
+
+proc rebootToBootRom {{dut 1} {msm ""} {mode bootrom}} {
+
+    global connectionTimeout
+    global DUT${dut}_CONNECT
+    global DUT${dut}_CONNECTB
+    global spawn_id
+
+    set timeout 1
+    set BootPrompt 0
+
+    Login [set DUT${dut}_CONNECT]
+
+    ;# Setup spawn_id to correct MSM And Rebooting the DUT
+    if {$msm == "A"} {
+		slow_send "reboot msm A\r"
+
+    } elseif { $msm == "B"} {
+		slow_send "reboot msm B\r"
+
+    } elseif { $msm == ""} {
+		slow_send "reboot\r"
+    #-------Adding this part of code to send a particular
+    #       slot on stacking to bootrom or bootstrap
+    } elseif { [regexp {[0-9]+}  $msm slotNo] } {
+                slow_send "reboot slot $slotNo \r"
+
+    } else {
+	result_debug "Invalid Argument"
+	result_debug "Usage : {rebootToBootRom 1} (or) {rebootToBootRom 1} <A/B> "
+	return 0
+    }
+     
+    #---Answering Reboot questions
+        set timeout 8
+	expect "\\?" {
+		result_pre $expect_out(buffer)
+                send "y\r"
+                exp_continue
+               }
+      
+   result_debug "Waiting for switch to go down"
+   exSleep 10
+
+    if {$msm == "B"} {
+           if {[info exist DUT${dut}_CONNECTB]} {
+            getSpawnId [set DUT${dut}_CONNECTB] spawn_id
+        	} else {
+	            return 0
+        	}
+         }
+    
+    #---spawn_id should point to target MSM console
+	set timeout 60
+	set expect_out(buffer) ""
+	expect "*"
+	expect -nocase -re "spacebar.*$mode" {
+	send "                 \r"
+	result_pre $expect_out(buffer)
+        result_debug "Now sending spaces to stop at BOOTROM prompt"
+	# Check to see if boot prompt is there
+	expect {
+	  "BootRom > " {
+               set BootPrompt "TRUE"
+           }
+           "BOOTLOADER> " {
+               set BootPrompt "TRUE"
+           }
+	   "BootStrap > " {
+		set BootPrompt "TRUE"
+           }
+           "~>" {
+               # Pacman prompt
+               result_debug "continue boot if in pacman"
+               send "c\r"
+           }
+	   "login:" {
+		# else check to see if login prompt is there
+		send "admin\r"
+		expect "password"
+		send "\r"
+		expect "#"
+		result_debug "Unable to get Boot prompt"
+	   }
+	   timeout {
+	   }
+	 }
+       }
+     result_pre $expect_out(buffer)
+     set timeout $connectionTimeout
+
+report_start_test "Checking the router prompt"
+    if {$BootPrompt == "TRUE" } {
+	result_ok "The router is at Boot Prompt"
+	report_end_test
+	return 1
+    } else {
+	result_error "Unable to get to Boot Prompt"
+	report_end_test
+	return 0
+    }
+}
+proc enableHeapTrc {{dut 1} {msm ""}} {
+
+    global connectionTimeout
+    global DUT${dut}_CONNECT
+    global DUT${dut}_CONNECTB
+    global spawn_id
+    set HeapTrcEnabled "FALSE"
+
+    if { $msm == "B" } {
+        if { [info exist DUT${dut}_CONNECTB]} {
+             Login [set DUT${dut}_CONNECTB] -CheckOperational 0 -masterCheck 0
+             EnableDebugMode 
+             SendACmd "jerry enable pacman"
+        } else {
+	    result_ok "MSMB not present"
+	    return 1
+        }
+    }
+    Login [set DUT${dut}_CONNECT]
+
+    ;# Setup spawn_id to correct MSM And Rebooting the DUT
+    if {$msm == "A"} {
+                EnableDebugMode 
+                SendACmd "jerry enable pacman"
+		slow_send "reboot msm A\r"
+
+    } elseif { $msm == "B"} {
+		slow_send "reboot msm B\r"
+    } elseif { $msm == ""} {
+                EnableDebugMode 
+                SendACmd "jerry enable pacman"
+		slow_send "reboot\r"
+    } else {
+	result_debug "Invalid Argument"
+	result_debug "Usage : {enableHeapTrc 1} (or) {rebootToBootRom 1} <A/B> "
+	return 0
+    }
+     
+    #---Answering Reboot questions
+    set timeout 8
+    expect "\\?" {
+		result_pre $expect_out(buffer)
+                send "y\r"
+                exp_continue
+    }
+      
+    result_debug "Waiting for switch to go down"
+    exSleep 10
+
+    if {$msm == "B"} {
+           if {[info exist DUT${dut}_CONNECTB]} {
+               getSpawnId [set DUT${dut}_CONNECTB] spawn_id
+           } else {
+	            return 0
+           }
+    }
+    
+    #---spawn_id should point to target MSM console
+    set timeout 200 
+    set expect_out(buffer) ""
+    expect {
+	   "login:" {
+                if {$msm == "B"} {
+                    Login [set DUT${dut}_CONNECTB] -CheckOperational 0 -masterCheck 0               
+                } else {
+                    Login [set DUT${dut}_CONNECT] -CheckOperational 0 -masterCheck 0               
+                }
+                EnableDebugMode 
+                SendACmd "jerry disable pacman"
+                DisableDebugMode 
+	   }
+           "Press enter within 5 second" {
+	     send "\r\r\r"
+             exp_continue
+           }
+           "pacman settings" {
+                sleep 5;
+                puts "7b\r"
+		send "7b\r"
+		expect "boot_enable_malloc_trace="
+                puts "true\r"
+		send "true\r"
+		expect ">"
+                puts "8a\r"
+		send "8a\r"
+		expect "pacman_autostart="
+                puts "true\r"
+		send "true\r"
+		expect ">"
+                puts "s\r"
+		send "s\r"
+		expect ">"
+                puts "c\r"
+		send "c\r"
+                set HeapTrcEnabled "TRUE"
+                exp_continue
+           }
+	   timeout {
+	         result_ok "Timeout while enabling HeapTrc"
+	   }
+     }
+     result_pre $expect_out(buffer)
+     set timeout $connectionTimeout
+     if {$HeapTrcEnabled == "TRUE" } {
+	result_ok "HeapTrc is enabled on DUT"
+	return 1
+     } else {
+	result_error "Unable to enabled HeapTrc on DUT"
+	return 0
+     }
+}
+proc disableHeapTrc {{dut 1} {msm ""}} {
+
+    global connectionTimeout
+    global DUT${dut}_CONNECT
+    global DUT${dut}_CONNECTB
+    global spawn_id
+    set HeapTrcDisabled "FALSE"
+
+    if { $msm == "B" } {
+        if { [info exist DUT${dut}_CONNECTB]} {
+             Login [set DUT${dut}_CONNECTB] -CheckOperational 0 -masterCheck 0
+             EnableDebugMode 
+             SendACmd "jerry enable pacman"
+        } else {
+	    result_ok "MSMB not present"
+	    return 1
+        }
+    }
+    Login [set DUT${dut}_CONNECT]
+
+    ;# Setup spawn_id to correct MSM And Rebooting the DUT
+    if {$msm == "A"} {
+                EnableDebugMode 
+                SendACmd "jerry enable pacman"
+		slow_send "reboot msm A\r"
+
+    } elseif { $msm == "B"} {
+		slow_send "reboot msm B\r"
+    } elseif { $msm == ""} {
+                EnableDebugMode 
+                SendACmd "jerry enable pacman"
+		slow_send "reboot\r"
+    } else {
+	result_debug "Invalid Argument"
+	result_debug "Usage : {DisableHeapTrc 1} (or) {rebootToBootRom 1} <A/B> "
+	return 0
+    }
+     
+    #---Answering Reboot questions
+    set timeout 8
+    expect "\\?" {
+		result_pre $expect_out(buffer)
+                send "y\r"
+                exp_continue
+    }
+      
+    result_debug "Waiting for switch to go down"
+    exSleep 10
+
+    if {$msm == "B"} {
+           if {[info exist DUT${dut}_CONNECTB]} {
+               getSpawnId [set DUT${dut}_CONNECTB] spawn_id
+           } else {
+	            return 0
+           }
+    }
+    
+    #---spawn_id should point to target MSM console
+    set timeout 200 
+    set expect_out(buffer) ""
+    expect {
+	   "login:" {
+                if {$msm == "B"} {
+                    Login [set DUT${dut}_CONNECTB] -CheckOperational 0 -masterCheck 0               
+                } else {
+                    Login [set DUT${dut}_CONNECT] -CheckOperational 0 -masterCheck 0               
+                }
+                EnableDebugMode 
+                SendACmd "jerry disable pacman"
+                DisableDebugMode 
+	   }
+           "Press enter within 5 second" {
+	     send "\r\r\r"
+             exp_continue
+           }
+           "pacman settings" {
+                sleep 5;
+                puts "7b\r"
+		send "7b\r"
+		expect "boot_enable_malloc_trace="
+                puts "false\r"
+		send "false\r"
+		expect ">"
+                puts "8a\r"
+		send "8a\r"
+		expect "pacman_autostart="
+                puts "true\r"
+		send "true\r"
+		expect ">"
+                puts "s\r"
+		send "s\r"
+		expect ">"
+                puts "c\r"
+		send "c\r"
+                set HeapTrcDisabled "TRUE"
+                exp_continue
+           }
+	   timeout {
+	         result_ok "Timeout while enabling HeapTrc"
+	   }
+     }
+     result_pre $expect_out(buffer)
+     set timeout $connectionTimeout
+     if {$HeapTrcDisabled == "TRUE" } {
+	result_ok "HeapTrc is disabled on DUT"
+	return 1
+     } else {
+	result_error "Unable to disabled HeapTrc on DUT"
+	return 0
+     }
+}

@@ -1,0 +1,705 @@
+proc my_login {ipAddr userid passwd} {
+
+   global spawn_id
+   global hostname 
+   global spawn_ids
+   global connectionTimeout
+
+   result_debug "my_login on device $ipAddr"
+   result_debug "userid: $userid, password: $passwd"
+   set newConnection 1
+   #check for existing connection
+   if { [ info exists hostname ] == "1" } {
+      foreach name $hostname {
+         if { $name == $ipAddr } {
+            set spawn_id $spawn_ids($name)
+            if { $spawn_id != "INVALID" } {
+               # --- use it for delay without using sleep
+               #puts "Login $ipAddr - Connection already exists pid=$spawn_id"
+               set newConnection 0
+            }
+         }
+      }
+      #if brand new connection, add to host name list
+      if { [lsearch $hostname $ipAddr] == -1 } {
+         lappend hostname $ipAddr
+      }
+   } else {
+      lappend hostname $ipAddr
+   }  
+
+   #spawn new connection if not exists
+   if { $newConnection == 1 } {
+      if [catch "spawn telnet $ipAddr" reason] {
+         result_debug "failed to spawn program: $reason\n"
+         error "failed to spawn program: $reason\n"
+      }
+      # it will cause hang
+      set spawn_ids($ipAddr) $spawn_id
+      set timeout $connectionTimeout
+      result_debug "Login telnet $ipAddr,  pid=$spawn_id"
+      #wait for connection
+      expect {
+         "?nable to ?onnect" {
+            result_error $expect_out(buffer)
+            expect *
+            result_error $expect_out(buffer)
+            error "Unable to connect"
+         }
+         "?onnected to" {
+            #wait for all remaining characters to come
+            sleep 1
+         }
+      }
+   }
+
+   expect *
+   result_debug $expect_out(buffer)
+   result_debug "Send $userid"
+   set timeout 1
+   foreach letter $userid {
+      send $letter
+      expect {
+         "$letter" {
+            after 10
+         }
+         timeout {
+            for {set c 0} {$c<2} {incr c} {
+               send $letter
+               expect {
+                  "$letter" {
+                     break
+                  }
+                  timeout {
+                     after 10
+                  }
+               }
+            }
+         }
+      }
+   }
+   send "\r"
+   expect "password:"
+   result_debug "got password:"
+if { 0 } {
+   send "$passwd\r"
+} else {
+   foreach letter $passwd {
+      send $letter
+      #after 100
+      expect {
+         "$letter" {
+            after 10
+         }
+         timeout {
+            for {set c 0} {$c<2} {incr c} {
+               send $letter
+               expect {
+                  "$letter" {
+                     break
+                  }
+                  timeout {
+                     after 10
+                  }
+               }
+            }
+         }
+      }
+   }
+   set timeout $connectionTimeout
+   send "\r"
+}
+   expect {
+      "Login incorrect" {
+         result_debug "Login incorrect!"
+         expect { 
+            "Maximum number of login attempts reached!" {
+               result_debug "Maximum number of login attempts reached!"
+	       expect {
+                  "Connection closed by foreign host" {
+                     result_debug "Connection closed by foreign host";
+                     # look for hostname and set spawn id invalid
+                     foreach name $hostname {
+                        if { $spawn_ids($name) == $spawn_id } {
+                           set spawn_ids($name) "INVALID"
+                        }
+                     }
+                     return 2;
+                  }
+                  "login:" {
+                     result_debug "login:"
+                     return 2;
+                  }
+                  timeout {
+                     result_debug "login timeout!!!"
+                     return -1; 
+                  }
+               }
+            }
+            "login:" {
+               result_debug "login:"
+               return 1;
+            }
+            timeout {
+               result_debug "login timeout!!!"
+               return -1;
+            }
+         }
+      }
+      "# " {
+         result_debug $expect_out(buffer)
+	 exSleep 1
+         expect *
+         result_debug $expect_out(buffer)
+         return 0;
+      }
+      "> " {
+         result_debug $expect_out(buffer)
+	 exSleep 1
+         expect *
+         result_debug $expect_out(buffer)
+         return 0;
+      }
+      timeout {
+         result_debug "login timeout!!!"
+         return -1 
+      }
+   }
+}
+
+
+################################################################## 
+# Procedure Name: MySendACmd
+#   
+# Description: Sends a CLI command to a DUT - a strip down version of SendACmd
+#
+# Input args: cmd, fd_result, fd_input, showError
+# Output args: none
+# Typical usage:
+#             MySendACmd $cmd
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#	VerifySwitchOutput,VerifyTraffic)
+# Category: Setup
+##################################################################
+proc MySendACmd {{cmd "NULL"}
+                    {fd_result "NULL"}
+                    {fd_input  "NULL"}
+                    {showError  "true"}} {
+   global spawn_id
+#   global connectionTimeout
+   
+   set timeout 20
+   set result ""
+   set exp_out_buf ""
+   # -- display and send the command
+   if {$fd_result != "NULL"} { puts $fd_result "$cmd" }
+   result_debug "--- Send $cmd"
+   send "$cmd\r"
+# --- some special characaters will give the following expect trouble
+#   expect $cmd
+   #puts SEND:$expect_out(buffer)
+
+   # -- loop until we receive correct string
+   expect {
+      timeout {
+         result_error "No response from the switch for $timeout seconds"
+         expect *
+         SaveOutputBuffer $expect_out(buffer)
+         close_result_file
+      }      
+      full_buffer {
+         result_debug "*************** GOT FULL_BUFFER ****************"
+         regsub -all "\n\r" $expect_out(buffer) "\n" out_buf
+         append exp_out_buf $out_buf
+         exp_continue
+      } 
+      -nocase -re "aspen.* # "         {}
+      -nocase -re "appen.* > "         {}
+      -nocase -re "bd.* # "            {}
+      -nocase -re "bd.* > "            {}
+      -nocase -re "summit.* # "        {}
+      -nocase -re "summit.* > "        {}
+      "\r" {
+         if {[regexp -nocase "ESC\\->" $expect_out(buffer)]} {
+            sleep 4
+            send "\033"
+         } else {
+            regsub -all "\n\r" $expect_out(buffer) "\n" out_buf
+            append exp_out_buf $out_buf
+         }
+         exp_continue
+      }
+      -re "# $" {
+      }
+      -re "> $" {
+      }
+   }
+   append exp_out_buf $expect_out(buffer)
+   regsub -all "\n\r" $exp_out_buf "\n" exp_out_buf
+   regsub -all "\t" $exp_out_buf " " exp_out_buf
+   
+   if {$fd_input != "NULL" } { puts -nonewline $fd_input $exp_out_buf }
+   result_pre $exp_out_buf
+   return $exp_out_buf
+}
+
+
+################################################################## 
+# Procedure Name: MyCheckCmdIllegal
+#   
+# Description: Sets result ok if CLI command sent to the switch 
+#               returns an error
+#     
+#
+# Input args: cmd {fd_res NULL} {testNo "CheckCmdIllegal"}
+# Output args: none
+# Typical usage: 
+#      
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: VerifySwitchOutput
+##################################################################
+proc MyCheckCmdIllegal {cmd {fd_res NULL} {testNo "CheckCmdIllegal"}} {
+   global spawn_id
+   set fd_in [open "Tmp/tmp_$testNo[pid]" "w"]
+   #do not need to show error status, since we know this will cause error
+   MySendACmd "$cmd" $fd_res $fd_in false
+   close $fd_in
+
+   set fd_in [open "Tmp/tmp_$testNo[pid]" "r"]
+   set rtValue [check_illegality $fd_in]
+   close $fd_in
+   file delete "Tmp/tmp_$testNo[pid]"
+
+   regsub {\{} $cmd "LeftBrace" cmd1;
+   regsub {\}} $cmd1 "rightBrace" cmd;
+   regsub {\[} $cmd "LeftBracket" cmd1;
+   regsub {\]} $cmd1 "RightBracket" cmd;
+   regsub {\010} $cmd "BACK" cmd1;
+   regsub {\010} $cmd1 "BACK" cmd;
+   report_start_test "Command <$cmd> should fail"
+   if { $rtValue == "illegal" } {
+      result_ok "Command illegal as expected"
+   } else {
+      result_error "Command should be illegal but accepted"
+   }
+   report_end_test
+   return $rtValue
+}
+
+################################################################## 
+# Procedure Name: MyCheckCmdLegal
+#   
+# Description: Test passes if Command sent to switch does not return 
+#               an error
+#     
+#
+# Input args: cmd {fd_res NULL} {testNo "CheckCmdLegal"}
+# Output args: none
+# Typical usage: 
+#      
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: VerifySwitchOutput
+##################################################################
+proc MyCheckCmdLegal {cmd {fd_res NULL} {testNo "CheckCmdLegal"}} {
+   global spawn_id
+   set fd_in [open "Tmp/tmp_$testNo[pid]" "w"]
+   MySendACmd "$cmd" $fd_res $fd_in
+   close $fd_in
+
+   set fd_in [open "Tmp/tmp_$testNo[pid]" "r"]
+   set rtValue [check_illegality $fd_in]
+   close $fd_in
+   file delete "Tmp/tmp_$testNo[pid]"
+
+   regsub {\{} $cmd "LeftBrace" cmd1;
+   regsub {\}} $cmd1 "rightBrace" cmd;
+   regsub {\[} $cmd "LeftBracket" cmd1;
+   regsub {\]} $cmd1 "RightBracket" cmd;
+   report_start_test "Command <$cmd> executed ok"
+   if { $rtValue == "illegal" } {
+      result_error "Error in executing command"
+   } else {
+      result_ok "Command executed successfully"
+   }
+   report_end_test
+   return $rtValue
+}
+
+################################################################## 
+# Procedure Name: exIACreateAccount
+#   
+# Description: To create account
+#
+# Input args: userid 
+#		-type		can be admin or user
+#		-passwd 	the password	
+# Output args: 
+#		rtValue		"", "timeout", "illegal"
+# Typical usage: 
+#
+##################################################################
+proc exIACreateAccount {userid args} {
+
+   parse_args exIACreateAccount $args {
+      type "admin"
+      passwd ""
+   }
+
+   set rtValue ""
+   global whichDutNow
+   global passwd3
+   set testNo "exIACreateAccount";
+
+   set ver [GetVersion DUT${whichDutNow}];
+#   set ver [lindex [split $ver -] 0];
+   result_debug "ver= $ver";
+   if {[CompareRelease $ver 11.1.0.21] >=0} {
+      set cmd "create account $type $userid";
+      result_debug "--- Send $cmd";
+      send "$cmd\r";
+      expect "$cmd";				;# echo
+      expect {
+         timeout {
+            result_debug "time1";
+	    set rtValue "timeout";
+         }
+         -nocase "password: " {
+            append exp_out_buf $expect_out(buffer);
+            send "$passwd\r";
+            expect {
+               -nocase "reenter password: " {
+                  append exp_out_buf $expect_out(buffer);
+#	          regsub -all "\n\r" $exp_out_buf "\n" exp_out_buf
+	          result_debug "$exp_out_buf";
+                  global spawn_id
+                  set fd_in [open "Tmp/tmp_$testNo[pid]" "w"]
+                  #do not need to show error status, since we know this will cause error
+                  MySendACmd "$passwd" "NULL" $fd_in false
+                  close $fd_in
+
+                  set fd_in [open "Tmp/tmp_$testNo[pid]" "r"]
+                  set rtValue [check_illegality $fd_in]
+                  close $fd_in
+                  file delete "Tmp/tmp_$testNo[pid]"
+		  set passwd3 $passwd ; 
+		echo "passwd3 == $passwd3"
+               }
+               timeout {
+                  result_debug "time1";
+	          set rtValue "timeout";
+               }
+            }
+         }
+         -nocase "does not have permissions for this command." {
+            set rtValue "illegal"
+         }
+      }
+   } else {
+      result_debug "Old Style";
+      SendACmd "create account $type $userid $passwd";
+   }
+   return $rtValue;
+}
+
+
+################################################################## 
+# Procedure Name: CheckCreateAcctIllegal
+#   
+# Description: Sets result ok if create account failed
+#
+# Input args: userid 
+#		-type
+#		-passwd
+# Output args: none
+# Typical usage: 
+##################################################################
+proc CheckCreateAcctIllegal {userid args} {
+
+   parse_args CheckCreateAcctIllegal $args {
+      type "admin"
+      passwd ""
+   }
+
+   global whichDutNow
+   set rtValue ""
+
+   set ver [GetVersion DUT${whichDutNow}];
+   result_debug "ver= $ver";
+   if {[CompareRelease $ver 11.1.0.21] >=0} {
+      set rtValue [exIACreateAccount "$userid" -type $type -passwd "$passwd"];
+      result_debug "rtValue= $rtValue";
+      set cmd "create account $type $userid $passwd";
+      regsub {\{} $cmd "LeftBrace" cmd1;
+      regsub {\}} $cmd1 "rightBrace" cmd;
+      regsub {\[} $cmd "LeftBracket" cmd1;
+      regsub {\]} $cmd1 "RightBracket" cmd;
+      regsub {\010} $cmd "BACK" cmd1;
+      regsub {\010} $cmd1 "BACK" cmd;
+      report_start_test "$cmd should fail"
+      if { $rtValue == "illegal" } {
+         result_ok "create account failed"
+      } else {
+         result_error "create account should fail but passed"
+      }
+      report_end_test
+   } else {
+      CheckCmdIllegal "create account $type $userid $passwd";
+   }
+}
+
+
+################################################################## 
+# Procedure Name: CheckCreateAcctLegal
+#   
+# Description: Sets result ok if create account successful
+#
+# Input args: userid 
+#		-type
+#		-passwd
+# Output args: none
+# Typical usage: 
+##################################################################
+proc CheckCreateAcctLegal {userid args} {
+
+   parse_args CheckCreateAcctLegal $args {
+      type "admin"
+      passwd ""
+   }
+
+   global whichDutNow
+   set rtValue ""
+
+   set ver [GetVersion DUT${whichDutNow}];
+   result_debug "ver= $ver";
+   if {[CompareRelease $ver 11.1.0.21] >=0} {
+      set rtValue [exIACreateAccount "$userid" -type $type -passwd "$passwd"];
+      result_debug "rtValue= $rtValue";
+      set cmd "create account $type $userid $passwd";
+      regsub {\{} $cmd "LeftBrace" cmd1;
+      regsub {\}} $cmd1 "rightBrace" cmd;
+      regsub {\[} $cmd "LeftBracket" cmd1;
+      regsub {\]} $cmd1 "RightBracket" cmd;
+      regsub {\010} $cmd "BACK" cmd1;
+      regsub {\010} $cmd1 "BACK" cmd;
+      report_start_test "$cmd should pass"
+      if { ($rtValue == "legal") || ($rtValue == "Illegal Line is Note:.*") } {
+         result_ok "create account sucessful"
+      } else {
+         result_error "create account failed"
+      }
+      report_end_test
+   } else {
+      CheckCmdLegal "create account $type $userid $passwd";
+   }
+}
+
+##################################################################
+# Procedure Name: exIAConfigAccount
+#
+# Description: To pasword for an account
+#
+# Input args: userid
+#               -passwd         the password
+# Output args:
+#               rtValue         "", "timeout", "error", "illegal"
+# Typical usage:
+#
+##################################################################
+proc exIAConfigAccount {userid args} {
+
+   parse_args exIAConfigAccount $args {
+      passwd3 ""
+      passwd ""
+   }
+
+   set rtValue ""
+   global whichDutNow
+   set testNo "exIACreateAccount";
+
+   set ver [GetVersion DUT${whichDutNow}];
+   result_debug "ver= $ver";
+   if {[CompareRelease $ver 11.1.0.21] >=0} {
+      set cmd "config account $userid";
+      send "$cmd\r";
+      expect "$cmd";                           
+      expect {
+         timeout {
+            result_debug "time1";
+            set rtValue "timeout";
+         }
+         -nocase -re "does not have permissions" {
+            append exp_out_buf $expect_out(buffer);
+            expect "*";
+            append exp_out_buf $expect_out(buffer);
+            result_debug "$exp_out_buf";
+            set rtValue "illegal";
+         }
+     -nocase -re "Current user's password:" {
+	if { $passwd3 != "NULL"} {
+        	 send "$passwd3\r";
+	} else {
+        	 send "\r\r";
+ 	}
+        expect {
+             -nocase -re "New password:" {
+                append exp_out_buf $expect_out(buffer);
+                send "$passwd\r";
+		expect {
+                -nocase -re "Reenter password:" {
+                append exp_out_buf $expect_out(buffer);
+                  regsub -all "\n\r" $exp_out_buf "\n" exp_out_buf
+#                  result_debug "$exp_out_buf";
+                  global spawn_id
+                  set fd_in [open "Tmp/tmp_$testNo[pid]" "w"]
+                  #do not need to show error status, since we know this will cause error
+                  MySendACmd "$passwd" "NULL" $fd_in false
+                  close $fd_in
+                  set fd_in [open "Tmp/tmp_$testNo[pid]" "r"]
+                  set rtValue [check_illegality $fd_in]
+                  close $fd_in
+                  file delete "Tmp/tmp_$testNo[pid]"
+	        }
+                 timeout {
+	            result_debug "time2";
+	            set rtValue "timeout";
+                 }
+		}
+       }
+         timeout {
+            result_debug "time1";
+            set rtValue "timeout";
+         }
+}
+#        set rtValue "legal";
+        }
+ -nocase -re "password: " {
+            append exp_out_buf $expect_out(buffer);
+            send "$passwd\r";
+            expect {
+               -nocase -re "reenter password: " {
+                  append exp_out_buf $expect_out(buffer);
+                  regsub -all "\n\r" $exp_out_buf "\n" exp_out_buf
+#                  result_debug "$exp_out_buf";
+                  global spawn_id
+                  set fd_in [open "Tmp/tmp_$testNo[pid]" "w"]
+                  #do not need to show error status, since we know this will cause error
+                  MySendACmd "$passwd" "NULL" $fd_in false
+                  close $fd_in
+                  set fd_in [open "Tmp/tmp_$testNo[pid]" "r"]
+                  set rtValue [check_illegality $fd_in]
+                  close $fd_in
+                  file delete "Tmp/tmp_$testNo[pid]"
+               }
+               timeout {
+                  set rtValue "timeout";
+               }
+            }
+         }
+
+      }
+   } else {
+      result_debug "Old Style";
+      SendACmd "config account $userid $passwd";
+   }
+   return $rtValue;
+}
+
+
+
+
+################################################################## 
+# Procedure Name: CheckConfigAcctIllegal
+#   
+# Description: Sets result ok if config account failed
+#
+# Input args: userid 
+#		-passwd
+# Output args: none
+# Typical usage: 
+##################################################################
+proc CheckConfigAcctIllegal {userid args} {
+
+   parse_args CheckConfigAcctIllegal $args {
+      passwd3 ""
+      passwd ""
+   }
+
+   global whichDutNow
+   set rtValue ""
+
+   set ver [GetVersion DUT${whichDutNow}];
+   result_debug "ver= $ver";
+   if {[CompareRelease $ver 11.1.0.21] >=0} {
+      set rtValue [exIAConfigAccount "$userid" -passwd3 "$passwd3" -passwd "$passwd"];
+      result_debug "rtValue= $rtValue";
+      set cmd "config account $userid $passwd";
+      regsub {\{} $cmd "LeftBrace" cmd1;
+      regsub {\}} $cmd1 "rightBrace" cmd;
+      regsub {\[} $cmd "LeftBracket" cmd1;
+      regsub {\]} $cmd1 "RightBracket" cmd;
+      regsub {\010} $cmd "BACK" cmd1;
+      regsub {\010} $cmd1 "BACK" cmd;
+      report_start_test "$cmd should fail"
+      if { $rtValue == "illegal" } {
+         result_ok "config account failed"
+      } else {
+         result_error "config account should fail but passed"
+      }
+      report_end_test
+   } else {
+      CheckCmdIllegal "config account $userid $passwd";
+   }
+}
+
+
+################################################################## 
+# Procedure Name: CheckConfigAcctLegal
+#   
+# Description: Sets result ok if config account successful
+#
+# Input args: userid 
+#		-passwd
+# Output args: none
+# Typical usage: 
+##################################################################
+proc CheckConfigAcctLegal {userid args} {
+
+   parse_args CheckConfigAcctLegal $args {
+      passwd3 ""
+      passwd ""
+   }
+
+   global whichDutNow
+   set rtValue ""
+
+   set ver [GetVersion DUT${whichDutNow}];
+   result_debug "ver= $ver";
+#set passwd3 $passwd
+   if {[CompareRelease $ver 11.1.0.21] >=0} {
+      set rtValue [exIAConfigAccount "$userid" -passwd3 "$passwd3" -passwd "$passwd"];
+      result_debug "rtValue= $rtValue";
+      set cmd "config account $userid $passwd";
+      regsub {\{} $cmd "LeftBrace" cmd1;
+      regsub {\}} $cmd1 "rightBrace" cmd;
+      regsub {\[} $cmd "LeftBracket" cmd1;
+      regsub {\]} $cmd1 "RightBracket" cmd;
+      regsub {\010} $cmd "BACK" cmd1;
+      regsub {\010} $cmd1 "BACK" cmd;
+      report_start_test "$cmd should pass"
+      if { $rtValue == "legal" } {
+         result_ok "config account sucessful"
+      } else {
+         result_error "config account failed"
+      }
+      report_end_test
+   } else {
+      CheckCmdLegal "config account $userid $passwd";
+   }
+}
+
+

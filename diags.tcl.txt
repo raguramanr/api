@@ -1,0 +1,658 @@
+proc getDiagModulePath { } {
+ result_debug "Inside of getDiaghModulePath proc"
+   return [getImagePath -Image 8900diags]
+}
+
+
+##################################################################
+# Procedure Name: rebootBootRom
+#
+# Description: reboots MSM and catches it at the bootrom prompt
+#
+# Input args: dut number, MSM A or B
+# Output args: none
+# Typical usage:
+#				rebootBootRom 1
+#				rebootBootRom 1 A
+##################################################################
+
+    proc rebootBootRom {{dut 1} {msm ""}} {
+
+    global connectionTimeout
+    global DUT${dut}_CONNECT
+    global DUT${dut}_CONNECTB
+    global spawn_id
+
+    set timeout 1
+    set BootPrompt 0
+
+    #Login [set DUT${dut}_CONNECT]
+
+    # Setup spawn_id to correct MSM And Rebooting the DUT
+    if {$msm == "A"} {
+                slow_send "reboot msm A\r"
+
+    } elseif { $msm == "B"} {
+                slow_send "reboot msm B\r"
+
+    } elseif { $msm == ""} {
+                slow_send "reboot\r"
+
+     } else {
+        result_debug "Invalid Argument"
+        result_debug "Usage : {rebootBootRom 1} (or) {rebootBootRom 1} <A/B> "
+        return 0
+    }
+
+    #---Answering Reboot questions
+        set timeout 8
+        expect "\\?" {
+                result_pre $expect_out(buffer)
+                send "y\r"
+                exp_continue
+               }
+       result_debug "Waiting for switch to go down"
+       exSleep 10
+       #exSleep 5
+ if {$msm == "B"} {
+           if {[info exist DUT${dut}_CONNECTB]} {
+            getSpawnId [set DUT${dut}_CONNECTB] spawn_id
+                }
+       } elseif {$msm == "A"} {
+        if {[info exist DUT${dut}_CONNECT]} {
+            getSpawnId [set DUT${dut}_CONNECT] spawn_id
+                }
+        }
+
+    #---spawn_id should point to target MSM console
+        set timeout 60
+        expect "*"
+        expect -nocase -re "spacebar.*bootrom" {
+        result_pre $expect_out(buffer)
+        result_debug "Now sending spaces to stop at BOOTROM prompt"
+        send "                 \r"
+        # Check to see if boot prompt is there
+        expect {
+          "BootRom > " {
+               set BootPrompt "TRUE"
+           }
+           "BOOTLOADER> " {
+               set BootPrompt "TRUE"
+           }
+           "BootStrap > " {
+                set BootPrompt "TRUE"
+           }
+           "login:" {
+                # else check to see if login prompt is there
+                send "admin\r"
+                expect "password"
+                send "\r"
+                expect "#"
+                result_debug "Unable to get Boot prompt"
+           }
+           timeout {
+           }
+         }
+       }
+ result_pre $expect_out(buffer)
+     set timeout $connectionTimeout
+
+    if {$BootPrompt == "TRUE" } {
+        result_ok "The router is at Boot Prompt"
+        return 1
+    } else {
+        result_error "Unable to get to Boot Prompt"
+        return 0
+    }
+}
+
+##################################################################
+# Procedure Name: clearPromptAspen
+#
+# Description: clears the prompt in Aspen Diags
+#
+# Input args: clearPromptAspen
+# Optional Args: none
+# Output args: none
+# Typical usage:
+#
+# I don't know why this works but if the previous Aspen Diag
+#  test case fails then this is necessary for the next test case
+#  to pass.
+#
+##################################################################
+
+# ----- Start Test Case
+
+proc clearPromptAspen {} {
+    puts "Clearing Prompt"
+    send \025
+    send \r
+    puts "All Clear"
+}
+
+
+
+##################################################################
+# Procedure Name: LoginOld
+#
+##################################################################
+proc LoginOld {{device "0.0.0.0"} {fd "NULL"} {userid "admin"} {passwd ""} {CheckOperational "0"}} {
+  global numDUT
+  global whichDutNow
+  for {set i 1} {$i <= $numDUT} {incr i} {
+     global DUT${i}_CONNECT DUT${i}_IP
+     if {$device==[set DUT${i}_CONNECT] || $device==[set DUT${i}_IP]} {
+       set whichDutNow $i
+       break
+     }
+  }
+  # Open appropriate device
+  result_debug "Login on device $device"
+  switch -glob -- $device \
+      "com?" {
+         login_comm $device $fd $userid $passwd
+  } default {
+         return [login_telnet $device $fd $userid $passwd $CheckOperational]
+  }
+}
+
+##################################################################
+# Procedure Name: loginAspenDiag
+#
+# Description: hardcoded just to get it running
+#
+# Input args: loginAspenDiag
+# Optional Args: none
+# Output args: none
+# Typical usage:
+#
+#
+##################################################################
+
+# ----- Start Test Case
+
+proc loginAspenDiag {} {
+    Login "10.66.1.18 2016" -CheckOperational 0 -masterCheck 0
+
+}
+
+
+
+##################################################################
+# Procedure Name: CheckAllSlotsOperational
+#
+# Description: runs "show slot" until all slot are operational
+#              or 10 minutes
+# Input args: CheckAllSlotsOperational
+# Optional Args: none
+# Output args: none
+# Typical usage:
+#
+#
+##################################################################
+
+# ----- Start Test Case
+
+proc CheckAllSlotsOperational {} {
+   global pioneerPlatform chassis
+   global everestChassis
+   global DUTs_info
+   global whichDutNow
+
+
+   if {![regexp -nocase "$chassis|vpex" $DUTs_info(DUT$whichDutNow,platform)]} {
+       puts "This is not a Stack or chassis. No need to verify slots"
+       return;
+   }
+
+   set slotStatusList ""
+   set slotOperational 0
+   set timeDuration 0
+   lappend slotStatusList "slot Operational inLine"
+   set listElem ""
+   set SlotStatusLength 12
+   set startCol 51
+   set endCol [expr $startCol+$SlotStatusLength]
+   lappend listElem "$startCol $endCol"
+   while {$slotOperational!=1} {
+      global pioneerPlatform
+      global DUTs_info
+      global whichDutNow
+      if {[regexp -nocase $pioneerPlatform $DUTs_info(DUT$whichDutNow,platform)] || \
+          [regexp -nocase $everestChassis $DUTs_info(DUT$whichDutNow,platform)]} {
+          set slotStatusString [GetColumnValues "show slot" $listElem "----" "MM-A|Flags|^$"]
+      } else {
+      set slotStatusString [GetColumnValues "show slot" $listElem "----" "MSM-A|Flags|^$"]
+      }
+      result_debug "The slotStatusString $slotStatusString"
+      foreach res [lindex $slotStatusString 0] {
+         if {![regexp -nocase "Operational|empty" $res]&&$res!=""} {
+            exSleep 3
+            set slotOperational 0
+           break
+         } else {
+            set slotOperational 1
+         }
+      }
+      incr timeDuration 3
+      result_debug "Total of $timeDuration out of 1200"
+      if {$timeDuration>=1200} {
+         break
+      }
+   }
+   if {$slotOperational==0} {
+      result_error "All slots not Operational even after 1200 wait"
+      return 0
+   }
+   return 1
+}
+
+##################################################################
+# Procedure Name: CheckMSMsOperational
+#
+# Description: runs "show slot" until all MSMs are operational
+#              or 10 minutes
+# Input args: CheckMSMsOperational
+# Optional Args: none
+# Output args: none
+# Typical usage:
+#
+#
+##################################################################
+
+# ----- Start Test Case
+
+proc CheckMSMsOperational {} {
+   set slotStatusList ""
+   set slotOperational 0
+   set timeDuration 0
+   lappend slotStatusList "MSM Operational inLine"
+   set listElem ""
+   set SlotStatusLength 12
+   set startCol 51
+   set endCol [expr $startCol+$SlotStatusLength]
+   lappend listElem "$startCol $endCol"
+   global pioneerPlatform
+   global whichDutNow
+   global DUTs_info
+   global chassis
+   set slotOperationalTimeout 420
+   set timeIncrement 3
+   if {[regexp -nocase $pioneerPlatform $DUTs_info(DUT$whichDutNow,platform)]} {
+     set slotOperationalTimeout 2800
+     set timeIncrement 20
+   }
+
+   if {[regexp -nocase "$chassis" [GetPlatform]] && [regexp -nocase "BD-X8|bd-8810|bd-8806|aspen|xcm" $DUTs_info(DUT$whichDutNow,platform)] } {
+     set slotOperationalTimeout 1200
+     set timeIncrement 20
+   }
+
+   while {$slotOperational!=1} {
+      set slotStatusString [GetColumnValues "show slot" $listElem "----" "MSM-A|Flags"]
+      result_debug "The slotStatusString $slotStatusString"
+      foreach res [lindex $slotStatusString 0] {
+         if {![regexp -nocase "Operational|Empty:Present" $res]&&$res!=""} {
+            exSleep $timeIncrement
+            set slotOperational 0
+           break
+         } else {
+            set slotOperational 1
+         }
+      }
+      incr timeDuration $timeIncrement
+      result_debug "Total of $timeDuration out of $slotOperationalTimeout"
+      if {$timeDuration>=$slotOperationalTimeout} {
+         break
+      }
+   }
+   if {$slotOperational==0} {
+      result_error "All slots not Operational even after $slotOperationalTimeout wait"
+      return 0
+   }
+   return 1
+}
+
+
+
+##################################################################
+# Procedure Name: CheckMSMsIsInSync
+#
+# Description: runs "show switch" until all MSMs are in sync
+#              or 10 minutes
+# Input args: CheckMSMsIsInSync
+# Optional Args: none
+# Output args: none
+# Typical usage:
+#
+#
+##################################################################
+
+# ----- Start Test Case
+
+proc CheckMSMIsInSync {} {
+global whichDutNow
+global DUT${whichDutNow}_CONNECTB
+global pioneerPlatform
+global DUTs_info
+    if {[regexp -nocase $pioneerPlatform $DUTs_info(DUT$whichDutNow,platform)]} {
+        set MSMSyncTimeout 2800
+        set timeInterval 20
+    } else {
+        set MSMSyncTimeout 600
+        set timeInterval 3
+    }
+
+    if {[info exist DUT${whichDutNow}_CONNECTB]} {
+        lappend parameterList "BACKUP {In Sync} inLine";
+        set timeOut "start: 10 interval: $timeInterval dummy: $timeInterval fail: $MSMSyncTimeout";
+        set returnCode [CheckKeyValue "show switch" $parameterList -time $timeOut];
+            if {$returnCode != "ok"} {
+                result_error "MSMs not in sync after $MSMSyncTimeout seconds.";
+                return 0;
+            } else {
+                return 1;
+            }
+    } else {
+        return 1;
+    }
+}
+
+
+##################################################################
+# Procedure Name: CheckLogs
+#
+# Description: check logs for error and warning msgs
+# Input args: CheckLogs
+# Optional Args: none
+# Output args: none
+# Typical usage:
+#
+#
+##################################################################
+
+# ----- Start Test Case
+
+proc CheckLogs {} {
+    set parameterList ""
+    lappend parameterList "{error} 1"
+    set diagsErrorLines [GetKeyValue "show log match error" $parameterList -needWholeLine 1];
+    set numOfErroredLines [llength $diagsErrorLines]
+    for { set lineCount 0 } { $lineCount < $numOfErroredLines } { incr lineCount } {
+            set errorLine [lindex $diagsErrorLines $lineCount]
+            if { ([regexp -nocase "error" $errorLine]) && \
+                 (![regexp -nocase "Unable to parse PSU" $errorLine]) &&
+                 (![regexp -nocase "Previous message repeated" $errorLine]) } {
+                  result_error "Error running Diags"
+                  return 0;
+            }
+    }
+        return 1;
+}
+
+##################################################################
+# Procedure Name: CheckLogErrors
+#
+# Description: check logs for error msgs
+# Input args: CheckLogErrors
+# Optional Args: none
+# Output args: none
+# Typical usage:
+#
+#
+##################################################################
+#LK added a work around for power supply error message PD3-206284097 which cannot be fix without manual inervention
+proc CheckLogErrors {} {
+    set parameterList ""
+    lappend parameterList "{error} 1"
+    set diagsErrorLines [GetKeyValue "show log match error" $parameterList -needWholeLine 1];
+    set numOfErroredLines [llength $diagsErrorLines]
+    for { set lineCount 0 } { $lineCount < $numOfErroredLines } { incr lineCount } {
+            set errorLine [lindex $diagsErrorLines $lineCount]
+            if { ([regexp -nocase "error" $errorLine]) && \
+                 (![regexp -nocase "Unable to parse PSU" $errorLine]) &&
+                 (![regexp -nocase "Previous message repeated" $errorLine]) } {
+                  result_error "Error running Diags"
+                  return 0;
+            }
+    }
+        return 1;
+}
+
+##################################################################
+# Procedure Name: CheckLogWarn
+#
+# Description: check logs for warning msgs
+# Input args: CheckLogWarn
+# Optional Args: none
+# Output args: none
+# Typical usage:
+#
+#
+##################################################################
+#LK added a work around for power supply error message PD3-206284097 which cannot be fix without manual inervention
+proc CheckLogWarn {} {
+	set parameterList ""
+    lappend parameterList "{error} 1"
+    set diagsWarnLines [GetKeyValue "show log match warn" $parameterList -needWholeLine 1];
+    set numOfWarnedLines [llength $diagsWarnLines]
+    for { set lineCount 0 } { $lineCount < $numOfWarnedLines } { incr lineCount } {
+            set warnLine [lindex $diagsWarnLines $lineCount]
+            if 	{([regexp -nocase "warn" $warnLine]) && \
+				(![regexp -nocase "CPU utilization" $warnLine])
+			} {
+				result_error "Warnings running Diags" return 0;
+			}
+    }
+    return 1;
+}
+
+##################################################################
+# Procedure Name: ShowLogs
+#
+# Description: shows logs for error and warning msgs
+# Input args: ShowLogs
+# Optional Args: none
+# Output args: none
+# Typical usage:
+#
+#
+##################################################################
+
+# ----- Start Test Case
+
+proc ShowLogs {} {
+
+        SendACmd "show log match error"
+        SendACmd "show log match warn"
+
+}
+
+##################################################################
+# Procedure Name: dataPathErrorsLog
+#
+# Description: Checks for Data Path errors in Sys-health-check
+# Input args: slot number
+# Optional Args: none
+# Output args: none
+# Typical usage:
+#
+#
+##################################################################
+proc dataPathErrorsLog {slot} {
+    SendACmd "enable sys-health-check slot $slot"
+    exSleep 15
+    # Check logs for sys-health-check log messages
+    set parameterList ""
+    lappend parameterList "No log messages were displayed";
+    set returnCode [CheckKeyValue "show log match rc=3" $parameterList];
+    unset parameterList
+        if {$returnCode != "ok"} {
+            result_debug "Sys-health-check errors found in logs after the test was run."
+            SendACmd "debug hal show sys-health-check"
+            SendACmd "disable sys-health-check slot $slot"
+            exSleep 10
+            SendACmd "debug hal clear sys-health-check counters"
+            return 0;
+        } else {
+            SendACmd "disable sys-health-check slot $slot"
+            exSleep 10
+            SendACmd "debug hal clear sys-health-check counters"
+            return 1;
+        }
+}
+
+##################################################################
+# Procedure Name: CheckDiagsFinish
+#
+# Description:
+# Input args:
+# Optional Args:
+# Output args:
+# Typical usage:
+#
+#
+##################################################################
+
+# ----- Start Test Case
+
+proc CheckDiagsFinish {{dut 1} {msm ""}} {
+
+    global connectionTimeout
+    global DUT${dut}_CONNECT
+    global DUT${dut}_CONNECTB
+    global spawn_id
+
+    set DiagsFinish 0
+
+    # Setup spawn_id to correct MSM And Rebooting the DUT
+
+    if {$msm == "B"} {
+           if {[info exist DUT${dut}_CONNECTB]} {
+            getSpawnId [set DUT${dut}_CONNECTB] spawn_id
+           }
+     } elseif {$msm == "A"} {
+        if {[info exist DUT${dut}_CONNECT]} {
+            getSpawnId [set DUT${dut}_CONNECT] spawn_id
+                }
+        }
+
+    #---spawn_id should point to target MSM console
+        set timeout 2800
+        set expect_out(buffer) ""
+        # Check to see if diags is finished
+        expect {
+           "Authentication Service.*now available for login" {
+               set DiagsFinish "TRUE"
+               puts "System rebooted fine after diags"
+           }
+           "login:" {
+               set DiagsFinish "TRUE"
+               puts "System rebooted fine after diags"
+           }
+           "PASS" {
+                   result_pre $expect_out(buffer)
+                   exp_continue;
+           }
+           timeout {
+               result_debug "Did not got the login prompt , timed out dumping expect buffer log"
+               result_debug $expect_out(buffer)
+           }
+       }
+     result_pre $expect_out(buffer)
+     set timeout $connectionTimeout
+
+    if {$DiagsFinish == "TRUE" } {
+        result_ok "The router finished Diagnostic"
+        return 1
+    } else {
+        result_error "Unable to finished Diagnostic"
+        return 0
+    }
+}
+
+
+##################################################################
+# Procedure Name: FROM Diags.tcl on RTPREG
+#
+# Description:
+# Input args:
+# Optional Args:
+# Output args:
+# Typical usage:
+#
+#
+##################################################################
+
+proc run_diag_dut1 {value} {
+   global DUT1_CONNECT
+
+   Login $DUT1_CONNECT -masterCheck 1
+   CheckCmdLegal "run diagnostics $value"
+}
+
+proc run_diag_dut2 {value} {
+   global DUT2_CONNECT
+
+   Login $DUT2_CONNECT -masterCheck 1
+   CheckCmdLegal "run diagnostics $value"
+}
+
+proc run_diag_dutslot1 {value slot name} {
+   global DUT1_CONNECT
+
+   Login $DUT1_CONNECT -masterCheck 1
+   CheckCmdLegal "run diagnostics $value $slot $name"
+}
+###################################################################
+proc run_diag_waitTillEnd_dut1 {value} {
+   global DUT1_CONNECT
+
+   Login $DUT1_CONNECT -masterCheck 1
+   CheckCmdLegal "run diagnostics $value"
+   puts "Checking for diags completion"
+   CheckDiagsFinish 1 A
+
+}
+
+proc run_diag_waitTillEnd_dut2 {value} {
+   global DUT2_CONNECT
+
+   Login $DUT2_CONNECT -masterCheck 1
+   CheckCmdLegal "run diagnostics $value"
+   puts "Checking for diags completion"
+   CheckDiagsFinish 2 A
+
+}
+proc run_diag_dutslot1_waitTillEnd {value slot name} {
+   global DUT1_CONNECT
+   global DUT1_CONNECTB
+   if { ($name == "a" ) } {
+      if {[info exist DUT1_CONNECTB]} {
+          Login $DUT1_CONNECTB -masterCheck 0
+      }
+   Login $DUT1_CONNECT -masterCheck 1
+   #MNM Start add this
+   CheckMSMIsInSync
+   #MNM End add this
+   CheckCmdLegal "run diagnostics $value $slot $name"
+   puts "Checking for diags completion"
+   CheckDiagsFinish 1 A
+   } elseif { ($name == "b" ) } {
+          Login $DUT1_CONNECTB -masterCheck 0
+          Login $DUT1_CONNECT -masterCheck 1
+            #MNM Start add this
+            CheckMSMIsInSync
+            #MNM End add this
+          CheckCmdLegal "run diagnostics $value $slot $name"
+          puts "Checking for diags completion"
+          CheckDiagsFinish 1 B 
+          Login $DUT1_CONNECT -masterCheck 0
+  } else {
+          CheckCmdLegal "run diagnostics $value $slot $name"
+  }
+}
+
+
+

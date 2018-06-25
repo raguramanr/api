@@ -1,0 +1,187 @@
+#!/usr/bin/expect --
+load [lindex [glob "/usr/lib/libexpect*so*"] 0]
+
+array set sysList [ list {10.210.1.211} {Linux-Alpine} \
+                   {10.210.1.212} {Linux-BD1} \
+                   {10.210.1.213} {Linux-BD2} \
+                   {10.210.1.214} {Linux-Summit} \
+                   {10.210.1.215} {Linux-Godzila} \
+                   {10.210.1.216} {Linux-BT} \
+                   {10.210.1.217} {Linux-IpRoute} \
+                   {10.210.1.222} {Linux-10G} \
+                   {10.255.56.20} {Linux-SnmpAuto} \
+                   {10.255.56.21} {Linux-Snmp} \
+                   {10.210.1.218} {Linux-CLI} ]
+
+set numOfSystems [ array size sysList ]
+
+set maxFileSize 1000000
+
+set MIN_POLL_TIME 15
+set MAX_POLL_TIME 120
+set pollingTime 0
+
+#******************************************************************
+# This procedure is used to check the health of a Linux PC.
+# It will telnet to the specified IP address, login and then logout.
+# Input: Ip address
+# Output: ok/error
+#*******************************************************************
+proc CheckHealth { ip } {
+   global fd_dbg
+   #set login "root"
+   #set passwd "extreme"
+   set login "autotest-sc"
+   set passwd "glitterpen1"
+   set timeout 120
+   set pid [spawn telnet $ip]
+   expect -nocase "login:" { send "$login\r" } timeout {
+              puts $fd_dbg "[GetTimeStr] No answer from host: $ip"
+              retrun "error"
+   }
+   expect -nocase "password:" { send "$passwd\r" } timeout {
+          puts $fd_dbg "[GetTimeStr] No answer from host: $ip"
+          retrun "error"
+   }
+   expect "$login@"
+   send "logout\r"
+   close; wait
+   return "ok"
+}
+
+proc SendEmail { ipList } {
+   global sysList;
+   global initialList;
+   global currentList;
+   global numOfSystems;
+
+   set mailTo "sqaauto@extremenetworks.com"
+
+   for { set i 0 } { $i < $numOfSystems } { incr i } {
+     set oldValue [ lindex $initialList $i ]
+     set newValue [ lindex $currentList $i ]
+     set ip [ lindex $ipList $i ]
+     if { $oldValue == 0 && $newValue == 1 } {
+          set subject "$sysList($ip) ($ip) NOT RESPONDING"
+          set body "Please check the linux PC $sysList($ip) ($ip).\
+                    Probably it got crashed!! "
+          exec /bin/mail -s "$subject" $mailTo << "$body " &        
+     } 
+     if { $oldValue == 1 && $newValue == 0 } {
+          set subject "$sysList($ip) ($ip) is UP and RUNNING now"
+          set body "Linux PC $sysList($ip) ($ip) is fixed.\
+                    It's up and running."
+          exec /bin/mail -s "$subject" $mailTo << "$body " &        
+     }
+     set initialList [ lreplace $initialList $i $i "$newValue" ]
+   }
+}
+
+proc isSameList { iList cList } {
+   global fd_dbg
+   global numOfSystems
+
+   puts $fd_dbg "Initial List : $iList CurrentList : $cList"
+
+   for { set i 0 } { $i < $numOfSystems } { incr i } {
+     set oldValue [ lindex $iList $i ]
+     set newValue [ lindex $cList $i ]
+     if { $oldValue != $newValue } {
+        return "false"
+     }
+   }
+  return "true"
+}
+
+proc isAnySystemDown { sysList } {
+   foreach entry $sysList {
+     if { $entry == 1 } {
+       return "yes"
+     }
+   }
+   return "no" 
+}
+
+proc GetTimeStr { } {
+   set sysTime [ clock seconds ]
+   set date [clock format $sysTime -format %D]
+   set time [clock format $sysTime -format %H:%M:%S]
+   set tString [format "%s:%s :" $date $time]
+   return $tString
+}
+
+for { set i 1 } { $i <=$numOfSystems } { incr i } {
+    lappend initialList "0"
+    lappend currentList "0"
+}
+puts "initial list = $initialList current list = $currentList"
+puts "Number of systems being monitored = $numOfSystems"
+
+while { 1 } {
+   set ipList ""
+   if { [ catch { open "healthCheck.txt" w } fd ] } {
+      puts "Can't opne file : healthCheck.txt"
+      exit
+   }
+   
+   if { [ catch { open "healthCheck_debug.txt" a+ } fd_dbg ] } {
+      puts "Can't opne file : healthCheck_error.txt"
+      exit
+   } else {
+       set fSize [file size "healthCheck_debug.txt"]
+       if { $fSize >= $maxFileSize } {
+          seek $fd_dbg 0 start
+       }     
+   }
+   puts $fd [format "%-35s %-20s" "    MACHINE NAME" "HEALTH CHECK"]
+   puts $fd [format "%-35s %-25s\n" " -----------------" "-------------"]
+   set idx 0
+   foreach ip [ array names sysList ] {
+      lappend ipList "$ip"
+      puts $fd_dbg "[GetTimeStr] Checking $sysList($ip) ($ip)" 
+      if { [ catch { set health [ CheckHealth $ip ] } ] } {
+           puts $fd_dbg "[GetTimeStr] Host: $ip unreachable!!"
+           set health "error"
+       }
+      if { $health == "ok" } {
+           puts $fd [format "%-35s %-30s\n" "$sysList($ip) ($ip)" "GOOD"]
+           set currentList [ lreplace $currentList $idx $idx "0" ]
+      } else {
+           puts $fd [format "%-35s %-25s\n" "$sysList($ip) ($ip)" "NOT RESPONDING"]
+           set currentList [ lreplace $currentList $idx $idx "1" ]
+      }
+     incr idx
+   }
+   puts $fd_dbg "IP List = $ipList"
+   set ret [ isSameList $initialList $currentList ]
+   if { $ret == "false" } {
+       SendEmail $ipList
+   } 
+
+   set status [ isAnySystemDown $currentList ] 
+   if { $status == "yes" } {
+        set pollingTime $MIN_POLL_TIME
+   } else {
+        set pollingTime $MAX_POLL_TIME
+   }
+
+  set freq [expr $pollingTime*60]
+  set currTime [ clock second ]
+  set nextTime [ expr $currTime + $freq ]
+  puts $fd_dbg "\n\n[GetTimeStr] Waiting for next health check cycle to start ..."
+  puts $fd_dbg "[GetTimeStr] Next health check time : [clock format $nextTime]"
+  puts "\n\nWaiting for next health check cycle to start ..."
+  puts "Next health check time : [clock format $nextTime]"
+  close $fd
+  close $fd_dbg
+  unset ipList
+  set sleepTime $freq
+  while {$freq} {
+        puts -nonewline "Sleeping $freq of $sleepTime seconds    \r"
+        flush stdout
+        incr freq -1
+        after 1000
+    }
+}
+
+

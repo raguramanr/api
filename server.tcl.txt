@@ -1,0 +1,57 @@
+# Function to write data to a file
+proc WriteToFile {filename data} {
+        set fileId [open $filename "w"]
+        puts -nonewline $fileId $data
+        close $fileId
+}
+
+# Function for server to receive connection and set resume flag
+proc Server {channel clientaddr clientport} {
+        global canresume
+        puts "Connection from $clientaddr registered"
+        puts $channel [clock format [clock seconds]]
+        close $channel
+        set canresume 1
+}
+
+proc EzPause { argc argv } {
+        set canresume 0
+        set portno [expr int([expr floor( rand() * 55000) + 10000])]
+        set sock 0
+
+        if { $argc != 1 } {
+                puts "This script requires a command line argument"
+                puts "The command line argument is the file name"
+                exit
+        }
+
+        puts "Trying $portno..."
+
+        while (1) {
+                if {[catch {set sock [socket -server Server $portno]} errmsg]} {
+                        puts $errmsg
+                        set portno [expr int([expr floor( rand() * 55000) + 10000])]
+                        puts "Error while trying to pause"
+                } else {
+                        break
+                }
+        }
+
+        WriteToFile [lindex $argv 0] $portno
+        puts "Execution Paused"
+        vwait canresume
+        close $sock
+}
+
+#unit testing
+#EzPause $argc $argv
+# --------------------------------------------------------------------
+# Procedure: _getRegServerHostname
+#
+#  return the hostname of the server the script is running on
+# --------------------------------------------------------------------
+proc _getRegServerHostname {} {
+    set hn [info hostname]
+    set hnList [split $hn "."]
+    return [lindex $hnList 0]
+}

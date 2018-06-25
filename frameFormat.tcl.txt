@@ -1,0 +1,653 @@
+
+
+##################################################################    
+# Procedure Name: displayIpPacketFormat
+# Description:
+#     	Displays the decoded version of a ip packet sent over
+#       the specified port.
+# Input args: 
+# Output args:  None
+# Return value: None
+# Typical usage: 
+#        displayIpPacketFormat -txPortId $txPortId -frameSent $streamSent \
+#                    -streamType $streamType -destMac $dMacAddr \
+#                    -srcMac $sMacAddr -srcIp $sIpAddr -destIp $dIpAddr \
+#                    -numFrames $numFrames -protocol $ipProtocol \
+#                    -tcpSynFlag $tcpSynFlag -tcpFinFlag $tcpFinFlag \
+#                    -tcpRstFlag $tcpRstFlag -tcpAckFlag $tcpAckFlag \
+#                    -tcpPushFlag $tcpPushFlag -tcpUrgFlag $tcpUrgFlag \
+#                    -tcpSeqNum $tcpSeqNum -tcpPushFlag $tcpPushFlag \
+#                    -sourcePort $pSrcPort -destPort $pDstPort -tag $tagNo \
+#                    -userPriority $userPriority
+# Category: Utility
+##################################################################
+proc displayIpPacketFormat {args} {
+  parse_args displayIpPacketFormat $args {
+     txPortId   ""
+     rxPortId   ""
+     direction  "1Way"
+     frameSent  ""
+     streamType ""
+     numFrames "1"
+     destMac    ""
+     srcMac     ""
+     destIp     ""
+     srcIp      ""
+     protocol  "ip"
+     daMode    "idle"
+     saMode    "idle"
+     daCount   ""
+     saCount   ""
+     ipSaMode "ipIdle"
+     ipDaMode "ipIdle"
+     ipSaCount ""
+     ipDaCount ""
+     tcpSynFlag ""
+     tcpFinFlag ""
+     tcpRstFlag ""
+     tcpAckFlag  ""
+     tcpPushFlag ""
+     tcpUrgFlag ""
+     tcpSeqNum ""
+     tcpPushFlag ""
+     sourcePort  ""
+     destPort    ""
+     tag         ""
+     userPriority ""
+     percentage "100"
+  }
+
+  set strType "packets"
+  set numPacket $numFrames
+  if {$streamType == "contPacket"} {
+     set strType "contPacket"
+     set numPacket ""
+  }
+
+  if {$direction == "1Way"} {
+     if {($protocol == "tcp") || ($protocol == "udp")} {
+        result_debug "Transmit $numPacket $protocol/Ip $strType from portId $txPortId"
+     } else {
+        result_debug "Transmit $numPacket Ip $strType from portId $txPortId"
+     }
+  } else {
+     if {($protocol == "tcp") || ($protocol == "udp")} {
+        result_debug "Transmit $numPacket $protocol/Ip $strType in 2 way direction from portId $txPortId and $rxPortId"
+     } else {
+        result_debug "Transmit $numPacket Ip $strType in 2 way direction from portId $txPortId and $rxPortId"
+     }
+  }
+
+  result_debug "$frameSent"
+
+  set space1 13
+  set space2 38
+  set space3 50
+
+  set str [format "%-*s %s" $space1 DestMac: $destMac]
+  set str [format "%-*s %s" $space2 $str srcMac:]
+  set str [format "%-*s %s" $space3 $str $srcMac]
+  result_debug "$str"
+
+  if {$daMode != "idle"} {
+     if {($daMode == "increment") || ($daMode == "decrement")} {
+        set daStr "$daMode $daCount macs"
+        set str [format "%-*s %s" $space1 daMode: $daStr]
+     } else {
+        set str [format "%-*s %s" $space1 daMode: $daMode]
+     }
+
+     if {$saMode != "idle"} {
+        set str [format "%-*s %s" $space2 $str saMode:]
+        if {($saMode == "increment") || ($saMode == "decrement")} {
+           set saStr "$saMode $saCount macs"
+           set str [format "%-*s %s" $space3 $str $saStr]
+        } else {
+           set str [format "%-*s %s" $space3 $str $saMode]
+        }
+     }
+     result_debug "$str"
+  } elseif {$saMode != "idle"} {
+        if {($saMode == "increment") || ($saMode == "decrement")} {
+           set saStr "$saMode $saCount macs"
+           set str [format "%-*s %s" $space1 saMode: $saStr]
+        } else {
+           set str [format "%-*s %s" $space1 saMode: $saMode]
+        }
+     result_debug "$str"
+  }
+
+  set str [format "%-*s %s" $space1 DestIpAddr: $destIp]
+  set str [format "%-*s %s" $space2 $str SrcIpAddr:]
+  set str [format "%-*s %s" $space3 $str $srcIp]
+
+  result_debug "$str"
+
+  if {$ipDaMode != "ipIdle"} {
+     if {($ipDaMode == "increment") || ($ipDaMode == "decrement")} {
+        set daStr "$ipDaMode $daCount Ips"
+        set str [format "%-*s %s" $space1 ipDaMode: $daStr]
+     } else {
+        set str [format "%-*s %s" $space1 ipDaMode: $ipDaMode]
+     }
+
+     if {$ipSaMode != "ipIdle"} {
+        set str [format "%-*s %s" $space2 $str ipSaMode:]
+        if {($ipSaMode == "increment") || ($ipSaMode == "decrement")} {
+           set saStr "$ipSaMode $ipSaCount Ips"
+           set str [format "%-*s %s" $space3 $str $saStr]
+        } else {
+           set str [format "%-*s %s" $space3 $str $ipSaMode]
+        }
+     }
+     result_debug "$str"
+  } elseif {$ipSaMode != "ipIdle"} {
+        if {($ipSaMode == "increment") || ($ipSaMode == "decrement")} {
+           set saStr "$ipSaMode $ipSaCount Ips"
+           set str [format "%-*s %s" $space1 ipSaMode: $saStr]
+        } else {
+           set str [format "%-*s %s" $space1 ipSaMode: $ipSaMode]
+        }
+     result_debug "$str"
+  }
+
+  if {$tag != "none"} {
+     set str [format "%-*s %s" $space1 VLANTag: $tag]
+     set str [format "%-*s %s" $space2 $str userPriority:]
+     set str [format "%-*s %s" $space3 $str $userPriority]
+     result_debug "$str"
+  }
+
+  if {$protocol == "tcp"} {
+     if {$tcpSynFlag != ""} {
+        set str [format "%-*s %s" $space1 tcpSynFlag: $tcpSynFlag]
+        set str [format "%-*s %s" $space2 $str tcpFinFlag:]
+        set str [format "%-*s %s" $space3 $str $tcpFinFlag]
+        result_debug "$str"
+     }
+
+     if {$tcpRstFlag != ""} {
+        set str [format "%-*s %s" $space1 tcpRstFlag: $tcpRstFlag]
+        set str [format "%-*s %s" $space2 $str tcpAckFlag:]
+        set str [format "%-*s %s" $space3 $str $tcpAckFlag]
+        result_debug "$str"
+     }
+
+     if {$tcpPushFlag != ""} {
+        set str [format "%-*s %s" $space1 tcpPushFlag: $tcpPushFlag]
+        set str [format "%-*s %s" $space2 $str tcpUrgFlag:]
+        set str [format "%-*s %s" $space3 $str $tcpUrgFlag]
+        result_debug "$str"
+     }
+
+     if {$tcpSeqNum != ""} {
+        set str [format "%-*s %s" $space1 tcpSeqNum: $tcpSeqNum]
+        result_debug "$str"
+     }
+
+     if {($sourcePort != "") || ($destPort != "") } {
+        set str [format "%-*s %s" $space1 sourcePort: $sourcePort]
+        set str [format "%-*s %s" $space2 $str destPort:]
+        set str [format "%-*s %s" $space3 $str $destPort]
+        result_debug "$str"
+     }
+  }
+  if {$protocol == "udp"} {
+     if {($sourcePort != "") || ($destPort != "") } {
+        set str [format "%-*s %s" $space1 sourcePort: $sourcePort]
+        set str [format "%-*s %s" $space2 $str destPort:]
+        set str [format "%-*s %s" $space3 $str $destPort]
+        result_debug "$str"
+     }
+  }
+  if {$percentage != "100"} {
+     set str [format "%-*s %s" $space1 TxPerc: $percentage]
+     result_debug "$str"
+  }
+}
+
+##################################################################    
+# Procedure Name: displayMacPacketFormat
+# Description:
+#     	Displays the decoded version of a L2 packet sent over
+#       the specified port.
+# Input args: 
+# Output args:  None
+# Return value: None
+# Typical usage: 
+#        displayMacPacketFormat -txPortId $txPortId -frameSent $streamSent \
+#                    -streamType $streamType -destMac $dMacAddr \
+#                    -srcMac $sMacAddr -numFrames $numFrames
+# Category: Utility
+##################################################################
+proc displayMacPacketFormat {args} {
+  parse_args displayMacPacketFormat $args {
+     txPortId   ""
+     rxPortId   ""
+     direction  "1Way"
+     frameSent  ""
+     streamType ""
+     numFrames  "1"
+     destMac    ""
+     srcMac     ""
+     protocol   "mac"
+     daMode     "idle"
+     saMode     "idle"
+     daCount    ""
+     saCount    ""
+     wTag       "false"
+     tag        ""
+     ethernetType "noType"
+     frameType "08 00"
+     userPriority ""
+     percentage "100"
+  }
+
+  set strType ""
+  set numPacket $numFrames
+
+  set strType "packet"
+  if {$streamType == "contPacket"} {
+     set strType "continuous"
+     set numPacket ""
+  }
+
+  if {$direction == "1Way"} {
+     result_debug "Transmit $numPacket L2 $strType from portId $txPortId"
+  } else {
+     result_debug "Transmit $numPacket L2 $strType in 2Way direction from portId $txPortId and $rxPortId"
+  }
+
+  result_debug "$frameSent"
+
+  set space1 10
+  set space2 35
+  set space3 49
+
+  set str [format "%-*s %s" $space1 DestMac: $destMac]
+  set str [format "%-*s %s" $space2 $str SrcMac:]
+  set str [format "%-*s %s" $space3 $str $srcMac]
+  result_debug "$str"
+
+  if {$daMode != "idle"} {
+     if {($daMode == "increment") || ($daMode == "decrement")} {
+        set daStr "$daMode $daCount macs"
+        set str [format "%-*s %s" $space1 daMode: $daStr]
+     } else {
+        set str [format "%-*s %s" $space1 daMode: $daMode]
+     }
+
+     if {$saMode != "idle"} {
+        set str [format "%-*s %s" $space2 $str saMode:]
+        if {($saMode == "increment") || ($saMode == "decrement")} {
+           set saStr "$saMode $saCount macs"
+           set str [format "%-*s %s" $space3 $str $saStr]
+        } else {
+           set str [format "%-*s %s" $space3 $str $saMode]
+        }
+     }
+     result_debug "$str"
+  } elseif {$saMode != "idle"} {
+        if {($saMode == "increment") || ($saMode == "decrement")} {
+           set saStr "$saMode $saCount macs"
+           set str [format "%-*s %s" $space1 saMode: $saStr]
+        } else {
+           set str [format "%-*s %s" $space1 saMode: $saMode]
+        }
+     result_debug "$str"
+  }
+
+  if {$wTag != "false"} {
+     set str [format "%-*s %s" $space1 VLANTag: $tag]
+     set str [format "%-*s %s" $space2 $str userPriority:]
+     set str [format "%-*s %s" $space3 $str $userPriority]
+  }
+
+  result_debug "$str"
+
+  set str [format "%-*s %s" $space1 FrameType: $frameType]
+  if {$ethernetType != "noType"} {
+     set str [format "%-*s %s" $space2 $str EtherType:]
+     set str [format "%-*s %s" $space3 $str $ethernetType]
+  }
+
+  result_debug "$str"
+
+  if {$percentage != "100"} {
+     set str [format "%-*s %s" $space1 TxPerc: $percentage]
+     result_debug "$str"
+  }
+}
+
+##################################################################    
+# Procedure Name: displayDhcpPacketFormat
+# Description:
+#     	Displays the decoded version of a dhcp packet sent over
+#       the specified port.
+# Input args: 
+# Output args:  None
+# Return value: None
+# Typical usage: 
+#      displayDhcpPacketFormat -txPortId $txPortId -destMac $dMacAddr \
+#        -srcMac $sMacAddr -srcIp $sIpAddr -destIp $dIpAddr -saMode $saMode \
+#        -daMode $daMode -chid $chid -clientHwAddr $clientHwAddr -clientIpAddr \
+#        $clientIpAddr -opCode $opCode -optionCodeList $optionCodeList \
+#        -wTag $wTag -tagNo $tagNo -frameSent $streamSent
+# Category: Utility
+##################################################################
+
+proc displayDhcpPacketFormat {args} {
+  parse_args displayDhcpPacketFormat $args {
+      txPortId   ""
+      rxPortId   ""
+      direction  "1Way"
+      frameSent  ""
+      numFrames "1"
+      streamType "stopStream"
+      srcMac "00 00 86 52 55 CB"
+      destMac "ff ff ff ff ff ff"
+      srcIp "127.0.0.1"
+      destIp "127.0.0.1"
+      saMode "idle"
+      daMode "idle"
+      chid "1"
+      clientHwAddr "00 00 86 52 55 CB"
+      clientIpAddr "0.0.0.0"
+      opCode "dhcpBootRequest"
+      optionCodeList "{dhcpMessageType dhcpDiscover}"
+      wTag "false"
+      tagNo "002"
+   }
+  set strType ""
+  set numPacket $numFrames
+  set strType "packet"
+  if {$streamType == "contPacket"} {
+     set strType "continuous"
+     set numPacket ""
+  }
+
+  if {$direction == "1Way"} {
+     result_debug "Transmit $numPacket Dhcp $strType from portId $txPortId"
+  } else {
+     result_debug "Transmit $numPacket Dhcp $strType in 2Way direction from portId $txPortId and $rxPortId"
+  }
+  result_debug "$frameSent"
+  result_debug " "
+
+  set space1 16
+  set space2 38
+  set space3 52
+
+  set str [format "%-*s %s" $space1 DestMac: $destMac]
+  set str [format "%-*s %s" $space2 $str srcMac:]
+  set str [format "%-*s %s" $space3 $str $srcMac]
+  result_debug "$str"
+
+  if {$daMode != "idle"} {
+     if {($daMode == "increment") || ($daMode == "decrement")} {
+        set daStr "$daMode $daCount macs"
+        set str [format "%-*s %s" $space1 daMode: $daStr]
+     } else {
+        set str [format "%-*s %s" $space1 daMode: $daMode]
+     }
+
+     if {$saMode != "idle"} {
+        set str [format "%-*s %s" $space2 $str saMode:]
+        if {($saMode == "increment") || ($saMode == "decrement")} {
+           set saStr "$saMode $saCount macs"
+           set str [format "%-*s %s" $space3 $str $saStr]
+        } else {
+           set str [format "%-*s %s" $space3 $str $saMode]
+        }
+     }
+     result_debug "$str"
+  } elseif {$saMode != "idle"} {
+        if {($saMode == "increment") || ($saMode == "decrement")} {
+           set saStr "$saMode $saCount macs"
+           set str [format "%-*s %s" $space1 saMode: $saStr]
+        } else {
+           set str [format "%-*s %s" $space1 saMode: $saMode]
+        }
+     result_debug "$str"
+  }
+
+  set str [format "%-*s %s" $space1 DestIpAddr: $destIp]
+  set str [format "%-*s %s" $space2 $str SrcIpAddr:]
+  set str [format "%-*s %s" $space3 $str $srcIp]
+  result_debug "$str"
+
+  set str [format "%-*s %s" $space1 clientHwAddr: $clientHwAddr]
+  set str [format "%-*s %s" $space2 $str clientIpAddr:]
+  set str [format "%-*s %s" $space3 $str $clientIpAddr]
+  result_debug "$str"
+
+  if {$wTag != "false"} {
+     set str [format "%-*s %s" $space1 Tag: $tagNo]
+     result_debug "$str"
+  }
+
+  set str [format "%-*s %s" $space1 opCode: $opCode]
+#  set str [format "%-*s %s" $space2 $str chid:]
+#  set str [format "%-*s %s" $space3 $str $chid]
+  result_debug "$str"
+
+# TBD
+  foreach optionCode $optionCodeList {
+     set i [lsearch -exact $optionCodeList $optionCode]
+     if {[regexp -nocase "dhcpMessageType" [GetPlatform]]!=1} {
+        regexp "(.*dhcpMessageType )(.*)" $optionCode var1 var2 dhcpMessage
+        if {[info exist dhcpMessage]} {
+           set str [format "%-*s %s" $space1 dhcpMessageType: $dhcpMessage]
+           result_debug "$str"
+           break
+        }
+     }
+#     result_debug "List is $optionCodeList" 
+#     result_debug " linex is $i"
+#     set str [format "%-*s %s" $space1 optionCode: $optionCode]
+#     result_debug "$str"
+  }
+
+}
+
+##################################################################    
+# Procedure Name: displayArpPacketFormat
+# Description:
+#     	Displays the decoded version of a Arp packet sent over
+#       the specified port.
+# Input args: 
+# Output args:  None
+# Return value: None
+# Typical usage: 
+#      displayArpPacketFormat -txPortId $txPortId -destMac $dMacAddr \
+#        -srcMac $sMacAddr -srcIp $sIpAddr -destIp $dIpAddr \
+#        -operation $operation -wTag $wTag -tagNo $tagNo -frameSent $streamSent
+# Category: Utility
+##################################################################
+
+proc displayArpPacketFormat {args} {
+  parse_args displayArpPacketFormat $args {
+      txPortId   ""
+      rxPortId   ""
+      direction  "1Way"
+      daMode    "idle"
+      saMode    "idle"
+      arpDaMode "arpIdle"
+      arpSaMode "arpIdle"
+      frameSent  ""
+      numFrames "1"
+      streamType "stopStream"
+      srcMac "00 00 86 52 55 CB"
+      destMac "ff ff ff ff ff ff"
+      srcIp "127.0.0.1"
+      destIp "127.0.0.1"
+      operation "arpRequest"
+      wTag "false"
+      tagNo "002"
+   }
+  set strType "packet"
+  set numPacket $numFrames
+  if {$streamType == "contPacket"} {
+     set strType "continuous"
+     set numPacket ""
+  }
+
+  if {$direction == "1Way"} {
+     result_debug "Transmit $numPacket $operation $strType from portId $txPortId"
+  } else {
+     result_debug "Transmit $numPacket $operation %strType in 2Way direction from portId $txPortId and $rxPortId"
+  }
+
+  result_debug "$frameSent"
+  result_debug " "
+
+  set space1 13
+  set space2 38
+  set space3 52
+
+  set str [format "%-*s %s" $space1 DestMac: $destMac]
+  set str [format "%-*s %s" $space2 $str srcMac:]
+  set str [format "%-*s %s" $space3 $str $srcMac]
+  result_debug "$str"
+
+  if {$daMode != "idle"} {
+     set str [format "%-*s %s" $space1 daMode: $daMode]
+
+     if {$saMode != "idle"} {
+        set str [format "%-*s %s" $space2 $str saMode:]
+        set str [format "%-*s %s" $space3 $str $saMode]
+     }
+     result_debug "$str"
+  } elseif {$saMode != "idle"} {
+     set str [format "%-*s %s" $space1 saMode: $saMode]
+     result_debug "$str"
+  }
+
+  set str [format "%-*s %s" $space1 DestIpAddr: $destIp]
+  set str [format "%-*s %s" $space2 $str SrcIpAddr:]
+  set str [format "%-*s %s" $space3 $str $srcIp]
+  result_debug "$str"
+
+  if {$arpDaMode != "arpIdle"} {
+     set str [format "%-*s %s" $space1 arpDaMode: $arpDaMode]
+     if {$arpSaMode != "arpIdle"} {
+        set str [format "%-*s %s" $space2 $str arpSaMode:]
+        set str [format "%-*s %s" $space3 $str $arpSaMode]
+     }
+     result_debug "$str"
+  } elseif {$arpSaMode != "arpIdle"} {
+     set str [format "%-*s %s" $space1 arpSaMode: $arpSaMode]
+     result_debug "$str"
+  }
+
+  if {$wTag != "false"} {
+     set str [format "%-*s %s" $space1 Tag: $tagNo]
+     result_debug "$str"
+  }
+  result_debug " "
+}
+##################################################################    
+# Procedure Name: displayIGMPv3PacketFormat
+# Description:
+#     	Displays the decoded version of a IGMPv3 packet sent over
+#       the specified port.
+# Input args: 
+# Output args:  None
+# Return value: None
+# Typical usage: 
+#      displayIGMPv3PacketFormat -txPortId $txPortId -destMac $dMacAddr \
+#        -srcMac $sMacAddr -srcIp $sIpAddr -destIp $dIpAddr \
+#        -operation $operation -wTag $wTag -tagNo $tagNo -frameSent $streamSent
+# Category: Utility
+##################################################################
+
+proc displayIGMPv3PacketFormat {args} {
+  parse_args displayIGMPv3PacketFormat $args {
+     txPortId "1"
+     sourceMac "00 A1 F1 00 00 01"
+     destMac "01 00 5E 00 00 16"
+     hostIp "127.0.0.1"
+     destIp "224.0.0.22"
+     streamType "stopStream"
+     numFrames "10"
+     tag "none"
+     tagMode "vIdle"
+     tagRepeat "1"
+     percentage "1"
+     saMode "idle"
+     daMode "idle"
+     ipSaMode "ipIdle"
+     ipDaMode "ipIdle"
+     reportType "1"
+     groupAddr "224.0.0.22"
+     srcIpAddr "{}"
+     igmpType  "report"
+     maxResponseTime "100"
+     qqic "127"
+     qrv  "0"
+   }
+  set strType "packet"
+  set numPacket $numFrames
+  if {$streamType == "contPacket"} {
+     set strType "continuous"
+     set numPacket ""
+  }
+
+  result_debug "Transmit IGMPv3 Report from portId $txPortId"
+
+  result_debug " "
+
+  set space1 13
+  set space2 38
+  set space3 52
+
+  set str [format "%-*s %s" $space1 DestMac: $destMac]
+  set str [format "%-*s %s" $space2 $str srcMac:]
+  set str [format "%-*s %s" $space3 $str sourceMac]
+  result_debug "$str"
+
+  if {$daMode != "idle"} {
+     set str [format "%-*s %s" $space1 daMode: $daMode]
+
+     if {$saMode != "idle"} {
+        set str [format "%-*s %s" $space2 $str saMode:]
+        set str [format "%-*s %s" $space3 $str $saMode]
+     }
+     result_debug "$str"
+  } elseif {$saMode != "idle"} {
+     set str [format "%-*s %s" $space1 saMode: $saMode]
+     result_debug "$str"
+  }
+
+  set str [format "%-*s %s" $space1 DestIpAddr: $destIp]
+  set str [format "%-*s %s" $space2 $str SrcIpAddr:]
+  set str [format "%-*s %s" $space3 $str $hostIp]
+  result_debug "$str"
+
+  set str [format "%-*s %s" $space1 Percentage: $percentage]
+  set str [format "%-*s %s" $space2 $str StreamType:]
+  set str [format "%-*s %s" $space3 $str $streamType]
+  result_debug "$str"
+
+  if {$tag != "none"} {
+     set str [format "%-*s %s" $space1 Tag: $tag]
+     result_debug "$str"
+  }
+
+  switch -- $reportType {
+      "1" {set rTypeText "1-Include";}
+      "2" {set rTypeText "2-Exclude";}
+      "3" {set rTypeText "3-ToInclude";}
+      "4" {set rTypeText "4-ToExcludeMode";}
+      "5" {set rTypeText "5-AllowNewSources";}
+      "6" {set rTypeText "6-BlockOldSources";}
+  }
+  set str [format "%-*s %s" $space1 ReportType: $rTypeText]
+  set str [format "%-*s %s" $space2 $str GroupAddr:]
+  set str [format "%-*s %s" $space3 $str $groupAddr]
+  result_debug "$str"
+
+  set str [format "%-*s %s" $space1 AllowedSrcs: $srcIpAddr]
+  result_debug "$str"
+  result_debug " "
+}

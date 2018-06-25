@@ -1,0 +1,930 @@
+
+##################################################################    
+# Description:
+#     	This proc can be used to send any L2/L3 unicast/multicast
+#	packets and verify their forwarding.  In checkPortList input, for 
+#	each receiving port the number of packets expected to be received
+#	can be specify to be any exact number or up/down range. 
+# Input args: args
+# Output args: None.
+# Typical usage:
+# 	lappend checkPortList "5 forwarded 1 up"
+#	lappend checkPortList "6 forwarded 7 exact"
+#	lappend checkPortList "7 forwarded 5 down"
+#	lappend checkPortList "9 notForwarded"
+#	CheckForwarding -txPortId 9 -rxPortId 0 -checkPortList $checkPortList -numIpFrame 7 \
+#              -protocol "tcp" -dIpAddr "192.168.0.18" -sIpAddr "24.3.89.146" -dPort 21 \
+#              -gIpAddr "24.3.89.145" -filePt $fd_res -careTotalIp "yes" -ttlDecr 2 \
+#              -comment "- redi." -ipDaMode "ipIncrHost"
+# Category: VerifyTraffic
+##################################################################  
+proc CheckForwardingQInQ {args} {
+   parse_args CheckForwardingQInQ $args {
+     txPortId "1"
+     rxPortId "0"    ;#default not sending learn arp, otherwise use this port as the 2nd arp port
+     protocol "mac"
+     ctag      "none"
+     stag      "none"
+     direction "c2s"
+     sEncap    "88A8"
+     ctagPriority "0"
+     stagPriority "0"
+     generateArpReq "1"
+     inSaMac "default"
+     inDaMac "FF:FF:FF:FF:FF:FF"
+     sIpAddr "127.0.0.1"
+     dIpAddr "127.0.0.1"
+     gIpAddr "0.0.0.0"     ;#gateway address
+     sPort "0"
+     dPort "0"
+     frameSize "64"
+     icmpType "0"
+     icmpCode "0"
+     dontFrag "true"
+     ttl "64"
+     ttlDecr "1"
+     checkPortList {"2 forwarded 1 exact"} 
+     numLearnFrame "1"
+     numIpFrame "1"
+     filePt "NULL"
+     ipDaMode "ipIdle"
+     ipSaMode "ipIdle"
+     ipDaCount ""
+     ethernetType "noType"
+     frameType "08 00"
+     ipSaCount ""
+     ipOptions ""
+     tcpSynFlag "false"
+     tcpFinFlag "false"
+     tcpRstFlag "false"
+     tcpAckFlag "false"
+     tcpPushFlag "false"
+     tcpUrgFlag "false"
+     checkMirroringTag "yes"
+     mirroringPort "0"
+     TOS "default"
+     careTotalIp "no" 	;# if to ckeck total IP packets rcvd from all forwarded ports
+     CRC "good"
+     comment ""
+     rate "null"
+     udfEnable "false"
+     udfInitval "00"
+     udfOffset "0"
+     udfCountertype "c8"
+     udfContinuousCount "false"
+   }
+ global TrafficGen
+   set rc 0
+
+   if { $gIpAddr == "0.0.0.0" } { set gIpAddr $dIpAddr }
+
+   set pPattern "abcd"   
+
+   if {$rxPortId == $txPortId} {
+      result_error "Invalid port specification: txPortId=rxPortId"
+      return
+   }
+   foreach checkPort $checkPortList {
+      lappend portMonitorList [lindex $checkPort 0]
+   }
+
+# --- Set the Tx and Rx parameter related to vlan Tag
+   if {[llength $ctag] > 1} { 
+      set rxCtag [lindex $ctag 1]
+      set txCtag [lindex $ctag 0]
+   } else {
+      set rxCtag [lindex $ctag 0]
+      set txCtag [lindex $ctag 0]
+   }
+
+   if {[llength $ctagPriority] > 1} { 
+      set rxCcos [lindex $ctagPriority 1]
+      set txCcos [lindex $ctagPriority 0]
+   } else {
+      set rxCcos "none"
+      set txCcos [lindex $ctagPriority 0]
+   }
+   set ctagPriority $txCcos
+
+   if {[llength $stag] > 1} { 
+      set rxStag [lindex $stag 1]
+      set txStag [lindex $stag 0]
+   } else {
+      set rxStag [lindex $stag 0]
+      set txStag [lindex $stag 0]
+   }
+   
+   if {[llength $sEncap] > 1} {
+      set rxEncap [lindex $sEncap 1]
+      set txEncap [lindex $sEncap 0]
+      result_debug "rxEncap is $rxEncap txEncap is $txEncap"
+   } else {
+      set rxEncap [lindex $sEncap 0]
+      set txEncap [lindex $sEncap 0]
+   }
+
+# --- txEncap Can;t be none. Anyway for c2s direction this field will not 
+#     be used
+   if {$txEncap == "none"} {
+      set txEncap "88A8"
+   }
+
+   if {$careTotalIp == "yes"} { set totalIpPacketReceived 0 }
+   if {[lindex $ctag 0]!="none"&&$frameSize==64} {set frameSize 68}
+   switch -- $protocol {
+      "mac" -
+      "ipx" -
+      "mac_ip" -
+      "arp" -
+      "multicastControl" {
+         report_start_test "Frame $protocol L2 forwarding check on Txport $txPortId $comment"
+         #turn on capturing function on all the monitor ports
+         StartPortsCapture $portMonitorList
+         switch -- $protocol {
+            "mac" -
+            "mac_ip" -
+            "ipx" {
+               set prot $protocol
+               set rxTag "none"
+               if {[llength $ctag] > 1} { 
+                  set rxTag [lindex $ctag 1]
+                  set txTag [lindex $ctag 0]
+               }
+               if {$prot == "mac_ip" } {set prot "ip"}
+               if {$rxPortId > 0} {
+                  result_debug "Send a $prot packet on port $rxPortId for fdb to learn the destination"
+               if {$direction == "c2s"} {
+		  if {$CRC == "bad"} {
+			set frameSent [SendFrame -frameRate $rate -txPortId $rxPortId -protocol $prot -tag $rxcTag -fcsError $CRC -udfEnable $udfEnable -udfInitval $udfInitval -udfOffset $udfOffset -udfCountertype $udfCountertype -udfContinuousCount $udfContinuousCount]
+		  } else {
+	                set frameSent [SendFrame -frameRate $rate -txPortId $rxPortId -protocol $prot -tag $rxCtag -frameRate 10 -udfEnable $udfEnable -udfInitval $udfInitval -udfOffset $udfOffset -udfCountertype $udfCountertype -udfContinuousCount $udfContinuousCount]
+		  }
+               } else {
+		  if {$CRC == "bad"} {
+			set frameSent [SendDoubleTagFrame -frameRate $rate -txPortId $rxPortId -protocol $prot -ctag $rxCtag -stag $rxStag -fcsError $CRC -udfEnable $udfEnable -udfInitval $udfInitval -udfOffset $udfOffset -udfCountertype $udfCountertype -udfContinuousCount $udfContinuousCount]
+		  } else {
+	                set frameSent [SendDoubleTagFrame -frameRate $rate -txPortId $rxPortId -protocol $prot  -ctag $rxCtag -stag $rxStag -frameRate 10 -udfEnable $udfEnable -udfInitval $udfInitval -udfOffset $udfOffset -udfCountertype $udfCountertype -udfContinuousCount $udfContinuousCount]
+		  }
+               }
+                  result_debug "$frameSent"
+                  
+                  set inDaMac [GetSourceMacAddress $frameSent]
+               }
+               #sending mac frame
+	       result_debug "Frame ($protocol) sent on portId $txPortId:"
+	if {$TrafficGen != "ept"} { 
+
+               if {$direction == "c2s"} {
+	          if {$CRC == "bad"} {
+                     set frameSent [SendFrame -frameRate $rate \
+                         -txPortId $txPortId -dataPattern $pPattern \
+                         -tag $txCtag -sourceMac $inSaMac  -destMac $inDaMac \
+                         -tagPriority $ctagPriority \
+                         -frameSize $frameSize -protocol $prot  \
+                         -frameType $frameType -ethernetType $ethernetType \
+                         -numFrames $numIpFrame -fcsError $CRC \
+                         -udfEnable $udfEnable -udfInitval $udfInitval \
+                         -udfOffset $udfOffset -udfCountertype $udfCountertype \
+                         -udfContinuousCount $udfContinuousCount]
+	          } else {
+	             set frameSent [SendFrame -frameRate $rate \
+                         -txPortId $txPortId -dataPattern $pPattern \
+                         -tag $txCtag -sourceMac $inSaMac  -destMac $inDaMac \
+                         -tagPriority $ctagPriority \
+                         -frameSize $frameSize -protocol $prot \
+                         -frameType $frameType -ethernetType $ethernetType \
+                         -numFrames $numIpFrame -frameRate 10 \
+                         -udfEnable $udfEnable -udfInitval $udfInitval \
+                         -udfOffset $udfOffset -udfCountertype $udfCountertype \
+                         -udfContinuousCount $udfContinuousCount]
+	          }
+               } else {
+# --- If the Dicerion is s2c or s2s need to send Q-InQ packets
+	          if {$CRC == "bad"} {
+                     set frameSent [SendDoubleTagFrame -frameRate $rate \
+                         -txPortId $txPortId -dataPattern $pPattern \
+                         -ctag $txCtag -stag $txStag -stagEncap $txEncap \
+                         -ctagPriority $ctagPriority \
+                         -stagPriority $stagPriority \
+                         -sourceMac $inSaMac -destMac $inDaMac \
+                         -frameSize $frameSize -protocol $prot \
+                         -frameType $frameType -ethernetType $ethernetType \
+                         -numFrames $numIpFrame -fcsError $CRC \
+                         -udfEnable $udfEnable -udfInitval $udfInitval \
+                         -udfOffset $udfOffset -udfCountertype $udfCountertype \
+                         -udfContinuousCount $udfContinuousCount]
+	          } else {
+                     set frameSent [SendDoubleTagFrame -frameRate $rate \
+                         -txPortId $txPortId -dataPattern $pPattern \
+                         -ctag $txCtag -stag $txStag -stagEncap $txEncap \
+                         -ctagPriority $ctagPriority \
+                         -stagPriority $stagPriority \
+                         -sourceMac $inSaMac -destMac $inDaMac \
+                         -frameSize $frameSize -protocol $prot \
+                         -frameType $frameType -ethernetType $ethernetType \
+                         -numFrames $numIpFrame -frameRate 10 \
+                         -udfEnable $udfEnable -udfInitval $udfInitval \
+                         -udfOffset $udfOffset -udfCountertype $udfCountertype \
+                         -udfContinuousCount $udfContinuousCount]
+	          }
+               }
+	} else {
+               if {$direction == "c2s" && $ctag == 0} {
+	          if {$CRC == "bad"} {
+                     set frameSent [SendFrame -frameRate $rate \
+                         -txPortId $txPortId -dataPattern $pPattern \
+                         -tag $txCtag -sourceMac $inSaMac  -destMac $inDaMac \
+                         -tagPriority $ctagPriority \
+                         -frameSize $frameSize -protocol $prot  \
+                         -frameType $frameType -ethernetType $ethernetType \
+                         -numFrames $numIpFrame -fcsError $CRC \
+                         -udfEnable $udfEnable -udfInitval $udfInitval \
+                         -udfOffset $udfOffset -udfCountertype $udfCountertype \
+                         -udfContinuousCount $udfContinuousCount]
+	          } else {
+	             set frameSent [SendFrame -frameRate $rate \
+                         -txPortId $txPortId -dataPattern $pPattern \
+                         -tag $txCtag -sourceMac $inSaMac  -destMac $inDaMac \
+                         -tagPriority $ctagPriority \
+                         -frameSize $frameSize -protocol $prot \
+                         -frameType $frameType -ethernetType $ethernetType \
+                         -numFrames $numIpFrame -frameRate 10 \
+                         -udfEnable $udfEnable -udfInitval $udfInitval \
+                         -udfOffset $udfOffset -udfCountertype $udfCountertype \
+                         -udfContinuousCount $udfContinuousCount]
+	          }
+               } else {
+# --- If the Dicerion is s2c or s2s need to send Q-InQ packets
+	          if {$CRC == "bad"} {
+                     set frameSent [SendDoubleTagFrame -frameRate $rate \
+                         -txPortId $txPortId -dataPattern $pPattern \
+                         -ctag $txCtag -stag $txStag -stagEncap $txEncap \
+                         -ctagPriority $ctagPriority \
+                         -stagPriority $stagPriority \
+                         -sourceMac $inSaMac -destMac $inDaMac \
+                         -frameSize $frameSize -protocol $prot \
+                         -frameType $frameType -ethernetType $ethernetType \
+                         -numFrames $numIpFrame -fcsError $CRC \
+                         -udfEnable $udfEnable -udfInitval $udfInitval \
+                         -udfOffset $udfOffset -udfCountertype $udfCountertype \
+                         -udfContinuousCount $udfContinuousCount]
+	          } else {
+                     set frameSent [SendDoubleTagFrame -frameRate $rate \
+                         -txPortId $txPortId -dataPattern $pPattern \
+                         -ctag $txCtag -stag $txStag -stagEncap $txEncap \
+                         -ctagPriority $ctagPriority \
+                         -stagPriority $stagPriority \
+                         -sourceMac $inSaMac -destMac $inDaMac \
+                         -frameSize $frameSize -protocol $prot \
+                         -frameType $frameType -ethernetType $ethernetType \
+                         -numFrames $numIpFrame -frameRate 10 \
+                         -udfEnable $udfEnable -udfInitval $udfInitval \
+                         -udfOffset $udfOffset -udfCountertype $udfCountertype \
+                         -udfContinuousCount $udfContinuousCount]
+	          }
+               }
+
+	}
+	       result_debug "$frameSent"
+            }
+            "arp" {
+            #sending arp frame
+		
+	       if {$CRC == "bad"} {
+	          set frameSent [SendArpFrame -txPortId $txPortId \
+                           -sourceIp $sIpAddr -destIp $dIpAddr -tag $txCtag \
+                           -fcsError $CRC -numFrames $numIpFrame ]
+               } else {	
+                  set frameSent [SendArpFrame -txPortId $txPortId \
+                           -sourceIp $sIpAddr -destIp $dIpAddr -tag $txCtag \
+                           -numFrames $numIpFrame]
+	       }
+
+            }
+            "multicastControl" {
+            # send an join multicast group igmp packet. QInQ Support is not
+            # there. Needs to be added if required.
+               set membershipQuerry 17
+               if {$CRC == "bad" } {
+	          set frameSent [SendIgmpFrame -txPortId $txPortId \
+                         -type $membershipQuerry -destMac $inDaMac \
+                         -sourceIp $sIpAddr -destIp $dIpAddr \
+                         -groupAddr $dIpAddr -fcsError $CRC \
+                         -dontFrag $dontFrag -numFrames $numIpFrame \
+                         -udfEnable $udfEnable -udfInitval $udfInitval \
+                         -udfOffset $udfOffset -udfCountertype $udfCountertype \
+                         -udfContinuousCount $udfContinuousCount]
+	    } else {
+                  set frameSent [SendIgmpFrame -txPortId $txPortId \
+                         -type $membershipQuerry -destMac $inDaMac \
+                         -sourceIp $sIpAddr -destIp $dIpAddr \
+                         -groupAddr $dIpAddr -dontFrag $dontFrag \
+                         -numFrames $numIpFrame -udfEnable $udfEnable \
+                         -udfInitval $udfInitval -udfOffset $udfOffset \
+                         -udfCountertype $udfCountertype \
+                         -udfContinuousCount $udfContinuousCount]
+	    }
+
+            }
+         }
+         set numExpectedFrame $numIpFrame
+         #retrieve data
+ 
+         foreach portId $portMonitorList {
+           set numPacketReceived($portId) 0
+           set rawPortData [GetCapturedFrames $portId]
+           foreach frameReceived $rawPortData {
+              result_debug "Frames received on portId $portId:"
+              result_debug "$frameReceived"
+              if {($checkMirroringTag == "no") && ($mirroringPort == $portId)} {
+                if {[CompareFrameQInQ $frameSent $frameReceived $direction 0 $rxCtag]} {
+                      incr numPacketReceived($portId) 1      
+                }            
+              } else {
+                 if {[CompareFrameQInQ $frameSent $frameReceived $direction 0 $rxCtag] \
+                           && [CheckTagQInQ -frameReceived $frameReceived \
+                                 -ctag $rxCtag -stag $rxStag -sEncap $rxEncap \
+                                 -direction $direction -ccos $rxCcos]} {
+                      incr numPacketReceived($portId) 1
+                 }
+              }
+           }
+           result_debug "numPacketReceived($portId)=$numPacketReceived($portId)"
+        }
+      }
+      "ip" -
+      "icmp" -
+      "udp" -
+      "tcp" -
+      "multicast" {
+         if { $ttlDecr == 0 } { report_start_test "Packet $protocol L2 forwarding check on Txport $txPortId $comment"
+         } elseif { $ttlDecr == 1} { report_start_test "Packet $protocol L3 forwarding check on Txport $txPortId $comment"
+         } elseif { $ttlDecr == "ignore"} { report_start_test "Packet $protocol forwarding check on Txport $txPortId $comment"
+         } else { report_start_test "Packet $protocol forwarding check with TTL decr $ttlDecr on Txport $txPortId $comment" }
+         #set to user input, will be overwritten when using learn_arp function
+         set destMacAddrTx $inDaMac
+
+         if {$protocol == "multicast" } {
+            if {[GetVersion DUT1 4] < "6.2.1" } {
+              #send an multicast ip packet, 1st packet is flooded on the vlan, just ignore
+              set frameSent [SendIpFrame -txPortId $txPortId -protocol "udp" \
+                         -dataPattern $pPattern -destMac $inDaMac \
+                         -sourceIp $sIpAddr  -destIp $dIpAddr -ttl $ttl \
+                         -udfEnable $udfEnable -udfInitval $udfInitval \
+                         -udfOffset $udfOffset -udfCountertype $udfCountertype \
+                         -udfContinuousCount $udfContinuousCount]
+              result_debug "1st Frame ($protocol) sent on portId $txPortId: \
+                            (will be flooded)"
+              result_debug "$frameSent"
+            }
+            set protocol "udp"
+            set rxPortId 0
+            set generateArpReq 0
+         }
+         set rxTag "none"
+         if {[llength $ctag] > 1} { set rxTag [lindex $ctag 1] }
+         set txTag [lindex $ctag 0]
+         
+         #enable protocol server for the Rx port, to reponse to ARP request
+         if {$rxPortId > 0} {
+            SaveAndSetProtocolServer $rxPortId $dIpAddr $dIpAddr ixInfo \
+               -arpService true -tag $rxTag
+            if {[lindex $ctag 1]!=""} {
+               SendArpFrame -txPortId $rxPortId -tag $rxCtag -sourceIp $dIpAddr
+            } else {
+               if {[regexp -nocase "bd" [GetPlatform]] && \
+                            [GetHardwareType] == "OLD_GEN" } {
+                  result_debug "Sending a mac frame for hardware to learn \
+                                mac first - timing problem"
+                  SendFrame -txPortId $rxPortId
+                  #SendArpRequest $rxPortId $dIpAddr "0.0.0.0"
+               }
+            }
+         }
+         #request mac to send ip packet
+         if { $generateArpReq == 1} {
+           #this section is being implemented this way for the old gen BD
+           #since it require 2 arp requests separated by about 1ms 
+           #in order for the ipf table to get updated
+           
+           for {set index 0} {$index < $numLearnFrame} { incr index } {
+              set destMacAddrTx [SendArpRequest $txPortId $sIpAddr $gIpAddr \
+                                                $txTag]
+           }
+           #need to set this to some invalid mac, otherwise ixia send function won't return
+           if {$destMacAddrTx == "NO_ARP_REPLY" } {
+               set destMacAddrTx "00 00 00 00 00 00"
+           }
+         }
+         #Send arp request from dPort for numIpFrame
+         if {($ipDaMode == "ipIncrHost") && \
+             ($rxPortId != 0)} {
+            set firstPart [string range $dIpAddr 0 [string last . $dIpAddr]]
+            set lastPart [string range $dIpAddr [expr [string last . $dIpAddr] +1] [string length $dIpAddr]]
+            if {$ipDaCount == ""} {
+                set numArps $numIpFrame
+            } else {
+                set numArps $ipDaCount
+            }
+            for {set i 1} {$i <= $numArps} {incr i} {
+               set tmpIpAddr [format "%s%s" $firstPart $lastPart]
+               #sending arp frame
+               set frameSent [SendArpFrame -txPortId $rxPortId \
+                                    -sourceIp $tmpIpAddr -destIp $gIpAddr]
+
+               set lastPart [expr $lastPart + 1]
+            }
+
+            # Set numIpFrame to be 1 as doesn't seem to send more, verify!!
+            #set numIpFrame 1
+         }
+
+         # Send a single IP frame to seed the FDB, IP ARP, and IP FDB tables.
+         if {$rxPortId > 0 && $numIpFrame > 1} {
+             SendIpFrame -txPortId $txPortId -sourceIp $sIpAddr \
+                         -destMac $destMacAddrTx -gatewayIp $gIpAddr \
+                         -rxPortId $rxPortId -destIp $dIpAddr
+         }
+
+         #turn on capturing function on all the monitor ports
+         StartPortsCapture $portMonitorList
+         
+         #send packets
+         result_debug "\n$numIpFrame Frames ($protocol) sent on portId $txPortId:"
+         if {$direction == "c2s"} {
+            set frameSent [SendIpFrame -txPortId $txPortId -protocol $protocol \
+                             -tag $txCtag -frameType $frameType \
+                             -destPort $dPort -sourcePort $sPort \
+                             -ipDaMode $ipDaMode -ipDaCount $ipDaCount \
+                             -ipSaMode $ipSaMode -ipSaCount $ipSaCount \
+                             -TOS $TOS -userPriority $ctagPriority \
+                             -dontFrag $dontFrag -type $icmpType \
+                             -code $icmpCode -ttl $ttl -tcpSynFlag $tcpSynFlag \
+                             -tcpFinFlag $tcpFinFlag -tcpRstFlag $tcpRstFlag \
+                             -tcpAckFlag $tcpAckFlag -tcpPushFlag $tcpPushFlag \
+                             -tcpUrgFlag $tcpUrgFlag -dataPattern $pPattern \
+                             -numFrames $numIpFrame -frameSize $frameSize \
+                             -sourceMac $inSaMac -destMac $destMacAddrTx \
+                             -sourceIp $sIpAddr -destIp $dIpAddr \
+                             -ipOptions $ipOptions -udfEnable $udfEnable \
+                             -udfInitval $udfInitval -udfOffset $udfOffset \
+                             -udfCountertype $udfCountertype \
+                             -udfContinuousCount $udfContinuousCount]
+         } else {
+         # --- If it is s2c send a QInQ packet
+            set frameSent [SendDoubleTagIpFrame -txPortId $txPortId \
+                             -protocol $protocol -ctag $txCtag -stag $txStag \
+                             -ctagPriority $ctagPriority \
+                             -stagPriority $stagPriority \
+                             -stagEncap $txEncap -frameType $frameType \
+                             -destPort $dPort -sourcePort $sPort \
+                             -ipDaMode $ipDaMode -ipDaCount $ipDaCount \
+                             -ipSaMode $ipSaMode -ipSaCount $ipSaCount \
+                             -TOS $TOS -ctagPriority $ctagPriority  \
+                             -dontFrag $dontFrag -type $icmpType \
+                             -code $icmpCode -ttl $ttl \
+                             -tcpSynFlag $tcpSynFlag -tcpFinFlag $tcpFinFlag \
+                             -tcpRstFlag $tcpRstFlag -tcpAckFlag $tcpAckFlag \
+                             -tcpPushFlag $tcpPushFlag -tcpUrgFlag $tcpUrgFlag \
+                             -dataPattern $pPattern -numFrames $numIpFrame \
+                             -frameSize $frameSize -sourceMac $inSaMac \
+                             -destMac $destMacAddrTx -sourceIp $sIpAddr \
+                             -destIp $dIpAddr -ipOptions $ipOptions \
+                             -udfEnable $udfEnable -udfInitval $udfInitval \
+                             -udfOffset $udfOffset \
+                             -udfCountertype $udfCountertype \
+                             -udfContinuousCount $udfContinuousCount]
+         }
+         result_debug "$frameSent"
+         set numExpectedFrame $numIpFrame
+         #retrieve data
+         foreach portId $portMonitorList {
+           set numPacketReceived($portId) 0
+           set rawPortData [GetCapturedFrames $portId]
+           foreach frameReceived $rawPortData {
+               result_debug "Frames received on portId $portId:"
+               result_debug "$frameReceived"
+               if { [CompareFrameQInQ $frameSent $frameReceived $direction \
+                    $ttlDecr $rxCtag $ipDaMode $ipSaMode] && [CheckTagQInQ \
+                    -frameReceived $frameReceived -ctag $rxCtag -stag $rxStag \
+                    -direction $direction -sEncap $rxEncap -ccos $rxCcos]} {
+                  incr numPacketReceived($portId) 1
+               }
+           }
+           result_debug "numPacketReceived($portId)= $numPacketReceived($portId)"
+           if {$careTotalIp == "yes"} {incr totalIpPacketReceived $numPacketReceived($portId)}  
+        }
+        # Restore the protocol server to its state before calling CheckForwarding.
+        if {$rxPortId > 0} {
+           RestoreSavedProtocolServer ixInfo
+        }
+
+      }
+      "proxyArp" {
+         report_start_test "Proxy-ARP forwarding check on Txport $txPortId $comment"
+         
+         #turn on capturing function on all the monitor ports
+         StartPortsCapture $portMonitorList
+         
+         result_debug "Frame (arp) sent on portId $txPortId:"
+#         result_debug "$frameSent"
+         
+         #sending arp frame
+         #this section is being implemented this way for the old gen BD
+         #since it require 2 arp requests separated by about 1ms 
+         #in order for the ipf table to get updated
+         for {set index 0} {$index < $numLearnFrame} { incr index } {
+             set frameSent [SendArpFrame -txPortId $txPortId -sourceIp $sIpAddr \
+                            -destIp $dIpAddr -tag $ctag]
+         }
+         #this is set to 1 for any numLearnFrame, since this sendArpFrame will
+         #reset the port capturing, a feature in ixia sending function that should be removed
+         set numExpectedFrame $numLearnFrame
+         #retrieve data
+         foreach portId $portMonitorList {
+            set numPacketReceived($portId) 0
+            set rawPortData [GetCapturedFrames $portId]
+            set sourceMac [GetDUTMac "DUT1" " "]
+            foreach frameReceived $rawPortData {
+               result_debug "Frames received on portId $portId:"
+               result_debug "$frameReceived"
+               result_debug "sourceMac:$sourceMac| sMACRecv:[GetSourceMacAddress $frameReceived]|"
+               if { $sourceMac == [GetSourceMacAddress $frameReceived] } {
+                  result_debug "sIPRecv: [GetSourceIPAddress $frameReceived] sIPSent: [GetSourceIPAddress $frameSent]"
+                  result_debug "dIPRecv: [GetDestIPAddress $frameReceived] dIPSent: [GetDestIPAddress $frameSent]"
+                  if { [GetMessageType $frameReceived] == "ARP_REQUEST" } {
+                     if { ([GetSourceIPAddress $frameReceived] == $gIpAddr) && \
+                          ([GetTargetMacAddress $frameReceived] == "00 00 00 00 00 00") && \
+                           ([GetDestIPAddress $frameReceived] == [GetDestIPAddress $frameSent]) } {
+                         incr numPacketReceived($portId) 1
+                     }
+                  }
+               }
+            }
+            result_debug "numPacketReceived($portId)= $numPacketReceived($portId)" 
+         }
+      }
+      default {
+         report_start_test "Unknown protocol $protocol $comment"
+         result_error "Invalid protocol."
+      }
+   }
+
+   #now check received data against checkList to see if matched
+   set testResult "good"
+   foreach checkPort $checkPortList {
+      set portId [lindex $checkPort 0]
+      set portFlag [lindex $checkPort 1]
+      set expectedRange "exact"
+      switch -- $portFlag \
+         "forwarded" {
+            if {[lindex $checkPort 2] == ""} {
+              set expectedPacket $numExpectedFrame
+            } else {  
+              set expectedPacket [lindex $checkPort 2]
+              if { [lindex $checkPort 3] != ""} { 
+                 set expectedRange [lindex $checkPort 3] ;# could be up or down
+              }  
+            }   
+      }  "notForwarded" {
+            set expectedPacket 0
+      }  default {
+            set expectedPacket $portFlag
+      }
+                        
+      switch -- $expectedRange {
+         "up" {
+            if { ($numPacketReceived($portId) >= $expectedPacket) } {
+               result_debug "Forwarding on port $portId checked Ok ($numPacketReceived($portId)). Was $portFlag"
+            } else {
+               result_error "Forwarding criteria failed on port $portId."
+               result_debug "numPacketReceived= $numPacketReceived($portId) BUT expectedPackets= $expectedPacket"
+               set testResult "bad"
+            }
+         } 
+         "down" {
+            if { ($numPacketReceived($portId) <= $expectedPacket) } {
+               result_debug "Forwarding on port $portId checked Ok ($numPacketReceived($portId)). Was $portFlag"
+            } else {
+               result_error "Forwarding criteria failed on port $portId."
+               result_debug "numPacketReceived= $numPacketReceived($portId) BUT expectedPackets= $expectedPacket"
+               set testResult "bad"
+            }
+         }
+         "exact" -
+         default {
+           if { ($numPacketReceived($portId) == $expectedPacket) } {
+              result_debug "Forwarding on port $portId checked Ok ($numPacketReceived($portId)). Was $portFlag"
+           } else {
+              result_error "Forwarding criteria failed on port $portId."
+              result_debug "numPacketReceived= $numPacketReceived($portId) BUT expectedPackets= $expectedPacket"
+              set testResult "bad"
+           }
+         }
+      }    
+   }
+   if {$careTotalIp == "yes"} {
+     if {$totalIpPacketReceived == $numIpFrame } {
+        result_debug "Forwarding on total received IP packets checked Ok"
+     } else {
+        result_error "Forwarding failed on total received IP packets from all forwarded ports"
+        result_debug "total no. Packet Received($totalIpPacketReceived) <> total no. IP packets sent($numIpFrame)"
+        set testResult "bad"        
+     }            
+   }
+   if {$testResult == "good"} {
+      result_ok "Check data forwarding passed"
+      set rc 1
+   } else {
+      result_error "Check data forwarding failed"
+      set rc 0
+   }  
+   report_end_test
+
+   return $rc
+}
+
+##################################################################    
+# Description:
+#     	This proc can be used to compare received frame and sent frame.
+#  if ipDaMode or ipSaMode set to ipIncrHost, checks on dest/source IP
+#  is/are ignored. 
+#		If ttlDecr = 0, L2 checking are performed, else L3's
+# Input args: args
+# Output args: return 0 if two frames are not matched, 1 if matched.
+# Typical usage:
+#  CompareFrameQInQ $frameSent $frameReceived $ttlDecr $ipDaMode $ipSaMode
+# Category: VerifyTraffic
+##################################################################
+
+proc CompareFrameQInQ {frameSent frameReceived {direction "c2s"} {ttlDecr 0} {ctag "none"} {ipDaMode "ipIdle"} {ipSaMode "ipIdle"}} {
+
+    set frameSizeSent [string length $frameSent]
+    set frameSizeReceived [string length $frameReceived]
+
+    set endIndexTx [expr $frameSizeSent - 12]
+    set endIndexRx [expr $frameSizeReceived - 12]
+
+    if {$direction == "s2c"} {
+       if {$ctag == "none"} {
+          set endIndexRx [expr $endIndexRx - 12]
+          set frameSent [string range $frameSent 0 34][string range $frameSent 47 $endIndexTx]
+          set frameReceived [string range $frameReceived 0 $endIndexRx]
+       } else {
+          set frameSent [string range $frameSent 0 34][string range $frameSent 59 $endIndexTx]
+          set frameReceived [string range $frameReceived 0 34][string range $frameReceived 47 $endIndexRx]
+       }
+    } elseif {$direction == "s2s"} {
+       if {$ctag == "none"} {
+          set frameSent [string range $frameSent 0 34][string range $frameSent 47 $endIndexTx]
+          set frameReceived [string range $frameReceived 0 34][string range $frameReceived 47 $endIndexRx]
+       } else {
+          set frameSent [string range $frameSent 0 34][string range $frameSent 59 $endIndexTx]
+          set frameReceived [string range $frameReceived 0 34][string range $frameReceived 59 $endIndexRx]
+       }
+    } else {
+       if {$ctag == "none"} {
+          set frameSent [string range $frameSent 0 $endIndexTx]
+          set frameReceived [string range $frameReceived 0 34][string range $frameReceived 47 $endIndexRx]
+       } else {
+          set frameSent [string range $frameSent 0 34][string range $frameSent 47 $endIndexTx]
+          set frameReceived [string range $frameReceived 0 34][string range $frameReceived 59 $endIndexRx]
+       }
+    }
+
+    #set retVal [CompareFrameQInQ $frameSent $frameReceived $ttlDecr $ipDaMode $ipSaMode]
+
+    set frameSizeSent [string length $frameSent]
+    set frameSizeReceived [string length $frameReceived]
+    #for sure not the packet we are looking if length difference is greater than 0
+    result_debug "SentFrameSize $frameSizeSent Recv frame size $frameSizeReceived"
+    if {[expr abs( $frameSizeSent - $frameSizeReceived ) ] > 12 } { return 0 }
+    set TTLSent [GetTTL $frameSent]
+    set TTLReceived [GetTTL $frameReceived]
+    set sourceMacRecv [GetSourceMacAddress $frameReceived]
+    set destMacRecv [GetDestMacAddress $frameReceived]
+    set sourceIpRecv [GetSourceIPAddress $frameReceived]
+    set destIpRecv [GetDestIPAddress $frameReceived]
+    result_debug "SourceMac: $sourceMacRecv DestMac: $destMacRecv"
+    result_debug "SourceIp: $sourceIpRecv DestIp: $destIpRecv"
+    if { ($ipDaMode == "ipIncrHost") } {
+       set destIpRecv [GetDestIPAddress $frameSent]
+       result_debug "!!warning: check on received dest Ip is ignored: ipDaMode = ipIncrHost"
+    }
+    if { ($ipSaMode == "ipIncrHost") } {
+       set sourceIpRecv [GetSourceIPAddress $frameSent]
+       result_debug "!!warning: check on received source Ip is ignored: ipSaMode = ipIncrHost"
+    }
+    if { ($ipDaMode == "ipIncrHost") || ($ipSaMode == "ipIncrHost")} {
+       set iPTotalLengthSent [GetIpTotalLength $frameSent]
+       set iPTotalLengthRecv [GetIpTotalLength $frameReceived]
+       set sPortSent [GetIPSourcePort $frameSent]
+       set sPortRecv [GetIPSourcePort $frameReceived]
+       set dPortSent [GetIPDestPort $frameSent]
+       set dPortRecv [GetIPDestPort $frameReceived]
+    }   
+
+    set typeSent [string range $frameSent 36 40]
+    set typeReceived [string range $frameReceived 36 40]
+
+    #L2 forwarding
+    if { $ttlDecr == "0" } {
+             result_debug "############# TTL decr 0 ###########"
+       if { $frameSent == $frameReceived } {
+          result_debug "Data L2 check passed"
+          return 1
+       } else { 
+          result_debug "Data L2 check failed"
+          result_debug "Sent:$typeSent Received: $typeReceived"
+          result_debug "Sent:$frameSent"
+          result_debug "Recv:$frameReceived"
+          return 0 
+       }
+    } else {      
+             result_debug "############# TTL is sent ###########"
+       # check ttl               
+       result_debug "TTLSent=$TTLSent TTLReceived=$TTLReceived"
+       if { ($ttlDecr == "ignore") || ($TTLSent == [incr TTLReceived $ttlDecr]) } {
+          result_debug "TLL check pass"
+          #check source and dest ip address (if ipDaMOde is "ipIncrHost", no check on dest ip)
+          if { ($sourceIpRecv == [GetSourceIPAddress $frameSent]) && \
+               ($destIpRecv == [GetDestIPAddress $frameSent]) } {
+             result_debug "Source and Dest IP check pass"
+             #check data
+             if { ($ipDaMode == "ipIncrHost") || ($ipSaMode == "ipIncrHost") } {
+                result_debug "iPTotalLengthSent:|$iPTotalLengthSent| ; iPTotalLengthRecv:|$iPTotalLengthRecv|"
+                result_debug "sPortSent:|$sPortSent| ; sPortRecv:|$sPortRecv|"
+                result_debug "dPortSent:|$dPortSent| ; dPortRecv:|$dPortRecv|"           
+                if { ($iPTotalLengthSent == $iPTotalLengthRecv) && \
+                     ($sPortSent == $sPortRecv) && \
+                     ($dPortSent == $dPortRecv) } {
+                   result_debug "L3 data check pass(only check ipLength, sPort, dPort)" 
+                   return 1
+                } else {
+                   result_debug "L3 data check failed(only check ipLength, sPort, dPort)" 
+                   return 0
+                }
+             }                
+             if { $typeSent == $typeReceived } {
+                if { $typeSent == "81 00" } { 
+                   set startIndex 114
+                } else { set startIndex 102 }
+                set endIndex [expr $frameSizeReceived - 12]
+                set dataSent4Compare [string range $frameSent $startIndex $endIndex]
+                set dataRecv4Compare [string range $frameReceived $startIndex $endIndex]
+             } else {
+                if { $typeSent == "81 00" } {
+                   #take everything except 4 bytes tagged and checksum
+                   set endIndex [expr $frameSizeSent - 12]
+                   set dataSent4Compare "[string range $frameSent 114 $endIndex]"
+                   set dataRecv4Compare [string range $frameReceived 102 [expr $endIndex - 12]]
+                } else {
+                   #take everything except 4 bytes tagged and checksum
+                   set endIndex [expr $frameSizeReceived - 12]
+                   set dataSent4Compare [string range $frameSent 102 [expr $endIndex - 12]]
+                   set dataRecv4Compare "[string range $frameReceived 114 $endIndex]"
+                }
+             }
+             if { $dataSent4Compare == $dataRecv4Compare } {
+                result_debug "L3 data check pass"
+                return 1
+             } else { 
+                result_debug "L3 data check failed"
+                result_debug "dataSent4Compare:|$dataSent4Compare|"
+                result_debug "dataRecv4Compare:|$dataRecv4Compare|"
+                return 0 
+             }
+          }
+       }
+    }
+ result_debug "retVal in CompareFrameQInQ is 000000000"
+ return 0
+ #result_debug "retVal in CompareFrameQInQ is $retVal"
+ #result_debug "frameSent: $frameSent "
+ #result_debug "frameReceived : $frameSent"
+ #return $retVal
+}
+
+##################################################################    
+# Description:
+#		This function checks the frame's tag to see if it matches
+#	the expected tag.
+# Input args:  Frame and tag id
+# Output args: return 0 if  the tag of the frame is not expected.
+#		       return 1 if the frame contains the expected Tag id.
+# Typical usage:
+#   CheckTagQInQ $frameReceived  $tag "c2s" "88 A8"
+# Category: VerifyTraffic
+##################################################################
+
+proc CheckTagQInQ {args} {
+   parse_args CheckTagQInQ $args {
+      frameReceived ""
+      ctag "none"
+      stag "none"
+      direction "c2s"
+      sEncap "88A8"
+      ccos "none"
+      ctos "none"
+   }
+   set stype [string range $frameReceived 36 40]
+   set type [string range $frameReceived 48 52]
+   set sEncap "[string range $sEncap 0 1] [string range $sEncap 2 3]"
+
+   if {($direction == "c2s") || ($direction == "s2s")} {
+      if {$sEncap != $stype} {
+         result_debug "Encaptype for the Service Tag is expected $sEncap but \
+                    received $stype"
+         return 0
+      } else {
+         set ctagRecv [GetShortInt "0[string range $frameReceived 55 58]"]
+         set stagRecv [GetShortInt "0[string range $frameReceived 43 46]"]
+         set ccosRecv [hextodec "[string range $frameReceived 54 54]"]
+         set ccosRecvBits [int2bits $ccosRecv 4]
+         set ccosRecvBits [string range $ccosRecvBits 0 2]
+         set ccosRecv [bits2int $ccosRecvBits]
+      }
+   } else {
+         set ctagRecv [GetShortInt "0[string range $frameReceived 43 46]"]
+         set ccosRecv [hextodec "[string range $frameReceived 42 42]"]
+         set ccosRecvBits [int2bits $ccosRecv 4]
+         set ccosRecvBits [string range $ccosRecvBits 0 2]
+         set ccosRecv [bits2int $ccosRecvBits]
+   }
+
+#   if {($ctag == "none") && ($stag == "none")} {
+#      result_debug "Ignore tag checking"
+#      return 1
+#   }
+  
+   if {($direction == "c2s") || ($direction == "s2s")} {
+      if {$ctag != "none" } {
+          if {$ctag == $ctagRecv} {
+            result_debug "cTag ($ctag) check pass"
+          } else {
+            result_debug "cTag ($ctag) check fail. Got tag $ctagRecv"
+            return 0
+          }
+      } else {
+         if {$type != "81 00"} {
+            result_debug "Untag packet check pass"
+         } else {
+            result_debug "Untag packet check fail"
+            return 0
+         }
+      }
+      
+      if {$ccos != "none"} {
+         if {$ccos == $ccosRecv} {
+            result_debug "cCos ($ccos) check pass"
+         } else {
+            result_debug "cCos ($ccos) check fail. Got cos $ccosRecv"
+            return 0
+         }
+      }
+
+      if {$stag != "none" } {
+          if {$stag == $stagRecv} {
+            result_debug "sTag ($stag) check pass"
+          } else {
+            result_debug "sTag ($stag) check fail. Got tag $stagRecv"
+            return 0
+          }
+      } else {
+            result_debug "Untag packet check pass"
+      }
+# --- ctag and stag checking passes. So return 1
+      return 1
+   } else {
+# --- if the direction is s2c, there is no service tag. So verify the customer
+#     only
+      if {$ctag != "none" } {
+          if {$ctag == $ctagRecv} {
+            result_debug "cTag ($ctag) check pass"
+            return 1
+          } else {
+            result_debug "cTag ($ctag) check fail. Got tag $ctagRecv"
+            return 0
+          }
+      } else {
+         if {$type != "81 00"} {
+            result_debug "Untag packet check pass"
+            return 1
+         } else {
+            result_debug "Untag packet check fail"
+            return 0
+         }
+      }
+
+      if {$ccos != "none"} {
+         if {$ccos == $ccosRecv} {
+            result_debug "cCos ($ccosRecv) check pass"
+         } else {
+            result_debug "cCos ($ccosRecv) check fail. Got cos $ccosRecv"
+            return 0
+         }
+      }
+
+   }
+   return 1
+}

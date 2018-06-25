@@ -1,0 +1,371 @@
+
+################################################################## 
+# Procedure Name: LoadCLIFile   
+# Description: Loads a .cli file into the parser with tcl list scheme
+# Input args: a file name normally with .cli extension 
+# Output args: none
+# Typical usage: 
+#         LoadCLIFile xxxxx.cli
+# Category: Utility
+##################################################################
+proc LoadCLIFile {filename} {
+   set fd_in [open "$filename" "r"]   
+   while {[gets $fd_in line] != -1} {
+      #result_debug "----- Line=|$line|"
+      if {([string length $line] > 1) && ([string trim $line " \t"] != "" ) } {
+         if {[regexp -nocase "Get.*CLIPort|GetVrString" $line]} {
+            set line [subst $line]
+         }
+         lappend mainList $line
+      }
+   } 
+   close $fd_in
+   return $mainList
+}
+
+################################################################## 
+# Procedure Name: GetGroupList   
+# Description: Retrieve a group of CLI lists(lines) till a cmd keyword     
+# Input args: CLIList listLength indexName
+# Output args: none
+# Typical usage: 
+#	 set groupList [GetGroupList $CLIList $listLength index]
+# Category: Utility
+##################################################################
+proc GetGroupList {CLIList listLength indexName} {
+upvar $indexName index
+
+set groupList ""
+set line [lindex $CLIList $index]
+lappend groupList $line
+incr index
+# -- get all the lines until Command or ShowCLI keyword
+for {set i $index} {$i < $listLength } {incr i} {
+   set line [lindex $CLIList $i]
+   if {[IsInKeywordList $line] } { 
+      set index $i
+      return $groupList
+   }
+   set line $line;
+   lappend groupList $line
+}
+set index $i
+return $groupList
+}
+
+################################################################## 
+# Procedure Name: IsInKeywordList   
+# Description: Return 1 if Command: is in the line 
+#              Return 1 if ShowCLI: is in the line
+#              Return 1 if ShowCLI_Once: is in the line
+#              Return 1 if SendAFile: is in the line
+#              Return 1 if DeleteAFile: is in the line
+#              Else return 0
+# Input args: a string line
+# Output args: none
+# Returned vlaue: 1 or 0
+# Typical usage: 
+#        IsInKeyWordList $line
+# Category: Utility
+##################################################################
+proc IsInKeywordList {line} {
+
+if {[regexp -nocase "command:" $line] } {
+   return 1
+} elseif {[regexp -nocase "showcli:" $line] } {
+   return 1
+} elseif {[regexp -nocase "showcli_once:" $line] } {
+   return 1
+} elseif {[regexp -nocase "sendafile:" $line] } {
+   return 1
+} elseif {[regexp -nocase "deleteafile:" $line] } {
+   return 1
+}
+return 0
+}
+
+################################################################## 
+# Procedure Name: FilterCommands   
+# Description: Return a list of CLI commands that are filtered
+#              based on image version and platform type     
+# Input args: CLIList softwareVersion platform verCmds
+# Output args: none
+# Typical usage: 
+#	set filterList [FilterCommands $groupList [GetVersion DUT1 0] [GetPlatform] verCmds]      
+# Category: Utility
+##################################################################
+proc FilterCommands {CLIList softwareVersion platform verCmds} {
+upvar $verCmds versionBasedCmds
+set returnList ""
+set verList ""
+set platform [string tolower $platform]
+set listLength [llength $CLIList]
+   # -- get the commands that belong to the test platform and release software 
+   for {set i 0}  {$i < $listLength} {incr i} {
+      set line [lindex $CLIList $i]
+      ##result_debug "line -- $line"
+      if {[regexp -nocase "start_platform" $line] } {
+         # -- get the command for tested platform 
+         if {[info exist platformArray]} {unset platformArray }
+         while {1} {
+            incr i
+            set line [lindex $CLIList $i]
+            # -- not account for nested platform and version
+            if {[regexp -nocase "end_platform" $line] } {
+               puts "platform: $platform"
+               if {[info exist platformArray($platform)]} {
+                  set platformList $platformArray($platform)
+               } elseif {[info exist platformArray(default)]} {
+                  set platformList $platformArray(default)               
+               } else {
+                  result_debug "No platform data found for this platform $platform"
+                  set platformList ""               
+               }
+               puts "platformList: $platformList"
+               foreach line $platformList {
+                  lappend returnList [string trim $line " \t"]
+               }
+               break
+            }
+            set firstword [string tolower [lindex $line 0]]
+            if {[regexp -nocase "<.*>" $firstword] } {
+               regsub -all {>} $firstword {} platformFound
+               regsub -all {<} $platformFound {} platformFound
+               regsub -all { } $platformFound {} platformFound
+               set platformFound [string tolower $platformFound]
+               puts "platform: $platformFound"
+            } else {
+               if {[info exist platformArray($platformFound)]} {
+                  set previousPlatformList $platformArray($platformFound) 
+               } else { set previousPlatformList "" }
+               lappend previousPlatformList $line
+               set platformArray($platformFound) $previousPlatformList
+            }
+         }
+      } elseif {[regexp -nocase "start_version" $line] } {
+         # -- get command for the tested release software
+         if {[info exist versionArray]} {unset versionArray }   
+         ##result_debug "CLIList ==> $CLIList";  
+         while {1} {
+            incr i
+            set line [lindex $CLIList $i]
+            if {[regexp -nocase "end_version" $line] } { 
+                set rlist [Start_Version_Parser $versionArray];
+                foreach command $rlist {         
+                    lappend returnList [string trim $command " \t"]
+                }               
+                break;
+            } else {
+                lappend versionArray $line;
+            }
+         }
+      } elseif {[regexp -nocase "start_vr" $line] } {
+         # -- get command for the tested release software
+         if {[info exist vrArray]} {unset versionArray }   
+         ##result_debug "CLIList ==> $CLIList";  
+         while {1} {
+            incr i
+            set line [lindex $CLIList $i]
+            if {[regexp -nocase "end_vr" $line] } { 
+                set rlist [Start_VR_Parser $versionArray];
+                foreach command $rlist {         
+                    lappend returnList [string trim $command " \t"]
+                }               
+                break;
+            } else {
+                lappend vrArray $line;
+            }
+         }
+      } elseif {![IsInKeywordList $line]} {
+         lappend returnList [string trimleft $line " \t"]
+      }
+   }
+   ##result_debug "returnList = $returnList";
+   return $returnList
+}
+
+################################################################## 
+# Procedure Name: RunCommandAndCheckCLI   
+# Description: Send the CLI commands within Command: group if flag is "true"; 
+#              and verify the CLI display by using commands in ShowCLI: group.
+# Input args: CLIList {flag "true"}
+# Output args: none
+# Typical usage: 
+# 	 RunCommandAndCheckCLI $CLIList "false"     
+# Category: Utility
+##################################################################
+proc RunCommandAndCheckCLI {CLIList {flag "true"}} {
+global DUT1_DefaultBlade
+
+set listLength [llength $CLIList]
+set index 0
+   while {$index < $listLength} {
+      set groupList [GetGroupList $CLIList $listLength index]
+      set keywordLine [lindex $groupList 0]
+      ##result_debug "groupList = $groupList"      
+      ##result_debug "keywordLine = $keywordLine"
+      # -- process the command and showcli section
+      if {[regexp -nocase "Command:" $keywordLine ]} {
+         #set versionCommands ""
+         set filterCommand [FilterCommands $groupList [GetVersion DUT1 0] [GetPlatform] versionCommands]
+         result_debug "SendInTheCommand: $filterCommand"
+         foreach CLICommand $filterCommand {
+            if {[string range $CLICommand 0 0] == "#" } {
+               puts "$CLICommand"
+            } elseif {[regexp -nocase "sleep*" $CLICommand] } {           
+              set wait [lindex $CLICommand 1]
+              result_debug "Sleeping for $wait seconds"
+              sleep $wait
+            } else {
+               # -- check for platform dependent
+               if {[regexp -nocase "<.*>" $CLICommand] } {
+                  regsub -all {>} $CLICommand {} CLICommand
+                  switch -regexp [GetPlatform] {
+                     "BD" -
+                     "XCM*" {set blade "$DUT1_DefaultBlade:" }
+                     "Asp*" {set blade "$DUT1_DefaultBlade:" }
+                     "Summit*" {set blade "" }
+                     default {set blade "" }
+                  }
+                  regsub -all {<} $CLICommand $blade CLICommand            
+               }        
+               if { $flag == "true" } { 
+                  SendACmd $CLICommand
+               } else { puts "$CLICommand" }           
+            }
+         }
+      } elseif {[regexp -nocase "ShowCLI:" $keywordLine ]} {
+         #set versionCommands ""
+         set filterList [FilterCommands $groupList [GetVersion DUT1 0] [GetPlatform] versionCommands]
+         result_debug "GetTheOutput: $filterList"
+         set checkOutput 0
+         set checkOutputList ""
+         set textBuffer ""
+         #set fd_in [open "Tmp/tmp_CheckCLIOutput" "w"]   
+         foreach line $filterList {
+            # -- check for platform dependent
+            if {[regexp -nocase "<.*>" $line] } {
+               regsub -all {>} $line {} line
+               switch -regexp [GetPlatform] {
+                  "BD" -
+                  "XCM*" {set blade "$DUT1_DefaultBlade:" }
+                  "Asp*" {set blade "$DUT1_DefaultBlade:" }
+                  "Summit*" {set blade "" }
+                  default {set blade "" }
+               }
+               regsub -all {;<|<} $line $blade line 
+            }
+            #replace parentheses              
+            regsub -all {\(} $line {.} line
+            regsub -all {\)} $line {.} line
+            #replace bracket         
+            regsub -all {\[} $line {.} line
+            regsub -all {\]} $line {.} line
+            if {[string range $line 0 0] == "#" } {
+               puts "$line"
+            } elseif {[regexp -nocase "sleep*" $line] } {           
+              set wait [lindex $line 1]
+              result_debug "Sleeping for $wait seconds"
+              sleep $wait           
+            } elseif {[regexp -nocase "OutPut:" $line ]} {
+               set checkOutput 1
+            } elseif {$checkOutput} {
+               #result_debug "--line--> $line";
+               
+               if {[string range $line 0 0] == "\{" } {
+                  set str [string trimright $line " \}" ]
+                  set line [string range $str 1 end]
+                  result_debug "Processed Line: $line"
+                  lappend checkOutputList $line
+               } else {
+                  lappend checkOutputList "\{$line\} exist"
+               }
+               #result_debug "--checkOutputList--> $checkOutputList";
+            } else {
+               #SendACmd $line NULL $fd_in
+               set textBuffer "$textBuffer {$line}"  
+            }
+         }
+         #close $fd_in  
+         result_debug ">>>textBuffer: $textBuffer"          
+         result_debug ">>>checkOutputList: $checkOutputList"
+         foreach line $textBuffer { 
+            CheckKeyValue $line $checkOutputList -comment "for commands: $line"                     
+         }
+         #CheckKeyValueShort "Tmp/tmp_CheckCLIOutput" $checkOutputList "for commands: $textBuffer"
+      }
+   }
+}
+
+################################################################## 
+# Procedure Name: CheckSkipVersion  
+# Description: Check whether to run upload/download test for the loaded 
+#              CLI file based on a list of vesions in the first line. 
+#	       If any of the listed versions match DUT's version, the CLI
+#	       file will be bypassed the test.
+# Input args: firstLine {dutVersion "$DUTs_info(DUT1,version)"}
+# Output args: none
+# Typical usage: 
+#         if {[CheckSkipVersion $1stLine]} {puts "this file is skipped for CLI test"}
+# Category: Utility
+##################################################################
+proc CheckSkipVersion {firstLine {dutVersion "$DUTs_info(DUT1,version)"}} {
+
+global DUTs_info
+
+  if {[regexp -nocase "skipVersion:" $firstLine] && \
+       [llength $firstLine] > 1 } {
+      set versionList [lrange $firstLine 1 end]
+      regsub -all {[\.bBvV]} $dutVersion " " dutVersion
+      foreach version $versionList {
+                
+        if {[regexp -nocase {b[0-9]+\+} $version]} {
+          set range "up"
+        } elseif {[regexp -nocase {b[0-9]+\-} $version]} {
+          set range "down"
+        } else {
+          set range "exact"
+        }
+          
+        regsub -all {[\.bBvV\+\-]} $version " " version
+        switch $range {
+          "exact" {set match 1
+                   for {set index 0} {$index < [llength $version]} {incr index} {
+                      if {[lindex $version $index] != [lindex $dutVersion $index]} {
+                         set match  0
+                         break
+                      }  
+                   }
+                  }
+          "up"    { if { ([lindex $version 0] == [lindex $dutVersion 0]) && \
+                         ([lindex $version 1] == [lindex $dutVersion 1]) && \
+                         ([lindex $version 2] == [lindex $dutVersion 2]) && \
+                         ([lindex $version 3] <= [lindex $dutVersion 3]) } {
+                       set match 1
+                    } else {
+                       set match 0
+                    }      
+                  }
+          "down"  { if { ([lindex $version 0] == [lindex $dutVersion 0]) && \
+                         ([lindex $version 1] == [lindex $dutVersion 1]) && \
+                         ([lindex $version 2] == [lindex $dutVersion 2]) && \
+                         ([lindex $version 3] >= [lindex $dutVersion 3]) } {
+                       set match 1
+                    } else {
+                       set match 0
+                    }      
+                  }         
+        }
+             
+        if {$match} { break }  
+      }
+      
+      if {$match} { 
+ 	 return 1
+      } else {
+         return 0   
+      }
+  } else {
+      return 0
+  }  
+}  

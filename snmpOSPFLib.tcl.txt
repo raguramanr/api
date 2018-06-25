@@ -1,0 +1,2974 @@
+#!/usr/bin/tclsh
+
+###############################################################################
+#  Procedure Name: snmpCheckOspfInterfaceParameters
+#  
+#  Description:
+#  This procedure checks the ospf parameters on particular interface.
+#
+#  Input Variables:
+#    session           - Session identifier which identifies the connection
+#                        with the DUT
+#    ipaddr            - Interface IP address 
+#
+#  Optional Args:
+#
+#    areaid            - AreaId 
+#    iftype            - Interface Type 
+#                        broadcast
+#                        nbma
+#                        pointToPoint
+#                        pointToMultipoint
+#    ospfstate         - OSPF State 
+#                        enabled/disabled
+#    rtrpriority       - Interface Router Priority 
+#    transitdelay      - Interface TransitDelay
+#    hellointerval     - Interface HelloInterval 
+#    rtrdeadinterval   - Interface Router DeadInterval
+#    authtype          - Interface Authentication Type 
+#    authkey           - Interface Authentication Key value 
+#    state             - Interface State
+#                        down
+#                        loopback
+#                        waiting
+#                        pointToPoint
+#                        designatedRouter
+#                        backupDesignatedRouter
+#                        otherDesignatedRouter
+#    retransinterval   - No. of seconds between lsa retransmissions
+#    pollinterval      - Time interval between hello pkts sent to an inactive
+#                        nbma neighbor
+#    ifevents          - No. of times this OSPF interface has changed its state
+#    multicastforward  - Multicast should be forwarded on this interface
+#                        blocked
+#                        multicast
+#                        unicast
+#    ifdemand          - Demand OSPF procedures should be performed on this 
+#                        interface
+#                        true
+#                        false
+#    dripaddr          - Interface DesignatedRouter IP Address
+#    bdripaddr         - Interface Backup DesignatedRouter IP Address
+#    status            - Whether DR/BDR ipaddress exist or not exist
+#    fd                - File descriptor of open log file   
+#    comment           - Comments to be logged in log file
+# 
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    0 - On failure 
+#    1 - On success 
+#
+#  Possible Usage:
+#    snmpCheckOspfInterfaceParameters -session $sessionid -areaid 0.0.0.1
+#                                     -iftype "broadcast" -rtrpriority 10
+#                                     -state "down" -dripaddr 10.2.1.1
+#                                     -status "exist"
+###############################################################################
+proc snmpCheckOspfInterfaceParameters { args } {
+    parse_args snmpCheckOspfInterfaceParameters $args {
+       session         ""
+       ipaddr          ""
+       areaid          ""
+       iftype          ""
+       ospfstate       ""
+       rtrpriority     ""
+       transitdelay    ""
+       hellointerval   ""
+       rtrdeadinterval ""
+       retransinterval ""
+       pollinterval    ""
+       ifstate         ""
+       ifevents        ""
+       dripaddr        ""
+       bdripaddr       ""
+       status          ""
+       authtype        ""
+       authkey         ""
+       multicastforward ""
+       ifdemand        ""
+       fd              "NULL"
+       comment         "snmpCheckOspfInterfaceParameters"
+    }
+ 
+    set func "snmpCheckOspfInterfaceParameters:" 
+    set retVal 0
+
+    if { $session == "" || $ipaddr == "" } {
+       error "$func SNMP session id, interface address must be specified"
+       return $retVal 
+    }   
+
+    snmpDebug DEBUG "session is $session, interface address is $ipaddr" $fd
+    result_debug "\n-- Checking OSPF Interface parameters on $ipaddr --"
+
+    report_start_test "$comment"
+
+    if { $areaid != "" } {
+       set result [snmpGet -session $session -oid ospfIfAreaId.$ipaddr.0]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set areaId [snmpUtilGetVal ipaddr $result]
+       snmpDebug LOG "$func AreaId for interface $ipaddr is $areaId" $fd
+
+       if {$areaid == $areaId} {
+          result_ok "Interface Parameter: Area Id $areaid exists. PASS"
+          set retVal 1
+        } else {
+          result_error "Interface Parameter: Area Id expected $areaid \
+                        but found $areaId. FAIL"
+        }
+    }
+
+    if { $iftype != "" } {
+       set result [snmpGet -session $session -oid ospfIfType.$ipaddr.0]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set typeVal [snmpUtilGetVal inttext $result]
+       snmpDebug LOG "$func InterfaceType for interface $ipaddr is $typeVal" $fd
+
+       if { [string compare [string tolower $typeVal] \
+                          [string tolower $iftype]] == 0 } {
+          result_ok "Interface Parameter: OSPF interface type is $iftype \
+                     exists. PASS"
+          set retVal 1
+       } else {
+          result_error "Interface Parameter: OSPF interface type expected is \
+                        $iftype but got $typeVal. FAIL"
+       }
+    }
+
+    if { $ospfstate != "" } {
+       set result [snmpGet -session $session -oid ospfIfAdminStat.$ipaddr.0]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set stateVal [snmpUtilGetVal inttext $result]
+       snmpDebug LOG "$func OSPF state for interface $ipaddr is $stateVal" $fd
+
+       if { [string compare [string tolower $stateVal] \
+                          [string tolower $ospfstate]] == 0 } {
+          result_ok "Interface Parameter: OSPF state is $ospfstate \
+                     exists. PASS"
+          set retVal 1
+       } else {
+          result_error "Interface Parameter: OSPF state expected is \
+                        $ospfstate but got $stateVal. FAIL"
+       }
+    }
+
+    if { $transitdelay != "" } {
+       set result [snmpGet -session $session -oid ospfIfTransitDelay.$ipaddr.0]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set delay [snmpUtilGetVal int $result]
+       snmpDebug LOG "$func Transit Delay for interface $ipaddr is $delay" $fd
+
+       if {$delay == $transitdelay} {
+          result_ok "Interface Parameter: Transit delay $transitdelay \
+                     exists. PASS"
+          set retVal 1
+        } else {
+          result_error "Interface Parameter: Transit delay expected \
+                        $transitdelay but got $delay. FAIL"
+        }
+    }
+
+    if { $hellointerval != "" } {
+       set result [snmpGet -session $session -oid ospfIfHelloInterval.$ipaddr.0]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set hello [snmpUtilGetVal int $result]
+       snmpDebug LOG "$func HelloInterval for interface $ipaddr is $hello" $fd
+
+       if {$hello == $hellointerval} {
+          result_ok "Interface Parameter: HelloInterval $hellointerval exists.\
+                     PASS"
+          set retVal 1
+        } else {
+          result_error "Interface Parameter: HelloInterval expected \
+                        $hellointerval but got $hello. FAIL"
+        }
+    }
+
+    if { $rtrdeadinterval != "" } {
+       set result [snmpGet -session $session \
+                           -oid ospfIfRtrDeadInterval.$ipaddr.0]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set deadinterval [snmpUtilGetVal int $result]
+       snmpDebug LOG "$func Router DeadInterval for interface $ipaddr \
+                      is $deadinterval" $fd
+
+       if {$deadinterval == $rtrdeadinterval} {
+          result_ok "Interface Parameter: Rtrdeadinterval $rtrdeadinterval \
+                     exists. PASS"
+          set retVal 1
+        } else {
+          result_error "Interface Parameter: Rtrdeadinterval expected \
+                        $rtrdeadinterval but got $deadinterval. FAIL"
+        }
+    }
+
+    if { $retransinterval != "" } {
+       set result [snmpGet -session $session \
+                           -oid ospfIfRetransInterval.$ipaddr.0]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set retransInterval [snmpUtilGetVal int $result]
+       snmpDebug LOG "$func ReTransmit Interval for interface $ipaddr \
+                      is $retransInterval" $fd
+
+       if {$retransInterval == $retransinterval} {
+          result_ok "Interface Parameter: Retransmit Interval \
+                     $retransinterval exists. PASS"
+          set retVal 1
+        } else {
+          result_error "Interface Parameter: Retransmit Interval expected \
+                        $retransinterval but got $retransInterval.FAIL"
+        }
+    }
+
+    if { $authtype != "" } {
+       set result [snmpGet -session $session -oid ospfIfAuthType.$ipaddr.0]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set AuthType [snmpUtilGetVal int $result]
+       snmpDebug LOG "$func AuthType for interface $ipaddr is $AuthType" $fd
+
+       if {[string compare [string tolower $authtype] "none"] == 0 } {
+          set type 0
+       } elseif {[string compare [string tolower $authtype] "simple"] == 0 } {
+          set type 1
+       } elseif {[string compare [string tolower $authtype] "md5"] == 0 } {
+          set type 2
+       } else {
+          result_error "AuthType should be either none/simple/md5"
+       }
+
+       if {$type == $AuthType} {
+          result_ok "Interface Parameter: Authentication Type $authtype \
+                             exists. PASS"
+          set retVal 1
+        } else {
+          result_error "Interface Parameter: Authentication Type expected \
+                        $authtype but got $AuthType. FAIL"
+        }
+    }
+
+    if { $authkey != "" } {
+       set result [snmpGet -session $session -oid ospfIfAuthKey.$ipaddr.0]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set AuthKeyValue [snmpUtilGetVal hex $result]
+       snmpDebug LOG "$func AuthKey for interface $ipaddr is $AuthKeyValue" $fd
+
+       if {$AuthKeyValue == $authkey} {
+          result_ok "Interface Parameter: Authentication key value $authkey \
+                     exists. PASS"
+          set retVal 1
+        } else {
+          result_error "Interface Parameter: Authentication key value expected \
+                        $authkey but got $AuthKeyValue. FAIL"
+       }
+    }
+
+    if { $rtrpriority != "" } {
+       set result [snmpGet -session $session -oid ospfIfRtrPriority.$ipaddr.0]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set routerPriority [snmpUtilGetVal int $result]
+       snmpDebug LOG "$func Router Priority for interface $ipaddr \
+                      is $routerPriority" $fd
+
+       if {$routerPriority == $rtrpriority} {
+          result_ok "Interface Parameter: Router Priority $rtrpriority \
+                             exists. PASS"
+          set retVal 1
+        } else {
+          result_error "Interface Parameter: Router Priority expected \
+                        $rtrpriority but got $routerPriority. FAIL"
+        }
+    }
+
+    if { $ifstate != "" } {
+       set result [snmpGet -session $session -oid ospfIfState.$ipaddr.0]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set stateVal [snmpUtilGetVal inttext $result]
+       snmpDebug LOG "$func Interface State for interface $ipaddr \
+                      is $stateVal" $fd
+
+       if { [string compare [string tolower $stateVal] \
+                          [string tolower $ifstate]] == 0 } {
+          result_ok "Interface Parameter: Interface state is $ifstate \
+                     exists. PASS"
+          set retVal 1
+       } else {
+          result_error "Interface Parameter: Interface state expected is \
+                        $ifstate but got $stateVal. FAIL"
+       }
+    }
+
+    if { $dripaddr != "" } {
+       if { $status != "" } {
+          set status [string tolower $status]
+          if { !([string compare "exist" $status] == 0  ||
+               [string compare "notexist" $status] == 0) } {
+                error "$func $result is invalid argument should be \
+                       either exist or notexist"
+                return $retVal
+          }
+       }
+       set result [snmpGet -session $session \
+                           -oid ospfIfDesignatedRouter.$ipaddr.0]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set drIpAddress [snmpUtilGetVal ipaddr $result]
+       snmpDebug LOG "$func DR Ipaddress for interface $ipaddr \
+                      is $drIpAddress" $fd
+
+       if { $drIpAddress != $dripaddr } {
+           if { $status == "exist" } {
+              result_error "Interface Parameter: DR ip address $dripaddr \
+                            does not exist. FAIL"
+           } else {
+              result_ok "Interface Parameter: DR ip address $dripaddr \
+                         does not exist result $status. PASS"
+              set retVal 1
+           }
+       } else {
+           if { $status == "notexist" } {
+              result_error "Interface Parameter: DR ip address $dripaddr exist \
+                            result $status. FAIL"
+           } else {
+              result_ok "Interface Parameter: DR ip address $dripaddr exist \
+                            result $status. PASS"
+              set retVal 1
+           }
+       }
+    }
+
+    if { $bdripaddr != "" } {
+       if { $status != "" } {
+          set status [string tolower $status]
+          if { !([string compare "exist" $status] == 0  ||
+               [string compare "notexist" $status] == 0) } {
+                error "$func $result is invalid argument should be \
+                       either exist or notexist"
+                return $retVal
+           }
+       }
+       set result [snmpGet -session $session \
+                           -oid ospfIfBackupDesignatedRouter.$ipaddr.0]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set bdrIpAddress [snmpUtilGetVal ipaddr $result]
+       snmpDebug LOG "$func BDR Ipaddress for interface $ipaddr \
+                      is $bdrIpAddress" $fd
+
+       if { $bdrIpAddress != $bdripaddr } {
+           if { $status == "exist" } {
+              result_error "Interface Parameter: BDR ip address $dripaddr \
+                            does not exist. FAIL"
+           } else {
+              result_ok "Interface Parameter: BDR ip address $dripaddr \
+                         does not exist result $status. PASS"
+              set retVal 1
+           }
+       } else {
+           if { $status == "notexist" } {
+              result_error "Interface Parameter: BDR ip address $dripaddr \
+                            exist result $status. FAIL"
+           } else {
+              result_ok "Interface Parameter: BDR ip address $dripaddr \
+                            exist result $status. PASS"
+              set retVal 1
+           }
+       }
+    }
+
+    if { $pollinterval != "" } {
+       set result [snmpGet -session $session -oid ospfIfPollInterval.$ipaddr.0]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set pollInt [snmpUtilGetVal int $result]
+       snmpDebug LOG "$func PollInterval for interface $ipaddr is $pollInt" $fd
+
+       if {$pollInt == $pollinterval} {
+          result_ok "Interface Parameter: PollInterval $pollinterval \
+                             exists. PASS"
+          set retVal 1
+        } else {
+          result_error "Interface Parameter: PollInterval expected \
+                        $pollinterval but got $pollInt. FAIL"
+        }
+    }
+
+    if { $ifevents != "" } {
+       set result [snmpGet -session $session -oid ospfIfEvents.$ipaddr.0]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set eventInt [snmpUtilGetVal counter $result]
+       snmpDebug LOG "$func IfEvents for interface $ipaddr is $eventInt" $fd
+
+       if {$eventInt == $ifevents} {
+          result_ok "Interface Parameter: Events $ifevents \
+                             exists. PASS"
+          set retVal 1
+        } else {
+          result_error "Interface Parameter: Events expected \
+                        $ifevents but got $eventInt. FAIL"
+        }
+    }
+
+    if { $multicastforward != "" } {
+       set result [snmpGet -session $session \
+                           -oid ospfIfMulticastForwarding.$ipaddr.0]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set typeVal [snmpUtilGetVal inttext $result]
+       snmpDebug LOG "$func Multicast capability for interface $ipaddr \
+                      is $typeVal" $fd
+
+       if { [string compare [string tolower $typeVal] \
+                          [string tolower $multicastforward]] == 0 } {
+          result_ok "Interface Parameter: Multicasts are $multicastforward \
+                     exists. PASS"
+          set retVal 1
+       } else {
+          result_error "Interface Parameter: Multicasts expected is \
+                        $multicastforward but got $typeVal. FAIL"
+       }
+    }
+
+    if { $ifdemand != "" } {
+       set result [snmpGet -session $session -oid ospfIfDemand.$ipaddr.0]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set typeVal [snmpUtilGetVal inttext $result]
+       snmpDebug LOG "$func Interface Demand extensions for interface $ipaddr \
+                      is $typeVal" $fd
+
+       if { [string compare [string tolower $typeVal] \
+                          [string tolower $ifdemand]] == 0 } {
+          result_ok "Interface Parameter: Demand OSPF is $ifdemand \
+                     exists. PASS"
+          set retVal 1
+       } else {
+          result_error "Interface Parameter: Demand OSPF expected is \
+                        $ifdemand but got $typeVal. FAIL"
+       }
+    }
+
+    report_end_test
+    snmpDebug DEBUG "$func - End\n" $fd
+    return $retVal
+}
+
+##########################################################################
+#  Procedure Name: snmpCheckOspfInterfaceMetricValues
+#  
+#  Description:
+#  This procedure checks the ospf cost parameters on particular interface.
+#
+#  Input Variables:
+#    session     - Session identifier which identifies the connection
+#                  with the DUT
+#    ipaddr      - Interface IP address 
+#
+#  Optional Args:
+#    cost        - Interface Cost 
+#    tos         - Type of service metric being referenced  
+#    fd          - File descriptor of open log file   
+#    comment     - Comments to be logged in log file
+# 
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    0 - On failure 
+#    1 - On success 
+#
+#  Possible Usage:
+#    snmpCheckOspfInterfaceMetricValues -session $sessionid 
+#                                       -ipaddr 100.1.1.1 -cost 10
+##########################################################################
+proc snmpCheckOspfInterfaceMetricValues { args } {
+    parse_args snmpCheckOspfInterfaceMetricValues $args {
+       session  ""
+       ipaddr   ""
+       cost     ""
+       tos      ""
+       fd       "NULL"
+       comment  "snmpCheckOspfInterfaceMetricValues"
+    }
+ 
+    set func "snmpCheckOspfInterfaceMetricValues:" 
+    set retVal 0
+
+    if { $session == "" || $ipaddr == "" } {
+       error "$func SNMP session id, interface address must be specified"
+       return $retVal
+    }   
+
+    snmpDebug DEBUG "session is $session, interface address is $ipaddr" $fd
+    result_debug "\n-- Checking OSPF Interface Metric Parameter: on $ipaddr --"
+
+    report_start_test "$comment"
+
+    if { $cost != "" } {
+       set result [snmpGet -session $session -oid ospfIfMetricValue.$ipaddr.0.0]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+   
+       set metric [snmpUtilGetVal int $result]
+       snmpDebug LOG "$func Cost for interface $ipaddr is $metric" $fd
+
+       if {$cost == $metric} {
+          result_ok "Interface Metric Parameter: Cost $cost exists. PASS"
+          set retVal 1
+        } else {
+          result_error "Interface Metric Parameter: Cost expected $cost but \
+                        got $metric. FAIL"
+        }
+    }
+
+    if { $tos != "" } {
+       set result [snmpGet -session $session -oid ospfIfMetricTOS.$ipaddr.0.0]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set tosVal [snmpUtilGetVal int $result]
+       snmpDebug LOG "$func TOS for interface $ipaddr is $tosVal" $fd
+
+       if {$tos == $tosVal} {
+          result_ok "Interface Metric Parameter: TOS $tos exists. PASS"
+          set retVal 1
+        } else {
+          result_error "Interface Metric Parameter: TOS expected $tos but \
+                        got $tosVal. FAIL"
+        }
+    }
+
+     report_end_test
+     snmpDebug DEBUG "$func - End\n" $fd
+     return $retVal
+}
+
+##############################################################################
+#  Procedure Name: snmpCheckOspfNeighborParameters
+#  
+#  Description: This procedure checks the ospf parameters on 
+#               particular interface.
+#
+#  Input Variables:
+#    session             - Session identifier which identifies the connection
+#                          with the DUT
+#    ipaddr              - Neighbor ip address 
+#    status              - If the value is "exist", the neighbor parameter 
+#                          must be exist. If "notexist", the neighbor 
+#                          parameters should notexist.
+#                          Default is "exist"
+#
+#  Optional Args:
+#    nbrstate            - Neighbor interface state 
+#                          down
+#                          attempt
+#                          init
+#                          twoWay
+#                          exchangeStart
+#                          exchange
+#                          loading
+#                          full
+#    routerid            - Neighbor router id 
+#    nbrpriority         - Priority of the neighbor in DR election algorithm  
+#    nbroptions          - Neighbor options field  
+#    nbrevents           - No. of times Neighbor relationship has changed state 
+#    nbrqueuelen         - Length of the retransmission queue 
+#    nbmanbrpermanence   - Status of the neighbor entry
+#                          dynamic
+#                          permanent 
+#    nbrhellosuppressed  - Hellos are being suppressed to the neighbor 
+#    fd                  - File descriptor of open log file   
+#    comment             - Comments to be logged in log file
+# 
+#  Output Variables: 
+#     None.
+#
+#  Return Variables:
+#    0 - On failure 
+#    1 - On success 
+#
+#  Possible Usage:
+#    snmpCheckOspfNeighborParameters -session $sessionid -ipaddr 11.11.11.1 
+#                                    -nbrstate "loading" -routerid 22.22.22.1
+#                                    -nbmanbrpermanence "dynamic" 
+#                                    -nbrhellosuppressed "false"
+##############################################################################
+proc snmpCheckOspfNeighborParameters { args } {
+    parse_args snmpCheckOspfNeighborParameters $args {
+       session            ""
+       ipaddr             ""
+       nbrstate           ""
+       status             ""
+       routerid           ""
+       nbrpriority        ""
+       nbrevents          ""
+       nbroptions         ""
+       nbrqueuelen        ""
+       nbmanbrpermanence  ""
+       nbrhellosuppressed ""
+       fd                 "NULL"
+       comment            "snmpCheckOspfNeighborParameters"
+    }
+ 
+    set func "snmpCheckOspfNeighborParameters:" 
+    set retVal 0
+
+    if { $session == "" || $ipaddr == "" } {
+       error "$func SNMP session id, interface address must be specified"
+       return $retVal 
+    }   
+
+    if { $status != "" } {
+       set status [string tolower $status]
+       if { !([string compare "exist" $status] == 0  ||
+            [string compare "notexist" $status] == 0) } {
+          error "$func invalid argument should be either exist or notexist"
+          return $retVal
+       }
+    }
+
+    snmpDebug DEBUG "session is $session, neighbor interface address \
+                     is $ipaddr" $fd
+    result_debug "\n-- Checking OSPF Neighbor Parameters on $ipaddr --"
+
+    report_start_test "$comment"
+
+    if { $nbrstate != "" } {
+       set result [snmpGet -session $session -oid ospfNbrState.$ipaddr.0]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       if {[regexp -nocase ".*No Such Instance.*" $result]} {
+          if { $status == "exist" } {
+             result_error "Nbr Interface state $ipaddr doesn't \
+                           exist in the ospfNbrTable result. FAIL"
+          } else {
+             result_ok "Nbr interface state $ipaddr exist in the \
+                        ospfNbrTable result $status. PASS"
+             set retval 1
+          }
+       } else {
+          if { $status == "notexist" } {
+             result_error "Nbr Interface state $ipaddr doesn't \
+                           exist in the ospfNbrTable. FAIL"
+          } 
+
+          set stateVal [snmpUtilGetVal inttext $result]
+          snmpDebug LOG "$func Interface state for neighbor $ipaddr \
+                         is $stateVal" $fd
+
+          if { [string compare [string tolower $stateVal] \
+                             [string tolower $nbrstate]] == 0 } {
+             result_ok "Nbr Interface Parameter: Interface state is $nbrstate \
+                        exists. PASS"
+             set retVal 1
+          } else {
+             result_error "Nbr Interface Parameter: Interface state expected \
+                           is $nbrstate but got $stateVal. FAIL"
+          }
+       }
+    }
+
+    if { $routerid != "" } {
+       set result [snmpGet -session $session -oid ospfNbrRtrId.$ipaddr.0]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+   
+       set routerId [snmpUtilGetVal ipaddr $result]
+       snmpDebug LOG "$func RouterId for neighbor $ipaddr is $routerId" $fd
+
+       if { $routerId == $routerid } {
+          result_ok "Nbr Interface Parameter: RouterId $routerid exists. PASS"
+          set retVal 1
+       } else {
+          result_error "Nbr Interface Parameter: RouterId expected is \
+                        $routerid, but got $routerId. FAIL"
+       }
+    }
+
+    if { $nbrpriority != "" } {
+       set result [snmpGet -session $session -oid ospfNbrPriority.$ipaddr.0]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set nbrPri [snmpUtilGetVal int $result]
+       snmpDebug LOG "$func Priority for neighbor $ipaddr is $nbrPri" $fd
+
+       if { $nbrPri == $nbrpriority } {
+          result_ok "Nbr Interface Parameter: Priority $nbrpriority \
+                     exists. PASS"
+          set retVal 1
+       } else {
+          result_error "Nbr Interface Parameter: Priority expected is \
+                        $nbrpriority, but got $nbrPri. FAIL"
+       }
+    }
+
+    if { $nbroptions != "" } {
+       set result [snmpGet -session $session -oid ospfNbrOptions.$ipaddr.0]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set nbrOpt [snmpUtilGetVal int $result]
+       snmpDebug LOG "$func Options for neighbor $ipaddr is $nbrOpt" $fd
+
+       if { $nbrOpt == $nbroptions } {
+          result_ok "Nbr Interface Parameter: Options $nbroptions \
+                     exists. PASS"
+          set retVal 1
+       } else {
+          result_error "Nbr Interface Parameter: Options expected is \
+                        $nbroptions, but got $nbrOpt. FAIL"
+       }
+    }
+
+    if { $nbrevents != "" } {
+       set result [snmpGet -session $session -oid ospfNbrEvents.$ipaddr.0]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set nbrEvent [snmpUtilGetVal counter $result]
+       snmpDebug LOG "$func Events for neighbor $ipaddr is $nbrEvent" $fd
+
+       if { $nbrEvent == $nbrevents } {
+          result_ok "Nbr Interface Parameter: Events $nbrevents \
+                     exists. PASS"
+          set retVal 1
+       } else {
+          result_error "Nbr Interface Parameter: Events expected is \
+                        $nbrevents, but got $nbrEvent. FAIL"
+       }
+    }
+
+    if { $nbrqueuelen != "" } {
+       set result [snmpGet -session $session \
+                           -oid ospfNbrLsRetransQLen.$ipaddr.0]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set nbrLen [snmpUtilGetVal gauge $result]
+       snmpDebug LOG "$func LsReTransQLen for neighbor $ipaddr is $nbrLen" $fd
+
+       if { $nbrLen == $nbrqueuelen } {
+          result_ok "Nbr Interface Parameter: Retransmission queue\
+                     $nbrqueuelen exists. PASS"
+          set retVal 1
+       } else {
+          result_error "Nbr Interface Parameter: Retransmission queue \
+                        expected is $nbrqueuelen, but got $nbrLen. FAIL"
+       }
+    }
+
+    if { $nbmanbrpermanence != "" } {
+       set result [snmpGet -session $session \
+                           -oid ospfNbmaNbrPermanence.$ipaddr.0]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set nbmaVal [snmpUtilGetVal inttext $result]
+       snmpDebug LOG "$func Nbr Permanence for neighbor $ipaddr is $nbmaVal" $fd
+
+       if { [string compare [string tolower $nbmaVal] \
+                          [string tolower $nbmanbrpermanence]] == 0 } {
+          result_ok "Nbr Interface Parameter: Status of the entry \
+                     is $nbmanbrpermanence exists. PASS"
+          set retVal 1
+       } else {
+          result_error "Nbr Interface Parameter: Status of the entry expected \
+                        $nbmanbrpermanence but got $nbmaVal. FAIL"
+       }
+    }
+
+    if { $nbrhellosuppressed != "" } {
+       set result [snmpGet -session $session \
+                           -oid ospfNbrHelloSuppressed.$ipaddr.0]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set nbrVal [snmpUtilGetVal inttext $result]
+       snmpDebug LOG "$func Hello Suppression for neighbor $ipaddr \
+                      is $nbrVal" $fd
+
+       if { [string compare [string tolower $nbrVal] \
+                          [string tolower $nbrhellosuppressed]] == 0 } {
+          result_ok "Nbr Interface Parameter: Hellos are suppressed to \
+                     neighbor $nbrhellosuppressed exists. PASS"
+          set retVal 1
+       } else {
+          result_error "Nbr Interface Parameter: Hellos are suppressed to \
+                        neighbor expected $nbrhellosuppressed but \
+                        got $nbrVal. FAIL"
+       }
+    }
+
+    report_end_test
+    snmpDebug DEBUG "$func - End\n" $fd
+    return $retVal
+}
+
+####################################################################
+#  Procedure Name: snmpSetOspfTrap
+#
+#  Description:
+#    This procedure enables or disables specific OSPF traps
+#
+#  Input Variables:
+#    session     - Session identifier which identifies the connection
+#                  with the DUT
+#    trapno      - Trap number to enable or disable
+# 
+#                  Trap name (defined in OSPF MIB)   No
+#                  -------------------------------   --
+#                  All the below traps               0
+#                  ospfVirtIfStateChange             1
+#                  ospfNbrStateChange                2
+#                  ospfVirtNbrStateChange            3
+#                  ospfIfConfigError                 4
+#                  ospfVirtIfConfigError             5
+#                  ospfIfAuthFailure                 6
+#                  ospfVirtIfAuthFailure             7
+#                  ospfIfRxBadPacket                 8
+#                  ospfVirtIfRxBadPacket             9
+#                  ospfTxRetransmit                  10                         
+#                  ospfVirtIfTxRetransmit            11
+#                  ospfOriginateLsa                  12
+#                  ospfMaxAgeLsa                     13
+#                  ospfLsdbOverflow                  14
+#                  ospfLsdbApproachingOverflow       15
+#                  ospfIfStateChange                 16 
+#    
+#    status     - Enable or disable trap      
+#
+#  Optional Args:
+#    fd         - File descriptor of open log file
+#    comment    - Comments to be logged in log file
+#
+#  Output Variables:
+#     None.
+#
+#  Return Variables:
+#    0 - On failure
+#    1 - On success
+#
+#  Possible Usage:
+#    snmpSetOspfTrap -session $sessionid -trapno 5,7,8-10 \
+#                    -status "enable"
+######################################################################
+proc snmpSetOspfTrap { args } {
+    parse_args snmpSetOspfTrap $args {
+       session   ""
+       trapno    ""
+       status    "enable"
+       fd        "NULL"
+       comment   "snmpSetOspfTrap"
+    }
+
+    set func "snmpSetOspfTrap:"
+
+    if { $session == "" || $trapno  == "" } {
+       error "$func SNMP session id, trapnumber must be specified"
+       return 0
+    }
+
+    snmpDebug DEBUG "session is $session, trap no is $trapno" $fd
+    result_debug "\n-- Setting OSPF trap no. $trapno --"
+
+    if { $trapno != "0" } {
+       foreach args [split $trapno ","] {
+          set args [string trim $args]
+          if {[regexp "(.*)-(.*)" $args res1 res2 res3] == 1 } {
+             for {set i $res2} { $i <= $res3 } { incr i 1} {
+                lappend traps $i
+             }
+          } else {
+             lappend traps $args
+          }
+       }
+
+       set trapval 0
+       foreach trap $traps {
+          set trapval [expr $trapval | [expr 1 << $trap]]
+       }
+
+       set trapname [format "%08x" $trapval]
+       regexp -nocase {([0-9a-f][0-9a-f])([0-9a-f][0-9a-f])([0-9a-f][0-9a-f])([0-9a-f][0-9a-f])} $trapname a b c d e
+       set trapname "$b $c $d $e" 
+    } else {
+       if { [string compare [string tolower $status] "enable"] == 0 } {
+          set trapname "00 01 FF FE"
+       } else {
+          set trapname "00 00 00 00"
+       }
+    }
+
+    snmpDebug LOG "$func trap value is $trapname" $fd
+
+    set result [snmpSet -session $session -oid ospfSetTrap.0 -type x \
+                        -val $trapname]
+
+
+    snmpDebug DEBUG "$func - $result" $fd 
+
+    snmpDebug DEBUG "$func - End\n" $fd
+    return 1
+}
+
+
+#############################################################################
+#  Procedure Name: snmpCheckOspfGlobalParameters
+#  
+#  Description: This procedure checks the parameters apply globally
+#               to the router's OSPF process.
+#
+#  Input Variables:
+#    session           - Session identifier which identifies the connection
+#                        with the DUT
+#
+#  Optional Args:
+#    ipaddr            - Router ip interface address 
+#    status            - If the value is "exist", the router id must be
+#                        exist. If "notexist", the router id should not exist.
+#                        Default is "exist"
+#    ospfstate         - OSPF State 
+#                        enabled/disabled
+#    versionno         - OSPF version no. 
+#    abrstatus         - Router is an area border router
+#                        true/false
+#    asbrstatus        - Router is an autonomous system border router
+#                        true/false
+#    externallsacount  - No. of external lsas in Lsdb
+#    externallsacksum  - Sum of the LS checksum of external lsas in Lsdb
+#    tossupport        - Router's support for TOS routing
+#                        true/false
+#    originatenewlsas  - No. of new lsas that have been originated
+#    receivednewlsas   - No. of lsas received determined to be new instants
+#    extlsdblimit      - Max. no of non-default AS-external lsas stored in lsdb
+#    multicastextns    - Multicast forwarding is enabled
+#    overflowinterval  - No. of seconds after entering OverflowState, a router
+#                        will attempt to leave OverflowState
+#    demandextensions  - Router's support for demand routing
+#                        true/false
+#    fd                - File descriptor of open log file   
+#    comment           - Comments to be logged in log file
+# 
+#  Output Variables: 
+#     None.
+#
+#  Return Variables:
+#    0 - On failure 
+#    1 - On success 
+#
+#  Possible Usage:
+#    snmpCheckOspfGlobalParameters -session $sessionid -ipaddr 11.11.11.1
+#                                  -ospfstate "enabled" -bdrstatus "false"
+#                                  -externallsacount 5 -originatenewlsas 6 
+##############################################################################
+proc snmpCheckOspfGlobalParameters { args } {
+    parse_args snmpCheckOspfGlobalParameters $args {
+       session           ""
+       ipaddr            ""
+       status            ""
+       ospfstate         ""
+       versionno         ""
+       abrstatus         ""
+       asbrstatus        ""
+       externallsacount  ""
+       externallsacksum  ""
+       tossupport        ""
+       originatenewlsas  ""
+       receivednewlsas   ""
+       extlsdblimit      ""
+       multicastextns    ""
+       overflowinterval  ""
+       demandextensions  ""
+       fd                "NULL"
+       comment           "snmpCheckOspfGlobalParameters"
+    }
+ 
+    set func "snmpCheckOspfGlobalParameters:" 
+    set retVal 0
+
+    if { $session == "" } {
+       error "$func SNMP session id must be specified"
+       return $retVal 
+    }   
+
+    snmpDebug DEBUG "session is $session" $fd
+    result_debug "\n-- Checking OSPF global parameters --"
+
+    report_start_test "$comment"
+
+    if { $ipaddr != "" && $status != "" } {
+       set result [snmpGet -session $session -oid ospfRouterId.0]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+   
+       set routerId [snmpUtilGetVal ipaddr $result]
+       snmpDebug LOG "$func RouterId of the switch is $routerId" $fd
+
+       if { $routerId != $ipaddr } {
+           if { [string tolower $status] == "exist" } {
+              result_error "Router Id expected $ipaddr but got $routerId. FAIL"
+           } else {
+              result_ok "Router Id $ipaddr does not exists. PASS"
+              set retVal 1
+           }
+       } else {
+           if { [string tolower $status] == "notexist" } {
+              result_error "Router Id expected $ipaddr but got $routerId. FAIL"
+           } else {
+              result_ok  "Router Id $ipaddr exists. PASS"
+              set retVal 1
+           }
+       }
+    }
+
+    if { $ospfstate != "" } {
+       set result [snmpGet -session $session -oid ospfAdminStat.0]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set stateVal [snmpUtilGetVal inttext $result]
+       snmpDebug LOG "$func OSPF state in the switch is $stateVal" $fd
+
+       if { [string compare [string tolower $stateVal] \
+                          [string tolower $ospfstate]] == 0 } {
+          result_ok "OSPF state is $ospfstate exists. PASS"
+          set retVal 1
+       } else {
+          result_error "OSPF state expected is $ospfstate but \
+                        got $stateVal. FAIL"
+       }
+    }
+
+    if { $versionno != "" } {
+       set result [snmpGet -session $session -oid ospfVersionNumber.0]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set verVal [snmpUtilGetVal inttext $result]
+       snmpDebug LOG "$func OSPF version no. in the switch is $verVal" $fd
+
+       if { [string compare [string tolower $verVal] \
+                          [string tolower $versionno]] == 0 } {
+          result_ok "Version no. is $versionno exists. PASS"
+          set retVal 1
+       } else {
+          result_error "Version no. expected is $versionno but \
+                        got $verVal. FAIL"
+       }
+    }
+
+    if { $abrstatus != "" } {
+       set result [snmpGet -session $session -oid ospfAreaBdrRtrStatus.0]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set statusVal [snmpUtilGetVal inttext $result]
+       snmpDebug LOG "$func ABR status in the switch is $statusVal" $fd
+
+       if { [string compare [string tolower $statusVal] \
+                          [string tolower $abrstatus]] == 0 } {
+          result_ok "Area BDR status is $abrstatus exists. PASS"
+          set retVal 1
+       } else {
+          result_error "Area BDR status expected is $abrstatus but \
+                        got $statusVal. FAIL"
+       }
+    }
+
+    if { $asbrstatus != "" } {
+       set result [snmpGet -session $session -oid ospfASBdrRtrStatus.0]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set statusVal [snmpUtilGetVal inttext $result]
+       snmpDebug LOG "$func ASBR status in the switch is $statusVal" $fd
+
+       if { [string compare [string tolower $statusVal] \
+                          [string tolower $asbrstatus]] == 0 } {
+          result_ok "AS BDR status is $asbrstatus exists. PASS"
+          set retVal 1
+       } else {
+          result_error "AS BDR status expected is $asbrstatus but \
+                        got $statusVal. FAIL"
+       }
+    }
+
+    if { $externallsacount != "" } {
+       set result [snmpGet -session $session -oid ospfExternLsaCount.0]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set count [snmpUtilGetVal gauge $result]
+       snmpDebug LOG "$func No.of AS-external lsas in the switch is $count" $fd
+
+       if {$count == $externallsacount} {
+          result_ok "External LSA count is $externallsacount exists. PASS"
+          set retVal 1
+        } else {
+          result_error "External LSA count expected $externallsacount but \
+                        got $count. FAIL"
+        }
+    }
+
+    if { $externallsacksum != "" } {
+       set result [snmpGet -session $session -oid ospfExternLsaCksumSum.0]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set count [snmpUtilGetVal int $result]
+       snmpDebug LOG "$func AS-external lsas ChkSum in the switch is $count" $fd
+
+       if {$count == $externallsacksum} {
+          result_ok "External LSA cksum is $externallsacksum exists. PASS"
+          set retVal 1
+        } else {
+          result_error "External LSA cksum expected $externallsacksum but \
+                        got $count. FAIL"
+        }
+    }
+
+    if { $tossupport != "" } {
+       set result [snmpGet -session $session -oid ospfTOSSupport.0]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set statusVal [snmpUtilGetVal inttext $result]
+       snmpDebug LOG "$func TOS support in the switch is $statusVal" $fd
+
+       if { [string compare [string tolower $statusVal] \
+                          [string tolower $tossupport]] == 0 } {
+          result_ok "TOS support $tossupport exists. PASS"
+          set retVal 1
+       } else {
+          result_error "TOS support expected is $tossupport but \
+                        got $statusVal. FAIL"
+       }
+    }
+
+    if { $originatenewlsas != "" } {
+       set result [snmpGet -session $session -oid ospfOriginateNewLsas.0]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set count [snmpUtilGetVal counter $result]
+       snmpDebug LOG "$func No.of newly originated lsas in the switch \
+                      is $count" $fd
+
+       if {$count == $originatenewlsas} {
+          result_ok "No. of newly originated LSAs $originatenewlsas \
+                     exists. PASS"
+          set retVal 1
+        } else {
+          result_error "No. of newly originated LSAs expected \
+                        $originatenewlsas but got $count. FAIL"
+        }
+    }
+
+    if { $receivednewlsas != "" } {
+       set result [snmpGet -session $session -oid ospfRxNewLsas.0]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set count [snmpUtilGetVal counter $result]
+       snmpDebug LOG "$func No.of newly received lsas in the switch \
+                      is $count" $fd
+
+       if {$count == $receivednewlsas} {
+          result_ok "No. of newly received LSAs $receivednewlsas \
+                     exists. PASS"
+          set retVal 1
+        } else {
+          result_error "No. of newly received LSAs expected \
+                        $receivednewlsas but got $count. FAIL"
+        }
+    }
+
+    if { $extlsdblimit != "" } {
+       set result [snmpGet -session $session -oid ospfExtLsdbLimit.0]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set count [snmpUtilGetVal int $result]
+       snmpDebug LOG "$func Max. AS-external lsas limit in Lsdb in the switch \
+                      is $count" $fd
+
+       if {$count == $extlsdblimit} {
+          result_ok "Max. AS-external lsa limit in lsdb $extlsdblimit \
+                     exists. PASS"
+          set retVal 1
+        } else {
+          result_error "Max. AS-external lsa limit in lsdb expected \
+                        $extlsdblimit but got $count. FAIL"
+        }
+    }
+
+    if { $multicastextns != "" } {
+       set result [snmpGet -session $session -oid ospfMulticastExtensions.0]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set count [snmpUtilGetVal int $result]
+       snmpDebug LOG "$func Multicast extensions in the switch is $count" $fd
+
+       if {$count == $multicastextns} {
+          result_ok "Multicast extensions $multicastextns exists. PASS"
+          set retVal 1
+        } else {
+          result_error "Multicast extensions expected $multicastextns but \
+                        got $count. FAIL"
+        }
+    }
+
+    if { $overflowinterval != "" } {
+       set result [snmpGet -session $session -oid ospfExitOverflowInterval.0]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set count [snmpUtilGetVal int $result]
+       snmpDebug LOG "$func OverFlow Interval in the switch is $count" $fd
+
+       if {$count == $overflowinterval} {
+          result_ok "OverFlowInterval $overflowinterval exists. PASS"
+          set retVal 1
+        } else {
+          result_error "OverFlowInterval expected $overflowinterval but \
+                        got $count. FAIL"
+        }
+    }
+
+
+    if { $demandextensions != "" } {
+       set result [snmpGet -session $session -oid ospfDemandExtensions.0]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set statusVal [snmpUtilGetVal inttext $result]
+       snmpDebug LOG "$func Demand extensions in the switch is $statusVal" $fd
+
+       if { [string compare [string tolower $statusVal] \
+                          [string tolower $demandextensions]] == 0 } {
+          result_ok "Demand extension is $demandextensions exists. PASS"
+          set retVal 1
+       } else {
+          result_error "Demand extension expected is $demandextensions but \
+                        got $statusVal. FAIL"
+       }
+    }
+
+    report_end_test
+    snmpDebug DEBUG "$func - End\n" $fd
+    return $retVal
+}
+
+##############################################################################
+#  Procedure Name: snmpCheckOspfAreaParameters
+#  
+#  Description: This procedure checks the ospf area parameters.
+#
+#  Input Variables:
+#    session          - Session identifier which identifies the connection
+#                       with the DUT
+#    areaid           - Area id 
+#
+#  Optional Args:
+#    status           - If the value is "exist", the area id must be
+#                       exist. If "notexist", the area id should not exist.
+#    authtype         - Authentication Type for an area
+#                       none - 0
+#                       simplePassword - 1
+#                       md5  - 2
+#    importasextern   - Area's support for importing AS external LSAs
+#                       importExternal - 1
+#                       importNoExternal - 2
+#                       importNssa - 3
+#    spfruns          - No. of times intra-area route table has been calculated
+#    abrcount         - No. of ABRs reachable within this area
+#    asbrcount        - No. of ASBRs reachable within this area
+#    lsacount         - No. of LSA in area LSDB excluding AS external LSAs
+#    lsacksum         - LSA cksum in area LSDB excluding AS external LSAs
+#    areasummary      - Importing of summary LSAs into stub areas
+#                       noAreaSummary - 1
+#                       sendAreaSummary - 2
+#    fd               - File descriptor of open log file   
+#    comment          - Comments to be logged in log file
+# 
+#  Output Variables: 
+#     None.
+#
+#  Return Variables:
+#    0 - On failure 
+#    1 - On success 
+#
+#  Possible Usage:
+#    snmpCheckOspfAreaParameters -session $sessionid -ipaddr 0.0.0.1
+#                                -authtype 0 -importasextern 1 -spfruns 4 
+#                                -areasummary 2
+###############################################################################
+proc snmpCheckOspfAreaParameters { args } {
+    parse_args snmpCheckOspfAreaParameters $args {
+       session         ""
+       areaid          ""
+       status          ""
+       authtype        ""
+       importasextern  ""
+       spfruns         ""
+       abrcount        ""
+       asbrcount       ""
+       lsacount        ""
+       lsacksum        ""
+       areasummary     ""
+       fd              "NULL"
+       comment         "snmpCheckOspfAreaParameters"
+    }
+ 
+    set func "snmpCheckOspfAreaParameters:" 
+    set retVal 0
+
+    if { $session == "" || $areaid == "" } {
+       error "$func SNMP session id, area id must be specified"
+       return $retVal 
+    }   
+
+    snmpDebug DEBUG "session is $session, area id is $areaid" $fd
+    result_debug "\n-- Checking OSPF Area Parameters with AreaId $areaid --"
+
+    report_start_test "$comment"
+
+    if { $status != "" } {
+       set status [string tolower $status]
+
+       set result [snmpGet -session $session -oid ospfAreaStatus.$areaid]
+       snmpDebug DEBUG "snmpGet-$result" $fd
+   
+      if {[regexp -nocase ".*No Such Instance.*" $result]} {
+         if { $status == "exist" } {
+            result_error "Area Id $areaid doesn't exist in the \
+                          ospfAreaTable. FAIL"
+         } else {
+            result_ok "Area Id $areaid doesn't exist in the ospfAreaTable \
+                       result $status. PASS"
+            set retVal 1
+         }
+       } else {
+         if { $status == "notexist" } {
+            result_error "Area Id $areaid  exist in the ospfAreaTable \
+                          result $status. FAIL"
+         } else {
+           if {[regexp -nocase ".*active(1).*" $result]} {
+               result_ok "Area Id $areaid  exist in the ospfAreaTable \
+                          result $status. PASS"
+               set retVal 1
+           }
+         }
+       }
+    }
+
+    if { $authtype != "" } {
+       set result [snmpGet -session $session -oid ospfAuthType.$areaid]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set AuthType [snmpUtilGetVal int $result]
+       snmpDebug LOG "$func AuthType for area $areaid is $AuthType" $fd
+
+       if {$authtype == $AuthType} {
+          result_ok "Area Parameter: Authentication Type $authtype \
+                             exists. PASS"
+          set retVal 1
+        } else {
+          result_error "Area Parameter: Authentication Type expected \
+                        $authtype but got $AuthType. FAIL"
+        }
+    }
+
+    if { $importasextern != "" } {
+       set result [snmpGet -session $session -oid ospfImportAsExtern.$areaid]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set importVal [snmpUtilGetVal inttext $result]
+       snmpDebug LOG "$func Import AS-External lsas for area $areaid \
+                      is $importVal" $fd
+
+       if { [string compare [string tolower $importVal] \
+                          [string tolower $importasextern]] == 0 } {
+          result_ok "Area Parameter: Importing AS-External LSAs \
+                     $importasextern exists. PASS"
+          set retVal 1
+        } else {
+          result_error "Area Parameter: Importing AS-External LSAs expected \
+                        $importasextern but got $importVal. FAIL"
+        }
+    }
+
+    if { $spfruns != "" } {
+       set result [snmpGet -session $session -oid ospfSpfRuns.$areaid]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set spfVal [snmpUtilGetVal counter $result]
+       snmpDebug LOG "$func No.of SPF runs for area $areaid is $spfVal" $fd
+
+       if {$spfruns == $spfVal} {
+          result_ok "Area Parameter: No. of times intra-area router table \
+                     calculated $spfruns exists. PASS"
+          set retVal 1
+        } else {
+          result_error "Area Parameter: No. of times intra-area router table \
+                        calculated expected is $spfruns but got $spfVal. FAIL"
+        }
+    }
+
+    if { $abrcount != "" } {
+       set result [snmpGet -session $session -oid ospfAreaBdrRtrCount.$areaid]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set abrVal [snmpUtilGetVal gauge $result]
+       snmpDebug LOG "$func No.of ABR routers for area $areaid is $abrVal" $fd
+
+       if {$abrcount == $abrVal} {
+          result_ok "Area Parameter: No. of ABRs $abrcount exists. PASS"
+          set retVal 1
+        } else {
+          result_error "Area Parameter: No. of ABRs expected is $abrcount \
+                        but got $abrVal. FAIL"
+        }
+    }
+
+    if { $asbrcount != "" } {
+       set result [snmpGet -session $session -oid ospfAsBdrRtrCount.$areaid]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set asbrVal [snmpUtilGetVal gauge $result]
+       snmpDebug LOG "$func No.of ASBR routers for area $areaid is $asbrVal" $fd
+
+       if {$asbrcount == $asbrVal} {
+          result_ok "Area Parameter: No. of ASBRs $asbrcount exists. PASS"
+          set retVal 1
+        } else {
+          result_error "Area Parameter: No. of ASBRs expected is $asbrcount \
+                        but got $asbrVal. FAIL"
+        }
+    }
+
+    if { $lsacount != "" } {
+       set result [snmpGet -session $session -oid ospfAreaLsaCount.$areaid]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set lsaVal [snmpUtilGetVal gauge $result]
+       snmpDebug LOG "$func No.of Lsas in area $areaid is $lsaVal" $fd
+
+       if {$lsacount == $lsaVal} {
+          result_ok "Area Parameter: No. of LSAs $lsacount exists. PASS"
+          set retVal 1
+        } else {
+          result_error "Area Parameter: No. of LSAs expected is $lsacount \
+                        but got $lsaVal. FAIL"
+        }
+    }
+
+    if { $lsacksum != "" } {
+       set result [snmpGet -session $session -oid ospfAreaLsaCksumSum.$areaid]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set lsacVal [snmpUtilGetVal int $result]
+       snmpDebug LOG "$func Lsa ChkSum for area $areaid is $lsacVal" $fd
+
+       if {$lsacksum == $lsacVal} {
+          result_ok "Area Parameter: LS checksums $lsacksum exists. PASS"
+          set retVal 1
+        } else {
+          result_error "Area Parameter: LS checksums expected is $lsacksum \
+                        but got $lsacVal. FAIL"
+        }
+    }
+
+    if { $areasummary != "" } {
+       set result [snmpGet -session $session -oid ospfAreaSummary.$areaid]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set areaVal [snmpUtilGetVal inttext $result]
+       snmpDebug LOG "$func Summary lsas for area $areaid is $areaVal" $fd
+
+       if { [string compare [string tolower $areaVal] \
+                          [string tolower $areasummary]] == 0 } {
+          result_ok "Area Parameter: Import summary LSAs $areasummary \
+                     exists. PASS"
+          set retVal 1
+        } else {
+          result_error "Area Parameter: Import summary LSAs expected \
+                        is $areasummary but got $areaVal. FAIL"
+        }
+    }
+
+    report_end_test
+    snmpDebug DEBUG "$func - End\n" $fd
+    return $retVal
+}
+
+##############################################################################
+#  Procedure Name: snmpCheckOspfStubAreaParameters
+#  
+#  Description: This procedure checks the ospf stub area parameters.
+#
+#  Input Variables:
+#    session          - Session identifier which identifies the connection
+#                       with the DUT
+#    areaid           - Area id 
+#    tos              - TOS associated with the metric 
+#
+#  Optional Args:
+#    status           - If the value is "exist", the area id must be
+#                       exist. If "notexist", the area id should not exist.
+#    metric           - Metric value
+#    metrictype       - Type of metric 
+#    fd               - File descriptor of open log file   
+#    comment          - Comments to be logged in log file
+# 
+#  Output Variables: 
+#     None.
+#
+#  Return Variables:
+#    0 - On failure 
+#    1 - On success 
+#
+#  Possible Usage:
+#    snmpCheckOspfStubAreaParameters -session $sessionid -areaid 0.0.0.1
+#                                    -tos 0 -metric 1 -metrictype "ospfMetric" 
+###############################################################################
+proc snmpCheckOspfStubAreaParameters { args } {
+    parse_args snmpCheckOspfStubAreaParameters $args {
+       session         ""
+       areaid          ""
+       tos             ""
+       status          ""
+       metric          ""
+       metrictype      ""
+       fd              "NULL"
+       comment         "snmpCheckOspfStubAreaParameters"
+    }
+
+    set func "snmpCheckOspfStubAreaParameters:"
+    set retVal 0
+
+    if { $session == "" || $areaid == "" || $tos == "" } {
+       error "$func SNMP session id, area id and tos must be specified"
+       return $retVal
+    }
+
+    snmpDebug DEBUG "session is $session, area id $areaid, tos $tos" $fd
+    result_debug "\n-- Checking OSPF Stub Area Parameters for area $areaid --" 
+
+    report_start_test "$comment"
+
+    if { $metric != "" } {
+       set result [snmpGet -session $session -oid ospfStubMetric.$areaid.$tos]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set met [snmpUtilGetVal int $result]
+       snmpDebug LOG "$func Metric for Stub Area $areaid is $metric" $fd
+
+       if {$metric == $met} {
+          result_ok "Stub Area Parameter: Metric $metric exists. PASS"
+          set retVal 1
+        } else {
+          result_error "Stub Area Parameter: Metric expected $metric but \
+                        got $met. FAIL"
+        }
+    }
+
+    if { $metrictype != "" } {
+       set result [snmpGet -session $session \
+                           -oid ospfStubMetricType.$areaid.$tos]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set typeVal [snmpUtilGetVal inttext $result]
+       snmpDebug LOG "$func Metric Type for Stub Area $areaid is $typeVal" $fd
+
+       if { [string compare [string tolower $typeVal] \
+                          [string tolower $metrictype]] == 0 } {
+          result_ok "Stub Area Parameter: Metric type is $metrictype \
+                     exists. PASS"
+          set retVal 1
+       } else {
+          result_error "Stub Area Parameter: Metric type expected is \
+                        $metrictype but got $typeVal. FAIL"
+       }
+    }
+
+    if { $status != "" } {
+       set status [string tolower $status]
+
+       set result [snmpGet -session $session -oid ospfStubStatus.$areaid.$tos]
+       snmpDebug DEBUG "snmpGet-$result" $fd
+
+      if {[regexp -nocase ".*No Such Instance.*" $result]} {
+         if { $status == "exist" } {
+            result_error "Stub Area Id $areaid doesn't exist in the \
+                          ospfStubAreaTable. FAIL"
+         } else {
+            result_ok "Stub Area Id $areaid doesn't exist in the \
+                       ospfStubAreaTable result $status. PASS"
+            set retVal 1
+         }
+       } else {
+         if { $status == "notexist" } {
+            result_error "Stub Area Id $areaid  exist in the ospfStubAreaTable \
+                          result $status. FAIL"
+         } else {
+            if {[regexp -nocase ".*active(1).*" $result]} {
+               result_ok "Stub Area Id $areaid  exist in the ospfStubAreaTable \
+                          result $status. PASS"
+               set retVal 1
+            }
+         }
+       }
+    }
+
+    report_end_test
+    snmpDebug DEBUG "$func - End\n" $fd
+    return $retVal
+}
+
+##############################################################################
+#  Procedure Name: snmpCheckOspfAreaAggregateTable
+#
+#  Description: This procedure checks range of IP address specified by 
+#               an IP address/IP network mask pair.
+#
+#  Input Variables:
+#    session          - Session identifier which identifies the connection
+#                       with the DUT
+#    areaid           - Area id in which address aggregate is to be found
+#    lsdbtype         - Type of the address aggregate
+#                       summaryLink/nssaExternalLink
+#    subnet           - IP address of the net or subnet indicated in range
+#    mask             - Subnet mast that pertains to the net or subnet
+#
+#  Optional Args:
+#    status           - If the value is "exist", the area id must be
+#                       exist. If "notexist", the area id should not exist.
+#    effect           - Subnets being advertised/notadvertised at all outside
+#                       the area, 
+#                       advertiseMatching
+#                       doNotAdvertiseMatching
+#    fd               - File descriptor of open log file
+#    comment          - Comments to be logged in log file
+#
+#  Output Variables:
+#     None.
+#
+#  Return Variables:
+#    0 - On failure
+#    1 - On success
+#
+#  Possible Usage:
+#    snmpCheckOspfAreaAggregateTable -session $sessionid -areaid 0.0.0.1
+#                                    -lsdbtype "summaryLink" -subnet 10.1.1.0
+#                                    -mask 255.255.255.0 -status "exist"
+#                                    -effect "advertiseMatching" 
+###############################################################################
+proc snmpCheckOspfAreaAggregateTable { args } {
+    parse_args snmpCheckOspfAreaAggregateTable $args {
+       session         ""
+       areaid          ""
+       lsdbtype        ""
+       subnet          ""
+       mask            ""
+       status          ""
+       effect          ""
+       fd              "NULL"
+       comment         "snmpCheckOspfAreaAggregateTable"
+    }
+
+    set func "snmpCheckOspfAreaAggregateTable:"
+    set retVal 0
+
+    if { $session == "" || $areaid == "" || $lsdbtype == "" || $subnet == "" \
+                        || $mask == "" } {
+       error "$func SNMP session id, area id, lsdbtype, subnet and mask \
+               must be specified"
+       return $retVal
+    }
+
+    snmpDebug DEBUG "session is $session, area id $areaid, lsdbtype $lsdbtype \
+                     subnet $subnet, mask $mask" $fd
+    result_debug "\n-- Checking OSPF Area AggregateTable Entries --"
+
+    report_start_test "$comment"
+
+    set status [string tolower $status]
+
+    if { $status == "exist" && $effect != "" } {
+          set result [snmpGet -session $session \
+                   -oid ospfAreaAggregateEffect.$areaid.$lsdbtype.$subnet.$mask]
+          snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+          set typeVal [snmpUtilGetVal inttext $result]
+          snmpDebug LOG "$func Advertising type for $lsdbtype lsa \
+                         is $typeVal" $fd
+
+          if { [string compare [string tolower $typeVal] \
+                             [string tolower $effect]] == 0 } {
+             result_ok "Area Aggregate Table: Advertising type is $effect \
+                        exists. PASS"
+             set retVal 1
+          } else {
+             result_error "Area Aggregate Table: Advertising type expected is \
+                           $effect but got $typeVal. FAIL"
+          }
+    }
+
+    if { $status != "" } {
+       set result [snmpGet -session $session \
+                   -oid ospfAreaAggregateStatus.$areaid.$lsdbtype.$subnet.$mask]
+       snmpDebug DEBUG "snmpGet-$result" $fd
+
+      if {[regexp -nocase ".*No Such Instance.*" $result]} {
+         if { $status == "exist" } {
+            result_error "Area Id $areaid doesn't exist in the \
+                          ospfAreaAggregateTable. FAIL"
+         } else {
+            result_ok "Area Id $areaid doesn't exist in the \
+                       ospfAreaAggregateTable result $status. PASS"
+            set retVal 1
+         }
+       } else {
+         if { $status == "notexist" } {
+            result_error "Area Id $areaid  exist in the ospfAreaAggregateTable \
+                          result $status. FAIL"
+         } else {
+            result_ok "Area Id $areaid  exist in the ospfAreaAggregateTable \
+                       result $status. PASS"
+            set retVal 1
+          }
+       }
+    }
+
+    report_end_test
+    snmpDebug DEBUG "$func - End\n" $fd
+    return $retVal
+}
+
+##############################################################################
+#  Procedure Name: snmpCheckOspfLsdbTable
+#
+#  Description: This procedure checks the ospf linkstate database.
+#
+#  Input Variables:
+#    session          - Session identifier which identifies the connection
+#                       with the DUT
+#    areaid           - Area id
+#    lstype           - Possible values are
+#                       routerLink
+#                       networkLink
+#                       summaryLink
+#                       asSummaryLink
+#                       asExternalLink
+#                       multicastLink
+#                       nssaExternalLink
+#    lsid             - Link State ID contains either Router ID/ IP address
+#    lsrouterid       - Router ID 
+#
+#  Optional Args:
+#    lsdbsequence     - Sequence number
+#    lsage	      - Age of LSA
+#    lsdbcksum        - Checksum of the complete contents of LSA, except
+#                       the age
+#    lsdbadvertise    - Entire LSA, including its header
+#    fd               - File descriptor of open log file
+#    comment          - Comments to be logged in log file
+#
+#  Output Variables:
+#     None.
+#
+#  Return Variables:
+#    0 - On failure
+#    1 - On success
+#
+#  Possible Usage:
+#    snmpCheckOspfLsdbTable -session $sessionid -areaid 0.0.0.1
+#                           -lstype routerLink -lsid 11.11.11.1 
+#                           -lsrouterid 11.11.11.1 -lsage 78 
+###############################################################################
+proc snmpCheckOspfLsdbTable { args } {
+    parse_args snmpCheckOspfLsdbTable $args {
+       session         ""
+       areaid          ""
+       lstype          ""
+       lsid            ""
+       lsrouterid      ""
+       lsdbsequence    ""
+       lsage           ""
+       lsdbcksum       ""
+       lsdbadvertise   ""
+       fd              "NULL"
+       comment         "snmpCheckOspfLsdbTable"
+    }
+ 
+    set func "snmpCheckOspfLsdbTable:" 
+    set retVal 0
+
+    if { $session == "" || $areaid == "" || $lstype == "" || $lsid == "" \
+                        || $lsrouterid == ""} {
+       error "$func SNMP session id, area id, lstype, lsid, router id \
+               must be specified"
+       return $retVal 
+    }   
+
+    snmpDebug DEBUG "session id $session, area id $areaid, lstype $lstype \
+                     ls id $lsid, router id $lsrouterid" $fd
+    result_debug "\n-- Checking OSPF Lsdbtable Entries--"
+
+    report_start_test "$comment"
+
+    if { $lsdbsequence != "" } {
+       set lsdbsequence [format "%d" "$lsdbsequence"]
+       set result [snmpGet -session $session \
+                        -oid ospfLsdbSequence.$areaid.$lstype.$lsid.$lsrouterid]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set seqVal [snmpUtilGetVal negative $result]
+       snmpDebug LOG "$func Lsdb Sequence number for $lstype lsas with \
+                      routerid $lsrouterid is $seqVal" $fd
+
+       if {$lsdbsequence == $seqVal} {
+          result_ok "LsdbTable Entry: LS Sequence no. $lsdbsequence \
+                     exists. PASS"
+          set retVal 1
+        } else {
+          result_error "LsdbTable Entry: LS Sequence no. expected \
+                        is $lsdbsequence but got $seqVal. FAIL"
+        }
+    }
+
+    if { $lsage != "" } {
+       set result [snmpGet -session $session \
+                           -oid ospfLsdbAge.$areaid.$lstype.$lsid.$lsrouterid]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set ageVal [snmpUtilGetVal int $result]
+       snmpDebug LOG "$func LsAge for $lstype lsas with \
+                      routerid $lsrouterid is $ageVal" $fd
+
+       set val [expr $ageVal + 3]
+       if {$ageVal <= $val} {
+          result_ok "LsdbTable Entry: LS age $lsage exists. PASS"
+          set retVal 1
+        } else {
+          result_error "LsdbTable Entry: LS age expected is $lsage but \
+                        got $ageVal. FAIL"
+        }
+    }
+
+    if { $lsdbcksum != "" } {
+       set lsdbcksum [format "%d" "$lsdbcksum"]
+       set result [snmpGet -session $session \
+                        -oid ospfLsdbChecksum.$areaid.$lstype.$lsid.$lsrouterid]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set cksumVal [snmpUtilGetVal int $result]
+       snmpDebug LOG "$func LsCkSum for $lstype lsas with \
+                      routerid $lsrouterid is $cksumVal" $fd
+
+       if {$lsdbcksum == $cksumVal} {
+          result_ok "LsdbTable Entry: LSA checksum $lsdbcksum exists. PASS"
+          set retVal 1
+        } else {
+          result_error "LsdbTable Entry: LSA checksum expected \
+                        is $lsdbcksum but got $cksumVal. FAIL"
+        }
+    }
+
+    if { $lsdbadvertise == "" } {
+       set result [snmpGet -session $session \
+                   -oid ospfLsdbAdvertisement.$areaid.$lstype.$lsid.$lsrouterid]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set advVal [snmpUtilGetVal hex $result]
+       snmpDebug LOG "$func Lsdb Advertise for $lstype lsas with \
+                      routerid $lsrouterid is $advVal" $fd
+
+       if {$lsdbadvertise == $advVal} {
+          result_ok "LsdbTable Entry: LSA $lsdbadvertise exists. PASS"
+          set retVal 1
+        } else {
+          result_error "LsdbTable Entry: LSA expected \
+                        is $lsdbadvertise but got $advVal. FAIL"
+        }
+    }
+
+    report_end_test
+    snmpDebug DEBUG "$func - End\n" $fd
+    return $retVal
+}
+
+##############################################################################
+#  Procedure Name: snmpCheckOspfExtLsdbTable
+#
+#  Description: This procedure checks the ospf external linkstate database.
+#
+#  Input Variables:
+#    session          - Session identifier which identifies the connection
+#                       with the DUT
+#    lstype           - Type of LSA, asExternalLink
+#    lsid             - Link State ID contains either Router ID/ IP address
+#    lsrouterid       - Router ID
+#
+#  Optional Args:
+#    lsdbsequence     - Sequence number
+#    lsage            - Age of LSA
+#    lsdbcksum        - Checksum of the complete contents of LSA, except
+#                       the age
+#    lsdbadvertise    - Entire LSA, including its header
+#    fd               - File descriptor of open log file
+#    comment          - Comments to be logged in log file
+#
+#  Output Variables:
+#     None.
+#
+#  Return Variables:
+#    0 - On failure
+#    1 - On success
+#
+#  Possible Usage:
+#    snmpCheckOspfExtLsdbTable -session $sessionid -lstype asExternalLink
+#                              -lsid 11.11.11.1 -lsrouterid 11.22.22.1 
+#                              -lsage 89
+###############################################################################
+proc snmpCheckOspfExtLsdbTable { args } {
+    parse_args snmpCheckOspfExtLsdbTable $args {
+       session         ""
+       lstype          ""
+       lsid            ""
+       lsrouterid      ""
+       lsdbsequence    ""
+       lsage           ""
+       lsdbcksum       ""
+       lsdbadvertise   ""
+       fd              "NULL"
+       comment         "snmpCheckOspfExtLsdbTable"
+    }
+ 
+    set func "snmpCheckOspfExtLsdbTable:" 
+    set retVal 0
+
+    if { $session == "" || $lstype == "" || $lsid == "" || $lsrouterid == ""} {
+       error "$func SNMP session id, lstype, lsid, router id must be specified"
+       return $retVal 
+    }   
+
+    snmpDebug DEBUG "session id $session, lstype $lstype lsid $lsid, \
+                     routerid $lsrouterid" $fd
+    result_debug "\n-- Checking OSPF External Lsdbtable Entries--"
+
+    report_start_test "$comment"
+
+    if { $lsdbsequence != "" } {
+       set lsdbsequence [format "%d" "$lsdbsequence"]
+       set result [snmpGet -session $session \
+                           -oid ospfExtLsdbSequence.$lstype.$lsid.$lsrouterid]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set seqVal [snmpUtilGetVal negative $result]
+       snmpDebug LOG "$func Lsdb Sequence number for AS-External lsas with \
+                      routerid $lsrouterid is $seqVal" $fd
+
+       if {$lsdbsequence == $seqVal} {
+          result_ok "External LsdbTable Entry: LS Sequence no. $lsdbsequence \
+                     exists. PASS"
+          set retVal 1
+        } else {
+          result_error "External LsdbTable Entry: LS Sequence no. expected \
+                        is $lsdbsequence but got $seqVal. FAIL"
+        }
+    }
+
+    if { $lsage != "" } {
+       set result [snmpGet -session $session \
+                           -oid ospfExtLsdbAge.$lstype.$lsid.$lsrouterid]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set ageVal [snmpUtilGetVal int $result]
+       snmpDebug LOG "$func LsAge for AS-External lsas with \
+                      routerid $lsrouterid is $ageVal" $fd
+
+       set val [expr $ageVal + 3]
+       if {$ageVal <= $val} {
+          result_ok "External LsdbTable Entry: LS age $lsage exists. PASS"
+          set retVal 1
+        } else {
+          result_error "External LsdbTable Entry: LS age expected is $lsage \
+                        but got $ageVal. FAIL"
+        }
+    }
+
+    if { $lsdbcksum != "" } {
+       set lsdbcksum [format "%d" "$lsdbcksum"]
+       set result [snmpGet -session $session \
+                           -oid ospfExtLsdbChecksum.$lstype.$lsid.$lsrouterid]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set cksumVal [snmpUtilGetVal int $result]
+       snmpDebug LOG "$func Lsdb CheckSum for AS-External lsas with \
+                      routerid $lsrouterid is $cksumVal" $fd
+
+       if {$lsdbcksum == $cksumVal} {
+          result_ok "External LsdbTable Entry: LSA checksum $lsdbcksum \
+                     exists. PASS"
+          set retVal 1
+        } else {
+          result_error "External LsdbTable Entry: LSA checksum expected \
+                        is $lsdbcksum but got $cksumVal. FAIL"
+        }
+    }
+
+    if { $lsdbadvertise == "" } {
+       set result [snmpGet -session $session \
+                        -oid ospfExtLsdbAdvertisement.$lstype.$lsid.$lsrouterid]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set advVal [snmpUtilGetVal hex $result]
+       snmpDebug LOG "$func Lsdb Advertise type for AS-External lsas with \
+                      routerid $lsrouterid is $advVal" $fd
+
+       if {$lsdbadvertise == $advVal} {
+          result_ok "External LsdbTable Entry: LSA $lsdbadvertise exists. PASS"
+          set retVal 1
+        } else {
+          result_error "External LsdbTable Entry: LSA expected \
+                        is $lsdbadvertise but got $advVal. FAIL"
+        }
+    }
+
+    report_end_test
+    snmpDebug DEBUG "$func - End\n" $fd
+    return $retVal
+}
+
+##############################################################################
+#  Procedure Name: snmpCheckOspfVirtualIfTable
+#
+#  Description: This procedure checks the ospf virtual interface parameters
+#
+#  Input Variables:
+#    session          - Session identifier which identifies the connection
+#                       with the DUT
+#    areaid           - Transit area that the virtual link traverses
+#    nbrid            - RouterId of the virtual neighbor
+#
+#  Optional Args:
+#    transitdelay     - Time in seconds it takes to transit LSUpdate pkt
+#    retransinterval  - No. of seconds between lsa retransmissions
+#    hellointerval    - HelloInterval in seconds
+#    rtrdeadinterval  - Router DeadInterval in seconds
+#    state            - Virtual interface state
+#                       down
+#                       pointToPoint
+#    events           - No. of times state changes on this virtual link
+#    authkey          - Authentication key value
+#    authtype         - Authentication type
+#                       none
+#                       simplePassword
+#                       md5
+#    fd               - File descriptor of open log file
+#    comment          - Comments to be logged in log file
+#
+#  Output Variables:
+#     None.
+#
+#  Return Variables:
+#    0 - On failure
+#    1 - On success
+#
+#  Possible Usage:
+#    snmpCheckOspfVirtualIfTable -session $sessionid -areaid 0.0.0.1
+#                                -nbrid 10.0.0.1 -transitdelay 11
+#                                -hellointerval 10 -state down 
+###############################################################################
+proc snmpCheckOspfVirtualIfTable { args } {
+    parse_args snmpCheckOspfVirtualIfTable $args {
+       session         ""
+       areaid          ""
+       nbrid           ""
+       transitdelay    ""
+       retransinterval ""
+       hellointerval   ""
+       rtrdeadinterval ""
+       state           ""
+       events          ""
+       authkey         ""
+       authtype        ""
+       fd              "NULL"
+       comment         "snmpCheckOspfVirtualIfTable"
+    }
+ 
+    set func "snmpCheckOspfVirtualIfTable:" 
+    set retVal 0
+
+    if { $session == "" || $areaid == "" || $nbrid == ""} {
+       error "$func SNMP sessionid, areaid, nbrid must be specified"
+       return $retVal 
+    }   
+
+    snmpDebug DEBUG "sessionid $session, areaid $areaid, nbrid $nbrid" $fd
+    result_debug "\n-- Checking OSPF Virtual interface parameters in \
+                       area $areaid on neighbor interface $nbrid --"
+
+    report_start_test "$comment"
+
+    if { $transitdelay != "" } {
+       set result [snmpGet -session $session \
+                           -oid ospfVirtIfTransitDelay.$areaid.$nbrid]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set delay [snmpUtilGetVal int $result]
+       snmpDebug LOG "$func Transit delay on virtual interface $nbrid \
+                      is $delay" $fd
+
+       if {$delay == $transitdelay} {
+          result_ok "Virtual Interface Parameter: Transit delay $transitdelay \
+                     exists. PASS"
+          set retVal 1
+        } else {
+          result_error "Virtual Interface Parameter: Transit delay expected \
+                        $transitdelay but got $delay. FAIL"
+        }
+    }
+    if { $retransinterval != "" } {
+       set result [snmpGet -session $session \
+                           -oid ospfVirtIfRetransInterval.$areaid.$nbrid]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set retransInterval [snmpUtilGetVal int $result]
+       snmpDebug LOG "$func ReTransit delay on virtual interface $nbrid \
+                      is $retransInterval" $fd
+
+       if {$retransInterval == $retransinterval} {
+          result_ok "Virtual Interface Parameter: Retransmit Interval \
+                     $retransinterval exists. PASS"
+          set retVal 1
+        } else {
+          result_error "Virtual Interface Parameter: Retransmit Interval \
+                        expected $retransinterval but got $retransInterval.FAIL"
+        }
+    }
+
+    if { $hellointerval != "" } {
+       set result [snmpGet -session $session \
+                           -oid ospfVirtIfHelloInterval.$areaid.$nbrid]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set interval [snmpUtilGetVal int $result]
+       snmpDebug LOG "$func Hello Interval on virtual interface $nbrid \
+                      is $interval" $fd
+
+       if {$interval == $hellointerval} {
+          result_ok "Virtual Interface Parameter: HelloInterval \
+                     $hellointerval exists. PASS"
+          set retVal 1
+        } else {
+          result_error "Virtual Interface Parameter: HelloInterval expected \
+                        $hellointerval but got $interval. FAIL"
+        }
+    }
+
+    if { $rtrdeadinterval != "" } {
+       set result [snmpGet -session $session \
+                           -oid ospfVirtIfRtrDeadInterval.$areaid.$nbrid]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set deadInterval [snmpUtilGetVal int $result]
+       snmpDebug LOG "$func Router DeadInterval on virtual interface $nbrid \
+                      is $deadInterval" $fd
+
+       if {$deadInterval == $rtrdeadinterval} {
+          result_ok "Virtual Interface Parameter: Rtrdeadinterval \
+                    $rtrdeadinterval exists. PASS"
+          set retVal 1
+        } else {
+          result_error "Virtual Interface Parameter: Rtrdeadinterval expected \
+                        $rtrdeadinterval but got $deadInterval. FAIL"
+        }
+    }
+
+    if { $state != "" } {
+       set result [snmpGet -session $session \
+                           -oid ospfVirtIfState.$areaid.$nbrid]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set stateVal [snmpUtilGetVal inttext $result]
+       snmpDebug LOG "$func IfState on virtual interface $nbrid \
+                      is $stateVal" $fd
+
+       if { [string compare [string tolower $stateVal] \
+                          [string tolower $state]] == 0 } {
+          result_ok "Virtual Interface Parameter: Interface state is $state \
+                     exists. PASS"
+          set retVal 1
+       } else {
+          result_error "Virtual Interface Parameter: Interface state \
+                        expected is $state but got $stateVal. FAIL"
+       }
+    }
+
+    if { $events != "" } {
+       set result [snmpGet -session $session \
+                           -oid ospfVirtIfEvents.$areaid.$nbrid]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set eventInt [snmpUtilGetVal counter $result]
+       snmpDebug LOG "$func IfEvents on virtual interface $nbrid \
+                      is $eventInt" $fd
+
+       if {$eventInt == $events} {
+          result_ok "Virtual Interface Parameter: Events $events \
+                             exists. PASS"
+          set retVal 1
+        } else {
+          result_error "Virtual Interface Parameter: Events expected \
+                        $events but got $eventInt. FAIL"
+        }
+    }
+
+    if { $authkey != "" } {
+       # always returns NULL string
+       set result [snmpGet -session $session \
+                           -oid ospfVirtIfAuthKey.$areaid.$nbrid]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set AuthKeyValue [snmpUtilGetVal hex $result]
+       snmpDebug LOG "$func AuthKey Value on virtual interface $nbrid \
+                      is $AuthKeyValue" $fd
+
+       if {$AuthKeyValue == $authkey} {
+          result_ok "Virtual Interface Parameter: Authentication key \
+                     value $authkey exists. PASS"
+          set retVal 1
+        } else {
+          result_error "Virtual Interface Parameter: Authentication key \
+                        value expected $authkey but got $AuthKeyValue. FAIL"
+       }
+    }
+
+    if { $authtype != "" } {
+       set result [snmpGet -session $session \
+                           -oid ospfVirtIfAuthType.$areaid.$nbrid]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set AuthType [snmpUtilGetVal int $result]
+       snmpDebug LOG "$func AuthType on virtual interface $nbrid \
+                      is $AuthType" $fd
+
+       if {$authtype == $AuthType} {
+          result_ok "Virtual Interface Parameter: Authentication \
+                     Type $authtype exists. PASS"
+          set retVal 1
+        } else {
+          result_error "Virtual Interface Parameter: Authentication \
+                        Type expected $authtype but got $AuthType. FAIL"
+        }
+    }
+
+    report_end_test
+    snmpDebug DEBUG "$func - End\n" $fd
+    return $retVal
+}
+
+##############################################################################
+#  Procedure Name: snmpCheckOspfVirtualNbrTable
+#
+#  Description: This procedure checks the ospf virtual neighbor parameters
+#
+#  Input Variables:
+#    session          - Session identifier which identifies the connection
+#                       with the DUT
+#    areaid           - Transit area that the virtual link traverses
+#    nbrid            - RouterId of the virtual neighbor
+#
+#  Optional Args:
+#    nbripaddr        - IP address this virtual neighbor is using
+#    nbroptions       - Neighbor options field  
+#    nbrstate         - State of virtual neighbor 
+#                       down
+#                       attempt
+#                       init
+#                       twoWay
+#                       exchangeStart
+#                       exchange
+#                       loading
+#                       full
+#    nbrevents        - No. of times state changes on this virtual link
+#    nbrqueuelen      - Length of the retransmission queue 
+#    nbrhellosuppress - Hellos are being suppressed to the neighbor 
+#    fd               - File descriptor of open log file
+#    comment          - Comments to be logged in log file
+#
+#  Output Variables:
+#     None.
+#
+#  Return Variables:
+#    0 - On failure
+#    1 - On success
+#
+#  Possible Usage:
+#    snmpCheckOspfVirtualNbrTable -session $sessionid -areaid 0.0.0.1
+#                                 -nbrid 10.0.0.1 -nbripaddr 11.11.11.1
+#                                 -nbroptions 0 -nbrstate full 
+###############################################################################
+proc snmpCheckOspfVirtualNbrTable { args } {
+    parse_args snmpCheckOspfVirtualNbrTable $args {
+       session          ""
+       areaid           ""
+       nbrid            ""
+       nbripaddr        ""
+       nbroptions       ""
+       nbrstate         ""
+       nbrevents        ""
+       nbrqueuelen      ""
+       nbrhellosuppress ""
+       fd               "NULL"
+       comment          "snmpCheckOspfVirtualNbrTable"
+    }
+ 
+    set func "snmpCheckOspfVirtualNbrTable:" 
+    set retVal 0
+
+    if { $session == "" || $areaid == "" || $nbrid == ""} {
+       error "$func SNMP sessionid, areaid, nbrid must be specified"
+       return $retVal 
+    }   
+
+    snmpDebug DEBUG "sessionid $session, areaid $areaid, nbrid $nbrid" $fd
+    result_debug "\n-- Checking OSPF Virtual neighbor parameters for \
+                       area $areaid, virtual neighbor ipaddress $nbrid --"
+
+    report_start_test "$comment"
+
+    if { $nbripaddr != "" } {
+       set result [snmpGet -session $session \
+                           -oid ospfVirtNbrIpAddr.$areaid.$nbrid]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set ip [snmpUtilGetVal ipaddr $result]
+       snmpDebug LOG "$func neigbor ipaddress for virtual interface $nbrid \
+                      is $ip" $fd
+
+       if {$ip == $nbripaddr} {
+          result_ok "Virtual Neighbor Parameter: Neighbor ipaddress $nbripaddr \
+                     exists. PASS"
+          set retVal 1
+        } else {
+          result_error "Virtual Neighbor Parameter: Neighbor ipaddress \
+                        expected $nbripaddr but got $ip. FAIL"
+        }
+    }
+
+    if { $nbroptions != "" } {
+       set result [snmpGet -session $session \
+                           -oid ospfVirtNbrOptions.$areaid.$nbrid]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set options [snmpUtilGetVal int $result]
+       snmpDebug LOG "$func neigbor options for virtual interface $nbrid \
+                      is $options" $fd
+
+       if {$options == $nbroptions} {
+          result_ok "Virtual Neighbor Parameter: Neighbor options $nbroptions \
+                     exists. PASS"
+          set retVal 1
+        } else {
+          result_error "Virtual Neighbor Parameter: Neighbor options \
+                        expected $nbroptions but got $options. FAIL"
+        }
+    }
+
+    if { $nbrstate != "" } {
+       set result [snmpGet -session $session \
+                           -oid ospfVirtNbrState.$areaid.$nbrid]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set stateVal [snmpUtilGetVal inttext $result]
+       snmpDebug LOG "$func neigbor state for virtual interface $nbrid \
+                      is $stateVal" $fd
+
+       if { [string compare [string tolower $stateVal] \
+                          [string tolower $nbrstate]] == 0 } {
+          result_ok "Virtual Neighbor Parameter: Neighbor state $nbrstate \
+                     exists. PASS"
+          set retVal 1
+        } else {
+          result_error "Virtual Neighbor Parameter: Neighbor state \
+                        expected $nbrstate but got $stateVal. FAIL"
+        }
+    }
+
+    if { $nbrevents != "" } {
+       set result [snmpGet -session $session \
+                           -oid ospfVirtNbrEvents.$areaid.$nbrid]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set events [snmpUtilGetVal counter $result]
+       snmpDebug LOG "$func neigbor events for virtual interface $nbrid \
+                      is $events" $fd
+
+       if {$events == $nbrevents} {
+          result_ok "Virtual Neighbor Parameter: Neighbor events $nbrevents \
+                     exists. PASS"
+          set retVal 1
+        } else {
+          result_error "Virtual Neighbor Parameter: Neighbor events \
+                        expected $nbrevents but got $events. FAIL"
+        }
+    }
+
+    if { $nbrqueuelen != "" } {
+       set result [snmpGet -session $session \
+                           -oid ospfVirtNbrLsRetransQLen.$areaid.$nbrid]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set queuelen [snmpUtilGetVal gauge $result]
+       snmpDebug LOG "$func neigbor LsRetransQLen for virtual \
+                      interface $nbrid is $queuelen" $fd
+
+       if {$queuelen == $nbrqueuelen} {
+          result_ok "Virtual Neighbor Parameter: Neighbor retransmission \
+                     queue len $nbrqueuelen exists. PASS"
+          set retVal 1
+        } else {
+          result_error "Virtual Neighbor Parameter: Neighbor retransmission \
+                        queue len expected $nbrqueuelen but got $queuelen. FAIL"
+        }
+    }
+
+    if { $nbrhellosuppress != "" } {
+       set result [snmpGet -session $session \
+                           -oid ospfVirtNbrHelloSuppressed.$areaid.$nbrid]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set hellosuppress [snmpUtilGetVal int $result]
+       snmpDebug LOG "$func neigbor hello suppression for virtual \
+                      interface $nbrid is $hellosuppress" $fd
+
+       if {$hellosuppress == $nbrhellosuppress} {
+          result_ok "Virtual Neighbor Parameter: Neighbor hello suppressed \
+                    $nbrhellosuppress exists. PASS"
+          set retVal 1
+        } else {
+          result_error "Virtual Neighbor Parameter: Neighbor hello suppressed \
+                        expected $nbrhellosuppress but got $hellosuppress. FAIL"
+        }
+    }
+
+    report_end_test
+    snmpDebug DEBUG "$func - End\n" $fd
+    return $retVal
+}
+
+########################################################################
+#  Procedure Name: snmpSetupCommonVlan
+#
+#  Description: ospf topology specific proc that is used to setup a
+#               common ospf vlan setup
+#
+#  Input Variables:
+#    session     - Session identifier which identifies the connection
+#                  with the DUT
+#    vlan1ip     - Vlan1 IP address
+#    vlan2ip     - Vlan2 IP address
+#    vlanarea    - Vlan Area Id
+#    dutid       - Dut ID
+#    status      - Enable/Disable ospf
+#
+#  Optional Args:
+#     fd         - File descriptor of open log file
+#    comment     - Comments to be logged in log file
+#
+#  Output Variables:
+#     list of vlan ids.
+#
+#  Return Variables:
+#    0 - On failure
+#    1 - On success
+#
+#  Possible Usage:
+#    snmpSetupCommonVlan -session $sessionid -vlan1ip $DUT1vlan1IP
+#                        -vlan2ip $DUT1vlan2IP -vlanarea $vlanArea -dutid 1
+############################################################################
+proc snmpSetupCommonVlan { args } {
+    parse_args snmpSetupCommonVlan $args {
+       session   ""
+       vlan1ip   ""
+       vlan2ip   ""
+       vlanarea  ""
+       dutid     ""
+       status    ""
+       fd        "NULL"
+       comment   "snmpSetupCommonVlan"
+    }
+
+    set func "snmpSetupCommonVlan:"
+
+    if { $session == "" || $vlan1ip == "" || $vlan2ip == "" \
+         || $vlanarea == "" || $dutid == "" } {
+       error "$func SNMP session id, vlan1ip, vlan2ip, vlanarea and \
+              dutid must be specified"
+       return 0
+    }
+
+    snmpDebug DEBUG "Session is $session, Vlan1IP is $vlan1ip, Vlan2IP \
+                    is $vlan2ip, Area is $vlanarea, DutId is $dutid" $fd
+
+    result_debug "\n-- Setup a common OSPF VLAN configuration \
+                   VLAN1 IP: $vlan1ip, VLAN2 IP: $vlan2ip, \
+                   VLAN Area: $vlanarea, DUT ID: $dutid --"
+
+    snmpChangeIpForwarding -session $session -status "enable" -fd $fd
+    set vlan1_id [snmpCreateVlan -session $session -name "vlan1" -fd $fd]
+    snmpAssignIPAddrToVlan -session $session -vlanid $vlan1_id -addr $vlan1ip \
+               -mask "255.255.255.0" -fd $fd
+    snmpChangeIpForwarding -session $session -status "enable" \
+                           -vlanid $vlan1_id -fd $fd
+    snmpAddPortToVlan -session $session -vlanid $vlan1_id \
+                      -port [GetATrunkPort $dutid 0] -fd $fd
+
+    lappend vlanlist "$vlan1_id"
+
+    SendACmd        "create ospf area $vlanarea"
+    set vlan2_id [snmpCreateVlan -session $session -name "vlan2" -fd $fd]
+    snmpAssignIPAddrToVlan -session $session -vlanid $vlan2_id -addr $vlan2ip \
+               -mask "255.255.255.0" -fd $fd
+    snmpChangeIpForwarding -session $session -status "enable" \
+                           -vlanid $vlan2_id -fd $fd
+    snmpAddPortToVlan -session $session -vlanid $vlan2_id \
+                      -port [MapDUTPortId [expr $dutid * 2] $dutid] -fd $fd
+
+    lappend vlanlist "$vlan2_id"
+
+    switch [GetVersion "DUT$dutid" ] {
+       4 {
+          SendACmd  "configure ospf add vlan vlan1"
+          SendACmd  "configure ospf vlan vlan1 area $vlanarea"
+          SendACmd  "configure ospf add vlan vlan2"
+          SendACmd  "configure ospf vlan vlan2 area $vlanarea" }
+       6 -
+       default {
+          SendACmd  "configure ospf add vlan vlan1 area $vlanarea"
+          SendACmd  "configure ospf add vlan vlan2 area $vlanarea" }
+    }
+    if { $status == "enable" } {
+       SendACmd "enable ospf"
+    } elseif { $status == "disable" } {
+       SendACmd "disable ospf"
+    } else {
+       result_error "$func SNMP status $status must be specified"
+    }
+
+    snmpDebug DEBUG "$func - End\n" $fd
+    return $vlanlist
+}
+
+####################################################################
+#  Procedure Name: snmpCleanupCommonVlan
+#
+#  Description: ospf topology specific proc that is used to cleanup
+#               the configuration performed by snmpSetupCommonVlan
+#
+#  Input Variables:
+#    session     - Session identifier which identifies the connection
+#                  with the DUT
+#    vlanid      - List of vlanid's returned from snmpSetupCommonVlan
+#    vlanarea    - Vlan Area Id
+#    dutid       - Dut ID
+#
+#  Optional Args:
+#    fd          - File descriptor of open log file
+#    comment     - Comments to be logged in log file
+#
+#  Output Variables:
+#     None.
+#
+#  Return Variables:
+#    0 - On failure
+#    1 - On success
+#
+#  Possible Usage:
+#    snmpCleanupCommonVlan -session $sessionid -vlanid $vlanList
+#                          -vlanarea $vlanArea -dutid 1
+#######################################################################
+proc snmpCleanupCommonVlan { args } {
+    parse_args snmpCleanupCommonVlan $args {
+       session   ""
+       vlanid    ""
+       vlanarea  ""
+       dutid     ""
+       fd        "NULL"
+       comment   "snmpCleanupCommonVlan"
+    }
+
+    set func "snmpCleanupCommonVlan:"
+
+    if { $session == "" || $vlanid == "" || $vlanarea == "" || $dutid == ""} {
+       error "$func SNMP session id, vlanid, vlanarea, dutid must be specified"
+    }
+
+    snmpDebug DEBUG "Session is $session, Area is $vlanarea, \
+                     DutId is $dutid" $fd
+
+    result_debug "\n-- Cleanup the configuration performed by \
+                    snmpSetupCommonVlan procedure --"
+
+    snmpDelPortFromVlan -session $session -vlanid [lindex $vlanid 0]\
+                     -port [GetATrunkPort $dutid 0] -fd $fd
+    snmpDelPortFromVlan -session $session -vlanid [lindex $vlanid 1]\
+                     -port [MapDUTPortId [expr $dutid * 2] $dutid] -fd $fd
+
+    snmpDelIPAddrFromVlan -session $session -vlanid [lindex $vlanid 0] -fd $fd
+    snmpDelIPAddrFromVlan -session $session -vlanid [lindex $vlanid 1] -fd $fd
+
+    snmpDeleteVlan -session $session -vlanid [lindex $vlanid 0] -fd $fd
+    snmpDeleteVlan -session $session -vlanid [lindex $vlanid 1] -fd $fd
+
+    SendACmd        "disable ospf"
+    SendACmd        "delete ospf area $vlanarea"
+
+    snmpDebug DEBUG "$func - End\n" $fd
+}
+
+##########################################################################
+# Procedure Name: snmpSetupSingleOSPFVlan
+#
+# Description: Ospf topology specific proc that is used to setup a 
+#              single ospf vlan for a given area.
+#
+#  Input Variables:
+#    session     - Session identifier which identifies the connection
+#                  with the DUT
+#    vlanip      - Vlan1 IP address
+#    vlanarea    - Vlan Area Id
+#    ports       - List of ports
+#    dutid       - Dut number
+#    vlanname    - Vlan name
+#    enableospf  - Enable/Disable OSPF in particular DUT
+#    tag         - Tagged vlan 
+#
+#  Optional Args:
+#     fd         - File descriptor of open log file
+#    comment     - Comments to be logged in log file
+#
+#  Output Variables:
+#     list of vlan ids.
+#
+#  Return Variables:
+#    0 - On failure
+#    1 - On success
+#
+#  Possible Usage:
+#    snmpSetupSingleOSPFVlan -session $sessionid -vlanip 100.101.10.1 
+#                            -vlanarea 0.0.0.0 -ports [MapDUTPortId 1] 
+#                            -dutid 1 -vlanname "vlan1"
+##########################################################################
+proc snmpSetupSingleOSPFVlan { args } {
+    parse_args snmpSetupSingleOSPFVlan $args {
+       session     ""
+       vlanip      ""
+       vlanarea    ""
+       ports       ""
+       dutid       ""
+       vlanname    ""
+       enableospf  "true"
+       tag         ""
+       fd          "NULL"
+       comment     "snmpSetupSingleOSPFVlan"
+    }
+
+    set func "snmpSetupSingleOSPFVlan:"
+    set retVal 0
+
+    if { $session == "" || $vlanip == "" || $ports == "" || $dutid == "" \
+                        || $vlanarea == "" || $vlanname == ""} {
+       error "$func SNMP session id, vlanip, ports, vlanarea and dutid must \
+              be specified"
+       return $retVal
+    }
+
+    snmpDebug DEBUG "Session is $session, VlanIp is $vlanip, Ports \
+                    is $ports, Area is $vlanarea, DutId is $dutid" $fd
+
+    result_debug "\n-- Setup a single OSPF VLAN configuration \
+                   VLAN IP: $vlanip, ports : $ports, \
+                   VLAN Area: $vlanarea, DUT ID: $dutid --"
+
+    SendACmd "disable ospf"
+    snmpChangeIpForwarding -session $session -status "enable" -fd $fd
+    set vlan_id [snmpCreateVlan -session $session -name $vlanname -fd $fd]
+    snmpAssignIPAddrToVlan -session $session -vlanid $vlan_id -addr $vlanip \
+                           -mask "255.255.255.0" -fd $fd
+
+    if { $tag == "" } {
+       snmpAddPortToVlan -session $session -vlanid $vlan_id -port $ports -fd $fd
+    } else {
+       set tag_id [snmpCreateTag -session $session -tagid $tag -fd $fd]
+       snmpAddPortToVlan -session $session -vlanid $vlan_id \
+                         -port $ports -tagid $tag_id -fd $fd
+    }
+
+    snmpChangeIpForwarding -session $session -status "enable" \
+                           -vlanid $vlan_id -fd $fd
+
+    if { $vlanarea != "0.0.0.0" } { 
+       SendACmd "create ospf area $vlanarea" 
+    }
+
+    switch [GetVersion "DUT$dutid" ] {
+       4 {
+          SendACmd  "configure ospf add vlan $vlanname"
+          SendACmd  "configure ospf vlan $vlanname area $vlanarea" }
+       6 -
+       default {
+          SendACmd  "configure ospf add vlan $vlanname area $vlanarea" }
+    }
+
+    if { $enableospf == "true" } {
+      SendACmd "enable ospf"
+    } elseif { $enableospf == "false" } {
+      SendACmd "disable ospf"
+    }
+
+    snmpDebug DEBUG "$func - End\n" $fd
+    return $vlan_id
+}
+
+####################################################################
+#  Procedure Name: snmpCleanupSingleOSPFVlan
+#
+#  Description: ospf topology specific proc that is used to cleanup 
+#               single ospf vlan cinfiguration for a given area. 
+#               opposite of SetupSingleOSPFVlan
+#
+#  Input Variables:
+#    session     - Session identifier which identifies the connection
+#                  with the DUT
+#    vlanid      - Vlanid's returned from snmpSetupSingleOSPFVlan
+#    vlanarea    - Vlan Area Id
+#    ports       - List of ports
+#
+#  Optional Args:
+#    fd          - File descriptor of open log file
+#    comment     - Comments to be logged in log file
+#
+#  Output Variables:
+#     None.
+#
+#  Return Variables:
+#    0 - On failure
+#    1 - On success
+#
+#  Possible Usage:
+#    snmpCleanupSingleOSPFVlan -session $sessionid -vlanid $vlanList
+#                              -vlanarea $vlanArea 
+#######################################################################
+proc snmpCleanupSingleOSPFVlan { args } {
+    parse_args snmpCleanupSingleOSPFVlan $args {
+       session   ""
+       vlanid    ""
+       vlanarea  ""
+       ports     ""
+       fd        "NULL"
+       comment   "snmpCleanupSingleOSPFVlan"
+    }
+
+    set func "snmpCleanupSingleOSPFVlan:"
+
+    if { $session == "" || $vlanid == "" || $vlanarea == "" || $ports == "" } {
+       error "$func SNMP sessionid,vlanid,vlanarea and ports must be specified"
+    }
+
+    snmpDebug DEBUG "session is $session, area is $vlanarea" $fd
+    result_debug "\n-- Cleanup the configuration performed by \
+                       snmpSetupSingleOSPFVlan procedure --"
+
+    snmpDelPortFromVlan -session $session -vlanid $vlanid -port $ports -fd $fd
+    snmpDelIPAddrFromVlan -session $session -vlanid $vlanid  -fd $fd
+
+    snmpDeleteVlan -session $session -vlanid $vlanid -fd $fd
+
+    SendACmd        "disable ospf"
+    if { $vlanarea != "0.0.0.0" } {
+       SendACmd  "delete ospf area $vlanarea"
+    }
+
+    snmpDebug DEBUG "$func - End\n" $fd
+}
+
+##########################################################################
+# Procedure Name: snmpSetupSingleOSPFVlanP2P
+#
+# Description: Ospf pointToPoint topology specific proc that is used to 
+#              setup a single pointToPoint ospf vlan for a given area.
+#
+#  Input Variables:
+#    session     - Session identifier which identifies the connection
+#                  with the DUT
+#    vlanip      - Vlan1 IP address
+#    vlanarea    - Vlan Area Id
+#    ports       - List of ports
+#    dutid       - Dut number
+#    vlanname    - Vlan name
+#    enableospf  - Enable/Disable OSPF in particular DUT
+#    tag         - Tagged vlan
+#
+#  Optional Args:
+#     fd         - File descriptor of open log file
+#    comment     - Comments to be logged in log file
+#
+#  Output Variables:
+#     list of vlan ids.
+#
+#  Return Variables:
+#    0 - On failure
+#    1 - On success
+#
+#  Possible Usage:
+#    snmpSetupSingleOSPFVlanP2P -session $sessionid -vlanip 100.101.10.1
+#                               -vlanarea 0.0.0.0 -ports [MapDUTPortId 1]
+#                               -dutid 1 -vlanname "vlan1"
+##########################################################################
+proc snmpSetupSingleOSPFVlanP2P { args } {
+    parse_args snmpSetupSingleOSPFVlanP2P $args {
+       session     ""
+       vlanip      ""
+       vlanarea    ""
+       ports       ""
+       dutid       ""
+       vlanname    ""
+       enableospf  "true"
+       tag         ""
+       fd          "NULL"
+       comment     "snmpSetupSingleOSPFVlanP2P"
+    }
+
+    set func "snmpSetupSingleOSPFVlanP2P:"
+    set retVal 0
+
+    if { $session == "" || $vlanip == "" || $ports == "" || $dutid == "" \
+                        || $vlanarea == "" || $vlanname == ""} {
+       error "$func SNMP session id, vlanip, ports, vlanarea and dutid must \
+              be specified"
+       return $retVal
+    }
+
+    snmpDebug DEBUG "Session is $session, VlanIp is $vlanip, Ports \
+                    is $ports, Area is $vlanarea, DutId is $dutid" $fd
+
+    result_debug "\n-- Setup a single OSPF VLAN P2P configuration \
+                       VLAN IP: $vlanip, ports :$ports, VLAN Area: $vlanarea, \
+                       DUT ID: $dutid --"
+
+    SendACmd "disable ospf"
+    snmpChangeIpForwarding -session $session -status "enable" -fd $fd
+    set vlan_id [snmpCreateVlan -session $session -name $vlanname -fd $fd]
+    snmpAssignIPAddrToVlan -session $session -vlanid $vlan_id -addr $vlanip \
+                           -mask "255.255.255.0" -fd $fd
+
+    if { $tag == "" } {
+       snmpAddPortToVlan -session $session -vlanid $vlan_id -port $ports -fd $fd
+    } else {
+       set tag_id [snmpCreateTag -session $session -tagid $tag -fd $fd]
+       snmpAddPortToVlan -session $session -vlanid $vlan_id \
+                         -port $ports -tagid $tag_id -fd $fd
+    }
+
+    snmpChangeIpForwarding -session $session -status "enable" \
+                           -vlanid $vlan_id -fd $fd
+
+    if { $vlanarea != "0.0.0.0" } {
+       SendACmd "create ospf area $vlanarea"
+    }
+
+    SendACmd  "configure ospf add vlan $vlanname area $vlanarea link point"
+
+    if { $enableospf == "true" } {
+      SendACmd "enable ospf"
+    }
+
+    snmpDebug DEBUG "$func - End\n" $fd
+    return $vlan_id
+}
+
+##########################################################################
+# Procedure Name: SendOspfPacket
+#
+# Description: Build and Send a malformed OSPF Packet.
+#
+#  Input Variables:
+#    txPortId      - Transmitting port number
+#    sourceMac     - Source MAC address
+#    destMac       - Destination MAC address
+#    sourceIp      - Source IP address
+#    destIp        - Destination IP address
+#    ttl           - TTL value
+#    numFrames     - Number of Frames
+#    tag           - Tagged vlan
+#    dataPattern   - Data pattern to be sent
+#    ipTotalLength - IP total length
+#    packetType    - Packet type
+#                    01-Hello
+#                    02-DD
+#                    03-LsUpdate
+#                    04-LsReq
+#                    05-LsAck
+#                 
+#  Optional Args:
+#     fd         - File descriptor of open log file
+#    comment     - Comments to be logged in log file
+#
+#  Output Variables:
+#     list of vlan ids.
+#
+#  Return Variables:
+#    0 - On failure
+#    1 - On success
+#
+#  Possible Usage:
+#    SendOspfPacket -txPortId 2 -sourceIp "11.11.11.2" -numFrames 1 \
+#                   -ipTotalLength 48 -packettype 02
+##########################################################################
+proc SendOspfPacket {args} {
+   parse_args SendOspfPacket $args {
+     txPortId     "1"
+     sourceMac    "default"
+     destMac      "01 00 5E 00 00 05"
+     sourceIp     "127.0.0.1"
+     destIp       "224.0.0.5"
+     ttl          "255"
+     numFrames    "1"
+     tag          "none"
+     dataPattern  "03 01 00 30 14 24 0B 35 0B 0B 0B 00 AF 28 00 00 00 00 00 00 00 00 00 00 FF FF FF 00 00 0A 02 01 00 00 00 28 0B 0B 0B 02 00 00 00 00 01 01 00 00"
+     ipTotalLength 20
+     packetType    01
+     fd            "NULL"
+     comment       "SendOspfPacket"
+   }
+
+   set func "SendOspfPacket:"
+
+   snmpDebug DEBUG "txPort is $txPortId" $fd
+   result_debug "\n-- Sending OSPF Packet from port $txPortId --"
+
+   result_debug "Host ($sourceIp) sending a Ospf \
+                  message ([lindex $dataPattern 1]) on portId $txPortId"   
+
+   set numIxiaCd [GetNumIxiaCd $txPortId]
+   set rxPo [MapIxiaPortId $txPortId chasisId card port]
+   if {$tag != "none" } { set wTag "true" } else {set wTag "false" }
+   global startCardNum
+
+   set dataPattern "03 $packetType 00 30 14 24 0B 35 0B 0B 0B 00 AF 28 00 00 00 00 00 00 00 00 00 00 FF FF FF 00 00 0A 02 01 00 00 00 28 0B 0B 0B 02 00 00 00 00 01 01 00 00"
+
+   set frameSize [expr 38 + [llength $dataPattern] ]
+   result_debug "FrameSize: $frameSize"
+   set frameSent [ixiaConf_2Ports_ip -numIxiaCd $numIxiaCd -txChas $chasisId \
+                                     -txCard $card -txPort $port \
+                                     -rxChas $chasisId -rxCard $card \
+                                     -rxPort $rxPo -ipProtocol "89" \
+                                     -sMacAddr $sourceMac -dMacAddr $destMac \
+                                     -sIpAddr $sourceIp -dIpAddr $destIp \
+                                     -ttl $ttl -TOS "0xC0" \
+                                     -ipTotalLength $ipTotalLength \
+	                             -numFrames $numFrames -wTag $wTag \
+                                     -tagNo $tag  -dataPattern $dataPattern \
+                                     -frameSize $frameSize]  
+
+   result_debug "OspfFrame: $frameSent"
+   snmpDebug DEBUG "$func - End\n" $fd
+   return $frameSent
+}

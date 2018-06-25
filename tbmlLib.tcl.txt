@@ -1,0 +1,656 @@
+proc CreateTBML {args} {
+
+    parse_args CreateTBML $args {
+        cfg "NULL"
+        path "NULL"
+        homeDir "NULL"
+    }
+
+set tbmlhead "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+<tbml xmlns:xs=\"http://www.w3.org/2001/XMLSchema\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xsi:schemaLocation=\"http://www.teslaalliance.org/trs/tbml/1.0/tbml-core.xsd\" xmlns=\"http://www.teslaalliance.org/trs/tbml/1.0\">\n\
+  <header>\n\
+    <name></name>\n\
+    <description></description>\n\
+    <property name=\"dateModified\">2014-05-22T22:25:26.844-04:00</property>\n        \
+    <property name=\"creationTool\" vendor=\"com.fnfr\">com.fnfr.itest.topology.tbml.diagram</property>\n        \
+    <property name=\"creationToolVersion\" vendor=\"com.fnfr\">4.3.0.71664</property>\n        \
+    <property name=\"switchPort2DefaultRouter\" vendor=\"Extreme\">@switchPort2DefaultRouter@</property>\n        \
+    <property name=\"numDUT\" vendor=\"Extreme\">@numDUT@</property>\n        \
+    <property name=\"ETCL_ID\" vendor=\"Extreme\">@ETCL_ID@</property>\n        \
+    <property name=\"defaultRouter\" vendor=\"Extreme\">@defaultRouter@</property>\n        \
+    <property name=\"startCardNum\" vendor=\"Extreme\">@startCardNum@</property>\n        \
+    <property name=\"checkConnection\" vendor=\"Extreme\">@checkConnection@</property>\n        \
+    <property name=\"connectionTimeout\" vendor=\"Extreme\">@connectionTimeout@</property>\n        \
+    <property name=\"InBandNetworkV4GW\" vendor=\"Extreme\">@InBandNetworkV4GW@</property>\n        \
+    <property name=\"InBandNetworkV4Mask\" vendor=\"Extreme\">@InBandNetworkV4Mask@</property>\n        \
+    <property name=\"InBandNetworkV6Mask\" vendor=\"Extreme\">@InBandNetworkV6Mask@</property>\n        \
+    <property name=\"lab\" vendor=\"Extreme\">@lab@</property>\n        \
+    <property name=\"phyMode\" vendor=\"Extreme\">@phyMode@</property>\n\
+  </header>\n\
+  <body>\n";
+
+set tbmlFoot "  </body>\n\
+  <illustration>\n\
+    <layer/>\n\
+  </illustration>\n\
+</tbml>\n";
+
+set resourcesTop "    <resources>";
+set resourcesBottom "    </resources>";
+set resourceBottom "    </resource>";
+set linkTop "    <connectivity>";
+set linkBottom "    </connectivity>"
+
+# Variables for Switches kept in DUTs_info... Loop through to sub vars
+set diList {"imageSel" "imageBooted" "version" "connectType" \
+   "VERSION" "priImage" "secImage" "platform" "sysMAC" "bootROM" \
+   "relMaster" "verTime" "serial" "hwList" "hwListFM" "numSlots" \
+   "numSlotsFM" "HardwareType" "bladeType" "dlReqD" "sysName" "sysType" \
+   "sVVersion" "snmpVersion" "license" "memoryCard" "mpls_license" \
+   "bgp" "openflow_license" "ssh_license" "advancededge_core" "advancedcore_edge" \
+   "advancededge_advancedcore" "core_advancedcore" "edge_advancededge" "edge_core" \
+   "trill_license" "40_100_optics_license" "avb_license" \
+   "remark" "connect" "ip" "defaultblade" "setup"}
+
+set tbmlSwitchHead_O "      <resource guid=\"db4a221c-dc20-4e09-964f-534e99db164b\" id=\"@res_id@\" type=\"switch\">\n        \
+        <boundary height=\"45\" width=\"50\" x=\"@x@\" y=\"@y@\"/>\n        \
+        <property name=\"iconURI\">platform:/plugin/com.fnfr.itest.topology.tbml.edit/icons/full/topology/switch_32.gif</property>\n        \
+        <property name=\"name\">@DUT@</property>\n        \
+        <property name=\"InBandNetworkV4IP\" vendor=\"Extreme\">@InBandNetworkV4IP@</property>\n        \
+        <property name=\"InBandNetworkBlade\" vendor=\"Extreme\">@InBandNetworkBlade@</property>\n        \
+        <property name=\"InBandNetworkPort\" vendor=\"Extreme\">@InBandNetworkPort@</property>\n        \
+        <property name=\"InBandNetworkMask\" vendor=\"Extreme\">@InBandNetworkMask@</property>\n        \
+        <property name=\"DefaultBlade\" vendor=\"Extreme\">@DefaultBlade@</property>\n        \
+        <property name=\"MASK\" vendor=\"Extreme\">@MASK@</property>\n        \
+        <property name=\"SETUP\" vendor=\"Extreme\">@SETUP@</property>\n        \
+        <property name=\"POWERCYCLE_DUT\" vendor=\"Extreme\">@POWERCYCLE_DUT@</property>\n        \
+        <property name=\"switchPort2DefaultRouter\" vendor=\"Extreme\">@switchPort2DefaultRouter@</property>\n        \
+        <property name=\"MGMT_GW\" vendor=\"Extreme\">@MGMT_GW@</property>\n        \
+        <property name=\"InBandNetworkV6IP\" vendor=\"Extreme\">@InBandNetworkV6IP@</property>"
+
+set tbmlConnTop_0 "       <extensions namespace=\"com.fnfr.itest.session\" type=\"com.fnfr.itest.session\">"
+set tbmlConnBottom_0 "       </extensions>"
+
+set tbmlConn_0 "          <session baseSessionProfile=\"\" name=\"@CONNECT@\" provider=\"com.fnfr\">\n            \
+            <sessionProfile version=\"4.3.0.71664\">\n               \
+              <baseApplication>com.fnfr.svt.applications.telnet</baseApplication>\n                  \
+              <sessionProperties type=\"com.fnfr.svt.applications.telnet.documents.TelnetSessionProperties\">\n                   \
+                <ipAddress inherit=\"false\">@CONNECTIP@</ipAddress>\n                   \
+                <port inherit=\"false\">@CONNECTPORT@</port>\n                 \
+              </sessionProperties>\n                 \
+              <baseProfile>project://common_project/session_profiles/extr.ffsp</baseProfile>\n                 \
+              <standalone>false</standalone>\n             \
+            </sessionProfile>\n            \
+          </session>          "
+
+set tbmlSSHConn_0 "          <session baseSessionProfile=\"\" name=\"mgmt_network_ssh\" provider=\"com.fnfr\">\n            \
+            <sessionProfile version=\"4.3.0.71664\">\n              \
+              <baseApplication>com.fnfr.svt.applications.ssh</baseApplication>\n              \
+              <sessionProperties type=\"com.fnfr.svt.applications.ssh.documents.SSHProperties\">\n              \
+                <ipAddress inherit=\"false\">@CONNECTIP@</ipAddress>\n            \
+                <user inherit=\"false\">admin</user>\n             \
+              </sessionProperties>\n              \
+              <baseProfile>project://common_project/session_profiles/extr_ssh.ffsp</baseProfile>\n           \
+              <standalone>false</standalone>\n     \
+            </sessionProfile>\n          \
+          </session>"
+
+set tbmlPort_0 "       <resource guid=\"6256833a-4500-45df-a3d8-9d819a7d30c4\" id=\"@res_id@\" type=\"port\">\n          \
+          <property name=\"name\">@portName@</property>\n          \
+          <property name=\"portMapping\" vendor=\"Extreme\">@portNum@</property>\n      \
+        </resource>"
+
+set tbmlHubHead_0 "      <resource guid=\"db4a22ac-dc20-4e09-964f-534e99db164b\" id=\"@res_id@\" type=\"@type@\">\n        \
+        <boundary height=\"45\" width=\"50\" x=\"@x@\" y=\"@y@\"/>\n        \
+        <property name=\"iconURI\">platform:/plugin/com.fnfr.itest.topology.tbml.edit/icons/full/topology/switch_32.gif</property>\n        \
+        <property name=\"name\">@DUT@</property>       "
+
+set tbmlIxia "      <resource guid=\"4f1cf57d-c88e-424b-9b0a-d3e9cfd26376\" id=\"resource_0\" type=\"trafficgen\">\n        \
+        <boundary height=\"50\" width=\"781\" x=\"152\" y=\"32\"/>\n        \
+        <property name=\"iconURI\">platform:/plugin/com.fnfr.itest.topology.tbml.edit/icons/full/topology/Traffic-Generator_32.gif</property>\n        \
+        <property name=\"name\">trafficgen1</property>\n        \
+        <property name=\"ixiaPath\" vendor=\"Extreme\">@ixiaPath@</property>\n        \
+        <property name=\"phyMode\" vendor=\"Extreme\">@phyMode@</property>\n          \
+        <extensions namespace=\"com.fnfr.itest.session\" type=\"com.fnfr.itest.session\">\n\
+          <session baseSessionProfile=\"\" name=\"ixiaTraffic\" provider=\"com.fnfr\">\n            \
+            <sessionProfile version=\"4.3.0.71664\">\n            \
+              <baseApplication>com.fnfr.svt.applications.ixiaTraffic</baseApplication>\n              \
+              <sessionProperties type=\"com.fnfr.svt.applications.ixtraffic.ixTrafficSessionPropertyGroup\">\n                \
+                <tclProperties>\n                    \
+                  <interpreterLocation defaultValue=\"\" inherit=\"false\"/>\n                        \
+                  <interpreterLibraryPath defaultValue=\"\" inherit=\"false\"/>\n                    \
+                </tclProperties>\n                    \
+                <chassisIpAddress inherit=\"false\">@ixiaCh1@</chassisIpAddress>\n                    \
+                <IxOSLocation inherit=\"false\">C:\\\\Program Files\\\\Ixia</IxOSLocation>\n                    \
+                <sessionCards inherit=\"false\">1 2 3</sessionCards>\n                    \
+                <automaticPortLock inherit=\"false\">false</automaticPortLock>\n                \
+              </sessionProperties>\n            \
+            </sessionProfile>\n        \
+          </session>\n        \
+          <session baseSessionProfile=\"\" name=\"ntaf\" provider=\"com.fnfr\">\n          \
+            <sessionProfile version=\"4.3.0.71664\">\n          \
+              <baseApplication>http://spirent.com/ntaf/harness/extreme/0.2</baseApplication>\n          \
+              <sessionProperties NodeId=\"@ntafHost@/unspecified\" NodeId.inherit=\"false\" action=\"open\" harness=\"http://spirent.com/ntaf/harness/extreme/0.2\" harnessName=\"Extreme NTAF provider\" toolId=\"standalone\" toolId.inherit=\"false\" type=\"com.fnfr.itest.adapter.automation.ntaf.common.documents.NtafOpenTransferableObject\"/>\n          \
+              <baseProfile>project://common_project/session_profiles/ntaf.ffsp</baseProfile>\n          \
+              <standalone>false</standalone>\n        \
+            </sessionProfile>\n        \
+          </session>\n      \
+        </extensions>";
+
+set link_0 "      <link id=\"link_@c@\">\n        \
+        <property name=\"type\">ethernet</property>\n        \
+        <property name=\"name\">ethernet@c@</property>\n        \
+        <endpoint id=\"@res1@\"/>\n        \
+        <endpoint id=\"@res2@\"/>\n        \
+      </link>";
+
+set tbmlServer "      <resource guid=\"4f1cf57d-c88e-424b-9b0a-d3e9cfd26376\" id=\"resource_30\" type=\"server\">\n        \
+        <boundary height=\"60\" width=\"60\" x=\"12\" y=\"12\"/>\n        \
+        <property name=\"iconURI\">platform:/plugin/com.fnfr.itest.topology.tbml.edit/icons/full/topology/server_32.gif</property>\n        \
+        <property name=\"name\">TftpServer</property>\n        \
+        <extensions namespace=\"com.fnfr.itest.session\" type=\"com.fnfr.itest.session\">\n\
+          <session baseSessionProfile=\"\" name=\"telnet\" provider=\"com.fnfr\">\n            \
+            <sessionProfile version=\"4.3.0.71664\">\n            \
+              <baseApplication>com.fnfr.svt.applications.telnet</baseApplication>\n              \
+              <sessionProperties type=\"com.fnfr.svt.applications.telnet.documents.TelnetSessionProperties\">\n                \
+                <ipAddress inherit=\"false\">@TFTPIP@</ipAddress>\n                    \
+                <port defaultValue=\"\" inherit=\"false\"/>\n                \
+              </sessionProperties>\n              \
+              <baseProfile>project://common_project/session_profiles/extr.ffsp</baseProfile>\n              \
+              <standalone>false</standalone>\n        \
+            </sessionProfile>\n        \
+          </session>\n        \
+        </extensions>";
+
+
+global defaultRouter
+global bootpserver
+global tftpServerList
+global switchPort2DefaultRouter
+result_h2 "Start to build the tbml"
+
+result_debug "Put HEADER HERE"
+global portMappingList
+global DUTs_info
+set pre_DUTs_info DUTs_info
+set pre_mapping $portMappingList
+
+if {$homeDir == "module"} {
+    source ../../main/cfg/common.cfg
+    source ../../main/cfg/$cfg
+} else {
+    source ../main/cfg/common.cfg
+    source ../main/cfg/$cfg
+}
+
+set tftpServer [lindex $tftpServerList 0]
+
+global numDUT
+set portMappingList $pre_mapping
+set cfgFile $cfg
+set cLst [split [file tail $cfgFile] "."]
+set sCfg [lindex $cLst 0]
+set fd_t [open "${path}/${sCfg}.tbml" "w"]
+    if {[info exists switchPort2DefaultRouter]} {
+        regsub -all "@switchPort2DefaultRouter@" $tbmlhead "$switchPort2DefaultRouter" tbmlhead;
+    } else {
+        regsub -all "@switchPort2DefaultRouter@" $tbmlhead "NULL" tbmlhead;
+    }
+    if {[info exists numDUT]} {
+        regsub -all "@numDUT@" $tbmlhead "$numDUT" tbmlhead;
+    } else {
+        regsub -all "@numDUT@" $tbmlhead "NULL" tbmlhead;
+    }
+    if {[info exists defaultRouter]} {
+        regsub -all "@defaultRouter@" $tbmlhead "$defaultRouter" tbmlhead;
+    } else {
+        regsub -all "@defaultRouter@" $tbmlhead "NULL" tbmlhead;
+    }
+    if {[info exists startCardNum]} {
+        regsub -all "@startCardNum@" $tbmlhead "$startCardNum" tbmlhead;
+    } else {
+        regsub -all "@startCardNum@" $tbmlhead "NULL" tbmlhead;
+    }
+    if {[info exists checkConnection]} {
+        regsub -all "@checkConnection@" $tbmlhead "$checkConnection" tbmlhead;
+    } else {
+        regsub -all "@checkConnection@" $tbmlhead "NULL" tbmlhead;
+    }
+    if {[info exists connectionTimeout]} {
+        regsub -all "@connectionTimeout@" $tbmlhead "$connectionTimeout" tbmlhead;
+    } else {
+        regsub -all "@connectionTimeout@" $tbmlhead "NULL" tbmlhead;
+    }
+    if {[info exists fpdefaultRouter]} {
+        regsub -all "@InBandNetworkV4GW@" $tbmlhead "$fpdefaultRouter" tbmlhead;
+    } else {
+        regsub -all "@InBandNetworkV4GW@" $tbmlhead "NULL" tbmlhead;
+    }
+
+    regsub -all "@InBandNetworkV4Mask@" $tbmlhead "24" tbmlhead;
+    regsub -all "@InBandNetworkV6Mask@" $tbmlhead "NULL" tbmlhead;
+    regsub -all "@ETCL_ID@" $tbmlhead "${sCfg}" tbmlhead;
+
+    if {[info exists phyMode]} {
+        regsub -all "@phyMode@" $tbmlhead "$phyMode" tbmlhead;
+    } else {
+        regsub -all "@phyMode@" $tbmlhead "copper" tbmlhead;
+    }
+
+    puts $fd_t $tbmlhead
+
+
+set rId 0
+result_debug "Put Resources Header"
+    puts $fd_t $resourcesTop
+
+# Setup ther server/tftpserver .. put has random high resource id.
+if {[info exists tftpServer]} {
+    regsub -all "@TFTPIP@" $tbmlServer "NULL" tbmlServer;
+    puts $fd_t $tbmlServer
+    puts $fd_t $resourceBottom
+}
+
+result_debug "Put Ixia info here - resource id $rId"
+set ntafHost "spirent@rtp-itest.extremenetworks.com"
+    if {[info exists phyMode]} {
+        regsub -all "@phyMode@" $tbmlIxia "$phyMode" tbmlIxia;
+    } else {
+        regsub -all "@phyMode@" $tbmlIxia "copper" tbmlIxia;
+    }
+    if {[info exists ixiaCh1]} {
+        if {[info exists ixiaPath($ixiaCh1)]} {
+             regsub -all "@ixiaPath@" $tbmlIxia "$ixiaPath($ixiaCh1)" tbmlIxia;
+        } else {
+             regsub -all "@ixiaPath@" $tbmlIxia "NULL" tbmlIxia;
+        }
+        regsub -all "@ixiaCh1@" $tbmlIxia "$ixiaCh1" tbmlIxia;
+    } else {
+        regsub -all "@ixiaCh1@" $tbmlIxia "NULL" tbmlIxia;
+    }
+    if {[info exists ntafHost]} {
+        regsub -all "@ntafHost@" $tbmlIxia "$ntafHost" tbmlIxia;
+    } else {
+        regsub -all "@ntafHost@" $tbmlIxia "NULL" tbmlIxia;
+    }
+    #START OF IXIA RESOURCE
+    puts $fd_t $tbmlIxia
+
+global ixiaPortMappingArray
+set myPortIdList [array names ixiaPortMappingArray]
+set myPortIdList [lsort $myPortIdList]
+set ic 0
+foreach myPortId $myPortIdList {
+    set ixPList $ixiaPortMappingArray($myPortId)
+    set iPortMap($myPortId) resource_${rId}_$ic
+    puts "portId$myPortId  portMapping \"[lindex $ixPList 1] [lindex $ixPList 2]\" resource_${rId}_$ic"
+    set tbmlPort $tbmlPort_0
+    regsub -all "@res_id@" $tbmlPort "resource_${rId}_$ic" tbmlPort;
+    regsub -all "@portName@" $tbmlPort "portId$myPortId" tbmlPort;
+    regsub -all "@portNum@" $tbmlPort "[lindex $ixPList 1] [lindex $ixPList 2]" tbmlPort;
+    puts $fd_t $tbmlPort
+    incr ic
+}
+    # END OF IXIA RESOURCES
+    puts $fd_t $resourceBottom
+incr rId
+
+
+set numDUT 1
+
+set hitHub 1
+foreach tPart $trunkPortList {
+    if {[lindex $tPart 1] == 0} {
+        set hConnect([lindex $tPart 0]) [lindex $tPart 2]
+        incr hitHub
+    }
+    if {![info exists tHit([lindex $tPart 0][lindex $tPart 1])]} {
+        set tHit([lindex $tPart 0][lindex $tPart 1]) 0
+    }
+    set tMapC([lindex $tPart 0],[lindex $tPart 1]) 1
+}
+
+while { [info exists DUT${numDUT}_CONNECT] } {
+      set nameList [array names $pre_DUTs_info]
+      foreach in $nameList {
+          if {[lindex $in 0] == "DUT${numDUT}"} {
+              set DUTs_info(DUT${numDUT},[lindex $in 1]) $pre_DUTs_info(DUT${numDUT},[lindex $in 1])
+          }
+      }
+      result_debug "Put SWITCH $numDUT"
+      set connect [set DUT${numDUT}_CONNECT]
+      set dut_ip [set DUT${numDUT}_IP]
+      set def_blade [set DUT${numDUT}_DefaultBlade]
+      if { $def_blade != 0 } {
+          set port $def_blade:$switchPort2DefaultRouter
+      } else {
+          set port $switchPort2DefaultRouter
+      }
+      puts "Start DUT$numDUT - with HEADER resource id $rId"
+      puts "ADD Console TOP"
+      puts "Place for DUT${numDUT}_CONNECT"
+      if {[info exists DUT${numDUT}_CONNECTB]} {
+          puts "Place for DUT${numDUT}_CONNECTB"
+      }
+          #START OF SWITCH RESOURCE
+          set tbmlSwitchHead $tbmlSwitchHead_O
+
+   switch -exact -- $numDUT {
+      1 { regsub -all "@x@" $tbmlSwitchHead "180" tbmlSwitchHead; regsub -all "@y@" $tbmlSwitchHead "200" tbmlSwitchHead;}
+      2 { regsub -all "@x@" $tbmlSwitchHead "780" tbmlSwitchHead; regsub -all "@y@" $tbmlSwitchHead "200" tbmlSwitchHead;}
+      3 { regsub -all "@x@" $tbmlSwitchHead "180" tbmlSwitchHead; regsub -all "@y@" $tbmlSwitchHead "350" tbmlSwitchHead;}
+      4 { regsub -all "@x@" $tbmlSwitchHead "780" tbmlSwitchHead; regsub -all "@y@" $tbmlSwitchHead "350" tbmlSwitchHead;}
+      5 { regsub -all "@x@" $tbmlSwitchHead "180" tbmlSwitchHead; regsub -all "@y@" $tbmlSwitchHead "500" tbmlSwitchHead;}
+      6 { regsub -all "@x@" $tbmlSwitchHead "780" tbmlSwitchHead; regsub -all "@y@" $tbmlSwitchHead "500" tbmlSwitchHead;}
+      7 { regsub -all "@x@" $tbmlSwitchHead "180" tbmlSwitchHead; regsub -all "@y@" $tbmlSwitchHead "650" tbmlSwitchHead;}
+      8 { regsub -all "@x@" $tbmlSwitchHead "780" tbmlSwitchHead; regsub -all "@y@" $tbmlSwitchHead "650" tbmlSwitchHead;}
+      9 { regsub -all "@x@" $tbmlSwitchHead "180" tbmlSwitchHead; regsub -all "@y@" $tbmlSwitchHead "800" tbmlSwitchHead;}
+     10 { regsub -all "@x@" $tbmlSwitchHead "780" tbmlSwitchHead; regsub -all "@y@" $tbmlSwitchHead "800" tbmlSwitchHead;}
+     11 { regsub -all "@x@" $tbmlSwitchHead "180" tbmlSwitchHead; regsub -all "@y@" $tbmlSwitchHead "950" tbmlSwitchHead;}
+     12 { regsub -all "@x@" $tbmlSwitchHead "780" tbmlSwitchHead; regsub -all "@y@" $tbmlSwitchHead "950" tbmlSwitchHead;}
+     13 { regsub -all "@x@" $tbmlSwitchHead "180" tbmlSwitchHead; regsub -all "@y@" $tbmlSwitchHead "1100" tbmlSwitchHead;}
+     14 { regsub -all "@x@" $tbmlSwitchHead "780" tbmlSwitchHead; regsub -all "@y@" $tbmlSwitchHead "1100" tbmlSwitchHead;}
+     15 { regsub -all "@x@" $tbmlSwitchHead "180" tbmlSwitchHead; regsub -all "@y@" $tbmlSwitchHead "1250" tbmlSwitchHead;}
+     16 { regsub -all "@x@" $tbmlSwitchHead "780" tbmlSwitchHead; regsub -all "@y@" $tbmlSwitchHead "1250" tbmlSwitchHead;}
+     17 { regsub -all "@x@" $tbmlSwitchHead "180" tbmlSwitchHead; regsub -all "@y@" $tbmlSwitchHead "1400" tbmlSwitchHead;}
+     18 { regsub -all "@x@" $tbmlSwitchHead "780" tbmlSwitchHead; regsub -all "@y@" $tbmlSwitchHead "1400" tbmlSwitchHead;}
+      default { }
+   }
+
+          regsub -all "@DUT@" $tbmlSwitchHead "DUT${numDUT}" tbmlSwitchHead;
+          regsub -all "@res_id@" $tbmlSwitchHead "resource_${rId}" tbmlSwitchHead;
+          if {[info exists DUT${numDUT}_IP_FP]} {
+              regsub -all "@InBandNetworkV4IP@" $tbmlSwitchHead "[set DUT${numDUT}_IP_FP]" tbmlSwitchHead;
+          } else {
+              regsub -all "@InBandNetworkV4IP@" $tbmlSwitchHead "NULL" tbmlSwitchHead;
+          }
+          if {[info exists DUT${numDUT}_DefaultBlade_FP]} {
+              regsub -all "@InBandNetworkBlade@" $tbmlSwitchHead "[set DUT${numDUT}_DefaultBlade_FP]" tbmlSwitchHead;
+          } else {
+              regsub -all "@InBandNetworkBlade@" $tbmlSwitchHead "NULL" tbmlSwitchHead;
+          }
+          if {[info exists DUT${numDUT}_MASK_FP]} {
+              regsub -all "@InBandNetworkMask@" $tbmlSwitchHead "[set DUT${numDUT}_MASK_FP]" tbmlSwitchHead;
+          } else {
+              regsub -all "@InBandNetworkMask@" $tbmlSwitchHead "NULL" tbmlSwitchHead;
+          }
+          if {[info exists frontPanelPortToGw]} {
+              regsub -all "@InBandNetworkPort@" $tbmlSwitchHead "$frontPanelPortToGw" tbmlSwitchHead;
+          } else {
+              regsub -all "@InBandNetworkPort@" $tbmlSwitchHead "NULL" tbmlSwitchHead;
+          }
+          if {[info exists DUT${numDUT}_SETUP]} {
+              regsub -all "@SETUP@" $tbmlSwitchHead "[set DUT${numDUT}_SETUP]" tbmlSwitchHead;
+          } else {
+              regsub -all "@SETUP@" $tbmlSwitchHead "NULL" tbmlSwitchHead;
+          }
+          if {[info exists DUT${numDUT}_MASK]} {
+              regsub -all "@MASK@" $tbmlSwitchHead "[set DUT${numDUT}_MASK]" tbmlSwitchHead;
+          } else {
+              regsub -all "@MASK@" $tbmlSwitchHead "24" tbmlSwitchHead;
+          }
+          if {[info exists DUT${numDUT}_DefaultBlade]} {
+              regsub -all "@DefaultBlade@" $tbmlSwitchHead "[set DUT${numDUT}_DefaultBlade]" tbmlSwitchHead;
+          } else {
+              regsub -all "@DefaultBlade@" $tbmlSwitchHead "NULL" tbmlSwitchHead;
+          }
+          if {[info exists POWERCYCLE_DUT($numDUT)]} {
+              regsub -all "@POWERCYCLE_DUT@" $tbmlSwitchHead "$POWERCYCLE_DUT($numDUT)" tbmlSwitchHead;
+          } else {
+              regsub -all "@POWERCYCLE_DUT@" $tbmlSwitchHead "NULL" tbmlSwitchHead;
+          }
+          if {[info exists defaultRouter]} {
+              regsub -all "@MGMT_GW@" $tbmlSwitchHead "$defaultRouter" tbmlSwitchHead;
+          } else {
+              regsub -all "@MGMT_GW@" $tbmlSwitchHead "NULL" tbmlSwitchHead;
+          }
+          if {[info exists InBandNetworkV6IP]} {
+              regsub -all "@InBandNetworkV6IP@" $tbmlSwitchHead "$InBandNetworkV6IP" tbmlSwitchHead;
+          } else {
+              regsub -all "@InBandNetworkV6IP@" $tbmlSwitchHead "NULL" tbmlSwitchHead;
+          }
+          if {[info exists switchPort2DefaultRouter]} {
+              regsub -all "@switchPort2DefaultRouter@" $tbmlSwitchHead "$switchPort2DefaultRouter" tbmlSwitchHead;
+          } else {
+              regsub -all "@switchPort2DefaultRouter@" $tbmlSwitchHead "NULL" tbmlSwitchHead;
+          }
+#switchPort2DefaultRouter
+          puts $fd_t $tbmlSwitchHead
+
+          foreach myVar $diList {
+              if {[info exists DUTs_info(DUT${numDUT},$myVar)]} {
+                  puts $fd_t "         <property name=\"$myVar\" vendor=\"Extreme\">$DUTs_info(DUT${numDUT},$myVar)</property>"          
+              }
+          }
+
+      puts "Place for mgmt $dut_ip"
+      puts "Place for mgmt_ssh $dut_ip"
+      puts "ADD Console BOTTOM"
+      puts "Add ports"
+      set dutRCount 0
+
+
+      set conhead $tbmlConnTop_0
+      puts $fd_t $conhead
+      set tbmlConn $tbmlConn_0
+      if {[info exists DUT${numDUT}_CONNECT]} {
+          regsub -all "@CONNECT@" $tbmlConn "CONNECT" tbmlConn;
+          set f [split [set DUT${numDUT}_CONNECT] " "]
+          set fip [lindex $f 0]
+          regsub -all "@CONNECTIP@" $tbmlConn "$fip" tbmlConn;
+          if {[string trim [lindex $f 1]] != ""} {
+              regsub -all "@CONNECTPORT@" $tbmlConn "[lindex $f 1]" tbmlConn;
+          } else {
+              regsub -all "@CONNECTPORT@" $tbmlConn "23" tbmlConn;
+          }
+          puts $fd_t $tbmlConn
+      }
+      set tbmlConn $tbmlConn_0
+      if {[info exists DUT${numDUT}_CONNECTB]} {
+          regsub -all "@CONNECT@" $tbmlConn "CONNECTB" tbmlConn;
+          set f [split [set DUT${numDUT}_CONNECTB] " "]
+          set fip [lindex $f 0]
+          regsub -all "@CONNECTIP@" $tbmlConn "$fip" tbmlConn;
+          if {[string trim [lindex $f 1]] != ""} {
+              regsub -all "@CONNECTPORT@" $tbmlConn "[lindex $f 1]" tbmlConn;
+          } else {
+              regsub -all "@CONNECTPORT@" $tbmlConn "23" tbmlConn;
+          }
+          puts $fd_t $tbmlConn
+      }
+      set tbmlConn $tbmlConn_0
+      if {[info exists DUT${numDUT}_IP]} {
+          regsub -all "@CONNECT@" $tbmlConn "mgmt_network" tbmlConn;
+          regsub -all "@CONNECTIP@" $tbmlConn "[set DUT${numDUT}_IP]" tbmlConn;
+          regsub -all "@CONNECTPORT@" $tbmlConn "23" tbmlConn;
+          puts $fd_t $tbmlConn
+      }
+      set tbmlConn $tbmlSSHConn_0
+      if {[info exists DUT${numDUT}_IP]} {
+          regsub -all "@CONNECT@" $tbmlConn "mgmt_network_ssh" tbmlConn;
+          regsub -all "@CONNECTIP@" $tbmlConn "[set DUT${numDUT}_IP]" tbmlConn;
+          puts $fd_t $tbmlConn
+      }
+      set confoot $tbmlConnBottom_0
+      puts $fd_t $confoot
+
+      set tbml_port $tbmlPort_0
+      foreach pPart $portMappingList {
+          if {[lindex $pPart 2] == $numDUT} {
+              set tbmlPort $tbmlPort_0
+              set dPortMap([lindex $pPart 0]) resource_${rId}_$dutRCount
+              puts "tb_portId[lindex $pPart 0] portMapping [lindex $pPart 1] resource_${rId}_$dutRCount"
+              regsub -all "@res_id@" $tbmlPort "resource_${rId}_$dutRCount" tbmlPort;
+              regsub -all "@portName@" $tbmlPort "tb_portId[lindex $pPart 0]" tbmlPort;
+              regsub -all "@portNum@" $tbmlPort "[lindex $pPart 1]" tbmlPort;
+              puts $fd_t $tbmlPort
+              incr dutRCount
+          }
+      }
+      set ti 1
+      foreach tPart $trunkPortList {
+          if {[lindex $tPart 0] == $numDUT && [lindex $tPart 1] != 0} {
+              set tbmlPort $tbmlPort_0
+              incr tHit([lindex $tPart 0][lindex $tPart 1])
+              set h $tHit([lindex $tPart 0][lindex $tPart 1])
+              set tMap([lindex $tPart 0],[lindex $tPart 1],$h) resource_${rId}_$dutRCount
+              puts "h $h tMap([lindex $tPart 0],[lindex $tPart 1],$h) trunk_[lindex $tPart 0]_[lindex $tPart 1]_$h portMapping [lindex $tPart 2] resource_${rId}_$dutRCount"
+              regsub -all "@res_id@" $tbmlPort "resource_${rId}_$dutRCount" tbmlPort;
+              regsub -all "@portName@" $tbmlPort "trunk_[lindex $tPart 0]_[lindex $tPart 1]_$h" tbmlPort;
+              regsub -all "@portNum@" $tbmlPort "[lindex $tPart 2]" tbmlPort;
+              puts $fd_t $tbmlPort
+              incr dutRCount
+              incr tMapC([lindex $tPart 0],[lindex $tPart 1])
+          }
+      }
+      if {[info exists hConnect($numDUT)]} {
+          set tbmlPort $tbmlPort_0
+          puts "hub_connect portMapping $hConnect($numDUT) resource_${rId}_$dutRCount"
+          set hubRes($numDUT) resource_${rId}_$dutRCount
+          regsub -all "@res_id@" $tbmlPort "resource_${rId}_$dutRCount" tbmlPort;
+          regsub -all "@portName@" $tbmlPort "hub_connect" tbmlPort;
+          regsub -all "@portNum@" $tbmlPort "$hConnect($numDUT)" tbmlPort;
+          puts $fd_t $tbmlPort
+          incr dutRCount
+      }
+      # END OF SWITCH RESOURCE
+      puts $fd_t $resourceBottom
+      incr numDUT 1
+      incr rId
+}
+incr numDUT -1
+
+set dutRCount 0
+if {$hitHub > 1} {
+    #    set hConnect([lindex $tPart 0]) [lindex $tPart 2]
+    #    set hPortMap([lindex $tPart 0]) resource_${rId}_$ic
+    #    incr hitHub
+    set hubstuff $tbmlHubHead_0
+    regsub -all "@x@" $hubstuff "450" hubstuff; regsub -all "@y@" $hubstuff "280" hubstuff;
+    regsub -all "@res_id@" $hubstuff "resource_${rId}" hubstuff;
+    regsub -all "@DUT@" $hubstuff "hub1" hubstuff;
+    regsub -all "@type@" $hubstuff "hub" hubstuff;
+    puts $fd_t $hubstuff
+
+      if {[info exists HUB_IP] || [info exists HUB_CONNECT]} {
+          set conhead $tbmlConnTop_0
+          puts $fd_t $conhead
+      }
+      set tbmlConn $tbmlConn_0
+      if {[info exists HUB_CONNECT]} {
+          set tbmlConn $tbmlConn_0
+          regsub -all "@CONNECT@" $tbmlConn "$HUB_CONNECT" tbmlConn;
+          set f [split $HUB_CONNECT " "]
+          set fip [lindex $f 0]
+          regsub -all "@CONNECTIP@" $tbmlConn "$fip" tbmlConn;
+          if {[string trim [lindex $f 1]] != ""} {
+              regsub -all "@CONNECTPORT@" $tbmlConn "[lindex $f 1]" tbmlConn;
+          } else {
+              regsub -all "@CONNECTPORT@" $tbmlConn "23" tbmlConn;
+          }
+          puts $fd_t $tbmlConn
+      }
+      set tbmlConn $tbmlConn_0
+      if {[info exists HUB_IP]} {
+          regsub -all "@CONNECT@" $tbmlConn "mgmt_network" tbmlConn;
+          regsub -all "@CONNECTIP@" $tbmlConn "$HUB_IP" tbmlConn;
+          regsub -all "@CONNECTPORT@" $tbmlConn "23" tbmlConn;
+          puts $fd_t $tbmlConn
+      }
+      if {[info exists HUB_IP] || [info exists HUB_CONNECT]} {
+          set conbott $tbmlConnBottom_0
+          puts $fd_t $conbott
+      }
+
+    puts "Create a hub switch ports"
+    set h 1
+    while {$dutRCount < [expr $hitHub - 1]} {
+        set tbmlPort $tbmlPort_0
+        puts "port$h portMapping resource_${rId}_$dutRCount"
+        set hPortMap($h) resource_${rId}_$dutRCount
+          regsub -all "@res_id@" $tbmlPort "resource_${rId}_$dutRCount" tbmlPort;
+          regsub -all "@portName@" $tbmlPort "port$h" tbmlPort;
+          regsub -all "@portNum@" $tbmlPort "port$h" tbmlPort;
+          puts $fd_t $tbmlPort
+        incr dutRCount
+        incr h
+    }
+    incr dutRCount -1
+    set tbmlPort $tbmlPort_0
+    set hPortMap(9) resource_${rId}_$dutRCount
+    regsub -all "@res_id@" $tbmlPort "resource_${rId}_$dutRCount" tbmlPort;
+    regsub -all "@portName@" $tbmlPort "port$h" tbmlPort;
+    regsub -all "@portNum@" $tbmlPort "port$h" tbmlPort;
+    puts $fd_t $tbmlPort
+    puts $fd_t $resourceBottom
+}
+puts $fd_t $resourcesBottom
+# Links section
+
+puts $fd_t $linkTop
+set lic 0
+foreach myPortId $myPortIdList {
+    set li $link_0
+    if {$hitHub > 1 && $myPortId == 9} {
+        puts "Link HUB portId$myPortId $iPortMap($myPortId) AND $hPortMap($myPortId)"
+        regsub -all "@c@" $li "$lic" li;
+        regsub -all "@res1@" $li "$iPortMap($myPortId)" li;
+        regsub -all "@res2@" $li "$hPortMap($myPortId)" li;
+    } else {
+        puts "Link portId$myPortId $iPortMap($myPortId) AND $dPortMap($myPortId)"
+        regsub -all "@c@" $li "$lic" li;
+        regsub -all "@res1@" $li "$iPortMap($myPortId)" li;
+        regsub -all "@res2@" $li "$dPortMap($myPortId)" li;
+    }
+    incr lic
+    puts $fd_t $li
+}
+
+set hx 1
+while {$hx < $hitHub} {
+    set li $link_0
+    puts "Link HUB $hx $hubRes($hx) AND $hPortMap($hx)"
+        regsub -all "@c@" $li "$lic" li;
+        regsub -all "@res1@" $li "$hubRes($hx)" li;
+        regsub -all "@res2@" $li "$hPortMap($hx)" li;
+    incr hx
+    incr lic
+    puts $fd_t $li
+}
+
+set tlen [llength $trunkPortList]
+# change to foreach
+set lcnt 0
+while {$lcnt < $tlen} {
+    set bList [lindex $trunkPortList $lcnt]
+    if {[lindex $bList 1] == 0} {
+        incr lcnt
+        continue
+    } else {
+        set tmc $tMapC([lindex $bList 0],[lindex $bList 1])
+        set mC 1
+        while {$mC < $tmc} {
+            set li $link_0
+            puts "t link lcnt $lcnt - tMap([lindex $bList 0],[lindex $bList 1],$mC) $tMap([lindex $bList 0],[lindex $bList 1],$mC)"
+            set a1 $tMap([lindex $bList 0],[lindex $bList 1],$mC)
+            incr lcnt
+            set bList [lindex $trunkPortList $lcnt]
+            puts "t link lcnt $lcnt - tMap([lindex $bList 0],[lindex $bList 1],$mC) $tMap([lindex $bList 0],[lindex $bList 1],$mC)"
+            set a2 $tMap([lindex $bList 0],[lindex $bList 1],$mC)
+                regsub -all "@c@" $li "$lic" li;
+                regsub -all "@res1@" $li "$a1" li;
+                regsub -all "@res2@" $li "$a2" li;
+                puts $fd_t $li
+                incr lic
+            incr lcnt
+            incr mC
+            set bList [lindex $trunkPortList $lcnt]
+            #incr tMapC([lindex $bList 0],[lindex $bList 1])
+        }
+    }
+}
+puts $fd_t $linkBottom
+puts $fd_t $tbmlFoot
+close $fd_t
+
+}

@@ -1,0 +1,370 @@
+
+proc setupRipngPeer {args} {
+    parse_args setupRipngPeer $args {
+        routerIp "3333::24"
+        mask "64"
+        vlanId "0"
+        txPortId 1
+        updateInterval 30
+        updateIntervalOffset 5
+        enableInterfaceMetric "false"
+        response "0"
+        rangeIpList ""
+        metricList ""
+        prefixList ""
+        nexthopList ""
+        tagList ""
+        numRouteList ""
+    }
+
+
+    #An array of multiple route ranges, organized as a table 
+    # Num 
+    # RangeIp Prefix Routes Metric Next-Hop Tag 
+    #set routeRanges {{10.0.0.0 13 10 4 198.18.1.2 9} \
+    #                {20.0.0.0 17 10 4 198.18.1.2 10}}
+    set routerId 1
+    set rangeId 1 
+    set vlanState "false"
+    
+    # get the port information   
+    MapIxiaPortId $txPortId chas card port
+    result_debug "setupRipngPeer - Chas: $chas Card: $card Port: $port"
+    
+    set pl [list [list $chas $card $port]] 
+    port get $chas $card $port
+    set myMac [port cget -MacAddress]
+
+    ipAddressTable               setDefault        
+    ipAddressTable               config            -defaultGateway                     "0.0.0.0"
+    ipAddressTable               set               $chas $card $port
+    arpServer setDefault 
+    arpServer config -mode 0
+    arpServer config -retries 3
+    arpServer config -rate 260417
+    arpServer config -requestRepeatCount 3
+    arpServer set $chas $card $port
+
+    interfaceTable               select  $chas $card $port
+    interfaceTable               clearAllInterfaces
+
+    interfaceIpV6                setDefault
+    interfaceIpV6                config            -maskWidth $mask
+    interfaceIpV6                config            -ipAddress $routerIp
+
+    interfaceEntry               addItem           addressTypeIpV6
+    interfaceEntry               setDefault
+    interfaceEntry               config            -enable true
+    interfaceEntry               config            -description "$routerIp/$mask - Port $port"
+    interfaceEntry               config            -macAddress  $myMac
+    if { $vlanId != "0" } {
+       set vlanState "true"
+    }
+    interfaceEntry               config            -enableVlan  $vlanState
+    interfaceEntry               config            -vlanId     $vlanId 
+    interfaceEntry               config            -vlanPriority 0
+    interfaceTable               addInterface
+    interfaceEntry               clearAllItems     addressTypeIpV6
+    interfaceEntry               clearAllItems     addressTypeIpV4
+
+    # Select the port and clear all defined routers 
+    ripngServer select $chas $card $port 
+    ripngServer clearAllRouters
+
+    ripngInterface               setDefault
+    ripngInterface               config            -enable   true 
+    ripngInterface               config            -responseMode  0
+    ripngInterface               config            -interfaceMetric 0 
+    ripngInterface               config            -protocolInterfaceDescription       "$routerIp/$mask - Port $port"
+    ripngRouter                  addInterface      interface1
+
+    ripngRouteRange setDefault 
+
+    # For all the defined routers
+    set idx 0 
+    while {[llength $rangeIpList] > $idx} {    
+        # Extract the information from the table and set the route ranges 
+        set myIp [lindex $rangeIpList $idx]
+        set prefix [lindex $prefixList $idx]
+        set metric [lindex $metricList $idx]
+        set nextHop [lindex $nexthopList $idx]
+        set numRt [lindex $numRouteList $idx]
+        set routeTag [lindex $tagList $idx]
+        incr idx
+        ripngRouteRange config -enable                   true 
+        ripngRouteRange config -routeTag                 $routeTag 
+        ripngRouteRange config -networkIpAddress         $myIp 
+        ripngRouteRange config -maskWidth                $prefix 
+        ripngRouteRange config -nextHop                  $nextHop
+        ripngRouteRange config -step                     1 
+        ripngRouteRange config -numRoutes                $numRt
+        ripngRouteRange config -metric                   $metric
+        ripngRouteRange config -enableIncludeLoopback    true
+        ripngRouteRange config -enableIncludeMulticast   true
+ 
+        # Create a name for each individual route range 
+        ripngRouter addRouteRange [format "routeRange%02d" $rangeId]
+        ripngRouteRange setDefault 
+        incr rangeId 
+    }
+
+    ripngRouter                  setDefault
+    ripngRouter                  config            -enable true
+    ripngRouter                  config            -routerId $routerId
+    ripngRouter                  config            -receiveType   0
+    ripngRouter                  config            -updateInterval   30
+    ripngRouter                  config            -updateIntervalOffset  5
+    ripngRouter                  config            -enableInterfaceMetric true
+    ripngServer                  addRouter         router1
+
+    ripngServer                  setDefault
+    ripngServer                  config            -numRoutes     0
+    ripngServer                  config            -timePeriod    0
+    ripngServer                  set
+ 
+    protocolServer  setDefault
+    protocolServer get $chas $card $port 
+    protocolServer config -enableArpResponse true 
+    protocolServer config -enableRipngService true 
+    protocolServer config -enablePingResponse false 
+    protocolServer set $chas $card $port
+    
+    # Send to the hardware 
+    ixWritePortsToHardware pl 
+    #ixCheckLinkState       pl          
+
+}
+
+proc startRipng {txPortIdList} {
+
+    set pList "";
+	global TrafficGen
+	  switch -exact -- $TrafficGen {
+		  ixia - 
+                  ixvm {
+    foreach txPortId $txPortIdList {
+        MapIxiaPortId $txPortId cha car por;
+        result_debug "startRipng - Chas: $cha Card: $car Port: $por";
+        lappend pList "$cha $car $por";
+    }
+
+    if {[ixStartRipng pList]} {
+        error "startRip: ixStartRipng failed.";
+    }
+}
+		  stc {
+				set globalDeviceList ""
+				foreach txPortId $txPortIdList {
+					set txPortId [hMapPortIdToSpirentPort $txPortId]
+					set deviceList [logcmd stc::get $txPortId -affiliationport-Sources]
+					result_debug "startRipng: Device List - $deviceList"
+					set globalDeviceList [concat $globalDeviceList $deviceList]				
+				}
+
+				if {[catch {logcmd stc::perform DeviceStartCommand -DeviceList $globalDeviceList} retCode]} {
+					error "startRipng: Spirent device start failed."
+				} 
+			}
+		}	
+    
+}
+
+proc stopRipng {txPortIdList} {
+
+    set pList "";
+	global TrafficGen
+	switch -exact -- $TrafficGen {
+		ixia -
+                ixvm {	
+    foreach txPortId $txPortIdList {
+        MapIxiaPortId $txPortId cha car por;
+        result_debug "stopRipng - Chas: $cha Card: $car Port: $por";
+        lappend pList "$cha $car $por";
+    }
+
+    if {[ixStopRipng pList]} {
+        error "stopRipng: ixStopRipng failed.";
+    }
+}
+		stc {
+			
+			set globalDeviceList ""
+			foreach txPortId $txPortIdList {
+				set txPortId [hMapPortIdToSpirentPort $txPortId]
+				set deviceList [logcmd stc::get $txPortId -affiliationport-Sources]
+				result_debug "stopRipng: Device List - $deviceList"
+				set globalDeviceList [concat $globalDeviceList $deviceList]				
+			}
+
+			if {[catch {logcmd stc::perform DeviceStopCommand -DeviceList $globalDeviceList} retCode]} {
+				error "stopRipng: Spirent device start failed."
+			} 
+		}
+	}
+	
+    
+}
+
+proc cleanupRipng {txPortIdList routerIp} {
+
+
+	global TrafficGen
+  
+	switch -exact -- $TrafficGen {
+		
+		stc {
+			if { [catch {
+				set txPortId [hMapPortIdToSpirentPort $txPortId]
+				foreach emulatedDevice [logcmd stc::get $txPortId -affiliationport-Sources] {
+					set ipv6IfList [logcmd stc::get $emulatedDevice -children-Ipv6If]
+					foreach ipv6If $ipv6IfList {
+						if {$ipv6If != ""} {
+							if {[logcmd stc::get $ipv6If -Address] ==  $routerIp} {
+								logcmd stc::delete $emulatedDevice
+							}
+						}
+					}
+				}									
+				
+			} msg ] } {
+				result_error "cleanupRip : Failed to delete RIP configuration $msg"
+				return 0
+			}			
+			
+		}
+		
+		ixia - 
+                ixvm {
+
+  set routerId 1
+  set rangeId 1
+  foreach txPortId $txPortIdList {
+    # get the port information
+    MapIxiaPortId $txPortId chas card port;
+    set pl [list [list $chas $card $port]]
+    result_debug "cleanupRipng - Chas: $chas Card: $card Port: $port";
+
+    # select the port
+    if {[ripngServer select $chas $card $port]} {
+        result_debug "Error Connecting to ripngServer";
+    }
+    ripngServer clearAllRouters
+    ripngRouter clearAllRouteRanges
+    if [ripngServer write] {
+        error "Error writing ripngServer"
+    }
+
+    arpServer setDefault
+    interfaceTable select $chas $card $port
+    interfaceTable clearAllInterfaces
+    protocolServer config -enableArpResponse false
+    protocolServer config -enableRipngService false
+    protocolServer set 1 $card $port
+
+    if {[protocolServer write $chas $card $port]} {
+        error "protocolServer write $chas $card $port failed."
+    }
+    # Send to the hardware
+    ixWritePortsToHardware pl
+  }
+}
+	}
+}
+
+proc CheckRIPngRoutes {ripFrameList routeList {oneOrAll "all"} {comment ""}} {
+
+ report_start_test "Checking routes in RIPng packets $comment"
+ set numFrame [llength $ripFrameList]
+
+ if { $numFrame > 0 } {
+   set numPass $numFrame
+   for {set i 1} {$i <= $numFrame} {incr i 1} {
+      set frame [lindex $ripFrameList [expr $i - 1]]
+      set msgType [GetMessageType $frame]
+      result_debug "$msgType frame($i):"
+      result_debug "$frame"
+      set routeCheck 1
+      foreach routeItem $routeList {
+        set route [lindex $routeItem 0]
+        set flag [lindex $routeItem 1]
+        set existence [string first $route [string range $frame 198 end] ]
+        switch $flag {
+          "notExist"    {
+             if { $existence != -1 } {
+                set routeCheck 0
+                result_debug "!!!! frame($i) advertises the unexpected route: ($route) !!!!"
+             } else {   
+                result_debug "frame($i) doesn't advertise the unexpected route: ($route)"
+             }
+          }
+          
+          "exist" -
+          default       {
+             if { $existence != -1 } {
+                result_debug "frame($i) advertises the expected route: ($route)"
+             } else {
+                set routeCheck 0
+                result_debug "!!!! frame($i) doesn't advertise the expected route: ($route) !!!!"
+             }
+          }
+        }
+      }       
+      if { !$routeCheck } { set numPass [expr $numPass - 1] }
+   }
+   
+   switch $oneOrAll {
+      "all"     { if { $numPass == $numFrame } {
+                    result_ok "ALL RIPng frames advertising routes check passed"
+                 } else {
+                    result_error "ALL RIPng frames advertising routes check failed" 
+                 }
+                }
+      default   { if { $numPass >= 1 } {
+                    result_ok "At least one RIPng frame advertising routes check passed"
+                 } else {
+                    result_error "At least one RIPng frame advertising routes check failed" 
+                 }
+                }               
+   }
+ } else {
+   result_debug "!!!! No frame in provided RIPng frame list while invoking CheckRIPngRoutes!!!!"
+   result_error "Routes in RIPng packets check failed due to empty RIP frame list"
+ }
+
+  report_end_test
+}
+
+
+proc decodeRipngPacket { rawFrame } {
+  set type [string range $rawFrame 36 40]
+
+   # if tagged, get rid of type and tag field from 36 to 47
+   if {$type == "81 00"} {
+     set leftRawFrame [string range $rawFrame 0 35] 
+     set rightRawFrame [string range $rawFrame 48 [string length $rawFrame]] 
+     set rawFrame [format "%s%s" $leftRawFrame $rightRawFrame]
+   }
+
+   lappend ripngPacket [string range $rawFrame 66 112]
+   lappend ripngPacket [string range $rawFrame 114 160]
+   lappend ripngPacket [string range $rawFrame 162 166]
+   lappend ripngPacket [string range $rawFrame 168 172]
+   set rtPkt [string range $rawFrame 198 end]
+   set length [string length $rtPkt]
+   set length [expr $length  - 13]
+   set routeList ""
+   set x 198
+   set y 244
+   set offSet {{0 0} {48 7} {54 9}}
+   while { $length > 0 } {
+      foreach index $offSet {
+         lappend routeList "[string range $rawFrame [expr $x + [lindex $index 0]] [expr $y + [lindex $index 1]]]"
+      }
+      set x [expr $x + 60]
+      set y [expr $x + 46]
+      set length [expr $length - 59]
+   }
+   lappend ripngPacket $routeList
+   return $ripngPacket
+}
+

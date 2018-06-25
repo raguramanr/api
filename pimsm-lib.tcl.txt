@@ -1,0 +1,223 @@
+
+proc CheckShPim {args} {
+    parse_args CheckShPim $args {
+
+       dutConnect "1"
+       comment ""
+       bsrState ""
+       bsrAddress ""
+       priority ""
+       advInterval ""
+       holdTimer ""
+       s "1"
+       i "2"
+       d "120"
+       f "120"
+       }
+        global DUT[set dutConnect]_CONNECT
+        Login [set DUT[set dutConnect]_CONNECT]
+        
+        set parameterList ""
+        if {$advInterval != ""} {
+        lappend parameterList "{CRP.*Adv.*Interval.*$advInterval.*CRP.*Holdtime.*$holdTimer} exist"
+        }
+        if {$bsrState != ""} {
+        lappend parameterList "{BSR.*state.*$bsrState}  exist"
+        }
+        if {$bsrAddress != ""} {
+        lappend parameterList  "{Current.*BSR.*Info.*$bsrAddress} exist"
+        } 
+        if {$priority != ""} {
+        lappend parameterList  "{Current.*BSR.*Info.*$bsrAddress.*Priority.*$priority} exist"
+        }
+        CheckKeyValue "show pim" $parameterList -comment $comment \
+                      -time "s: [set s] i: [set i] d: [set d] f: [set f] r"
+        unset parameterList
+}                 
+proc CheckShPimVlan {args} {
+    parse_args CheckShPim $args {
+
+       dutConnect "1"
+       comment ""
+       vlan ""
+       numBstraps ""
+       }
+        global DUT[set dutConnect]_CONNECT
+        Login [set DUT[set dutConnect]_CONNECT]
+        
+        set parameterList ""
+        lappend parameterList "{Hellos.*Bootstraps.*$numBstraps} exist"
+        CheckKeyValue "show pim $vlan" $parameterList -comment $comment \
+                      -time {s: 1 i: 2 d: 60 f: 60 r}
+        unset parameterList
+
+}
+
+proc CheckBootStraps {args} {
+    parse_args CheckBootStraps $args {
+
+       dutConnect "1"
+       vlan ""
+       inOut "in"
+       comment ""
+       numBstraps "1"
+       }
+        report_start_test "Checking Bootstrap $inOut Msg"
+        
+        global DUT[set dutConnect]_CONNECT
+        Login [set DUT[set dutConnect]_CONNECT]
+        if {$inOut == "in" } {
+        set parameterList ""
+        lappend parameterList "Hellos.*Bootstraps 1"
+        } else {
+         set parameterList ""
+        lappend parameterList "Hellos.*Bootstraps 2"
+        }
+        set numBstrapsRcd [GetKeyValue "show pim $vlan" $parameterList]
+        if {$numBstraps == $numBstrapsRcd} {
+        result_ok "Got correct Bootstraps = $numBstrapsRcd"
+        } else {
+        result_error "Got incorrect Bootstraps = $numBstrapsRcd"
+        }
+        report_end_test
+}
+
+
+proc CheckShPimRP {args} {
+    parse_args CheckShPim $args {
+
+       dutConnect "1"
+       comment ""
+       crp ""
+       groupIp ""
+       priority ""
+       exists 1
+       }
+        global DUT[set dutConnect]_CONNECT
+        Login [set DUT[set dutConnect]_CONNECT]
+        set parameterList ""
+        if {$exists == 1} {
+        if {$priority == ""} {
+        set parameterList ""
+        lappend parameterList "{$groupIp.*$crp} exist"
+        } else {
+        set parameterList ""
+        lappend parameterList "{$groupIp.*$crp.*$priority} exist"
+        }
+        } else {
+        if {$priority == ""} {
+        set parameterList ""
+        lappend parameterList "{$groupIp.*$crp} notExist"
+        } else {
+        set parameterList ""
+        lappend parameterList "{$groupIp.*$crp.*$priority} notExist"
+        } 
+        }
+        CheckKeyValue "show pim rp-set" $parameterList -comment $comment \
+                      -time {s: 1 i: 2 d: 50 f: 50  r} 
+        unset parameterList
+}
+proc CheckShLog {args} {
+    parse_args CheckShPim $args {
+
+       dutConnect "1"
+       comment ""
+       vlanAccp ""
+       vlanRej  ""
+       bsrAddress ""
+       }
+        global DUT[set dutConnect]_CONNECT
+        Login [set DUT[set dutConnect]_CONNECT]
+        set parameterList ""
+        lappend parameterList "{Received.*pim.*Bootstrap.*$vlanAccp} {Bsr.*packet.*received.*from.*$bsrAddress.*failed.*RPF.*test} inLine exist 1"
+        lappend parameterList "{Received.*pim.*Bootstrap.*$vlanAccp} {Received.*pim.*Bootstrap.*$vlanRej} inLine exist 2"
+        CheckKeyValue "show log" $parameterList -comment $comment \
+                      -time {s: 1 i: 2 d: 60 f: 60  r}
+        unset parameterList
+}
+
+proc CheckBootStrapsMsg {args} {
+    parse_args CheckBootStrapsMsg $args {
+
+       dutConnect "1"
+       vlan ""
+       in "1"
+       out "1"
+       }
+
+        global DUT[set dutConnect]_CONNECT
+        Login [set DUT[set dutConnect]_CONNECT]
+        set parameterList ""
+	lappend parameterList "{Packet.*Statistics.*In.*Out} {Hellos.*Bootstraps.*$in.*$out} inLine exist 1"
+	CheckKeyValue "show pim $vlan" $parameterList -time {s: 1 i: 2 d: 90 f: 90 r}
+
+}
+
+proc encodedBSRGroupAddressesRP {rawFrame RPAddressList  } {
+   set messageType [GetMessageType $rawFrame]
+   set groupAddress ""
+   if {$messageType=="IP_PIMv2_BOOTSTRAP"} {
+      set type [string range $rawFrame 36 40]
+      if {$type == "81 00"} {
+        set leftRawFrame [string range $rawFrame 0 35]
+        set rightRawFrame [string range $rawFrame 48 [string length $rawFrame]]
+        set rawFrame [format "%s%s" $leftRawFrame $rightRawFrame]
+      }
+       set BSRGroupAddresses ""
+       set BSREncodedRPAddress ""
+      set FRPCount [string range $rawFrame 168 172]
+      if {$FRPCount == "04 04"} {
+      result_debug "$rawFrame"
+      set startLoc 144
+      set RPStartLoc 156
+      for {set startLoc 144} {[expr $startLoc+156]<=[expr [string length $rawFrame]-11]} {incr startLoc $RPStartLoc} {
+         lappend BSRGroupAddresses [GetIPAddressOffset $rawFrame [expr $startLoc + 12]]
+         set BSRRPCount [string range $rawFrame [expr $startLoc+24] [expr $startLoc+24+1]]
+         set RPAddressStartLoc [expr $startLoc + 36]
+         set BSREncodedRPAddress ""
+         for {set i 1} {$i<=$BSRRPCount} {incr i} {
+            lappend BSREncodedRPAddress [GetIPAddressOffset $rawFrame [expr $RPAddressStartLoc + 6]]
+            set RPAddressStartLoc [expr $RPAddressStartLoc + 30]
+         }
+   }
+
+   }
+   lappend BSRGroupAddresses $BSREncodedRPAddress
+   return $BSRGroupAddresses
+   } else {
+      return -1
+   }
+}
+
+
+proc CheckPimRegisterPkt {args} {
+    parse_args CheckPimRegisterPkt $args {
+       portId ""
+       }
+        report_start_test "PIM REGISTER MESSAGE RECEIVED"
+
+        set rawFrameLst [GetCapturedFrames $portId NULL 2000000]
+        set match 0
+
+                foreach rawFrame $rawFrameLst {
+
+                set pimPktType [GetMessageType $rawFrame]
+                result_debug "$pimPktType"
+
+                if {($pimPktType == "IP_PIMv2_REGISTER") || ($pimPktType == "IP_PIMv2_NULL_REGISTER")} {
+                        incr match
+                        break;
+               }
+        }
+
+                if {$match == 1} {
+                        result_ok "PIM REGISTER MESSAGE RECEIVED"
+                } else {
+                        result_error "PIM REGISTER MESSAGE NOT RECEIVED"
+                        }
+
+
+        report_end_test
+
+ }
+

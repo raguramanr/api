@@ -1,0 +1,284 @@
+
+##################################################################
+# Description:
+#     Check if it is ESRP Hello packet
+#
+# Input args: rawFrame
+# Output args: 
+# Typical usage:
+#
+##################################################################
+proc IsESRPHelloMessage {rawFrame} {
+
+    set destmac [string range $rawFrame 0 16];
+    if {$destmac == "00 E0 2B 00 00 02"} {
+        return "ESRP_HELLO_MESSAGE";    
+    } else {
+        return "NOT_ESRP_HELLO_MESSAGE";
+    }    
+}
+
+##################################################################
+# Description:
+#     Request for the option type field
+#
+# Input args: rawFrame and type
+# Output args: offset field
+# Typical usage:
+#
+##################################################################
+proc GetESRPHelloMessageOption {rawFrame type} {
+
+    set destmac [string range $rawFrame 0 16];
+    if {$destmac == "00 E0 2B 00 00 02"} {    
+        switch -- $type \
+        "dmac" {
+            set val [string range $rawFrame 0 16];
+        } "smac" {
+            set val [string range $rawFrame 18 34];                        
+        } "group" {
+            set val [string range $rawFrame 126 130];
+        } "priority" {
+            set val [string range $rawFrame 132 136];            
+        } "state" {
+            set val [string range $rawFrame 138 142];    
+        } "activeport" {
+            set val [string range $rawFrame 144 148];  
+        } "ipaddress" {
+            set val [string range $rawFrame 150 160]; 
+        } "systemmac" {
+            set val [string range $rawFrame 162 178];                            
+        } "timer" {
+            set val [string range $rawFrame 180 184];  
+        } "trackport" {
+            set val [string range $rawFrame 186 190];                                            
+        } default {
+            set val "NO_OPTION";
+        }                  
+        return $val;
+          
+    } else {
+        return "NOT_ESRP_HELLO_MESSAGE";
+    }   
+    
+}
+
+proc GetMasterSlaveIP1 {vname sw1 sw2 fd_res} {
+
+    # ----- Environment variables setup
+    global DUT1_CONNECT;
+    global DUT2_CONNECT;
+    global DUT3_CONNECT;
+    global DUT4_CONNECT;
+    
+    set x $sw1;
+    set y $sw2;
+    append x "_CONNECT";
+    append y "_CONNECT";
+    set connect1 [set $x];
+    set connect2 [set $y];    
+    set retval "NONE";
+    lappend parameterList "{$vname } 4";
+    Login $connect1
+    set val1 [GetKeyValue "show esrp" $parameterList];
+    Login $connect2
+    set val2 [GetKeyValue "show esrp" $parameterList];
+    if {($val1 == "Master") && ($val2 == "Slave")} {
+        set retval $sw1;
+    } elseif {($val1 == "Slave") && ($val2 == "Master")} {   
+        set retval $sw2;
+    }
+    unset parameterList;
+    
+    return $retval;
+}
+
+proc GetMasterSlaveIP2 {vname sw1 sw2 sw3 fd_res} {
+
+    # ----- Environment variables setup
+    global DUT1_CONNECT;
+    global DUT2_CONNECT;
+    global DUT3_CONNECT;
+    global DUT4_CONNECT;
+    global DUT5_CONNECT;
+        
+    set x $sw1;
+    set y $sw2;
+    set z $sw3;    
+    append x "_CONNECT";
+    append y "_CONNECT";
+    append z "_CONNECT";    
+    set connect1 [set $x];
+    set connect2 [set $y]; 
+    set connect3 [set $z];          
+    set retval "NONE";
+    lappend parameterList "{$vname } 4";
+    Login $connect1
+    set val1 [GetKeyValue "show esrp" $parameterList];
+    Login $connect2
+    set val2 [GetKeyValue "show esrp" $parameterList];
+    Login $connect3
+    set val3 [GetKeyValue "show esrp" $parameterList]; 
+    unset parameterList;      
+    lappend ret $val1;
+    lappend ret $val2;
+    lappend ret $val3;
+    set m 0;
+    set s 0;        
+    foreach k $ret {
+        if {$k == "Master"} {
+            incr m;
+        } elseif {$k == "Slave"} {
+            incr s;
+        }
+    }
+    unset ret;
+    if {($m == 1) && ($s == 2)} {
+        if {$val1 == "Master"} {
+            return $sw1;
+        } elseif {$val2 == "Master"} {
+            return $sw2;        
+        } elseif {$val3 == "Master"} {
+            return $sw3;        
+        } else {
+            return "NONE";        
+        }
+    } else {
+        return "NONE";
+    }
+}
+
+proc GetHexNumber {number} {
+
+    set nh [format "%06X" $number];
+    set x1 [string range $nh 0 1];
+    set x2 [string range $nh 2 3];
+    set x3 [string range $nh 4 end];
+    
+    set val "00:A1:11:";
+    append val $x1;
+    append val ":";
+    append val $x2;
+    append val ":";
+    append val $x3;
+    return $val;        
+}
+
+##################################################################
+# Description:
+#     This proc can will check if the port is able to forwarding the
+#     packets or not.
+#
+# Input args:
+#            portn - port number to check
+#            flag  - 1 means forwarding
+#                    0 means not forwarding
+#            dut   - DUT name (DUT1)
+#            vlan  - vlan name
+#
+# Output args: None.
+#
+# Typical usage:
+# CheckDisplayvpst "3:1" 1 "DUT2" "vlanlink"
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: VerifySwitchOutput
+##################################################################
+proc CheckDisplayvpst {portn flag dut {vlan ""}} {
+    set platform [GetPlatform $dut];
+    global gnssPlatform i386Platform bcmPlatform pioneerPlatform
+    if {[regexp -nocase "$gnssPlatform|$pioneerPlatform" $platform]} {
+        report_start_test "CheckDisplayvpst $portn $flag $dut $vlan on $platform";
+        lappend parameterList "{$vlan } 1";
+        set vid [GetKeyValue "show vlan" $parameterList];
+        unset parameterList;
+	set ret [regexp {([0-9]+):([0-9]+)} $portn y slot port];
+        lappend parameterList "{(^| )$port=} 1";
+        set ver [GetVersion $dut];
+        if {[CompareRelease $ver 11.7.0.1] >= 0} {
+           EnableDebugMode
+           set vpstList [GetKeyValue "debug hal show iomodule vpst $slot $vid" $parameterList];
+        } else {
+           set vpstList [GetKeyValue "show platform iomodule vpst $slot $vid" $parameterList];
+        }
+	result_debug "vpstList for slot $slot vid $vid port $port: $vpstList";
+	set vpst [lindex $vpstList 0];
+	result_debug "vpst for slot $slot vid $vid port $port: $vpst";
+        if {[regexp -nocase "KEY_NOT_FOUND" $vpst]!=1} {
+	set forward [expr (0x$vpst % 2)];
+	if {$forward == $flag} {
+	    result_ok " forward: $forward and flag: $flag is the same";
+        } else {
+	    result_error " forward: $forward and flag: $flag is different";
+        }
+        }
+    } elseif {[regexp -nocase "$i386Platform|$bcmPlatform" $platform]} {
+        report_start_test "CheckDisplayvpst $portn $flag $dut $vlan on $platform";
+        # --- summitx450 needs to prepend the slot number
+        global i386Stackable stackable
+        if {[regexp -nocase "$stackable|$i386Stackable" $platform]} {
+           set portn "1:$portn";
+        }
+        set ver [GetVersion $dut];
+        EnableDebugMode;
+        if {[CompareRelease $ver 11.1.0.10] >= 0} {
+           if {[CompareRelease $ver 11.4.0.2] >= 0} {
+            lappend parameterList "{vlan: *$vlan, *port:$portn,} 2 1";
+            if {[CompareRelease $ver 12.1.0.53] >= 0} {
+	       set egres [GetKeyValue "jerry vlan show vpifs" $parameterList];
+            } else {
+	       set egres [GetKeyValue "jerry show vlan vpifs" $parameterList];
+            }
+	    unset parameterList;
+           } else {
+            lappend parameterList "{vlan: *$vlan, *port:$portn,} 0 1";
+	    set egres [GetKeyValue "jerry show vlan vpifs" $parameterList];
+	    unset parameterList;
+	    set egres [string trimleft $egres "Egres:"];
+           }
+	    set egres [string trimright $egres ","];
+           if {[CompareRelease $ver 11.4.0.2] >= 0} {
+            lappend parameterList "{vlan: *$vlan, *port:$portn,} 0 1";
+            if {[CompareRelease $ver 12.1.0.53] >= 0} {
+	       set ingres [GetKeyValue "jerry vlan show vpifs" $parameterList];
+            } else {
+	       set ingres [GetKeyValue "jerry show vlan vpifs" $parameterList];
+            }
+	    unset parameterList;
+	    set ingres [string trimleft $ingres "Ingress:"];
+           } else {
+            lappend parameterList "{vlan: *$vlan, *port:$portn,} 2 1";
+	    set ingres [GetKeyValue "jerry show vlan vpifs" $parameterList];
+	    unset parameterList;
+           }
+	    set ingres [string trimright $ingres ","];
+        } else {
+            lappend parameterList "{vlan: *$vlan, *port:$portn, *.* egState: } 1";
+	    set egres [GetKeyValue "jerry show vlan 7" $parameterList];
+	    unset parameterList;
+	    set egres [string trimright $egres ","];
+            lappend parameterList "{vlan: *$vlan, *port:$portn, *.* inState: } 1";
+	    set ingres [GetKeyValue "jerry show vlan 7" $parameterList];
+	    unset parameterList;
+	    set ingres [string trimright $ingres ","];
+        }
+	if {$flag == 1} { 
+            if {$egres == "0x1" && $ingres == "0x5"} {
+	        result_ok " flag: $flag and egres: $egres, ingres: $ingres";
+	    } else {
+	        result_error " flag: $flag BUT egres: $egres, ingres: $ingres";
+	    }
+	} else {
+            if {$egres == "0x8" && $ingres == "0x42"} {
+	        result_ok " flag: $flag and egres: $egres, ingres: $ingres";
+	    } else {
+	        result_error " flag: $flag BUT egres: $egres, ingres: $ingres";
+	    }
+	}
+    } else {
+        report_start_test "CheckDisplayvpst $portn $flag $dut $vlan not supported on $platform";
+        result_error "Displayvpst not supported on $platform";
+    }
+    report_end_test
+}

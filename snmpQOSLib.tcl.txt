@@ -1,0 +1,1216 @@
+#!/usr/bin/tclsh
+
+
+################################################################
+#  Procedure Name: snmpGetQosProfileIndexFromName
+#  
+#  Description:
+#    This procedures retrieves the QOSprofile index for the
+#    given QOS profile name
+#
+#  Input Variables:
+#    sessionid - SNMP session established with the DUT
+#    profname  - Name of the QOS Profile
+# 
+#  Optional Args:
+#    None
+#
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#     QOS profile index / ERROR 
+#
+#  Possible Usage:
+#     snmpGetQosProfileIndexFromName $sessionid "QP1"
+###############################################################
+proc snmpGetQosProfileIndexFromName { sessionid profname} {
+   set result [snmpGetTable -session $sessionid -oid extremeQosProfileName]
+
+   foreach profInfo [split $result "\n"] {
+     foreach item [split $profInfo "\ : , \""] {
+     if {[string compare [string tolower $profname] \
+                            [string tolower $item]] == 0 } {
+          regexp {.*[.]([0-9]+)} $profInfo res index
+          if { [info exists index] } {
+             result_debug "snmpGetQosProfileIndexFromName - QOS profile index \
+                           for $profname is $index"
+             return $index
+          }
+        }
+     }
+   }
+   result_debug "snmpGetQosProfileIndexFromName - QOS profile index for \
+                 $profname is ERROR"
+   return "ERROR"
+}
+
+################################################################
+#  Procedure Name: snmpGetQosACLIndexFromName
+#  
+#  Description:
+#    This procedures retrieves the QOSprofile index for the
+#    given QOS profile name
+#
+#  Input Variables:
+#    sessionid - SNMP session established with the DUT
+#    profname  - Name of the QOS Profile
+# 
+#  Optional Args:
+#    None
+#
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#     QOS profile index / ERROR 
+#
+#  Possible Usage:
+#     snmpGetQosACLIndexFromName $sessionid "QP1"
+###############################################################
+proc snmpGetQosACLIndexFromName { sessionid rulename} {
+   set result [snmpGetTable -session $sessionid -oid extremeQosRuleName]
+
+   foreach profInfo [split $result "\n"] {
+     foreach item [split $profInfo "\ : , \""] {
+     if {[string compare [string tolower $rulename] \
+                            [string tolower $item]] == 0 } {
+          regexp {.*[.]([0-9]+)} $profInfo res index
+          if { [info exists index] } {
+             result_debug "snmpGetQosACLIndexFromName - QOS ACL index \
+                           for $rulename is $index"
+             return $index
+          }
+        }
+     }
+   }
+   result_debug "snmpGetQosACLIndexFromName - QOS profile index for \
+                 $rulename is ERROR"
+   return "ERROR"
+}
+
+################################################################
+#  Procedure Name: snmpConfigQosProfile
+#  
+#  Description:
+#  This procedure creates and modifies a qos profile with the  
+#  appropriate parameter values specified.
+#
+#  Input Variables:
+#    session    - Session identifier which identifies the connection
+#                 with the DUT
+#    index      - Index of the Qos profile which needs to be modified
+#                 or created.
+#    name       - Name of the Qos profile which need to be modified or created. 
+# 
+#  Optional Args:
+#    minbw      - minimum bandwidth of the Qos profile.
+#    maxbw      - maximum bandwidth of the Qos profile.
+#    priority   - priority of the Qos profile.
+#    comment    - User comment for logging in the command outputs   
+#    fd         - File descriptor for logging the command outputs   
+# 
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    Logs the error message - On failure 
+#
+#  Possible Usage:
+#    snmpConfigQosProfile -session $sessionid -index 2 -name TQP -minbw 10 
+#                         -maxbw 75 -priority 2 -comment "configuring QOS 
+#                         profile" -fd $fd_res 
+#    snmpConfigQosProfile -session $sessionid -name TQP -minbw 10 
+#                         -maxbw 95 -priority 2 -comment "configuring QOS 
+#                         profile" -fd $fd_res 
+#    snmpConfigQosProfile -session $sessionid -index 2 -minbw 20 
+#                         -maxbw 75 -priority 2 -comment "configuring QOS 
+#                         profile" -fd $fd_res 
+###############################################################
+
+proc snmpConfigQosProfile { args } {
+    parse_args snmpConfigQosProfile $args {
+       session    ""
+       index      ""
+       name       ""
+       minbw      ""
+       maxbw      ""
+       priority   ""
+       comment    "snmpConfigQosProfile"
+       fd         "NULL"
+    }
+ 
+    set func "snmpConfigQosProfile:" 
+
+    result_debug "$func: Configuring QOS Profile"
+
+    if { $session == ""} {
+       error "$func session must be specified"
+       return Error
+    }
+
+    if {$index != "" && $name == ""} {
+       error "$func index or name of the Qos profile must be specified"
+       return Error
+    }
+
+    set var "snmpSet -session $session " 
+
+    snmpDebug DEBUG "$func SNMP Set string is $var" $fd
+
+    if {$name == "" && $index == ""} {
+       set index [snmpGetQosProfileIndexFromName $session $name]
+       if {$index == "ERROR"} {
+          error "Qos profile $name does not exist"
+          return Error
+       }
+    }
+
+    if {$minbw != ""} {
+       lappend var -oid extremeQosProfileMinBw.$index -type i -val $minbw
+    }
+ 
+    snmpDebug DEBUG "SNMP Set string is $var" $fd
+    if {$maxbw != ""} {
+       lappend var -oid extremeQosProfileMaxBw.$index -type i -val $maxbw
+    }
+   
+    snmpDebug DEBUG "SNMP Set string is $var" $fd
+    if {$priority != ""} {
+       lappend var -oid extremeQosProfilePriority.$index -type i -val $priority
+    }
+    snmpDebug DEBUG "SNMP Set string is $var" $fd
+
+    set res [snmpGet -session $session -oid \
+                        extremeQosProfileRowStatus.$index]
+    snmpDebug LOG "$func snmpGet-$var" $fd
+
+    set status [snmpUtilGetVal inttext $res]
+
+    snmpDebug LOG "$func row status is $status" $fd
+
+    if {[string compare [string tolower $status] "active"] != 0 } {
+       lappend var -oid extremeQosProfileRowStatus.$index -type i -val 4
+    }
+
+    # ---- configure QOS profile
+    snmpDebug DEBUG "SNMP Set string is $var" $fd
+    set result [eval $var]
+    snmpDebug LOG "$func snmpSet-$result" $fd
+    return $result
+}
+
+################################################################
+#  Procedure Name: snmpVerifyQosProfile
+#  
+#  Description:
+#  This procedure verifies the attributes of a qos profile with the  
+#             values specified.
+#
+#  Input Variables:
+#    session    - Session identifier which identifies the connection
+#                 with the DUT
+#    index      - Index of the Qos profile which needs to be modified
+#                 or created.
+#    name       - Name of the Qos profile which need to be modified or created. 
+# 
+#  Optional Args:
+#    minbw      - minimum bandwidth of the Qos profile.
+#    maxbw      - maximum bandwidth of the Qos profile.
+#    priority   - priority of the Qos profile(1-8).
+#    comment    - User comment for logging in the command outputs
+#    fd         - File descriptor for logging the command outputs
+# 
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    Logs the error message - On failure 
+#
+#  Possible Usage:
+#    snmpVerifyQosProfile -session $sessionid -index 2 -name TQP -minbw 10 
+#                         -maxbw 75 -priority 2 -comment "verifying QOS 
+#                         profile" -fd $fd_res 
+#    snmpVerifyQosProfile -session $sessionid -name TQP -minbw 10 
+#                         -maxbw 95 -priority 2 -comment "verifying QOS 
+#                         profile" -fd $fd_res 
+#    snmpVerifyQosProfile -session $sessionid -index 2 -minbw 20 
+#                         -maxbw 75 -priority low -comment "verifying QOS
+#                         profile" -fd $fd_res 
+###############################################################
+
+proc snmpVerifyQosProfile { args } {
+    parse_args snmpVerifyQosProfile $args {
+       session    ""
+       index      ""
+       name       ""
+       minbw      ""
+       maxbw      ""
+       priority   ""
+       status     ""
+       comment    "snmpVerifyQosProfile"
+       fd         "NULL"
+    }
+ 
+    set func "snmpVerifyQosProfile:" 
+
+    result_debug "$func : Verifying QOS Profile"
+
+    if { $session == ""} {
+       error "$func session must be specified"
+       return Error
+    }
+
+    if {$index == "" && $name == ""} {
+       error "$func index or name of the Qos profile must be specified"
+       return Error
+    }
+
+    if {$name != "" && $index == ""} {
+       set index [snmpGetQosProfileIndexFromName $session $name]
+       if {$index == "ERROR"} {
+          error "Qos profile $name does not exist"
+          return
+       }
+    }
+
+    report_start_test "$comment"
+
+    if {$minbw != ""} {
+       set res [snmpGet -session $session -oid extremeQosProfileMinBw.$index]
+ 	result_ok "SNMP Get operation returns $res"		
+       snmpDebug LOG  "SNMP Get operation returns $res"
+
+       set val [snmpUtilGetVal int $res]
+       snmpDebug DEBUG  "SNMP Get operation returns value $val"
+
+       if {$minbw == $val} {
+          result_ok "minimum bandwidth for QOS profile $index is $val as \
+                     expected"
+       } else {
+          result_error "minimum bandwidth for QOS profile $index is expected \
+                     $minbw but got $val"
+       }
+    }
+ 
+    if {$maxbw != ""} {
+       set res [snmpGet -session $session -oid extremeQosProfileMaxBw.$index]
+	result_ok "SNMP Get operation returns $res"
+       snmpDebug LOG  "SNMP Get operation returns $res"
+       set val [snmpUtilGetVal int $res]
+       snmpDebug DEBUG  "SNMP Get operation returns value $val"
+
+       if {$maxbw == $val} {
+          result_ok "maximum bandwidth for QOS profile $index is $val as \
+                     expected"
+       } else {
+          result_error "maximum bandwidth for QOS profile $index is expected \
+                     $maxbw but got $val"
+       }
+    }
+   
+    if {$priority != ""} {
+      
+       set priority [string tolower $priority]
+       switch $priority {
+          "1" {
+              set priority "low"
+           }
+          "2" {
+              set priority "lowhi"
+           }
+          "3" {
+              set priority "normal"
+           }
+          "4" {
+              set priority "normalhigh"
+           }
+          "5" {
+              set priority "midium"
+           }
+          "6" {
+              set priority "midiumhigh"
+           }
+          "7" {
+              set priority "high"
+           }
+          "8" {
+              set priority "highhi"
+           }
+       }
+
+       set res [snmpGet -session $session -oid extremeQosProfilePriority.$index]
+       snmpDebug LOG  "SNMP Get operation returns $res"
+       set val [snmpUtilGetVal inttext $res]
+       snmpDebug DEBUG  "SNMP Get operation returns value $val"
+
+       if {[string compare [string tolower $val] $priority] == 0 } {
+          result_ok "priority for QOS profile $index is $val as expected"
+       } else {
+          result_error "priority for QOS profile $index is expected 
+                        $priority but got $val"
+       }
+    }
+
+    if {$status != ""} {
+      
+       set status [string tolower $status]
+       switch $status {
+          "1" {
+              set priority "active"
+           }
+          "2" {
+              set priority "notinservice"
+           }
+          "3" {
+              set priority "notready"
+           }
+          "4" {
+              set priority "createandgo"
+           }
+          "5" {
+              set priority "createandwait"
+           }
+          "6" {
+              set priority "destroy"
+           }
+       }
+
+       set res [snmpGet -session $session -oid \
+                                 extremeQosProfileRowStatus.$index]
+       snmpDebug LOG  "SNMP Get operation returns $res"
+       set val [snmpUtilGetVal inttext $res]
+       snmpDebug DEBUG  "SNMP Get operation returns value $val"
+
+       if {[string compare [string tolower $status] $val] == 0 } {
+          result_ok "Row Status for QOS profile $index is $val as expected"
+       } else {
+          result_error "Row Status for QOS profile $index is expected 
+                        $status but got $val"
+       }
+    }
+
+    report_end_test
+}
+
+################################################################
+#  Procedure Name: snmpConfigVlanQos
+#  
+#  Description:
+#  This procedure configures a qos profile for a specified vlan
+#
+#  Input Variables:
+#    session    - Session identifier which identifies the connection
+#                 with the DUT
+#    index      - Index of the Qos profile which needs to be modified
+#                 or created.
+#    name       - Name of the Qos profile which need to be modified or created. 
+#    vlanindex  - Vlan if index of the Vlan with which QOS profile is to be 
+#                 associated 
+# 
+#  Optional Args:
+#    comment    - User comment for logging in the command outputs   
+#    fd         - File descriptor for logging the command outputs   
+# 
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    Logs the error message - On failure 
+#
+#  Possible Usage:
+#    snmpConfigVlanQos -session $sessionid -name QP1 -vlanindex 70 
+#                      -comment "configuring QOS profile" -fd $fd_res 
+#    snmpConfigVlanQos -session $sessionid -index 1 -vlanindex 70 
+#                      -comment "configuring QOS profile" -fd $fd_res 
+###############################################################
+
+proc snmpConfigVlanQos { args } {
+    parse_args snmpConfigVlanQos $args {
+       session    ""
+       name       ""
+       index      ""
+       vlanindex  ""
+       comment    ""
+       fd         "NULL"
+    }
+ 
+    set func "snmpConfigVlanQos:" 
+
+    result_debug "$func : Configuring VLAN QOS"
+
+    if { $session == "" || $vlanindex == ""} {
+       error "$func session and vlan if index must be specified"
+       return Error
+    }
+
+    if {$index == "" && $name == ""} {
+       error "$func index or name of the Qos profile must be specified"
+       return Error
+    }
+
+    if {$name != "" && $index == ""} {
+       set index [snmpGetQosProfileIndexFromName $session $name]
+       if {$index == "ERROR"} {
+          error "Qos profile $name does not exist"
+          return
+       }
+    }
+
+    snmpDebug DEBUG "$func Configuring QOS profile $name to vlan \
+                  ifindex $vlanindex" $fd
+
+    set result [snmpSet -session $session -oid \
+                extremeQosByVlanMappingQosProfileIndex.$vlanindex -type i \
+                -val $index]
+    snmpDebug LOG "$func snmpSet-$result" $fd
+    return $result
+}
+
+################################################################
+#  Procedure Name: snmpVerifyVlanQos
+#  
+#  Description:
+#  This procedure verifies if the specified qos profile is configured
+#  for the specified vlan.                  
+#
+#  Input Variables:
+#    session    - Session identifier which identifies the connection
+#                 with the DUT
+#    index      - Index of the Qos profile which needs to be modified
+#                 or created.
+#    name       - Name of the Qos profile which need to be verified for the 
+#                 specified vlan. 
+#    vlanindex  - Vlan if index of the Vlan with which QOS profile is to be 
+#                 verified.
+# 
+#  Optional Args:
+#    comment    - User comment for logging in the command outputs   
+#    fd         - File descriptor for logging the command outputs   
+# 
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    Logs the error message - On failure 
+#
+#  Possible Usage:
+#    snmpVerifyVlanQos -session $sessionid -name QP1 -vlanindex 70 
+#                      -comment "verifying Vlan QOS profile" -fd $fd_res 
+#    snmpVerifyVlanQos -session $sessionid -index 1 -vlanindex 70 
+#                      -comment "verifying Vlan QOS profile" -fd $fd_res 
+###############################################################
+
+proc snmpVerifyVlanQos { args } {
+    parse_args snmpVerifyVlanQos $args {
+       session    ""
+       name       ""
+       index      ""
+       vlanindex  ""
+       comment    "snmpVerifyVlanQos"
+       fd         "NULL"
+    }
+ 
+    set func "snmpVerifyVlanQos:" 
+
+    result_debug "$func : Verifying Vlan QOS"
+
+    if { $session == "" || $vlanindex == ""} {
+       error "$func session and vlan if index must be specified"
+       return Error
+    }
+
+    if {$index == "" && $name == ""} {
+       error "$func index or name of the Qos profile must be specified"
+       return Error
+    }
+
+    if {$name != "" && $index == ""} {
+       set index [snmpGetQosProfileIndexFromName $session $name]
+       if {$index == "ERROR"} {
+          error "Qos profile $name does not exist"
+          return
+       }
+    }
+
+    report_start_test "$comment"
+
+    set result [snmpGet -session $session -oid \
+                extremeQosByVlanMappingQosProfileIndex.$vlanindex]
+    snmpDebug LOG "$func snmpGet-$result" $fd
+
+    set val [snmpUtilGetVal int $result]
+
+    if {$val == $index} {
+       result_ok "Vlan Index $vlanindex is associated with Qos profile index \
+                  $val as expected"
+    } else {
+       result_error "Vlan Index $vlanindex is associated with Qos profile index\
+                  $val but expected to be associated with Qos profile $index"
+    }
+
+    report_end_test
+}
+
+
+################################################################
+#  Procedure Name: snmpCreateQosAcl    
+#  
+#  Description:
+#  This procedure creates and modifies a qos ACL with the  
+#  appropriate parameter values specified.
+#
+#  Input Variables:
+#    session    - Session identifier which identifies the connection
+#                 with the DUT
+# 
+#  Optional Args:
+#    inport     - Specific port for which the rule applies  
+#    inportmask - List of ports for which the rule is applied  
+#    destaddrst - Starting ip address of the destination address range of a ip
+#                 traffic for which the rule is applied
+#    destaddrend- Last ip address of the destination address range of a ip
+#                 traffic for which the rule is applied
+#    srcaddrst  - Starting ip address of the source address range of a ip
+#                 traffic for which the rule is applied
+#    srcaddrend - Last ip address of the destination address range of a ip
+#                 traffic for which the rule is applied  
+#    protocol   - Specific type of traffic. tcp/udp/ip  
+#    destl4st   - Starting of the range of the destination L4 port of the 
+#                 traffic for which the rule is applied  
+#    srcl4st    - Starting of the range of the source L4 port of the
+#                 traffic for which the rule is applied
+#    destl4end  - Last of the range of the destination L4 port of the
+#                 traffic for which the rule is applied  
+#    srcl4end   - Last of the range of the source L4 port of the
+#                 traffic for which the rule is applied  
+#    profindex  - Index of the QOS profile associated with the rule
+#    ruleowner  - name of the ruleowner  
+#    name       - Name of the Qos profile which need to be modified or created. 
+#    precedence - precedence of the rule  
+#    comment    - User comment for logging in the command outputs   
+#    fd         - File descriptor for logging the command outputs   
+# 
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    Logs the error message - On failure 
+#
+#  Possible Usage:
+#    snmpCreateQosAcl -session $sessionid -index 2 -name "acl1"
+#                     -destaddrst 10.0.0.2 -destaddrend 10.0.0.100 
+#                     -srcaddrst 11.0.0.2 -srcaddrend 11.0.0.10
+#                     -precedence 10 -comment "configuring QOS Acl" -fd $fd_res
+###############################################################
+
+proc snmpCreateQosAcl { args } {
+    parse_args snmpCreateQosAcl $args {
+       session       ""
+       scope         ""
+       direction     ""
+       inport        ""
+       inportmask    ""
+       destaddrst    ""
+       destaddrend   ""
+       srcaddrst     ""
+       srcaddrend    ""
+       protocol      ""
+       destl4st      ""
+       srcl4st       ""
+       destl4end     ""
+       srcl4end      ""
+       profindex     ""
+       ruleowner     ""
+       precedence    ""
+       name          ""
+       comment       ""
+       fd            "NULL"
+    }
+ 
+    set func "snmpCreateQosAcl:"
+
+    result_debug "$func : Creating ACL Rule"
+
+    if { $session == "" } {
+       error "$func session must be specified"
+       return Error
+    }
+
+    set var "snmpSet -session $session " 
+
+    result_debug "Check pt 1"
+    set res [snmpGet -session $session -oid \
+                              extremeNextAvailableQosRuleIndex.0]
+    snmpDebug LOG "$func snmpGet-next available qos index is $res" $fd
+
+    set index [snmpUtilGetVal int $res]
+ 
+    snmpDebug LOG "$func next available qos index is $index" $fd
+ 
+    lappend inputInfo ACL is created with
+
+    if {$scope != ""} {
+       lappend var -oid extremeQosRuleScope.$index -type i -val $scope
+       lappend inputInfo scope $scope
+    }
+ 
+    if {$direction != ""} {
+       lappend var -oid extremeQosRuleDirection.$index -type i -val $direction
+       lappend inputInfo direction $direction
+    }
+ 
+    if {$inport != ""} {
+       lappend var -oid extremeQosRuleInPort.$index -type i -val $inport
+       lappend inputInfo inport $inport
+    }
+ 
+    if {$inportmask != ""} {
+       lappend var -oid extremeQosRuleInPortMask.$index -type x -val $inportmask
+       lappend inputInfo inportmask $inportmask
+    }
+ 
+    if {$destaddrst != ""} {
+       lappend var -oid extremeQosRuleDestAddrStart.$index -type a \
+                   -val $destaddrst
+       lappend inputInfo destaddrst $destaddrst
+    }
+ 
+    if {$destaddrend != ""} {
+       lappend var -oid extremeQosRuleDestAddrEnd.$index -type a \
+                   -val $destaddrend
+       lappend inputInfo destaddrend $destaddrend
+    }
+ 
+    if {$srcaddrst != ""} {
+       lappend var -oid extremeQosRuleSrcAddrStart.$index -type a \
+                   -val $srcaddrst
+       lappend inputInfo srcaddrst $srcaddrst
+    }
+ 
+    if {$srcaddrend != ""} {
+       lappend var -oid extremeQosRuleSrcAddrEnd.$index -type a -val $srcaddrend
+       lappend inputInfo srcaddrend $srcaddrend
+    }
+ 
+    if {$protocol != ""} {
+       lappend var -oid extremeQosRuleProtocol.$index -type i -val $protocol
+       lappend inputInfo protocol $protocol
+    }
+ 
+    if {$srcl4st != ""} {
+       lappend var -oid extremeQosRuleSourceL4PortStart.$index -type i \
+                   -val $srcl4st
+       lappend inputInfo srcl4st $srcl4st
+    }
+ 
+    if {$srcl4end != ""} {
+       lappend var -oid extremeQosRuleSourceL4PortEnd.$index -type i \
+                   -val $srcl4end
+       lappend inputInfo srcl4end $srcl4end
+    }
+ 
+    if {$destl4st != ""} {
+       lappend var -oid extremeQosRuleDestL4PortStart.$index -type i \
+                   -val $destl4st
+       lappend inputInfo destl4st $destl4st
+    }
+ 
+    if {$destl4end != ""} {
+       lappend var -oid extremeQosRuleDestL4PortEnd.$index -type i \
+                   -val $destl4end
+       lappend inputInfo destl4end $destl4end
+    }
+ 
+    if {$profindex != ""} {
+       lappend var -oid extremeQosRuleQosProfileIndex.$index -type i \
+                   -val $profindex
+       lappend inputInfo profindex $profindex
+    }
+ 
+    if {$ruleowner != ""} {
+       lappend var -oid extremeQosRuleOwner.$index -type s -val $ruleowner
+       lappend inputInfo ruleowner $ruleowner
+    }
+ 
+    if {$precedence != ""} {
+       lappend var -oid extremeQosRulePrecedence.$index -type i -val $precedence
+       lappend inputInfo precedence $precedence
+    }
+ 
+    if {$name != ""} {
+       lappend var -oid extremeQosRuleName.$index -type s -val $name
+       lappend inputInfo name $name
+    }
+ 
+    lappend var -oid extremeQosRuleRowStatus.$index -type i -val 4
+
+    snmpDebug DEBUG "$func $inputInfo" $fd
+
+    # ---- configure QOS profile
+    set result [eval $var]
+    snmpDebug DEBUG "$func snmpSet-$result" $fd
+
+    if { [regexp -nocase "error" $result] == 1} {
+       result_debug "ACL profile $name returns $result"
+       return error
+    }
+
+    result_debug "ACL profile $name returns $index"
+    return $index
+}
+
+################################################################
+#  Procedure Name: snmpDeleteQosAcl    
+#  
+#  Description:
+#  This procedure creates and modifies a qos ACL with the  
+#  appropriate parameter values specified.
+#
+#  Input Variables:
+#    session    - Session identifier which identifies the connection
+#                 with the DUT
+#    index      - Index of the Qos profile which need to be deleted. 
+# 
+#  Optional Args:
+#    name       - Name of the ACL which needs to be deleted.
+#    comment    - User comment for logging in the command outputs   
+#    fd         - File descriptor for logging the command outputs   
+# 
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    Logs the error message - On failure 
+#
+#  Possible Usage:
+#    snmpDeleteQosAcl -session $sessionid -index 2
+#                     -comment "Deleting QOS Acl index 3" -fd $fd_res
+###############################################################
+
+proc snmpDeleteQosAcl { args } {
+    parse_args snmpDeleteQosAcl $args {
+       session       ""
+       index         ""
+       name          ""
+       comment       ""
+       fd            "NULL"
+    }
+ 
+    set func "snmpDeleteQosAcl:"
+
+    result_debug "$func : Deleting ACL Rules"
+
+    if { $session == "" } {
+       error "$func session must be specified"
+       return Error
+    }
+
+    if { $name == "" && $index == ""} {
+       error "$func ACL name or index must be specified"
+       return Error
+    }
+
+    if {$name != ""} {
+       set index [snmpGetQosACLIndexFromName $session $name]
+       result_debug "$func Deleting the ACL Rule $name"
+    } else {
+       result_debug "$func Deleting the ACL Rule with index $index"
+    }
+
+    set res [snmpSet -session $session -oid  extremeQosRuleRowStatus.$index \
+                     -type i -val 6]
+    snmpDebug LOG "$func snmpSet-$res" $fd
+}
+
+################################################################
+#  Procedure Name: snmpVerifyQosAcl    
+#  
+#  Description:
+#  This procedure verifies the parameters of a ACL with the  
+#  specified values.
+#
+#  Input Variables:
+#    session    - Session identifier which identifies the connection
+#                 with the DUT
+#    index      - Index of the Qos ACL. 
+# 
+#  Optional Args:
+#    scope      - any/signaled/inband   
+#    direction  - any/forward/backward 
+#    inport     - Specific port for which the rule applies  
+#    inportmask - List of ports for which the rule is applied  
+#    destaddrst - Starting ip address of the destination address range of a ip
+#                 traffic for which the rule is applied
+#    destaddrend- Last ip address of the destination address range of a ip
+#                 traffic for which the rule is applied
+#    srcaddrst  - Starting ip address of the source address range of a ip
+#                 traffic for which the rule is applied
+#    srcaddrend - Last ip address of the destination address range of a ip
+#                 traffic for which the rule is applied  
+#    protocol   - Specific type of traffic. tcp/udp/ip  
+#    destl4st   - Starting of the range of the destination L4 port of the 
+#                 traffic for which the rule is applied  
+#    srcl4st    - Starting of the range of the source L4 port of the
+#                 traffic for which the rule is applied
+#    destl4end  - Last of the range of the destination L4 port of the
+#                 traffic for which the rule is applied  
+#    srcl4end   - Last of the range of the source L4 port of the
+#                 traffic for which the rule is applied  
+#    profindex  - Index of the QOS profile associated with the rule
+#    ruleowner  - name of the ruleowner  
+#    precedence - precedence of the rule  
+#    name       - Name of the rule.  
+#    status     - Row status of the entry.  
+#    comment    - User comment for logging in the command outputs   
+#    fd         - File descriptor for logging the command outputs   
+# 
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    Logs the error message - On failure 
+#
+#  Possible Usage:
+#    snmpVerifyQosAcl -session $sessionid -index 2 -name "acl1"
+#                     -destaddrst 10.0.0.2 -destaddrend 10.0.0.100 
+#                     -srcaddrst 11.0.0.2 -srcaddrend 11.0.0.10
+#                     -precedence 10 -comment "verifying QOS Acl" -fd $fd_res
+###############################################################
+proc snmpVerifyQosAcl { args } {
+    parse_args snmpVerifyQosAcl $args {
+       session       ""
+       index         ""
+       scope         ""
+       direction     ""
+       inport        ""
+       inportmask    ""
+       destaddrst    ""
+       destaddrend   ""
+       srcaddrst     ""
+       srcaddrend    ""
+       protocol      ""
+       destl4st      ""
+       srcl4st       ""
+       destl4end     ""
+       srcl4end      ""
+       profindex     ""
+       ruleowner     ""
+       precedence    ""
+       name          ""
+       status        ""
+       comment       "snmpVerifyQosAcl"
+       fd            "NULL"
+    }
+ 
+    set func "snmpVerifyQosAcl:"
+
+    result_debug "$func : Verifying ACL Rule"
+
+    if { $session == "" || $index == ""} {
+       error "$func session and QOS ACL index must be specified"
+       return Error
+    }
+
+    if {$comment == ""} {
+       if {$name == ""} {
+          set comment "Verifying the Parameters configured for QOS ACL \
+                    Index $index using SNMP"
+       } else {
+          set comment "Verifying the Parameters configured for QOS ACL \
+                    Index $index name $name using SNMP"
+       }
+    }
+
+    report_start_test "$comment"
+
+    if {$scope != ""} {
+       set res [snmpGet -session $session -oid extremeQosRuleScope.$index] 
+       snmpDebug LOG "$func snmpGet-$res" $fd
+
+       set val [snmpUtilGetVal inttext $res]
+       snmpDebug LOG "$func snmpUtilGetVal- returns $val" $fd
+
+       if {$val == $scope} {
+          result_ok "scope is $val as expected"
+       } else {
+          result_error "scope is expected $scope but got $val"
+       }
+    }
+ 
+    if {$direction != ""} {
+       set res [snmpGet -session $session -oid extremeQosRuleDirection.$index] 
+       snmpDebug LOG "$func snmpGet-$res" $fd
+
+       set val [snmpUtilGetVal inttext $res]
+       snmpDebug LOG "$func snmpUtilGetVal- returns $val" $fd
+
+       if {$val == $direction} {
+          result_ok "Direction is $val as expected"
+       } else {
+          result_error "Direction is expected $direction but got $val"
+       }
+    }
+ 
+    if {$inport != ""} {
+       set res [snmpGet -session $session -oid extremeQosRuleInPort.$index] 
+       snmpDebug LOG "$func snmpGet-$res" $fd
+
+       set val [snmpUtilGetVal inttext $res]
+       snmpDebug LOG "$func snmpUtilGetVal- returns $val" $fd
+
+       if {$val == $inport} {
+          result_ok "extremeQosRuleInPort is $val as expected"
+       } else {
+          result_error "extremeQosRuleInPort is expected $inport but got $val"
+       }
+    }
+ 
+    if {$inportmask != ""} {
+       set res [snmpGet -session $session -oid extremeQosRuleInPortMask.$index]
+       snmpDebug LOG "$func snmpGet-$res" $fd
+
+       set val [snmpUtilGetVal int $res]
+       snmpDebug LOG "$func snmpUtilGetVal- returns $val" $fd
+
+       if {$val == $inportmask} {
+          result_ok "extremeQosRuleInPortMask is $val as expected"
+       } else {
+          result_error "extremeQosRuleInPortMask is expected $inportmask \
+                        but got $val"
+       }
+    }
+ 
+    if {$destaddrst != ""} {
+       set res [snmpGet -session $session -oid \
+                                 extremeQosRuleDestAddrStart.$index]
+       snmpDebug LOG "$func snmpGet-$res" $fd
+
+       set val [snmpUtilGetVal ipaddr $res]
+       snmpDebug LOG "$func snmpUtilGetVal- returns $val" $fd
+
+       if {$val == $destaddrst} {
+          result_ok "extremeQosRuleDestAddrStart is $val as expected"
+       } else {
+          result_error "extremeQosRuleDestAddrStart is expected $destaddrst \
+                        but got $val"
+       }
+    }
+ 
+    if {$destaddrend != ""} {
+       set res [snmpGet -session $session -oid extremeQosRuleDestAddrEnd.$index]
+       snmpDebug LOG "$func snmpGet-$res" $fd
+
+       set val [snmpUtilGetVal ipaddr $res]
+       snmpDebug LOG "$func snmpUtilGetVal- returns $val" $fd
+
+       if {$val == $destaddrend} {
+          result_ok "extremeQosRuleDestAddrEnd is $val as expected"
+       } else {
+          result_error "extremeQosRuleDestAddrEnd is expected $destaddrend \
+                        but got $val"
+       }
+    }
+
+    if {$srcaddrst != ""} {
+       set res [snmpGet -session $session -oid \
+                                 extremeQosRuleSrcAddrStart.$index]
+       snmpDebug LOG "$func snmpGet-$res" $fd
+
+       set val [snmpUtilGetVal ipaddr $res]
+       snmpDebug LOG "$func snmpUtilGetVal- returns $val" $fd
+
+       if {$val == $srcaddrst} {
+          result_ok "extremeQosRuleSrcAddrStart is $val as expected"
+       } else {
+          result_error "extremeQosRuleSrcAddrStart is expected $srcaddrst \
+                        but got $val"
+       }
+    }
+ 
+    if {$srcaddrend != ""} {
+       set res [snmpGet -session $session -oid extremeQosRuleSrcAddrEnd.$index]
+       snmpDebug LOG "$func snmpGet- $res" $fd
+
+       set val [snmpUtilGetVal ipaddr $res]
+       snmpDebug LOG "$func snmpUtilGetVal- returns $val" $fd
+
+       if {$val == $srcaddrend} {
+          result_ok "extremeQosRuleSrcAddrEnd is $val as expected"
+       } else {
+          result_error "extremeQosRuleSrcAddrEnd is expected $srcaddrend \
+                        but got $val"
+       }
+    }
+ 
+    if {$protocol != ""} {
+       set protocol [string tolower $protocol]
+
+       switch $protocol {
+          "1" {
+              set protocol "any"
+           }
+          "2" {
+              set protocol "udp"
+           }
+          "3" {
+              set protocol "tcp"
+           }
+          "4" {
+              set protocol "other"
+           }
+          "5" {
+              set protocol "tcpPermitEstablished"
+           }
+          "6" {
+              set protocol "icmp"
+           }
+       }
+
+       set res [snmpGet -session $session -oid extremeQosRuleProtocol.$index]
+       snmpDebug LOG  "$func SNMP Get operation returns $res"
+
+       set val [snmpUtilGetVal inttext $res]
+       snmpDebug DEBUG  "SNMP Get operation returns value $val"
+
+       if {[string compare [string tolower $protocol] $val] == 0 } {
+          result_ok "extremeQosRuleProtocol is $val as expected"
+       } else {
+          result_error "extremeQosRuleProtocol is expected $protocol \
+                        but got $val"
+       }
+
+    }
+ 
+    if {$srcl4st != ""} {
+       set res [snmpGet -session $session \
+                        -oid extremeQosRuleSourceL4PortStart.$index]
+       snmpDebug LOG "$func snmpGet - returns $res" $fd
+
+       set val [snmpUtilGetVal int $res]
+       snmpDebug DEBUG "$func snmpUtilGetVal- returns $val" $fd
+
+       if {$val == $srcl4st} {
+          result_ok "extremeQosRuleSourceL4PortStart is $val as expected"
+       } else {
+          result_error "extremeQosRuleSourceL4PortStart is expected $srcl4st \
+                        but got $val"
+       }
+    }
+ 
+    if {$srcl4end != ""} {
+       set res [snmpGet -session $session -oid \
+                                 extremeQosRuleSourceL4PortEnd.$index]
+       snmpDebug LOG "$func snmpGet - returns $res" $fd
+
+       set val [snmpUtilGetVal int $res]
+       snmpDebug DEBUG "$func snmpUtilGetVal- returns $val" $fd
+
+       if {$val == $srcl4end} {
+          result_ok "extremeQosRuleSourceL4PortEnd is $val as expected"
+       } else {
+          result_error "extremeQosRuleSourceL4PortEnd is expected $srcl4end \
+                        but got $val"
+       }
+    }
+ 
+    if {$destl4st != ""} {
+       set res [snmpGet -session $session -oid \
+                         extremeQosRuleDestL4PortStart.$index]
+       snmpDebug LOG "$func snmpGet - returns $res" $fd
+
+       set val [snmpUtilGetVal int $res]
+       snmpDebug DEBUG "$func snmpUtilGetVal- returns $val" $fd
+
+       if {$val == $destl4st} {
+          result_ok "extremeQosRuleDestL4PortStart is $val as expected"
+       } else {
+          result_error "extremeQosRuleDestL4PortStart is expected $destl4st \
+                        but got $val"
+       }
+    }
+ 
+    if {$destl4end != ""} {
+       set res [snmpGet -session $session -oid \
+                                 extremeQosRuleDestL4PortEnd.$index] 
+       snmpDebug LOG "$func snmpGet - returns $res" $fd
+
+       set val [snmpUtilGetVal int $res]
+       snmpDebug DEBUG "$func snmpUtilGetVal- returns $val" $fd
+
+       if {$val == $destl4end} {
+          result_ok "extremeQosRuleDestL4PortEnd is $val as expected"
+       } else {
+          result_error "extremeQosRuleDestL4PortEnd is expected $destl4end \
+                        but got $val"
+       }
+    }
+ 
+    if {$profindex != ""} {
+       set res [snmpGet -session $session -oid \
+                                 extremeQosRuleQosProfileIndex.$index]
+       snmpDebug LOG "$func snmpGet-$res" $fd
+
+       set val [snmpUtilGetVal int $res]
+       snmpDebug LOG "$func snmpUtilGetVal- returns $val" $fd
+
+       if {$val == $profindex} {
+          result_ok "extremeQosRuleQosProfileIndex is $val as expected"
+       } else {
+          result_error "extremeQosRuleQosProfileIndex is expected $profindex \
+                        but got $val"
+       }
+    }
+ 
+    if {$ruleowner != ""} {
+       set res [snmpGet -session $session -oid extremeQosRuleOwner.$index] 
+       snmpDebug LOG "$func snmpGet-$res" $fd
+
+       set val [snmpUtilGetVal str $res]
+       snmpDebug LOG "$func snmpUtilGetVal- returns $val" $fd
+
+       if {$val == $ruleowner} {
+          result_ok "extremeQosRuleOwner is $val as expected"
+       } else {
+          result_error "extremeQosRuleOwner is expected $name \
+                        but got $val"
+       }
+    }
+ 
+    if {$precedence != ""} {
+       set res [snmpGet -session $session -oid extremeQosRulePrecedence.$index]
+       snmpDebug LOG "$func snmpGet-$res" $fd
+    }
+ 
+    if {$name != ""} {
+       set res [snmpGet -session $session -oid extremeQosRuleName.$index]
+       snmpDebug LOG "$func snmpGet-$res" $fd
+
+       set val [snmpUtilGetVal str $res]
+       snmpDebug LOG "$func snmpUtilGetVal- returns $val" $fd
+
+       if {$val == $name} {
+          result_ok "extremeQosRuleName is $val as expected"
+       } else {
+          result_error "extremeQosRuleName is expected $name \
+                        but got $val"
+       }
+    }
+ 
+    if {$status != ""} {
+       set res [snmpGet -session $session -oid extremeQosRuleRowStatus.$index]
+       snmpDebug LOG "$func snmpGet-$res" $fd
+
+       set val [snmpUtilGetVal inttext $res]
+       snmpDebug LOG "$func snmpUtilGetVal- returns $val" $fd
+
+       if {$val == $status} {
+          result_ok "extremeQosRuleRowStatus is $val as expected"
+       } else {
+          result_error "extremeQosRuleRowStatus is expected $status \
+                        but got $val"
+       }
+    }
+
+    report_end_test
+}

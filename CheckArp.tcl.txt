@@ -1,0 +1,545 @@
+
+##################################################################    
+# Description:
+#     This proc can be used to verify an ARP reply. Given a replySendHwAddr,
+#     it analyses the ArpReply and reports success/failure.
+#     it receives the reply on Tx port(from where ARP request is sent).
+#     It also start capture on test equipment, so caller does not have to 
+#     start capture. If replySendHwAddr is "none", it assumes that txPortId
+#     does not receive any ARP reply.
+# Input args: txPortId, rxPortId, dIpAddr, sIpAddr, replySendHwAddr,
+#              filePt, numArpFrames, tag, sMacAddr, dMacAddr
+# Output args: None.
+# Typical usage:
+# CheckArpReply -txPortId 3 -dIpAddr 10.10.1.55 -sIpAddr 10.10.2.200 \
+#                -replySendHwAddr "$cookedDutMac" \
+#                -rxPortId 1 -filePt $fd_res -numArpFrames $nArpFrames
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################    
+proc CheckArpReply {args} {
+    parse_args CheckArpReply $args {
+        txPortId "1"
+        rxPortId "0"  ;#default not sending learn arp, otherwise use this port as the 2nd arp port
+        sMacAddr "default"
+        dMacAddr "FF:FF:FF:FF:FF:FF"
+        sIpAddr "127.0.0.1"
+        dIpAddr "127.0.0.1"
+        srcHwAddr "default"
+        replySendHwAddr "none"
+        percentage "100"
+        numArpFrames "1"
+        filePt "NULL"
+        tag "none"
+        comment ""
+    }
+    global TrafficGen
+    set rc 0
+  
+   switch -exact -- $TrafficGen {
+        stc -
+        ixvm -
+        ixia {
+            # Setup the tag field first
+            if {$tag == "none"} {
+                set wTag false
+                set tagNo "002"
+            } else {
+                set wTag true
+                set tagNo $tag
+            }
+
+            # Get the maximum port number in use
+            if {$txPortId > $rxPortId} {
+                set maxPorts $txPortId
+            } else {
+                set maxPorts $rxPortId
+            }
+
+            set numIxiaCd [GetNumIxiaCd $maxPorts]
+            global startCardNum
+            set pPattern "abcd"   
+
+            #map portId to Ixia port
+            if {$rxPortId == $txPortId} {
+                result_error "Invalid port specification: txPortId=rxPortId"
+                return
+            }
+            MapIxiaPortId $txPortId txChas txCard txPort
+            if {$rxPortId == 0} {
+                #then just choose some random port different the txPort
+                if {$txPortId == 1} {
+                    MapIxiaPortId 2 rxChas rxCard rxPort
+                } else {
+                    MapIxiaPortId 1 rxChas rxCard rxPort
+                }
+            } else {
+                MapIxiaPortId $rxPortId rxChas rxCard rxPort
+            }
+
+            report_start_test "ARP REPLY check on Txport $txPortId $comment"
+            # Disable protocol server on txPort by default unless rx != 0
+            if {$rxPortId > 0} {
+                if {$TrafficGen != "ept"} {
+                    SaveAndSetProtocolServer $rxPortId $dIpAddr $dIpAddr ixInfo \
+                        -arpService true
+                }
+            }
+
+            #Configure interface for collection
+            #
+            # EY-02-28-2013: Replace per-card operations with per-port operations.
+            #ixiaConf_clearStat $txCard
+            #ixiaStartCaptureCards $numIxiaCd $startCardNum  
+            ClearPortsStats $txPortId;
+            StartPortsCapture $txPortId;
+
+            #send a packet
+            set frameSent [ixiaConf_2Ports_arp -numIxiaCd $numIxiaCd \
+                -startCardNum $startCardNum -txChas $txChas -txCard $txCard -txPort $txPort \
+                -rxChas $txChas -rxCard $rxCard -rxPort $rxPort  \
+                -sMacAddr $sMacAddr -dMacAddr $dMacAddr -srcHwAddr $srcHwAddr \
+                -wTag $wTag -tagNo $tagNo -percentage "$percentage" \
+                -sIpAddr $sIpAddr -dIpAddr $dIpAddr -numFrames $numArpFrames]
+            result_debug "FrameSentARP: $frameSent"
+
+            #
+            # EY-02-28-2013: Stop capturing.
+            StopPortsCapture $txPortId;
+        }
+        default {
+        }
+   }
+
+   
+    #retrieve data from ixia
+    #find how many expected packets was received
+    set numPacketReceived -255
+
+    #
+    # EY-02-28-2013: Replace call to ixiaCaptureOnePort with call to
+    # GetCapturedFrames.
+    #set rawPortData [ixiaCaptureOnePort $txChas $txCard $txPort $filePt]	 ;# check forwarding
+    set rawPortData [GetCapturedFrames $txPortId];
+    foreach frame $rawPortData {
+        result_debug "Frames received on portId $txPortId:"
+        result_debug "$frame"
+
+        result_debug "senderMacAddress:[GetSenderMacAddress $frame]"
+        result_debug "sIPRecv: [GetSourceIPAddress $frame] sIPSent: [GetSourceIPAddress $frameSent]"
+        result_debug "dIPRecv: [GetDestIPAddress $frame] dIPSent: [GetDestIPAddress $frameSent] and message type [GetMessageType $frame]"
+        if {[GetMessageType $frame] == "ARP_REPLY"} {
+            if {$numPacketReceived==-255} {
+                set numPacketReceived 0
+            }
+            if {([GetSourceIPAddress $frame] == $dIpAddr) && \
+              ([GetDestIPAddress $frame] == [GetSourceIPAddress $frameSent]) && \
+              ([GetSenderMacAddress $frame] == $replySendHwAddr) && \
+              ([GetTargetMacAddress $frame] == [GetSourceMacAddress $frameSent] || \
+              [GetTargetMacAddress $frame] == [cookMacForIxia $srcHwAddr])} {
+                incr numPacketReceived 1
+            }
+        }
+        result_debug "numPacketReceived= $numPacketReceived"
+    }
+
+    if {$rxPortId > 0} {
+        if {$TrafficGen != "ept"} { 
+            RestoreSavedProtocolServer ixInfo
+        }
+    }
+
+    #now check received data against checkList to see if matched
+    set testResult "good"
+
+    if {($numPacketReceived == $numArpFrames) && \
+      ($replySendHwAddr != "none")} {
+        result_debug "ARP_REPLY on txport $txPort checked Okay."
+    } elseif {($numPacketReceived!=$numArpFrames) && ($numPacketReceived==-255) && \
+      ($replySendHwAddr == "none")} {
+        result_debug "ARP_REPLY on txport $txPort check okay. Got $numPacketReceived replies."
+    } elseif {$numPacketReceived >= 1} {
+        result_debug "ARP_REPLY on txport $txPort check okay. Got at least $numPacketReceived replies."
+    } else {
+        result_error "ARP_REPLY failed on port $txPort."
+        result_debug "numPacketReceived= $numPacketReceived BUT expectedPackets= $numArpFrames"
+        set testResult "bad"
+    }
+    if {$testResult == "good"} {
+        result_ok "ARP_REPLY Check passed"
+        set rc 1  
+    } else {
+        result_error "ARP_REPLY Check failed"
+        set rc 0
+    }
+    report_end_test 
+
+    return $rc
+}
+
+
+##################################################################    
+# Description:
+#     This proc can be used to enable arp protocol server on
+#     a number of given ixia ports. This proc accepts a portIdList and
+#     ipAddressList. Make sure number of elements are same in 2 lists.
+#     It does not perform any other tasks.
+#     Caller should separately call DisableProtocolServer after done.
+# Input args: portIdList, ipAddressList
+# Optional Input args: taglist, pingEnable, gwIpList, nwrangelist, numAddr, netMask, clearinter
+# Output args: None.
+# returns : 1 (success), 0 (failure)
+# Typical usage:
+# if [EnableProtocolServer portIdList ipAddressList] {
+#    puts "Success"
+# } else {
+#    puts "failure"
+# }
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: SetupTestTool
+# Note : If the "clearinter" argument is provided with  "noclear" input, then Multiple 
+#        Ipv4 Interface can be configured in that port
+##################################################################    
+proc EnableProtocolServer {portIdList ipAddressList {taglist "none"} {pingEnable "false"} \
+                          {gwIpList "0.0.0.0"} {nwrangelist "none"} {numAddr 1} {netMask 24} {clearinter "clear"} } {
+
+    ##############
+    set ResetInter 1
+    if {$clearinter == "noclear"} {
+        set ResetInter 0
+    } else {
+        set ResetInter 1
+    }
+    #############
+
+    global TrafficGen
+    if {$nwrangelist == "none" } {
+        if {[llength $portIdList] != [llength $ipAddressList]} {
+            result_error "Number of list elements do not match."
+            return 0
+        }    
+        set listlen  [llength $portIdList]
+    } else {
+        set listlen  [llength $ipAddressList]
+    } 
+
+    switch -exact -- $TrafficGen {
+        stc {
+           result_warning "THIS CODE SHOULD NOT RUN"
+           return 0
+        }
+        ept {
+        }
+        default {
+        }
+    }
+
+    for {set i 0} {$i < $listlen } {incr i} {
+        if {$nwrangelist == "none" } {
+            set portId [lindex $portIdList $i]
+            set tag $taglist 
+        } else {
+            set portId $portIdList 
+            set tag  [lindex $taglist $i]
+        }
+        set ipAddress [lindex $ipAddressList $i]
+        set gwIp [lindex $gwIpList $i]
+        if {$gwIp == ""} {set gwIp "0.0.0.0"} 
+
+        MapIxiaPortId $portId chas card port
+        if [port get $chas $card $port] {
+            error "port $chas,$card,$port not configured yet!"
+        }
+
+        set cookedMac [port cget -MacAddress]
+
+        # Add the IP address to the IP address table for the port.
+        if {[ipAddressTable get $chas $card $port]} {
+            error "EnableProtocolServer: ipAddressTable get $chas $card $port failed."
+        }
+
+        ipAddressTableItem setDefault
+
+        # Only add the IP address if it isn't already there.
+        if {[ipAddressTable getItem $ipAddress]} {
+            ipAddressTableItem config -fromIpAddress $ipAddress
+            ipAddressTableItem config -overrideDefaultGateway true
+            ipAddressTableItem config -gatewayIpAddress $gwIp                   
+            if {[port get $chas $card $port]} {
+                error "EnableProtocolServer: port get $chas $card $port failed."
+            }
+            ipAddressTableItem config -fromMacAddress $cookedMac
+            ipAddressTableItem           config            -numAddresses   $numAddr
+            ipAddressTableItem config -enableUseNetwork true
+            ipAddressTableItem config -netMask $netMask
+            if {$tag != "none"} {
+                # Tag is only available in 3.65
+                if {![regexp -nocase "3.50" [version cget -installVersion]]} {
+                    ipAddressTableItem config -enableVlan true
+                    ipAddressTableItem config -vlanId $tag
+                }
+            }
+            ipAddressTableItem set
+
+            if {$nwrangelist == "none" } {
+                if {[ipAddressTable addItem]} {
+                    error "EnableProtocolServer: ipAddressTable addItem failed."
+                }
+            } else {
+                ipAddressTable addItem
+            }
+            if {[ipAddressTable set $chas $card $port]} {
+                error "EnableProtocolServer: ipAddressTable set $chas $card $port failed."
+            }
+        }
+
+        if {$nwrangelist != "none" } {
+            arpServer                    setDefault        
+            arpServer  config   -mode      2
+            arpServer                    set               $chas $card $port
+        }
+        interfaceTable               select            $chas $card $port
+        if {$ResetInter == 1} {
+            interfaceTable               clearAllInterfaces
+        }
+        interfaceIpV4          setDefault
+        interfaceIpV4          config        -gatewayIpAddress $gwIp
+        interfaceIpV4          config        -maskWidth 24
+        interfaceIpV4          config        -ipAddress  $ipAddress
+        interfaceEntry         addItem        addressTypeIpV4                     
+        interfaceEntry         setDefault        
+        interfaceEntry         config        -enable                     true
+        interfaceEntry         config        -description                "$ipAddress/24 - $card:$port"
+        interfaceEntry         config        -macAddress                 "[port cget -MacAddress]"
+        interfaceEntry         config        -vlanPriority               0
+
+        if {$tag != "none"} {
+            interfaceEntry     config        -enableVlan                 true
+            interfaceEntry     config        -vlanId                     $tag
+        } else {
+            interfaceEntry     config        -enableVlan                 false
+            interfaceEntry     config        -vlanId                     0
+        }
+        interfaceTable         addInterface      
+        interfaceEntry         clearAllItems     addressTypeIpV6
+        interfaceEntry         clearAllItems     addressTypeIpV4
+
+
+        # Modify protocol server flags.
+        if {[protocolServer get $chas $card $port]} {
+            error "EnableProtocolServer: protocolServer get $chas $card $port failed."
+        }
+        protocolServer config -enableArpResponse true
+        if {$pingEnable != "false"} {
+            protocolServer config -enablePingResponse true 
+        }
+        if {[protocolServer set $chas $card $port]} {
+            error "EnableProtocolServer: protocolServer set $chas $card $port failed."
+        }
+        if {[protocolServer write $chas $card $port]} {
+            error "EnableProtocolServer: protocolServer write $chas $card $port failed."
+        }
+   } ;# for
+   
+   return 1
+} ;# EnableProtocolServer
+
+
+##################################################################    
+# Description:
+#     This proc can be used to disable arp protocol server on
+#     a number of given ixia ports. This proc accepts a portIdList.
+#     Make sure number of elements are same in 2 lists.
+# Input args: portIdList
+# Output args: None.
+# returns : 1 (success), 0 (failure)
+# Typical usage:
+# if [DisableProtocolServer $portIdList] {
+#    puts "Success"
+# } else {
+#    puts "failure"
+# }
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: SetupTestTool
+##################################################################    
+proc DisableProtocolServer {portIdList ipAddressList} {
+    global TrafficGen
+
+    if {[llength $ipAddressList] > 0 &&
+      [llength $ipAddressList] != [llength $portIdList]} {
+        result_error "Number of list elements do not match."
+        return 0
+    }
+
+    switch -exact -- $TrafficGen {
+        stc {
+            return 1
+        }
+        ept {
+        }
+        default {
+        }
+    }
+
+    for {set i 0} {$i < [llength $portIdList]} {incr i} {
+        set portId [lindex $portIdList $i]
+
+        MapIxiaPortId $portId chas card port
+
+        # Clean up the IP address table.
+        if {[llength $ipAddressList] > 0} {
+            set ipAddress [lindex $ipAddressList $i]
+
+            ipAddressTable setDefault
+            ipAddressTableItem setDefault
+
+            if {[ipAddressTable get $chas $card $port]} {
+                error "DisableProtocolServer: ipAddressTable get $chas $card $port failed."
+            }
+            if {![ipAddressTable getItem $ipAddress]} {
+                if {[ipAddressTable delItem]} {
+                    error "DisableProtocolServer: ipAddressTable delItem failed."
+                }
+                if {[ipAddressTable set $chas $card $port]} {
+                    error "DisableProtocolServer: ipAddressTable set $chas $card $port failed."
+                }
+            }
+        }
+        #----added loop to verify the ipaddress on the intf is v4 or v6
+        if {![IsValidIpAddress $ipAddress]} {
+            set mask "64"
+        } else {
+            set mask "24"
+        }
+        #-----This will delete the interface table
+        interfaceTable select $chas $card $port
+        interfaceTable getInterface "$ipAddress/$mask - $card:$port"
+        interfaceTable delInterface "$ipAddress/$mask - $card:$port"
+        interfaceTable write
+
+
+        #this will keep the previous configuration, but just disable arp and ping
+        if {[protocolServer get $chas $card $port]} {
+            error "DisableProtocolServer: protocolServer get $chas $card $port failed."
+        }
+        protocolServer config -enableArpResponse false
+        protocolServer config -enablePingResponse false 
+        if {[protocolServer set $chas $card $port]} {
+            error "DisableProtocolServer: protocolServer set $chas $card $port failed."
+        }
+        if {[protocolServer write $chas $card $port]} {
+            error "DisableProtocolServer: protocolServer write $chas $card $port failed."
+        }
+    } ;# for
+
+    return 1
+} ;# DisableProtocolServer
+
+
+;#################################################################
+;#
+;# RestoreProtocolServer
+;#
+;# This function will restore the state of the ARP, and optionally,
+;# the PING protocol servers to the states specified.
+;#
+;# Input variables: Variables in []'s are optional.
+;#     portIdList: The logical port numbers to operate on.
+;#
+;#     ipAddressList: The IP addresses, one per port, assigned to
+;#                    the protocol servers.  These addresses will
+;#                    be removed from the IP address tables on the
+;#                    IXIA.
+;#
+;#                    Note: The number of IP addresses in this
+;#                    list must match the number of port numbers
+;#                    specified in portIdList.
+;#
+;#     arpEnable: Specifies whether the ARP protocol server is to
+;#                be enabled or disabled.
+;#
+;#     [pingEnable=""]: Specifies whether the PING protocol is to
+;#                      be enabled or disabled.
+;#
+;#     Note: Below is a list of acceptable values and their meanings
+;#     for both arpEnable and pingEnable,  Other values will cause
+;#     unspecified behavior.
+;#
+;#         0, false: Disable the protocol server.
+;#         1, true: Enable the protocol server.
+;#
+;# Output variables: None.
+;#
+;# Return value: None.
+;#
+;# Typical usage:
+;#     set txPort 3
+;#     set txIpAddress 1.1.3.3
+;#     GetProtocolServerInfo $txPort -arpService arpOnOrOff
+;#     if {$arpOnOrOff} {
+;#         result_debug "ARP server is enabled."
+;#     } else {
+;#         result_debug "ARP server is disabled."
+;#     }
+;#
+;#     # Enable the ARP protocol server.
+;#     EnableProtocolServer $txPort $txIpAddress
+;#     ...
+;#     # Do other stuff here.
+;#     ...
+;#     # Restore the ARP protocol server to its former state.
+;#     RestoreProtocolServer $txPort $txIpAddress $arpOnOrOff
+;#
+;# Category: SetupTestTool
+;#
+;#################################################################
+proc RestoreProtocolServer {portIdList ipAddressList arpEnable {pingEnable ""}} {
+    if {[llength $portIdList] != [llength $ipAddressList]} {
+       result_error "Number of list elements do not match."
+       return
+    }
+
+    global TrafficGen
+    switch -exact -- $TrafficGen {
+        agilent {
+            return 0
+        }
+        stc {
+        }
+        ept {
+        }
+        default {
+        }
+    }
+
+    for {set i 0} {$i < [llength $portIdList]} {incr i} {
+        set portId [lindex $portIdList $i]
+        set ipAddress [lindex $ipAddressList $i]
+
+        MapIxiaPortId $portId chas card port
+
+        ipAddressTable setDefault
+        ipAddressTableItem setDefault
+
+        if {[ipAddressTable get $chas $card $port]} {
+            error "RestoreProtocolServer: ipAddressTable get $chas $card $port failed."
+        }
+        if {![ipAddressTable getItem $ipAddress]} {
+            if {[ipAddressTable delItem]} {
+                error "RestoreProtocolServer: ipAddressTable delItem failed."
+            }
+            if {[ipAddressTable set $chas $card $port]} {
+                error "RestoreProtocolServer: ipAddressTable set $chas $card $port failed."
+            }
+        }
+
+        SetProtocolServerInfo $portId -arpService $arpEnable -pingService $pingEnable
+    } ;# for
+} ;# RestoreProtocolServer
+

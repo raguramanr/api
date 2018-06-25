@@ -1,0 +1,173 @@
+#!/usr/bin/tclsh
+
+set HOST [exec hostname -s]
+if {[regexp -nocase "autoregeni|autoregrdu" $HOST]} {
+    source /auto/branch/automation/Lib/mainLib.tcl
+    source /auto/branch/automation/Lib/parse_args.tcl
+    source /auto/branch/automation/Lib/mysqlLib.tcl
+} else {
+    source /auto/automation/Lib/mainLib.tcl
+    source /auto/automation/Lib/parse_args.tcl
+    source /auto/automation/Lib/mysqlLib.tcl
+}
+
+
+  set regression_ip     "NULL"
+  set regression_id     "NULL"
+  set regression_id     "NULL"
+
+  proc myIP {} {
+   set host 10.69.6.211
+   set anyport 5555 ;# Any random port number
+   set sock [socket -async $host $anyport]
+   set sock_name [fconfigure $sock -sockname]
+   set ip_list [split $sock_name " "]
+   set ip [lindex $ip_list 0] 
+   close $sock
+   return $ip
+  }
+
+  proc connToDb { host db } {
+  global mysqlstatus mysql_handler
+  set user regression_user
+  set password extreme
+  catch {mysqlconnect -host $host -user $user -password $password -db $db} mysql_handler
+  #puts $mysqlstatus(code);
+  if {$mysqlstatus(code) !=0} {
+      #puts stderr $mysqlstatus(message)
+      #mysqlclose $mysql_handler
+     return $mysqlstatus(code)
+  }
+  #mysqlexec  $mysql_handler "SET max_allowed_packet=50000000"
+  return $mysqlstatus(code)
+ }
+
+  
+  global mysqlIP
+  set mysqlIP [lindex $argv 0]
+  set db [lindex $argv 1]
+  #puts "mysqlIP $mysqlIP"
+  set host $mysqlIP
+  global host mysql_handler
+
+  #conn_to_autoweb_db $host
+  #set db autoweb_db_2;
+  #connToDb $host $db
+  conn_to_db $host $db
+
+  set my_ip [myIP]
+  #puts "my_ip $my_ip"
+
+  while {1} {
+    set output ""
+    set pid_list {}
+    set bulb_regression_ids {}
+    set bulb_regression_pids {}
+    set bulb_regression_statuss {}
+    set bulb_regressions {}
+
+    set rslt [catch {
+    # get the latest 3 builds
+    set latest_builds [mysqlsel $mysql_handler "SELECT build_id \
+                                                     FROM build_table \
+                                                     ORDER BY build_id DESC LIMIT 5" -flatlist]
+    #puts "latest_builds $latest_builds"
+    set build1 [lindex $latest_builds 0]
+    set build2 [lindex $latest_builds 1]
+    set build3 [lindex $latest_builds 2]
+    set build4 [lindex $latest_builds 3]
+    set build5 [lindex $latest_builds 4]
+    set or_build_st " ( build_id='$build1' OR build_id='$build2' OR build_id='$build3' OR build_id='$build4' OR build_id='$build5' ) "
+    #puts "or_build_st $or_build_st"
+#exit
+    set bulb_regressions [mysqlsel $mysql_handler "SELECT regression_id, \
+                                                              regression_pid, \
+                                                              status \
+                                                              FROM regression_table \
+                                                              WHERE regression_ip='$my_ip' \
+                                                              AND regression_pid != '' AND $or_build_st \
+                                                              ORDER BY regression_id DESC" -flatlist]
+
+   set nmbr_regressions [llength $bulb_regressions]
+   #puts "bulb_regressions $bulb_regressions"
+   #puts "nmbr_regressions $nmbr_regressions"
+   
+   for {set i 0} {$i<$nmbr_regressions} {set i [expr $i + 3]} {
+     set bulb_regression_id [lindex $bulb_regressions $i] 
+     set bulb_regression_pid [lindex $bulb_regressions [expr $i + 1]] 
+     set bulb_regression_status [lindex $bulb_regressions [expr $i + 2]] 
+
+     lappend bulb_regression_ids $bulb_regression_id
+     lappend bulb_regression_pids $bulb_regression_pid
+     lappend bulb_regression_statuss $bulb_regression_status
+   }
+
+   #puts "got bulb_regression_ids: $bulb_regression_ids"
+   #puts "got bulb_regression_pids: $bulb_regression_pids"
+   #puts "got bulb_regression_statuss: $bulb_regression_statuss"
+    
+    catch {set output [exec /bin/ps -fC tclsh | grep mysqlRunall_monitor]}
+    if {[info exists output]} {
+      #puts "$output \n\n\n"
+      set regr_list [split $output "\n"]
+      set lines [llength $regr_list]
+      #puts "lines $lines"
+      for {set i 0} {$i<$lines} {incr i} {
+        # split the line
+        set line [lindex $regr_list $i]
+        set line_list [split $line " "]
+        # skip the empty elements
+        set j 1
+        set empty_element 1
+        while {$empty_element} {
+          if {[lindex $line_list $j] == ""} {
+             incr j
+          } else {
+            set empty_element 0
+          }
+        }
+        set pid [lindex $line_list $j]
+        #puts "pid $pid"
+        lappend pid_list $pid
+      }
+    }
+    #puts "RegressionWatchDog pid_list $pid_list\n\n"
+    # see if all the bulb regressions have running regression
+
+    if {[llength $bulb_regression_ids] > 0} {
+      foreach bulb_regression_id $bulb_regression_ids \
+              bulb_regression_pid $bulb_regression_pids \
+              bulb_regression_status $bulb_regression_statuss {
+  
+       #puts "bulb_regression_id $bulb_regression_id"
+       #puts "bulb_regression_pid $bulb_regression_pid"
+       #puts "bulb_regression_status $bulb_regression_status"
+       # is this regression running?
+       set sres [lsearch -exact $pid_list $bulb_regression_pid]
+       #puts "are we running?: $sres" 
+       if {$sres  < 0 } {
+         if {$bulb_regression_status == "running"} {
+           # DANY - set regression status to crashed
+           mysqlexec $mysql_handler "UPDATE regression_table SET status='crashed' WHERE regression_id = '$bulb_regression_id'"
+           #puts "crashing regression: $bulb_regression_id"
+         }
+       } else {
+         if {$bulb_regression_status != "running"} {
+           # DANY - set regression status to running
+           mysqlexec $mysql_handler "UPDATE regression_table SET status='running' WHERE regression_id = '$bulb_regression_id'"
+           #puts "restarting regression: $bulb_regression_id"
+         }
+       }
+     }
+    }
+    } result]
+    after 180000
+    if {$rslt} {
+      #puts "RegressionWatchDog crashed - reason: $result"
+      #puts "restarting"
+      # re-connect db if needed
+      conn_to_db $host $db
+    }
+  }
+
+

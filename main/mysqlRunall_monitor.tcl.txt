@@ -1,0 +1,1915 @@
+#!/usr/bin/tclsh
+
+puts "Entered the script"
+package require http 1.0;
+package require Tclx
+source ../Lib/mainLib.tcl
+
+set  startTime [exec date]
+set  executeBatFile 0
+#set  modSummaryCfgPath "./cfg/modulesToBeSummarized.cfg"
+# SK: Changed duplicated files to be referred under Autoweb/cgi-bin/cgiScripts
+set  modSummaryCfgPath "./../Autoweb/cgi-bin/cgiScripts/modulesToBeSummarized.cfg"
+
+# List of errors returned by main.tcl deemed FATAL
+set fatalErrorList [list \
+	"Unable to connect to switch after reboot" \
+	"Cannot find config file" \
+	"No response from the switch" \
+	"Can't create dir" \
+        "CONSOLE IS HUNG" \
+	"spawn id .* not open" \
+	"invalid command name" \
+	"Loop Condition" \
+	"Config Booted is Factory Default after save reboot" \
+	"CF is corrupted on DUT" \
+	]
+
+# Default user to send mail notification to.
+set defaultRecipient "sqaauto@extremenetworks.com"
+
+# List of modules that returned errors during run of main.tcl
+set erroredModules [list]
+# counter to check how many times the regression is continously failing
+global regression_fail_counter
+set  regression_fail_counter 0 
+
+load [lindex [glob "/usr/lib/libexpect*so*"] 0]
+set LIB_PATH "../Lib"
+lappend auto_path $LIB_PATH
+
+
+gen_index ../Lib
+gen_index .
+
+source ../Lib/parse_args.tcl
+
+
+# ------------------------------------------------------------------------------
+# These 4 calls are REQUIRED for all sublevel libraries that use 
+# result_xxxx functions to work.
+#set resultDir "RunAllMonitor_logs"
+set resultDir "Log"
+if { ! [file isdirectory $resultDir] } {
+    ;# Create it!
+    file mkdir $resultDir
+}
+set tStartTime [clock seconds]
+set tStartDate [clock format [clock seconds] -format "%Y-%m-%d %I.%M.%S%p"]
+set tStartDateString [clock format [clock seconds] -format "%Y-%m-%d_%I.%M.%S%p"]
+set fd_res [open_result_file "runall-[clock format [clock seconds] -format "%I.%M%p"]-[pid]"]
+# ------------------------------------------------------------------------------
+
+set connectionTimeout 60
+
+
+# ------------------------------------------------------------------------------
+# Dump out usage information
+# ------------------------------------------------------------------------------
+proc print_usage {} {
+puts "Calling proc print usage"
+    puts "\r"
+    puts "USAGE: runall_monitor.tcl \
+	    -cfg <config file> \
+	    -regType <regType>"
+    puts "           -regSubType <SubType> \
+	    \[-platformIndx <platformName,index>] \
+	    \[-platform <platform>] \
+	    \[-lst <lst>] \
+	    \[-blade <blade>] "
+    puts "           \[-exclude <module>] \
+	    \[-include <module>] \
+	    \[-forstats <yes|no>] \
+	    \[-download <yes|no>
+	    \[-mailTo <e-mail address>]"
+    puts "  \[-noPost <Y>] "
+    puts "  \[-i386ImagePath <image path to i386 image>]"
+    puts "  \[-marinerImagePath <image path to mariner image>]"
+    puts "  \[-aspenImagePath <image path to aspen image>]"
+    puts "  \[-cougarImagePath <image path to cougar image>]"
+    puts "  \[-x480ImagePath <image path to x480 image>]"
+    puts "  \[-x870ImagePath <image path to x870 image>]"
+    puts "  \[-NWIImagePath <image path to NWI image>]"
+    puts "  \[-viperImagePath <image path to viper image>]"
+    puts "  \[-jaguarImagePath <image path to jaguar image>]"
+    puts "  \[-olympicImagePath <image path to olympic image>]"
+    puts "  \[-voyagerImagePath <image path to voyager image>]"
+    puts "  \[-bootrom <bootrom>]"
+    puts "  \[-bootrom <bootrom>]"
+    puts "  \[-obuild <software build>]"
+    puts "\r"
+    puts "      <cfg>: Path of the config file name (e.g. \
+	    short/ptgm4x6.2.2b4.cfg)"
+    puts "      <regType>: Type of Regression to be run \
+	    (functional|snmp|cli|performance|scalability|fit)"
+    puts "      <regSubType>: Test Subtype (standard|ipRoute1|ipRoute2|ipRoute3|\
+	    uploadanddownload)"
+    puts "      \[<platform>]: Name of the platform"
+    puts "           BD/Alpine/Summit7i/Summit48i/Summit48si/Summit5i/summit2/\
+	    Summit4/Summit24e3/BT/Godzilla"
+    puts "      \[<blade>]: "
+    puts "          FM24T/FM32T/FM4X/G12SXi/F48Ti/F32T/G8Xi/F96Ti/F32Fi/\
+	    G8Ti/Summit7i/Summit5i/Summit48si"
+    puts "      \[<lst>]: quick/pass/all/dev/debug."
+    puts "      \[<exclude>]: modules to be excluded from testing."
+    puts "      \[<include>]: modules to be tested. The regression will only run \
+	    those modules you specified"
+    puts "      \[<forstats>]: If this regression is valid for collecting statistics"
+    puts "	\[-download] <yes|no> Download image before starting. Default: \
+	    yes"
+    puts "      \[<mailTo>]: The email address to which you want to send the \
+	    regression status "
+    puts "      \[<-noPost>]: No posting to autoweb will happen if (-noPost Y) \
+	    is given Note: no rerun will happen also."
+    puts "      \[<i386ImagePath>]: ./exosi386.tgz"
+    puts "      \[<marinerImagePath>]: ./exosmariner.tgz"
+    puts "      \[<aspenImagePath>]: ./exosaspen.tgz"
+    puts "      \[<cougarImagePath>]: ./exoscougar.tgz"
+    puts "      \[<x480ImagePath>]: ./exosx480.tgz"
+    puts "      \[<x870ImagePath]: ./exosx870.tgz"
+    puts "      \[<NWIImagePath>]: ./exosNWI.tgz"
+    puts "      \[<viperImagePath>]: ./exosviper.tgz"
+    puts "      \[<jaguarImagePath>]: ./exosjaguar.tgz"
+    puts "      \[<olympicImagePath>]: ./exosolympic.tgz"
+    puts "      \[<voyagerImagePath>]: ./exosvoyager.tgz"
+    puts "      \[<bootrom>]: bootver (assume in root of your location share)"
+    puts "      \[<obuild>]: old sofware version (ie. 10.1.2.16)"
+    puts "      \[<rerun>] : rerun of failed cases"
+    puts "      \[<baseLine>]: base line build with which the results have to be compared"
+    puts "      \[<stopWithPhase>]: stop with a particular phase in regression"
+}
+
+puts "Starting to run mysqlrunmonitor"
+# ------------------------------------------------------------------------------
+# Function to do validation of input arguments
+# ------------------------------------------------------------------------------
+proc validatemysqlRunall_monitorArgs { p_blade p_platformIndx p_platform p_cfg p_regType p_regSubType \
+	p_exclude p_include p_forstats p_download p_noPost \
+	p_mailTo p_i386ImagePath p_marinerImagePath p_aspenImagePath p_x870ImagePath \
+        p_cougarImagePath p_x480ImagePath p_NWIImagePath p_viperImagePath p_jaguarImagePath p_olympicImagePath \
+	p_voyagerImagePath p_image p_rerun p_baseLine p_stopWithPhase} {
+ puts "Proc  validatemysqlRunall_monitorArgs  is called "
+    global defaultRecipient
+
+    ;# From modulesToBeSummarized.cfg
+    global clis
+    global platformLists
+    global bds summits aspens
+    global RerunEnabled 
+
+    upvar $p_blade  blade
+    upvar $p_platformIndx platformIndx
+    upvar $p_platform platform
+    upvar $p_cfg cfg
+    upvar $p_regType regType 
+    upvar $p_regSubType regSubType
+    upvar $p_exclude exclude
+    upvar $p_include include
+    upvar $p_forstats forstats
+    upvar $p_download download
+    upvar $p_noPost noPost
+    upvar $p_mailTo mailTo 
+    upvar $p_i386ImagePath i386ImagePath 
+    upvar $p_marinerImagePath marinerImagePath 
+    upvar $p_aspenImagePath aspenImagePath 
+    upvar $p_cougarImagePath cougarImagePath 
+    upvar $p_x480ImagePath x480ImagePath
+    upvar $p_x870ImagePath x870ImagePath
+    upvar $p_NWIImagePath NWIImagePath
+    upvar $p_viperImagePath viperImagePath
+    upvar $p_jaguarImagePath jaguarImagePath 
+    upvar $p_olympicImagePath olympicImagePath 
+    upvar $p_voyagerImagePath voyagerImagePath 
+    upvar $p_image image 
+    upvar $p_rerun rerun
+    upvar $p_baseLine baseLine
+    upvar $p_stopWithPhase stopWithPhase
+    if {$mailTo == ""} {
+	set mailTo $defaultRecipient
+    }
+    
+    if {$regType == "null"} {
+	result_error "ERROR: regType: Regression Type to be run is required."
+	return 0
+    }
+    
+    if {$regSubType == "null"} {
+	result_error "ERROR: regSubType: Regression Test Sub type required."
+	return 0
+    }
+
+    if [regexp -nocase "summit" $platform] {
+	set blade ""
+    }
+
+    if {$cfg == "null"} {
+	result_error "ERROR: cfg name required."
+	return 0
+    }
+    
+    if {$rerun == "yes"} {
+        set RerunEnabled 1
+ 
+    }
+    
+    if {($stopWithPhase < 1 || $stopWithPhase > 4) && ($stopWithPhase != "NULL")} {
+         result_error "!!! wrong input to stopWithPhase It has to be from 1 to 4!!"
+
+    }
+
+    
+    ;# Check that platform/blade is supported by autoweb.  The file written to 
+    ;# autoweb data files must match what autoweb expects.  If platform/blade 
+    ;# combo is incorrect, the data will be written, but won't show up when 
+    ;# display.  For example, an AlpineFM32 directory might be created, but 
+    ;# autoweb expects AlpineFM32T.
+    if [regexp -nocase "cli" $regType] {
+	;# Look at  $clis in modulesToBeSummarized.cfg...which is 
+	;# generated from $cliTableConfig
+	set ok 0
+	set temp [format "cli%s%s" $platform $blade]
+	foreach listMember $clis {
+	    if [regexp -nocase $listMember $temp] {
+		set ok 1
+		break
+	    }
+	}
+	if { $ok == 0 } {
+	    regsub -all "cli" $clis "" supportedList 
+	    result_debug "WARNING: Unsupported CLI blade/platform combination \
+		    $platform:$blade may not post to autoweb correctly."
+	    result_debug "WARNING: Autoweb supported combinations are $supportedList"
+	}
+    } elseif { [regexp -nocase "func|snmp" $regType] && \
+	    [regexp -nocase "stand" $regSubType] } {
+	;# Validate standard regressions
+	;# These are generated from xxxTableConfig
+	set ok 0
+	set temp [format "%s%s" $platform $blade]	
+	foreach platList $platformLists {
+	    set curList [set $platList]
+	    foreach listMember $curList {
+		if [regexp -nocase $temp $listMember] {
+		    set ok 1
+		    break
+		}
+	    }
+	    if {$ok == 1} {
+		break
+	    }
+	}
+	if { $ok == 0 } {
+	    result_debug "WARNING: Unsupported Standard blade/platform \
+		    combination $platform:$blade may not post to autoweb correctly"
+	}
+    }
+
+    if {($platform == "null") && (![regexp -nocase {ipRoute[1-3]} \
+	    $regSubType])}  {
+	result_error "ERROR: platform name required."
+	return 0
+    }
+    
+    if {($platform != "null") && ([regexp -nocase {ipRoute[1-3]} \
+	    $regSubType])} {
+	# Do not exit, just ignore the extra parameter.
+	result_debug "WARNING: regSubType=$regSubType, platform parameter is \
+		being ignored."
+    }
+    
+    if {($blade == "null") && (![regexp -nocase {ipRoute[1-3]} \
+	    $regSubType])} {
+	# Do not exit, just ignore the extra parameter.
+	result_debug "WARNING: blade name required."
+    }
+
+    if {($blade != "null") && ([regexp -nocase {ipRoute[1-3]} \
+	    $regSubType])} {
+	# Do not exit, just ignore the extra parameter.
+	result_debug "WARNING: regSubType=$regSubType, blade parameter is \
+		being ignored."
+    }
+
+    if {($i386ImagePath == "NULL") && ($marinerImagePath == "NULL") && \
+        ($aspenImagePath == "NULL") && ($cougarImagePath == "NULL") && ($x480ImagePath == "NULL") && ($x870ImagePath == "NULL") && \
+	($viperImagePath == "NULL") && ($jaguarImagePath == "NULL") && ($olympicImagePath == "NULL") && \
+        ($voyagerImagePath == "NULL") && ($NWIImagePath == "NULL") && $download != "no"} {
+        # error, at least one of them needs to be set
+	result_error "ERROR: marinerImagePath ,i386ImagePath,aspenImagePath, \
+                      cougarImagePath, x480ImagePath, x870ImagePath, NWIImagePath, viperImagePath, jaguarImagePath, \
+		      olympicImagePath or voyagerImagePath must be set"
+	return 0
+    } else {
+
+        set marinerList [split $marinerImagePath /]
+        set marinerFile [lindex $marinerList end]
+        result_debug "marinerFile: $marinerFile"
+        set i386List [split $i386ImagePath /]
+        set i386File [lindex $i386List end]
+        result_debug "i386File: $i386File"
+
+        set aspenList [split $aspenImagePath /]
+        set aspenFile [lindex $aspenList end]
+        result_debug "aspenFile: $aspenFile"
+
+        set cougarList [split $cougarImagePath /]
+        set cougarFile [lindex $cougarList end]
+        result_debug "cougarFile: $cougarFile"
+
+        set x480List [split $x480ImagePath /]
+        set x480File [lindex $x480List end]
+        result_debug "x480File: $x480File"
+
+        set x870List [split $x870ImagePath /]
+        set x870File [lindex $x870List end]
+        result_debug "x870File: $x870File"
+
+        set NWIList [split $NWIImagePath /]
+        set NWIFile [lindex $NWIList end]
+        result_debug "NWIFile: $NWIFile"
+
+        set viperList [split $viperImagePath /]
+        set viperFile [lindex $viperList end]
+        result_debug "viperFile: $viperFile"
+
+        set jaguarList [split $jaguarImagePath /]
+        set jaguarFile [lindex $jaguarList end]
+        result_debug "jaguarFile: $jaguarFile"
+
+        set olympicList [split $olympicImagePath /]
+        set olympicFile [lindex $olympicList end]
+        result_debug "olympicFile: $olympicFile"
+
+        set voyagerList [split $voyagerImagePath /]
+        set voyagerFile [lindex $voyagerList end]
+        result_debug "voyagerFile: $voyagerFile"
+        
+        # parse out the build number
+        if {$marinerImagePath != "NULL"} {
+            # use marinerImagePath
+            regsub "\.xos" $marinerFile "" marinerFile
+            set marinerFileList [split $marinerFile -]
+            regsub "[lindex $marinerFileList 0]-" $marinerFile "" image
+
+        } elseif { $aspenImagePath != "NULL"} {
+            # use aspenImagePath
+            regsub "\.xos" $aspenFile "" aspenFile
+            set aspenFileList [split $aspenFile -]
+            regsub "[lindex $aspenFileList 0]-" $aspenFile "" image
+        }  elseif { $cougarImagePath != "NULL"} {
+            # use cougarImagePath
+            regsub "\.xos" $cougarFile "" cougarFile
+            set cougarFileList [split $cougarFile -]
+            regsub "[lindex $cougarFileList 0]-" $cougarFile "" image
+        }  elseif { $x480ImagePath != "NULL"} {
+            # use x480ImagePath
+            regsub "\.xos" $x480File "" x480File
+            set x480FileList [split $x480File -]
+            regsub "[lindex $x480FileList 0]-" $x480File "" image
+        }  elseif { $x870ImagePath != "NULL"} {
+            # use x870ImagePath
+            regsub "\.xos" $x870File "" x870File
+            set x870FileList [split $x870File -]
+            regsub "[lindex $x870FileList 0]-" $x870File "" image
+        }  elseif { $NWIImagePath != "NULL"} {
+            # use NWIImagePath
+            regsub "\.xos" $NWIFile "" NWIFile
+            set NWIFileList [split $NWIFile -]
+            regsub "[lindex $NWIFileList 0]-" $NWIFile "" image
+        }  elseif { $viperImagePath != "NULL"} {
+            # use viperImagePath
+            regsub "\.xos" $viperFile "" viperFile
+            set viperFileList [split $viperFile -]
+            regsub "[lindex $viperFileList 0]-" $viperFile "" image
+        }  elseif { $jaguarImagePath != "NULL"} {
+            # use jaguarImagePath
+            regsub "\.xos" $jaguarFile "" jaguarFile
+            set jaguarFileList [split $jaguarFile -]
+            regsub "[lindex $jaguarFileList 0]-" $jaguarFile "" image
+        }  elseif { $olympicImagePath != "NULL"} {
+            # use olympicImagePath
+            regsub "\.xos" $olympicFile "" olympicFile
+            set olympicFileList [split $olympicFile -]
+            regsub "[lindex $olympicFileList 0]-" $olympicFile "" image
+        }  elseif { $voyagerImagePath != "NULL"} {
+            # use voyagerImagePath
+            regsub "\.xos" $voyagerFile "" voyagerFile
+            set voyagerFileList [split $voyagerFile -]
+            regsub "[lindex $voyagerFileList 0]-" $voyagerFile "" image
+        } else { 
+            # parse out using i386ImagePath
+            regsub "\.xos" $i386File "" i386File
+            set i386FileList [split $i386File -]
+            set image [lindex $i386FileList end]
+       } 
+    }
+        
+    return 1
+}
+
+# ------------------------------------------------------------------------------
+# Procedure to handle copying the image to the tftp servers, then
+#    downloading the image to the DUTs. 
+# ------------------------------------------------------------------------------
+proc handleImageDownload { cfg i386ImagePath marinerImagePath aspenImagePath \
+                           cougarImagePath x480ImagePath x870ImagePath NWIImagePath viperImagePath \
+			   jaguarImagePath olympicImagePath voyagerImagePath bootrom } {
+    
+    result_debug "*****************************************************"
+    result_debug "          Starting Download Image Process"
+    result_debug "*****************************************************"
+    
+
+    puts "cfg: $cfg marinerImagePath: $marinerImagePath \n
+      aspenImagePath: $aspenImagePath x480ImagePath: $x480ImagePath x870ImagePath: $x870ImagePath NWIImagePath: $NWIImagePath \
+      jaguarImagePath: $jaguarImagePath olympicImagePath: $olympicImagePath voyagerImagePath: $voyagerImagePath \
+       bootrom: $bootrom"
+
+    set dlPlatformList ""
+    set dlImageList ""
+
+    if {$i386ImagePath != "NULL"} {
+        lappend dlPlatformList i386
+        lappend dlImageList $i386ImagePath
+    }
+
+    if {$marinerImagePath != "NULL"} {
+        lappend dlPlatformList Mariner
+        lappend dlImageList $marinerImagePath    
+    }
+
+    if {$aspenImagePath != "NULL"} {
+        lappend dlPlatformList Aspen
+        lappend dlImageList $aspenImagePath    
+    }
+
+    if {$cougarImagePath != "NULL"} {
+        lappend dlPlatformList Jaguar
+        lappend dlImageList $cougarImagePath    
+    } elseif {$jaguarImagePath != "NULL"} {
+        lappend dlPlatformList Jaguar
+        lappend dlImageList $jaguarImagePath    
+    } 
+    if {$x480ImagePath != "NULL"} {
+        lappend dlPlatformList x480
+        lappend dlImageList $x480ImagePath
+    }
+    if {$x870ImagePath != "NULL"} {
+        lappend dlPlatformList x870
+        lappend dlImageList $x870ImagePath
+    }
+    if {$NWIImagePath != "NULL"} {
+        lappend dlPlatformList NWI
+        lappend dlImageList $NWIImagePath
+    }
+    if {$viperImagePath != "NULL"} {
+        lappend dlPlatformList viper 
+        lappend dlImageList $viperImagePath
+    }
+
+    if {$olympicImagePath != "NULL"} {
+        lappend dlPlatformList Olympic
+        lappend dlImageList $olympicImagePath    
+    }
+
+    if {$voyagerImagePath != "NULL"} {
+        lappend dlPlatformList Voyager
+        lappend dlImageList $voyagerImagePath    
+    }
+    #set dlStat [catch {exec tclsh LoadImage.tcl -cfg $cfg \
+    #        -marinerImagePath $marinerImagePath \
+    #        -i386ImagePath $i386ImagePath \
+    #        -aspenImagePath $aspenImagePath \
+    #        -cougarImagePath $cougarImagePath \
+    #        -x480ImagePath $x480ImagePath \
+    #        -x870ImagePath $x870ImagePath \
+    #        -NWIImagePath $NWIImagePath \
+    #        -viperImagePath $viperImagePath \
+    #        -jaguarImagePath $jaguarImagePath \
+    #        -olympicImagePath $olympicImagePath \
+    #        -voyagerImagePath $voyagerImagePath \
+    #        -bootrom $bootrom >&@stdout} result]
+    set dlStat [catch {exec tclsh QLoadImage.tcl -cfg $cfg \
+            -platformList $dlPlatformList \
+            -platformImageList $dlImageList \
+            -bootrom $bootrom >&@stdout} result]
+
+
+	if {$dlStat != 0} {
+	    result_error "\nERROR: Image download failed to DUTs!\nIf you do NOT\
+		    want to download image, please use '-download no' option.\n"
+	    result_error "$result"
+	    return 0
+	}
+    return 1
+}
+# ------------------------------------------------------------------------------
+
+# ------------------------------------------------------------------------------
+proc logTail {logFile n} { 
+     
+     set tailLogFile "tail_"
+     set tailLogFile [append tailLogFile $logFile]
+     set tailLogFileFull "Log/Regressions/$tailLogFile"
+     set logFileFull "Log/Regressions/$logFile"
+     if { [ catch {exec tail -n $n $logFileFull > $tailLogFileFull} result ] } {
+        puts "$result"
+        return $result
+     }
+     set in [open $tailLogFileFull] 
+     set tailStr  [read $in]
+     close $in 
+     exec rm -f $tailLogFileFull
+     return $tailStr 
+}
+
+# ------------------------------------------------------------------------------
+#  returns the IP address of the Linux where this is running
+# ------------------------------------------------------------------------------
+proc myIP {} {
+  set host 10.210.1.58
+  set anyport 5555 ;# Any random port number
+  set sock [socket -async $host $anyport]
+  set sock_name [fconfigure $sock -sockname]
+  set ip_list [split $sock_name " "]
+  set ip [lindex $ip_list 0]
+  close $sock
+  return $ip
+}
+
+# ------------------------------------------------------------------------------
+#
+# ------------------------------------------------------------------------------
+proc copyResultsToReportDirectory { testModule regType platform blade image } {
+
+    global randomIndex
+
+    set build $image
+    set imageVer [ getBuildNumber $build ]
+    #set reportDir [ GetReportDir $testModule $regType $platform $blade $imageVer ".."]
+    #result_debug "Report dir for the module : $reportDir"
+
+    #if { [ catch {exec mkdir $reportDir} result ] } {
+        #result_error "$result"
+    #}
+
+    # get the result directory
+    set latestResultDir [GetMainResultDir $testModule $regType $randomIndex ".."]
+    result_debug "Latest result dir for the module : $latestResultDir"
+
+    set reportDir [get_report_dir $latestResultDir $testModule $regType ".."]
+    result_debug "Report dir for the module : $reportDir"
+
+    # create the report directory if it does not exist
+    if {[file exists $reportDir]!=1} {
+      if { [ catch {exec mkdir $reportDir} result ] } {
+          result_error "$result"
+      }
+    }
+
+    puts "Directory contents are:\n[glob -directory $latestResultDir *]"
+    set fileList [glob -directory $latestResultDir *]
+
+    #Remove the report.exr from original result dir
+    set exrFile "$latestResultDir/report.exr"
+    if {[file exists $exrFile]==1} {
+      file delete $exrFile
+    }
+    #Remove the reportdir.txt file
+    set reportdirFile "$latestResultDir/reportdir.txt"
+    if {[file exists $reportdirFile]==1} {
+      file delete $reportdirFile
+    }
+
+    # copy everything from the result directory to report directory
+    foreach fileThis [glob -directory $latestResultDir *] {
+      if { [file rename $fileThis $reportDir] != "" } {
+        puts "Failed to move results file $fileThis to report directory."
+        puts "Make sure all opened files are closed."
+      }
+    }
+    if [file isdirectory $latestResultDir] {
+      file delete $latestResultDir
+    }
+}
+
+# ------------------------------------------------------------------------------
+#
+# ------------------------------------------------------------------------------
+proc handleAbortedModule { testModule regType platform blade image result } {
+
+    global abortingReason, randomIndex
+    set abortingReason $result
+    set build $image
+    set imageVer [ getBuildNumber $build ]  
+
+    # get the result directory
+    set latestResultDir [GetMainResultDir $testModule $regType $randomIndex ".."]
+    result_debug "Latest result dir dir for the module : $latestResultDir"
+
+    if { [ catch { set reportDir [get_report_dir $latestResultDir $testModule $regType ".."] } ] } {
+        result_error "there is no info about report directory - leaving handleAbortedModule"
+        return
+    }
+    result_debug "Report dir for the module : $reportDir"
+
+    if { [ catch { open "$latestResultDir/report.txt" a } fd ] } {
+	result_error "Can't open file : $latestResultDir/report.txt - leaving handleAbortedModule"
+        return
+    }
+    #let's find the name of the aborted file
+
+    set lt 0
+    set ctimeList ""
+    set dirList [glob -nocomplain -- "$latestResultDir/*"]
+    foreach di $dirList {
+       file lstat $di damn
+       lappend ctimeList [set damn(ino)] 
+    }
+    set latestcTime [lindex [lsort -integer $ctimeList] [expr [llength $ctimeList]-1]]
+    set finalIndex [lsearch -exact $ctimeList $latestcTime]
+    set finalFile [file tail [lindex $dirList $finalIndex]]
+    regsub -nocase ".txt" $finalFile "" lt
+    result_debug "the aborted feature  was $lt"
+ 
+ 
+    if { ($result != "connectionBad") } {
+      puts $fd "\n\n$lt  ABORTED                                                       \[FAILED\]\n"
+    }
+    puts $fd "\nTHIS MODULE WAS ABORTED DUE TO THE ABOVE FAILURE                     \[FAILED\]\n\n"
+    close $fd
+ 
+    if { ($result != "connectionBad") } {
+      # add error comment to the failing log
+      if { [ catch { open "$latestResultDir/$lt.txt" a } fd ] } {
+          result_error "Can't open file : $latestResultDir/$lt.txt"
+          return
+      }
+      puts $fd "\n!!!!! THIS TEST WAS ABORTED !!!!!\n"
+      puts $fd "\n!!!!! main returned: $result !!!!!\n"
+      close $fd
+    }
+
+    copyResultsToReportDirectory $testModule $regType $platform $blade $image
+}
+
+# ------------------------------------------------------------------------------
+#  Check the result value returned by main.tcl for FATAL errors that we
+#   want to ABORT the rest of the run.
+# ------------------------------------------------------------------------------
+proc checkFatalError { result  } {
+    
+    global fatalErrorList
+    global regression_fail_counter
+    if { $regression_fail_counter >= 5 } {
+    	result_debug "ABORTING REGRESSION AS REGRESSION CONTINOUSLY FAILED FOR $regression_fail_counter MODULES"
+    	return 1 
+    }
+    foreach errorString $fatalErrorList {
+	
+	result_debug "$errorString  $result"
+	if [regexp -nocase $errorString $result] {
+	    return 1
+	}
+    }
+    if { [regexp -nocase "Unable to connect|connectionBad|Unable to login" $result] } {
+    ;# increment the continously regression failed count
+    incr regression_fail_counter
+    result_debug "Sleep for 2 minutes to recover for recoverable failure"
+    exSleep  120 
+    }
+    return 0
+}
+
+# -----------------------------------------------------------------
+# Take care of running regression (main.tcl) and posting to the
+#    web (automate.tcl).
+# ------------------------------------------------------------------------------
+proc runModuleRegression {args} { 
+puts "Calling Pric runModuleRegression "
+    parse_args runModuleRegression $args {
+        testModule "" 
+        modeToUse "" 
+        regPath "" 
+        cfg "" 
+        noPost "" 
+    	createConfig "" 
+        regType "" 
+        regSubType "" 
+        platformIndx "" 
+        platform "" 
+        blade ""
+        image "" 
+        obuild "" 
+        regression_id "" 
+        host "" 
+        db "" 
+        build_name "" 
+        subversion ""
+        run_number "" 
+        lst ""
+        efence "" 
+        saveConfigPerTest "" 
+        debugLevel "0"
+    }
+
+    global exclude
+    global heuristicTCList
+    global forstats
+    global executeBatFile 
+    global erroredModules
+    global fd_res
+    global mysql_handler
+    global randomIndex
+    global regression_fail_counter
+    global mailTo
+    global DebugOn
+    global DebugOnHi
+    global FCOUNT
+    global MAIN
+
+    set harness "tcl"
+
+    if {![info exists DebugOn]} {
+        set DebugOn 0
+    }
+    if {![info exists DebugOnHi]} {
+        set DebugOnHi 0
+    }
+
+    set errorCode 1
+    set match ""
+    set str "" 
+    set skipModule ""
+    
+    ;# Check if this module is on the exclude list
+    #foreach excludeM $exclude {
+        if {[lsearch -exact $exclude  $testModule ] != -1} {
+            set skipModule $testModule
+            #break
+        } 
+    #}
+   
+    if {$skipModule == ""} {
+        
+        # re-connect db if needed
+        conn_to_db $host $db
+        
+        # create entry in the current_run_table
+        set current_run_id [CreateCurrentRunTableEntry -regression_id $regression_id \
+                                                       -feature_directory $testModule]
+        puts "current_run_id $current_run_id"
+        
+        set moduleStartTime [exec date]
+        
+        # IF SECOND RUN FIND THE FAILING MODULES
+        puts "runModuleRegression run_number: $run_number testModule: $testModule"
+        set failingTests "all"
+        if {$run_number == 2} {
+            set failingTests [GetFailingTestsForModule_autoreg -regression_id $regression_id \
+                                                     -feature_directory $testModule ]
+            # IF THE LIST IS EMPTY WE ARE DONE HERE
+            if {$failingTests == "all"} {
+                puts "runModuleRegression run_number: $run_number failingTests: $failingTests"
+                return $errorCode
+            }
+        } elseif {$heuristicTCList != "null"} {
+            set failingTests $heuristicTCList
+        }
+        
+        #this is needed to create result directory by main.tcl known to mysqlRunall_monitor
+        set range 1000000
+        set randomIndex [expr {int(rand()*$range)}]
+        
+        # find the efence processes for this feature
+        # do not activate efence for stackables
+        set efenceProcessList "no"
+        if {[llength $efence] > 0} {
+            if {[lindex $efence 0] == "yes"} {
+                set efenceProcessList [getEfenceProcessList -module $testModule -cfg $cfg -regType $regType]
+            }
+        }
+        
+        result_debug "Starting regression for $testModule START: $moduleStartTime...."
+        result_debug "main.tcl -mode $modeToUse -module $testModule -comment \"xtermtitle regId:$regression_id \" \
+            -regPath $regPath -cfg $cfg -tcList \"$failingTests\" -debugLevel $debugLevel \
+            -randomIndex $randomIndex -lst $lst -efence $efenceProcessList \
+            -saveConfigPerTest $saveConfigPerTest"
+       result_ok "flie reaches her here"
+        # -------------------------------------------------------------------
+        # Write logs to file before starting
+        # -------------------------------------------------------------------
+        flush $fd_res
+        #------------------------------------------------------------------
+        #Check if Regressions dir exists and create if the dir didn't exist
+        #-------------------------------------------------------------------
+        if {![file isdirectory Log/Regressions]} {
+              exec  mkdir Log/Regressions
+        }
+        ###################################################################
+        set logFileName1 "regLog_"
+        set logFileName1 [append logFileName1 "$image"] 
+        set logFileName1 [append logFileName1 "_"]
+        set logFileName1 [append logFileName1 "$regression_id"] 
+        set logFileName1 [append logFileName1 "_"]
+        set logFileName1 [append logFileName1 "$run_number"]
+        set logFileName1 [append logFileName1 ".txt"]
+        set logFileName "Log/Regressions/$logFileName1"
+        puts "\n==============================================================="
+        puts "==============================================================="
+        puts "  S T A R T I N G    M A I N . T C L   O N :: $testModule"
+        puts   "============       Log File Name             ================\n"
+        puts "logFileName $logFileName\n"
+        puts "==============================================================="
+        puts "==============================================================="
+
+        catch { exec {tclsh} main.tcl -mode $modeToUse -module $testModule \
+                -comment "xtermtitle regId:$regression_id " \
+                -regPath $regPath -cfg $cfg -build $image -subversion $subversion \
+                -obuild $obuild -tcList "$failingTests" \
+                -debugLevel $debugLevel -randomIndex $randomIndex \
+                -lst $lst -efence $efenceProcessList \
+                -saveConfigPerTest $saveConfigPerTest  \
+                >@stdout | busybox tee -a $logFileName } result
+
+        if { [regexp -nocase "connectionBad" $result] } {
+            catch { exec {tclsh} main.tcl -mode $modeToUse -module $testModule \
+                    -comment "xtermtitle regId:$regression_id " \
+                    -regPath $regPath -cfg $cfg -build $image -subversion $subversion \
+                    -obuild $obuild -tcList "$failingTests" \
+                    -debugLevel $debugLevel -randomIndex $randomIndex \
+                    -lst $lst -efence $efenceProcessList \
+                    -saveConfigPerTest $saveConfigPerTest \
+                    >@stdout | busybox tee -a $logFileName } result
+        }
+        
+        result_debug "$testModule   main.tcl returned result: $result"
+        
+        # re-connect db if needed
+        conn_to_db $host $db
+        
+        
+        #copyResultsToReportDirectory $testModule $regType $platform $blade $image
+        
+        ;# If we get no result back, we assume abnormal termination
+        ;# If we get something other than testCompleted or testSkipped, we assume problem
+        ;#    with the test execution.
+        set resultForAbortTest $result
+        # login_telnet error catch
+        if {[regexp -nocase login_telnet $result]} {
+            set resultForAbortTest error
+        }
+        if {(! [regexp -nocase {testCompleted|testSkipped} $resultForAbortTest]) || ($result == "")} {
+            global mailTo
+            incr FCOUNT
+            # Send email notification
+            set  notificationData  "\nHOST PC:  [exec hostname] \
+            \nSTARTED:  $moduleStartTime \
+            \nENDED:    [exec date] \
+            \nIMAGE:    $image \
+            \nCFG:      $cfg \
+            \nPLATFORM: $platform \
+            \nBLADE:    $blade \
+            \nMODULE:   $testModule"
+            set subject "$cfg : Regression Aborted in $testModule with ERROR"
+            
+            set tailDataFile [logTail $logFileName1 100] 
+            set tailData "\n\nLast 100 lines from ./main/$logFileName\n\n\n"
+            set tailData [append tailData "$tailDataFile"]
+            
+            # -------- If the results is greater than 2000 char, trim --------
+            if {[string length $result] > 2000} {
+                set result [string range $result 0 1999]
+            } 
+            sendMailNotification $mailTo $subject \
+            "MAIN.TCL: $testModule\nERROR:$result\n$notificationData\n$tailData"
+            
+            result_error "MAIN.TCL: $testModule\n$result\n$notificationData\n$tailData"
+            lappend erroredModules $testModule
+            set errorCode 1
+            
+            handleAbortedModule $testModule $regType $platform $blade $image $result
+            
+            ;# Check if the string returned from main.tcl constitutes a fatal
+            ;# error where we ABORT the rest of the regression.
+            if {[checkFatalError $result] == 1} {
+                return "FATAL_ERROR"
+            }
+        } else {
+            ;# Reset the continues regression fail count if any modules passes
+            set regression_fail_counter 0
+        }
+        
+        after 2000
+        
+        if {[regexp -nocase -indices "(^Y)" $noPost matchedRange] == 1} {
+            result_debug "\tSkip call to automate.tcl." 
+            return $errorCode
+        }
+        
+        if {$regSubType == "upgradedowngrade"} {
+            set delimit ":"
+        } else {
+            set delimit ""
+            # make sure to clear obuild since it's not needed
+            set obuild ""
+        }
+        # ----------------------------------------------------------------
+        # Post results to autoweb
+        # ----------------------------------------------------------------
+        puts "CALLING mysqlAutomate WITH:"
+        puts "regId $regression_id host $host \
+                                         module $testModule \
+                                         obuild $obuild"
+        
+        if {[catch { exec {tclsh} mysqlAutomate.tcl -regId $regression_id \
+                                     -module $testModule \
+                                     -forstats $forstats \
+                     -obuild $obuild } \
+                                     result]} {
+        result_error "mysqlAutomate.tcl returned an error"
+        }
+        
+        puts "RESULTS OF mysqlAutomate: $result"
+        # ----------------------------------------------------------------
+        # --------------- testing mysqlAutomate.tcl end ------------------
+        
+        # re-connect db if needed
+        conn_to_db $host $db
+
+        # ----------------------------------------------------------------
+        #   Check the current_run_table to see if a user has set the  
+        #     reserved status to reserved.
+        #
+        # ----------------------------------------------------------------
+        CheckAndPauseRegression -regression_id $regression_id -feature_directory $testModule \
+                            -admin_email $mailTo -regCfg $cfg
+        # ----------------------------------------------------------------
+        #   The current_run_table should always be emtpy except for
+        #      regressions that are actually running.  If there is an
+        #      entry for this feature/test bed in the current_run_table
+        #      delete it
+        # ----------------------------------------------------------------
+        if {[info exists current_run_id]} {
+            if {$current_run_id != "error"} {
+                # re-connect db if needed
+                conn_to_db $host $db
+                DeleteCurrentRunTableEntry -current_run_id $current_run_id
+            }
+        }
+
+    }
+
+    return $errorCode
+
+}
+# ------------------------------------------------------------------------------
+#
+# ------------------------------------------------------------------------------
+proc GetNumberNodes { regType regSubType } {
+puts "Proc vGetNumberNodes is called "
+    #if we do not have a platform_id
+    set number_nodes 2
+    puts "regType: $regType"
+    puts "regSubType: $regSubType"
+    if { $regType == "functional" } {
+    	if { [regexp -nocase "route" $regSubType]  } {
+    	    set number_nodes 5
+    	} else {
+    	    set number_nodes 2
+    	}
+    }
+    if { $regType == "cli" } {
+    	set number_nodes 1
+    }
+    if { $regType == "ixscriptmate" } {
+    	if { [regexp -nocase "route" $regSubType]  } {
+    	    set number_nodes 5
+    	} else {
+    	    set number_nodes 2
+    	}
+    }
+    if { $regType == "scalability" } {
+    	if { [regexp -nocase "route" $regSubType]  } {
+    	    set number_nodes 5
+    	} else {
+    	    set number_nodes 2
+    	}
+    }
+    if { $regType == "snmp" } {
+    	if { [regexp -nocase "route" $regSubType]  } {
+    	    set number_nodes 5
+    	} else {
+    	    set number_nodes 2
+    	}
+    }
+    puts "number_nodes: $number_nodes"
+
+    return $number_nodes
+}
+puts "Entering main function"
+# ------------------------------------------------------------------------------
+################################################################################
+#                                M A I N
+################################################################################
+# ------------------------------------------------------------------------------
+
+result_debug "###################################################################"
+result_debug "                    RUNALL_MONITOR.TCL STARTED!"
+result_debug "###################################################################"
+result_debug "[exec date]"
+
+source ../Lib/parse_args.tcl
+
+parse_args mysqlRunall_monitor $argv {
+    blade "null"
+    platformIndx "null"
+    platform "null"
+    cfg "null"
+    regType "null"
+    regSubType "null"
+    exclude ""
+    include ""
+    forstats "no"
+    download "yes"
+    noPost "N"
+    mailTo ""
+    i386ImagePath   "NULL"
+    marinerImagePath   "NULL"
+    aspenImagePath   "NULL"
+    cougarImagePath   "NULL"
+    x480ImagePath   "NULL"
+    x870ImagePath   "NULL"
+    NWIImagePath   "NULL"
+    viperImagePath   "NULL"
+    jaguarImagePath   "NULL"
+    olympicImagePath   "NULL"
+    voyagerImagePath   "NULL"
+    bootrom "NULL"
+    obuild ""
+    regression_id "NULL"
+    system_id "NULL"
+    system_name "exos"
+    build_id "NULL"
+    build_name "NULL"
+    subversion "NULL"
+    pass_number "NULL"
+    platform_id "NULL"
+    heuristic "no"
+    efence "no"
+    saveConfigPerTest "no"
+    debugLevel "0"
+    lst "NULL"
+    incrBuilds "NULL"
+    rerun "no"
+    baseLine "NULL"
+    stopWithPhase "NULL"
+}
+
+
+# ----------------------------------------  start the mysql stuff ---------------------
+puts "system_id: $system_id"
+puts "system_name: $system_name"
+puts "build_id: $build_id"
+puts "build_name: $build_name"
+puts "subversion: $subversion"
+puts "pass_number: $pass_number"
+puts "regression_id: $regression_id"
+puts "platform_id: $platform_id"
+puts "heuristic: $heuristic"
+puts "efence: $efence"
+puts "saveConfigPerTest: $saveConfigPerTest"
+puts "debugLevel: $debugLevel"
+
+puts "OLD PARAMETERS"
+puts "blade: $blade"
+puts "platformIndx: $platformIndx"
+puts "platform: $platform"
+puts "cfg: $cfg"
+puts "regType: $regType"
+puts "regSubType: $regSubType"
+puts "exclude: $exclude"
+puts "include: $include"
+puts "forstats: $forstats"
+puts "download: $download"
+puts "noPost: $noPost"
+puts "mailTo: $mailTo"
+puts "i386ImagePath: $i386ImagePath"
+puts "aspenImagePath: $aspenImagePath"
+puts "cougarImagePath: $cougarImagePath"
+puts "x480ImagePath: $x480ImagePath"
+puts "x870ImagePath: $x870ImagePath"
+puts "NWIImagePath: $NWIImagePath"
+puts "viperImagePath: $viperImagePath"
+puts "jaguarImagePath: $jaguarImagePath"
+puts "olympicImagePath: $olympicImagePath"
+puts "voyagerImagePath: $voyagerImagePath"
+puts "bootrom: $bootrom"
+puts "obuild: $obuild"
+puts "lst: $lst"
+puts "incrBuilds: $incrBuilds"
+puts "rerun: $rerun"
+puts "baseLine: $baseLine"
+puts "stopWithPhase: $stopWithPhase"
+source ../Lib/mysqlLib.tcl
+source ../main/cfg/common.cfg
+
+# Default config file
+set cfgFile ./runReg.cfg
+
+# Source config file that has Regression PC information
+if [file exists $cfgFile] {
+    result_debug "Sourcing $cfgFile now"
+    catch {source $cfgFile} reason
+} else {
+    result_error "!!! Configuration file $cfgFile not found !!!"
+    return 0
+}
+
+
+
+global abortingReason
+set abortingReason ""
+
+global mysqlIP my_db
+set host $mysqlIP
+set db $my_db
+global host mysql_handler
+
+conn_to_db $host $db
+set run_number ""
+# -------------------------------------------------------------------------
+# Initialize database module selection variables
+# -------------------------------------------------------------------------
+set useDbModuleSelection 1
+
+if {$stopWithPhase == "NULL"} {
+       set useDbPhase 0
+} else {
+
+      set useDbPhase 1
+}
+
+puts "Made it this far"
+# Modify exclude list from db
+    # GRANT
+    #my_platform_id ""
+    #regType ""
+    #regSubType ""  GRANT
+    set sel_clause "SELECT excludes_std FROM runreg_table \
+                  WHERE regplatform_regtype = '[string tolower $regType]' AND \
+                  regplatform_subtype = '[string tolower $regSubType]' AND \
+                  regplatform_cfg = '$cfg'"
+    set rslt_lst [mysqlsel $mysql_handler $sel_clause -flatlist]
+
+    set tmpExclude ""
+    if {[llength $rslt_lst] == 0} {
+        puts "$sel_clause"
+        puts "!!!\n!!!Failed to get platform exclude information\n!!!\n!!!"
+    } else {
+        regsub -all "\n" $rslt_lst " " rslt_lst
+        set eList [split $rslt_lst " "]
+        foreach e $eList {
+           set ne [string trim $e]
+           if {$ne != ""} {
+               lappend tmpExclude $ne
+           }
+        }
+        set exclude [concat $exclude $tmpExclude]
+        puts "\n\n!!! NEW EXCLUDE: $exclude"
+    }
+# get system_id from the database
+if {$system_id == "NULL"} {
+    puts "The system_id is set to NULL.  Get system_id from the database"
+    set system_id [mysqlsel $mysql_handler "SELECT system_id FROM system_table WHERE system_name = '$system_name'" -flatlist]
+    puts "The system_id received from the DB: $system_id"
+}
+
+set number_nodes [GetNumberNodes $regType $regSubType]
+
+if {($platform_id == "NULL")} {
+    puts "We do not have platform get one"
+    
+    if {$blade == $platform } {
+        set platform_id [mysqlsel $mysql_handler "SELECT platform_id FROM platform_table WHERE platform_cfg_file_name = '$cfg'" -flatlist]
+    } else {
+        set platform_id [mysqlsel $mysql_handler "SELECT platform_id FROM platform_table WHERE platform_cfg_file_name = '$cfg'" -flatlist]
+    }
+    puts "we found patform_id: $platform_id for platform_name= '$platform' AND platform_blade= '$blade' AND number_nodes='$number_nodes'"
+}
+
+###############################
+#  set  target phase
+#####################################
+if {$stopWithPhase == "1"} {
+     set target_phase "one"
+} elseif {$stopWithPhase == "2"} {
+     set target_phase "two"
+} elseif {$stopWithPhase == "3"} {
+     set target_phase "three"
+} else {
+     set target_phase "four"
+} 
+
+# -------------------------------------------------------------------------
+# if we do not have a build_id
+# -------------------------------------------------------------------------
+if {($build_id == "NULL")} {
+    puts "We do not have build_id.  Get A Build ID"
+    
+    if ![regexp {([0-9]+)\.([0-9]+)\.([0-9]+)[\.b]([0-9]+.*)} \
+        $build_name  match \
+        major minor patch build] {
+            error \
+            "$build_name not in good format."
+            return "error"
+    }
+    puts "==================================================="
+    puts "major: $major"
+    puts "minor: $minor"
+    puts "patch: $patch"
+    puts "build: $build"
+    set build_major_release "$major.$minor"
+    puts "build_major_release: $build_major_release"
+    set build_minor_release "$major.$minor.$patch"
+    puts "build_minor_release: $build_minor_release"
+    set build_number "$build"
+    puts "build_number: $build_number"
+    set sel_clause "SELECT build_id FROM build_table WHERE \
+    build_major_release = '$build_major_release' AND \
+    build_minor_release = '$build_minor_release' AND \
+    build_number = '$build_number'"
+    set build_id [mysqlsel $mysql_handler $sel_clause -flatlist]
+    puts "llength of build_id_list: [llength $build_id]"
+    if {([llength $build_id] != 0)} {
+        puts "we found build_id: $build_id"
+    } else {
+        puts "we did not found build_id - enter it into the build table"
+        InsertIntoBuildTable -system_id $system_id -build_major_release $build_major_release \
+        -build_minor_release $build_minor_release -build_number $build_number -db_name $db -target_phase $target_phase
+        # get the new build_id
+        set build_id [mysqlsel $mysql_handler $sel_clause -flatlist]
+    }
+    puts "==================================================="
+}
+
+set feature_type $regType
+if {$regSubType == "ipRoute1"} {
+    set feature_sub_type "routing"
+} else {
+    set feature_sub_type $regSubType
+}
+
+# if we have a regression_id
+if {($regression_id != "NULL")} {
+    puts "We have regression_id"
+} else {
+    set regression_id [GetRegressionId \
+	    -build_id $build_id -platform_id $platform_id \
+        -feature_type $feature_type \
+        -feature_sub_type $feature_sub_type]
+}
+
+# -------------------------------------------------------------------------------
+# Check if the regression is already running
+#    - safety mechanism to keep regressions from running
+#      over the top of each other.
+# -------------------------------------------------------------------------------
+set sel_clause "SELECT status FROM regression_table WHERE \
+        regression_id = '$regression_id'"
+set run_status [mysqlsel $mysql_handler $sel_clause -flatlist]
+puts "\n-----------\nrun_status: $run_status\n-----------"
+
+# -------------------------------------------------------------------------------
+# Check the daemon/wrapper entry for this test bed
+# -------------------------------------------------------------------------------
+set MAIN(TrackInit) [OpenTrackingPort -cfg "[file tail $cfg]" -script_name "mysqlRunall_monitor" -type "wrapper" ]
+
+# update the regression table with the pid
+set pid [pid]
+mysqlexec $mysql_handler "UPDATE regression_table SET regression_pid='$pid' WHERE regression_id = '$regression_id'"
+# update the regression table with ip address of this linux
+set my_ip [myIP]
+mysqlexec $mysql_handler "UPDATE regression_table SET regression_ip='$my_ip' WHERE regression_id = '$regression_id'"
+# get latest run number
+puts "\n==========================================="
+puts "Get latest run number"
+set sel_clause "SELECT total_number_of_runs FROM regression_table WHERE \
+                regression_id = '$regression_id'"
+set run_number [mysqlsel $mysql_handler $sel_clause -flatlist]
+puts "run_number: $run_number"
+puts "regSubType: $regSubType"
+puts "==========================================="
+# -----------  end the mysql stuff ----------------
+
+# -------------------------------------------------------------------------------
+# check to see if testModuleList.cfg exists
+# -------------------------------------------------------------------------------
+if {![file exists $modSummaryCfgPath]} {
+    result_error "\nERROR: $modSummaryCfgPath could not be found.  Please correct \
+	    this error before re-running.\n"
+    return 0
+}
+
+source $modSummaryCfgPath
+
+set env(EXOS_PLATFORM_TYPE) 2
+set image ""
+
+# -------------------------------------------------------------------------------
+# NOTE: Pass by reference
+# -------------------------------------------------------------------------------
+if { ! [ validatemysqlRunall_monitorArgs blade platformIndx platform cfg regType \
+         regSubType exclude forstats include download noPost mailTo i386ImagePath \
+        marinerImagePath aspenImagePath cougarImagePath x480ImagePath x870ImagePath \
+        NWIImagePath viperImagePath jaguarImagePath olympicImagePath voyagerImagePath \
+        image rerun baseLine stopWithPhase] } {
+    print_usage
+    return 0
+}
+
+if {$heuristic == "yes"} {
+  # ------
+  #  TO DO : Dev new heuristic for cases that have never failed
+  # ------
+    
+  #  # let PHP find the modules which have to run - find using heuristic approach
+  #  set regression_id_url [http_formatQuery regression_id $regression_id]
+  #  # puts "regression_id_url: $regression_id_url"
+  #  
+  #  #set filterModulesURL "http://10.210.1.59/filterModules.php"
+  #  if {$my_db == "autoweb_db_4" || $my_db == "autoweb_db_5"} {
+  #    set filterModulesURL "http://$mysqlIP/phpdb4/filterModules.php"
+  #  } ellse {
+  #    set filterModulesURL "http://$mysqlIP/filterModules.php"
+  #  }
+  #  set filterModulesURL [append filterModulesURL "?$regression_id_url"]
+  #  puts "filterModulesURL: $filterModulesURL"
+  #  set token [http_get $filterModulesURL -timeout 1000000 ]
+  #  upvar #0 $token httpState
+  #  while { [string match eof $httpState(state)] != 1 } {
+  #  puts stderr "$httpState(state) [string match eof $httpState(state)]"
+  #  flush stderr
+  #  after 100
+  # }
+  #  set allTypeModules [http_data httpState]
+}
+
+# -----------------------------------------------------------
+# Get all possible modules to run in order of the exec times
+# -----------------------------------------------------------
+global FeatureInfo
+global FeatureIdInfo
+global PlatformInfo
+global RegressionInfo
+global DebugOn
+global DebugOnHi
+global ForceTimeUpdate
+global exclude
+# -----------------------------------------------------------
+# Set the regression subtype either function or routing
+# -----------------------------------------------------------
+set regSubTypeThis $regSubType
+if {$regSubTypeThis == "ipRoute1"} {
+    set regSubTypeThis "routing"
+}
+switch $regType {
+    "functional" { set myRegPath "Functionaltest" }
+    "ixscriptmate" { set myRegPath "ixScriptMate" }
+    "cli" {
+    	if { $regSubType == "uploadanddownload" } {
+    	    set myRegPath "../CLItest/uploadanddownload"
+    	} else {
+    	    set myRegPath "../CLItest/upgradedowngrade"
+    	}
+    }
+    "scalability" { set myRegPath "Scalabilitytest" }
+    "snmp" { set myRegPath "SnmpFunctionaltest" }
+    "xml" { set myRegPath "XML_API" }
+    "fit" { set myRegPath "FeatureInteraction" }
+    default { set myRegPath "Functionaltest" }
+}
+
+puts "==========================================="
+puts "regtype=$regType"
+puts "regsubtype=$regSubTypeThis"
+puts "--------------------------------------------"
+puts "Regression Path: $myRegPath"
+puts "==========================================="
+
+##################################################
+#  Create java files for XML_APIs if needed 
+###################################################
+if {$regType == "xml"} {
+    set my_ip_list [split $my_ip "."]
+    set my_ip_last [lindex $my_ip_list end]
+    
+    set xml_sync_table_this xml_sync_table_
+    set xml_sync_table_this [append xml_sync_table_this $my_ip_last]
+    
+    # lock the protected region - max wait 240 seconds
+    set lock_rslt [getLock $my_ip_last 240]
+    puts "lock_rslt $lock_rslt"
+    if {$lock_rslt != 1} {
+        # set status to none in order not to leave the database in a wrong state
+        set rslt [mysqlexec $mysql_handler "UPDATE $xml_sync_table_this SET status='none' WHERE build = '$image'"]
+        result_error "\nERROR: Couldn't get XML Java creation lock.\n"
+    }
+    
+    set xml_status [mysqlsel $mysql_handler "SELECT status FROM \
+          $xml_sync_table_this WHERE build = '$image'" -flatlist]
+    puts "xml_status $xml_status"
+    if {$xml_status == ""} {
+        set insert_clause [append insert_clause "insert into \
+                                       $xml_sync_table_this "]
+        set insert_clause [append insert_clause "(build) "]
+        set insert_clause [append insert_clause "values (\"$image\") "]
+        
+        set rslt [mysqlexec  $mysql_handler $insert_clause]
+        
+        if {($xml_status == "") || ($xml_status == "none")} {
+            # lets create the java code
+            # clear all the entries
+            set rslt [mysqlexec $mysql_handler "UPDATE $xml_sync_table_this \
+                                                          SET status='none'"]
+            # set status to creating java code
+            set rslt [mysqlexec $mysql_handler "UPDATE $xml_sync_table_this \
+                               SET status='creating' WHERE build = '$image'"]
+            if {[regexp -nocase "OLY" $platformIndx]} {
+                set myImagePath $olympicImagePath
+            } elseif {[regexp -nocase "MAR" $platformIndx]} {
+                set myImagePath $marinerImagePath
+            } elseif {[regexp -nocase "JAG" $platformIndx]} {
+                set myImagePath $jaguarImagePath
+            } elseif {[regexp -nocase "TOR" $platformIndx]} {
+                set myImagePath $olympicImagePath
+            } elseif {[regexp -nocase "COU" $platformIndx]} {
+                set myImagePath $cougarImagePath
+            } elseif {[regexp -nocase "VIP" $platformIndx]} {
+                set myImagePath $viperImagePath
+            } elseif {[regexp -nocase "SYL|x480" $platformIndx]} {
+                set myImagePath $x480ImagePath
+            } elseif {[regexp -nocase "SLF|x870" $platformIndx]} {
+                set myImagePath $x870ImagePath
+            } elseif {[regexp -nocase "ASP" $platformIndx]} {
+                set myImagePath $aspenImagePath
+            } elseif {[regexp -nocase "STA" $platformIndx]} {
+                set myImagePath $jaguarImagePath
+            } elseif {[regexp -nocase "VOY|PAT" $platformIndx]} {
+                set myImagePath $voyagerImagePath
+            } else {
+                set myImagePath $cougarImagePath
+            }
+            
+            # strip the build file name from the path
+            set myImagePath [file dirname $myImagePath]
+            set mainPwd [pwd]
+            cd "../XML_API/API_Java"
+            puts "pwd [pwd]"
+            global env
+            set env(JAVA_HOME) /mnt/stools/jdk/jdk1.5.0_08/
+            set javaStat [catch {exec /mnt/stools/ant/apache-ant-1.7.0Beta1/bin/ant \
+                 -f build.xml \
+                 -D"axis.home=/mnt/software_tools/apache/axis/axis-1_4" \
+                 -D"scratch.home=../../main/Tmp" \
+                 -D"release.home=$myImagePath" \
+                 -D"libsshcli.home=../Lib" \
+                 complete_compile >&@stdout} result]
+            puts "javaStat $javaStat"
+            cd $mainPwd
+            if {$javaStat != 0} {
+                result_error "\nERROR: XML java code creation failed.\n"
+                result_error "$result"
+                return 0
+            }
+            # update database
+            set rslt [mysqlexec $mysql_handler "UPDATE $xml_sync_table_this \
+                                  SET status='ready' WHERE build = '$image'"]
+            
+        } elseif {$xml_status == "ready"} {
+            puts "XML JAVA code READY for build $image"
+        }
+        
+        # inlock the protected region
+        set unlock_rslt [releaseLock $my_ip_last]
+        puts "unlock_rslt $unlock_rslt"
+    }
+}
+
+##################################################
+#  Download image if needed 
+###################################################
+if {($image != "") && [regexp -nocase "yes" $download] } {
+
+    if {! [handleImageDownload $cfg $i386ImagePath $marinerImagePath \
+            $aspenImagePath $cougarImagePath $x480ImagePath $NWIImagePath $viperImagePath $jaguarImagePath $olympicImagePath $voyagerImagePath $bootrom ]} {
+	
+	set  notificationData  "\nHOST  PC:  [exec hostname] \
+		\nSTARTED:  $startTime \
+		\nENDED:    [exec date] \
+		\nIMAGE:    $i386ImagePath \
+		\nIMAGE:    $marinerImagePath \
+		\nIMAGE:    $aspenImagePath \
+		\nIMAGE:    $cougarImagePath \
+        \nIMAGE:    $x480ImagePath \
+        \nIMAGE:    $x870ImagePath \
+        \nIMAGE:    $NWIImagePath \
+        \nIMAGE:    $viperImagePath \
+		\nIMAGE:    $jaguarImagePath \
+		\nIMAGE:    $olympicImagePath \
+		\nIMAGE:    $voyagerImagePath \
+		\nCFG:      $cfg \
+		\nINCLUDE:  $include \
+		\nEXCLUDE:  $exclude \
+		\nREGPATH:  $myRegPath \               
+                \nRERUN :   $rerun \
+                \nBASELINE: $baseLine\
+                \nSTOPWITHPHASE: $stopWithPhase\n"
+	;# Unable to download image.
+	sendMailNotification $mailTo \
+		"$cfg Image download FAILED" \
+		"Image download for $cfg FAILED. Please debug and restart. \
+		$notificationData"
+	
+	result_error "IMAGE DOWNLOAD Failed!"
+	return 0
+    }
+}
+sleep 5
+
+;# Get the regPath $myRegPath
+set regPath $myRegPath
+result_debug "regPath: $regPath"
+
+# -------------------------------------------------------------------------
+#  05-19-09 - Load Balancing of modules to run.
+#
+#  The logic for deciding which module to run is broken down into 4 phases.
+#  Prior to the db logic that follows, the include or exclude list was used
+#  to decide what to run next.  This db method of module selection allows 
+#  for dynamic, perfectly balanced.
+#
+#  Phase - 1 : Functional run :  single module single testbed 
+#  Phase - 2 : chipset level functional run :  Broadcom + GNSS/Voyager
+#  Phase - 3 : Platform level functional run :
+#  Phase - 4 : Blade level functional run :
+# -------------------------------------------------------------------------
+
+# -------------------------------------------------------------------------
+#  The include and exclude lists will still be used.
+#    Include will override the db selection of the next module
+#    Exclude will cause the selected module to skip execution
+# -------------------------------------------------------------------------
+if {!$useDbPhase && $include == ""} {
+    set useDbModuleSelection 0
+    set allTypeModules [mysqlsel $mysql_handler "SELECT feature_directory \
+    FROM feature_table WHERE status = 'Active' AND feature_type = '$regType' AND \
+    feature_sub_type = '$regSubTypeThis' AND (end_release_id = '' OR end_release_id >= '$build_minor_release') AND (start_release_id = '' OR start_release_id <= '$build_minor_release') ORDER BY feature_directory ASC" -flatlist]
+
+
+    # -------------------------------------------------------------------------
+    # Last module to be determined by db call procedure
+    # -------------------------------------------------------------------------
+    set lastModule [lindex $allTypeModules [expr [llength $allTypeModules] - 1]]
+} elseif {$include != "" && !$useDbPhase} {
+    ;# Rebuild $allTypeModules list with only included modules
+    set useDbModuleSelection 0
+    set allTypeModules ""
+    set allTypeModules $include
+    # -------------------------------------------------------------------------
+    # Last module to be determined by db call procedure
+    # -------------------------------------------------------------------------
+    set lastModule [lindex $allTypeModules [expr [llength $allTypeModules] - 1]]
+    result_debug "============================================================="
+    result_debug "INCLUDE LIST SELECTED REGRESSION RUN"
+    result_debug "$allTypeModules"
+    result_debug "============================================================="
+} else {
+    set useDbModuleSelection 1
+    ;# Remove regPath param from $allTypeModules
+    ;# set allTypeModules [lrange $allTypeModules 1 \
+    ;#	    [expr [llength $allTypeModules] - 1] ]
+
+    # -------------------------------------------------------------------------
+    # Last module to be determined by db call procedure
+    # -------------------------------------------------------------------------
+    ;#set lastModule [lindex $allTypeModules [expr \
+    ;#	[llength $allTypeModules] - 1]]
+    set lastModule ""
+    result_debug "============================================================="
+    result_debug " DATABASE SELECTED REGRESSION RUN"
+    result_debug "============================================================="
+}
+;# Write logs to file
+flush $fd_res
+
+# -------------------------------------------------------------------------
+# Set the globals
+# -------------------------------------------------------------------------
+global FCOUNT
+set createConfig 0
+# Default mode to use for main.tcl (auto | dev | autodev )
+set modeToUse "auto"
+set modeFast   1  ;# Use auto for first module, then autodev for next
+set heuristicTCList "null" ;# Heuristic only exec previously failed cases
+set DebugOn 0 
+set DebugOnHi 1 
+set ForceTimeUpdate 0
+
+if {![file isdirectory Tmp]} {
+        file mkdir Tmp
+}
+
+# -------------------------------------------------------------------------
+# set regression status to running
+# -------------------------------------------------------------------------
+mysqlexec $mysql_handler "UPDATE regression_table SET status='running' WHERE regression_id = '$regression_id'" 
+
+# WE RUN THIS TWICE IF RerunEnabled is set or pass_number is 2
+# calculate i
+if {$pass_number == "" || $pass_number == "NULL"} {
+  set pass_number 1
+}
+if {[info exists RerunEnabled] && ($RerunEnabled)} {
+  set max_runs 2
+} else {
+  set max_runs 1
+}
+
+if {$pass_number == 2} {
+  set max_runs 2
+}
+
+    # -------------------------------------------------------------------------
+    # Include list case.  Just loop on the include list
+    # -------------------------------------------------------------------------
+    if {!$useDbModuleSelection} {
+        result_debug "Not using DB module selection"
+        set FCOUNT 0
+        # ---------------------------------------------------------------------
+        # If include is passed in we automatically skip DB logic
+        # ---------------------------------------------------------------------
+        set initList $lst
+        foreach testModule $allTypeModules {
+            
+             set status "OK"
+            
+             #puts "STARTING RUN NUMBER: $i"
+             puts "LAST: $lastModule  TEST:$testModule"
+            
+             if {([string equal -nocase $lastModule $testModule] == 1) && \
+                (! [regexp -nocase "perf" $regType])} {
+                    set createConfig 1
+                    result_debug "****** SETTING CREATE CONFIG to 1 ******"
+             } 
+            
+             # For initial release, keep everything in AUTO mode
+             set modeToUse "auto"
+             #If user didn't pass the lst to run get it from db
+             set lst $initList
+             if {$lst == "NULL"} {
+                 set lst [string trim [mysqlsel $mysql_handler \
+                       "SELECT list_to_run FROM feature_table WHERE \
+                       feature_type = \"$regType\" AND feature_directory = \"$testModule\" \
+                       AND feature_sub_type = \"$feature_sub_type\"" -flatlist] "{}"] 
+             }
+             puts "*************** RUNNING in $modeToUse *****************" 
+             for {set i $pass_number} {$i <= $max_runs} {incr i} {
+                
+                 mysqlexec $mysql_handler "UPDATE regression_table SET total_number_of_runs='$i' \
+                           WHERE regression_id = '$regression_id'"
+                 UpdateTrackDBTxt "runModuleRegression: $testModule";
+                 set status [runModuleRegression -testModule $testModule -modeToUse $modeToUse \
+                        -regPath $regPath -cfg $cfg -noPost $noPost \
+    	                -createConfig $createConfig -regType $regType -regSubType $regSubType \
+                        -platformIndx $platformIndx -platform $platform -blade $blade \
+                        -image $image -obuild $obuild -regression_id $regression_id \
+                        -host $host -db $db -build_name $build_name -subversion $subversion \
+                        -run_number $i -lst $lst -efence $efence \
+                        -saveConfigPerTest $saveConfigPerTest -debugLevel $debugLevel]
+             }
+             ####Module is done compare the results with baseLine#######################################
+             if {$baseLine != "NULL"} {
+                 mailNewFailures -cfg $cfg -module $testModule -build $build_name -baseLine $baseLine
+             }
+            
+             set conn [conn_to_db $host $db]
+             if [regexp -nocase "FATAL_ERROR" $status] {
+                 UpdateTrackDBTxt "FATAL ERROR: $testModule";
+                 result_debug "######################################################################"
+                 result_debug "  ** ABORTED ** RUNALL_MONITOR.TCL -- $testModule ** ABORTED **"
+                 result_debug "######################################################################"
+                
+                 # DISABLING THIS - ONLY THE WATCHDOG WILL SET THE STATUS TO CRASHED
+                 # set regression status to crashed
+                 # mysqlexec $mysql_handler "UPDATE regression_table SET status='crashed' \
+                 #                                  WHERE regression_id = '$regression_id'" 
+                 return 0  ;# QUIT
+             }
+
+            
+             # ------------------------
+             if {$FCOUNT > 2} {
+                 # ----------------------------------------------------------------
+                 #   Too many errors set current_run_table to locked by admin
+                 #
+                 # ----------------------------------------------------------------
+                 CheckAndPauseRegression -regression_id $regression_id -feature_directory $testModule \
+                                    -admin_email $mailTo -pauseType "error" -regCfg $cfg
+                 set FCOUNT 0;
+             }
+        }      
+    } else {
+        # -------------------------------------------------------------------------
+        # Phase logic database section.
+        # -------------------------------------------------------------------------
+        result_debug "In Phased Logic Section"
+        # Counter for fatal errors
+        set FCOUNT 0;
+        set FeatureInfo ""
+        set FeatureIdInfo ""
+        set PlatformInfo ""
+        set RegressionInfo ""
+        set LastFeature ""
+        set initList $lst
+        while {1} {
+            
+            unset FeatureInfo
+            unset FeatureIdInfo
+            unset PlatformInfo
+            unset RegressionInfo
+            set status "OK"
+
+            # ------------------------
+            if {$FCOUNT > 2} {
+                # ----------------------------------------------------------------
+                #   Too many errors set current_run_table to locked by admin  
+                #
+                # ----------------------------------------------------------------
+                CheckAndPauseRegression -regression_id $regression_id -feature_directory $testModule \
+                                    -admin_email $mailTo -pauseType "error" -regCfg $cfg
+                set FCOUNT 0;
+            }
+            #puts "STARTING RUN NUMBER: $i"
+            # ---------------------------------------------------------------------
+            # ---------------------------------------------------------------------
+            #  Pick a module to run.  The phase logic is all contained within this
+            #     proc
+            # ---------------------------------------------------------------------
+            # ---------------------------------------------------------------------
+            set testModule [GetModulePhased -build_id $build_id -regression_id $regression_id \
+                     -my_platform_id $platform_id -regType $regType -regSubType $regSubTypeThis \
+                     -incrBuilds $incrBuilds -build_minor_release $build_minor_release]
+            set lst $initList
+            if {$lst == "NULL"} {
+                  set lst [string trim [mysqlsel $mysql_handler \
+                     "SELECT list_to_run FROM feature_table WHERE feature_type = \"$regType\" \
+                     AND feature_directory = \"$testModule\" AND \
+                     feature_sub_type = \"$feature_sub_type\"" -flatlist] "{}"]
+            }
+            puts "New Test Module $testModule"
+            set tExclude [join $exclude " "]
+            if {$testModule == "" || $testModule == 0} {
+                incr FCOUNT;
+                continue;
+            } elseif {$testModule == "Finished"} {
+                result_debug "######################################################################"
+                result_debug "            ** Finished with Database Automation Run **"
+                result_debug "######################################################################"
+                break
+            } elseif {[string match "$testModule" "$tExclude"]} {
+                result_debug "######################################################################"
+                result_debug "            ** Module $testModule is in the String Match Exclude **"
+                result_debug "######################################################################"
+                continue;
+            } else {
+puts "$testModule === $exclude\n$tExclude"
+                result_debug "######################################################################"
+                result_debug "            ** Database Automation Run NOT Complete  **"
+                result_debug "######################################################################"
+            }
+            #puts "LAST: $lastModule  TEST:$testModule"
+            #
+            #if {([string equal -nocase $lastModule $testModule] == 1) && \
+            #(! [regexp -nocase "perf" $regType])} {
+            #set createConfig 1
+            #result_debug "****** SETTING CREATE CONFIG to 1 ******"
+            #} 
+            
+            # For initial release, keep everything in AUTO mode
+            set modeToUse "auto"
+            # ------------------------------------------------------------
+            # Init the Feature getting ready to run.  We need to have a safety
+            #   so as to not re-run the same module over and over should mysqlAutomate
+            #   fail to post results correctly.
+            # ------------------------------------------------------------
+            if {$LastFeature == $testModule} {
+                result_debug "######################################################################"
+                result_debug "    !!!!! M Y S Q L A U T O M A T E  is not  P O S T I N G   !!!!!    "
+                result_debug "######################################################################"
+                lappend exclude $testModule
+                continue
+            }
+            puts "*************** RUNNING in $modeToUse *****************" 
+           for {set i $pass_number} {$i <= $max_runs} {incr i} {
+                UpdateTrackDBTxt "runModuleRegression $testModule";# tracking db location
+                mysqlexec $mysql_handler "UPDATE regression_table SET \
+                     total_number_of_runs='$i' WHERE regression_id = '$regression_id'"
+                set status [runModuleRegression -testModule $testModule -modeToUse $modeToUse \
+                        -regPath $regPath -cfg $cfg -noPost $noPost \
+    	                -createConfig $createConfig -regType $regType -regSubType $regSubType \
+                        -platformIndx $platformIndx -platform $platform -blade $blade \
+                        -image $image -obuild $obuild -regression_id $regression_id \
+                        -host $host -db $db -build_name $build_name -subversion $subversion \
+                        -run_number $i -lst $lst -efence $efence \
+                        -saveConfigPerTest $saveConfigPerTest -debugLevel $debugLevel]
+          }
+          #### Module is done Compare the results with base line and mail teh results ####
+          if {$baseLine != "NULL"} {
+               mailNewFailures -cfg $cfg -module $testModule -build $build_name -baseLine $baseLine
+          }
+           
+          set conn [conn_to_db $host $db]
+
+          if [regexp -nocase "FATAL_ERROR" $status] {
+              UpdateTrackDBTxt "FATALERROR: $testModule";# tracking db location
+              result_debug "######################################################################"
+              result_debug "            ** ABORTED ** RUNALL_MONITOR.TCL ** ABORTED **"
+              result_debug "######################################################################"
+              incr FCOUNT
+          } else {
+                set FCOUNT 0;
+          }
+          if {$FCOUNT > 2} {
+              UpdateTrackDBTxt "FCOUNT PAUSE: $testModule";
+              # ----------------------------------------------------------------
+              #   Too many errors set current_run_table to locked by admin  
+              #
+              # ----------------------------------------------------------------
+              CheckAndPauseRegression -regression_id $regression_id -feature_directory $testModule \
+                                    -admin_email $mailTo -pauseType "error" -regCfg $cfg
+              set FCOUNT 0;
+          }
+          set LastFeature $testModule;
+          ##  BOTTOM of PHASED LOGIC LOOP
+       }
+    }
+
+    set  notificationData  "\nHOST PC:  [exec hostname] \
+	\nSTARTED:  $startTime \
+	\nENDED:    [exec date] \
+	\nIMAGE:    $i386ImagePath \
+	\nIMAGE:    $marinerImagePath \
+	\nIMAGE:    $aspenImagePath \
+	\nIMAGE:    $cougarImagePath \
+        \nIMAGE:    $x480ImagePath \
+        \nIMAGE:    $x870ImagePath \
+        \nIMAGE:    $NWIImagePath \
+        \nIMAGE:    $viperImagePath \
+	\nIMAGE:    $jaguarImagePath \
+	\nIMAGE:    $olympicImagePath \
+	\nIMAGE:    $voyagerImagePath \
+	\nDOWNLOAD: $download \
+	\nCFG:      $cfg \
+	\nINCLUDE:  $include \
+	\nEXCLUDE:  $exclude \
+        \nRERUN  :  $rerun \
+        \nBASELINE: $baseLine \
+        \nSTOPWITHPHASE: $stopWithPhase \\n"
+
+
+if {$abortingReason == "connectionBad"} {
+    set notificationData "$notificationData\n\
+	    REGRESSION ABORTED DUE TO: $abortingReason"
+    # DISABLING THIS - ONLY THE WATCHDOG WILL SET THE STATUS TO CRASHED
+    # set regression status to crashed
+    # mysqlexec $mysql_handler "UPDATE regression_table SET status='crashed' WHERE regression_id = '$regression_id'" 
+} elseif [llength $erroredModules] {
+    set notificationData "$notificationData\n\
+	    MODULES ABNORMALLY TERMINATED DURING RUN: $erroredModules"
+    # DISABLING THIS - ONLY THE WATCHDOG WILL SET THE STATUS TO CRASHED
+    # set regression status to crashed
+    # mysqlexec $mysql_handler "UPDATE regression_table SET status='crashed' WHERE regression_id = '$regression_id'" 
+}
+
+sendMailNotification $mailTo \
+	"$cfg RUNALL_MONITOR finished" \
+	"Congratulations! runall_monitor.tcl for $cfg has completed $regType tests.\n \
+	$notificationData"
+
+# set regression status to finished
+puts "set regression status to finished"
+puts "we probably lost the mysql connection here, let's reopen it"
+if {[catch {mysqlclose $mysql_handler} reason]} {
+    puts "couldn't close mysql connection - reason:\n$reason\n"
+}
+conn_to_db $host $db
+mysqlexec $mysql_handler "UPDATE regression_table SET status='finished' WHERE regression_id = '$regression_id'" 
+
+#NEW GRANT
+TrackingCleanup;
+
+result_debug "######################################################################"
+result_debug "                      RUNALL_MONITOR.TCL FINISHED!"
+result_debug "######################################################################"
+result_debug "$notificationData"

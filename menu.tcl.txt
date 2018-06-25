@@ -1,0 +1,384 @@
+#
+proc NumberedMenu {args} {
+    parse_args NumberedMenu $args {
+        head             "This is a Menu"
+        question1        "What"
+        choices          "This That TheOther"
+        chAppendList     "null"
+        chPrependList    "null"
+        menuWidth        100
+        keyWidth         5
+        headerPadChar    "-"
+        barChar          "-"
+        clearXterm       "yes"
+        clearXtermInfo   ""
+        all              "no"
+        simple           "no"
+    }
+
+    if {$chAppendList != "null"} {
+        set choices [concat $choices $chAppendList]
+    }
+    if {$chPrependList != "null"} {
+        set choices [concat $chPrependList $choices]
+    }
+    if {[llength $choices] < 1} {
+        puts "No elements passed into menu"
+        exit
+    } else {
+        #puts "Choices $choices"
+    }
+    set nWidth $keyWidth; # width of number column
+    set longest 0; # init longest value in
+    set i 0
+    foreach cc $choices {
+        set ln [string length $cc]
+        if {$ln > $longest} {
+            set longest $ln; # return the longest string length pased in
+        }
+        incr i
+    }
+    set choiceCount $i
+    set valWidth [expr $longest + 4]; # leave some white space 3 spaces
+    set numValWidth [expr $nWidth + $valWidth];# entire col width
+    set colCount [expr int(floor($menuWidth / $numValWidth))]; # columns in menu 100 chars/ longest val
+    set choiceLen [llength $choices]
+    if {$choiceLen > $colCount} {
+        set numRows [expr int(ceil($choiceLen/$colCount))];# elements in array div by num rows
+    } else {
+        set numRows 1
+    }
+    # Create a bar the width of the menu
+    set bl 0
+    set bar ""
+    while {$bl <= $menuWidth} {
+        append bar "$barChar"
+        incr bl
+    }
+    # ------------------------------------------------
+    #        make header
+    # ------------------------------------------------
+    # Header will look like -----  $head  -----
+    set headWidth [expr $menuWidth - 4]; # leave for with spaces
+    set slen [string length $head];# Length of the header passed in
+    set pad [expr $headWidth - $slen];# buffer is line length of 90 - 4 spaces - header
+    set pad [expr int(floor($pad / 2))];# div buffer by 2 to left and right side
+
+    set h 0 ;# counter for pad string
+    set padStr ""
+    while {$h<=$pad} {
+        append padStr $headerPadChar;# create the pad string
+        incr h ;# pad length
+    }
+    # --------------------------------------------------------------------
+    #  Create the menu
+    # --------------------------------------------------------------------
+
+    # init the menu counters
+    set lastSelection ""
+    set listOut ""
+    set listIn $choices
+    # make the menu
+    while {1} {
+        # print the header
+        puts "\n\n"
+        # ------------------------------------------------
+        # Previous app important info to display
+        #   this menu may clear stdout.  If you want
+        #   to add important info to display at the top
+        #   after stdout is cleared. Pass it in as a list
+        #   $clearXtermInfo ""
+        if {[llength $clearXtermInfo] > 0} {
+            puts "$bar"
+            foreach preI $clearXtermInfo {
+                if {[llength $preI] == 2} {
+                    set pic 0
+                    foreach kv $preI {
+                        set pikv($pic) $kv
+                        incr pic
+                    }
+                    puts "[format "%-20s %-20s" ${pikv(0)}: ${pikv(1)}]"
+                } else {
+                    puts "$preI"
+                }
+            }
+        }
+        puts "${padStr}  ${head}  $padStr"
+
+        set r 0;
+        set x 0;
+        while {$x <= $choiceLen} {
+            # build the format colCount   nWidth valWidth
+            set ls ""
+            for {set ccc 0} {$ccc<$colCount} {incr ccc} {
+                # Loop formats the 
+                if {[string trim [lindex $listIn $x]] != ""} {
+                    set pDigit [expr $x+1]; # print digit is 1 higher than key
+                    lappend ls [format "%-${nWidth}s %-${valWidth}s" ${pDigit}: [lindex $listIn $x]]
+                } else {
+                    set blk ""
+                    lappend ls [format "%-${nWidth}s %-${valWidth}s" $blk $blk]
+                }
+                incr x
+            }
+            puts "[join $ls ""]"
+        }
+
+        if {[llength $listOut] > 0} {
+            set selLen [llength $listOut]
+            puts "\n\nYour Current Selections:"
+            set xx 0;
+            set blk " "
+
+            while {$xx <= $selLen} {
+                # build the format colCount   nWidth valWidth
+                set ls ""
+                for {set ccc 0} {$ccc<$colCount} {incr ccc} {
+                    # Loop formats the 
+                    if {[string trim [lindex $listOut $xx]] != ""} {
+                        lappend ls [format "%-${valWidth}s %-${nWidth}s" [lindex $listOut $xx] $blk]
+                    } else {
+                        set blk " "
+                        lappend ls [format "%-${valWidth}s %-${nWidth}s" $blk $blk]
+                    }
+                    incr xx
+                }
+                puts "[join $ls ""]"
+            }
+        }
+        # reset selection to array index
+        puts " "
+        if {$simple == "yes"} {
+            puts -nonewline "$question1 : Default = 1: [lindex $listIn 0] :";
+        } else {
+            puts -nonewline "$question1 : (a)ll, (u)ndo, (f)inished <CR>Default = 1: [lindex $listIn 0] :";
+        }
+        flush stdout;
+        gets stdin userChoice;
+        if {$userChoice==""} {
+            set userChoice 1
+        }
+        # Simple, what's next, menu case
+        if {$simple == "yes"} {
+            if {![regexp {[0-9]+} $userChoice]} {
+                puts "You can only enter an integer in this menu"
+                continue;
+            }
+            set inIndex [expr $userChoice - 1]
+            lappend ol [lindex $listIn $inIndex]
+            return $ol
+        }
+        # ---------- Complex, build array menu -------------
+        if {[regexp -nocase "^a" $userChoice]} {
+            set listOut $listIn
+            break
+        }
+        if {[regexp -nocase "^f" $userChoice]} {
+            break
+        }
+        if {[regexp -nocase "^u" $userChoice]} {
+            if {$lastSelection == ""} {
+                puts "You can only undo the last selection"
+                after 3000
+                if {$clearXterm == "yes"} {
+                    catch {exec clear >@ stdout} ww
+                }
+                continue
+            }
+            lappend listIn $lastSelection
+            set listOut [ldelete $listOut "$lastSelection"];
+            set choiceLen [llength $listIn]
+            if {$clearXterm == "yes"} {
+                catch {exec clear >@ stdout} ww
+            }
+            set lastSelection ""
+            continue;
+        }
+        if {[regexp -nocase "\[a-zA-Z]" $userChoice]} {
+            puts "Must be a number";
+            after 2000;
+            if {$clearXterm == "yes"} {
+                catch {exec clear >@ stdout} ww
+            }
+            continue;
+        }
+        set userChoice [expr $userChoice - 1];# reset to list key value
+        if {$userChoice >= 0 && $userChoice < $x} {
+            #puts -nonewline "You selected: [lindex $listIn $userChoice].\
+            #                     <R|Retry>  <S|Select 1> and Contiue <F|Finished> <A|Add>\[A]:";
+
+            #flush stdout;
+            #gets stdin whatNext;
+            set whatNext a
+            if {$whatNext == ""} {
+                set whatNext "a"
+            }
+            if {[regexp -nocase "^a" $whatNext]} {
+                lappend listOut [lindex $listIn $userChoice]
+                set lastSelection "[lindex $listIn $userChoice]"
+                set listIn [ldelete $listIn "[lindex $listIn $userChoice]"];
+                set choiceLen [llength $listIn]
+                if {$clearXterm == "yes"} {
+                    catch {exec clear >@ stdout} ww
+                }
+                continue;
+            } elseif {[regexp -nocase "^r" $whatNext]} {
+                if {$clearXterm == "yes"} {
+                    catch {exec clear >@ stdout} ww
+                }
+                continue;
+
+            } elseif {[regexp -nocase "^f" $userChoice]} {
+                set listOut $listIn
+                break
+            } elseif {[regexp -nocase "^s" $whatNext]} {
+                if {[llength $listOut] <= 0} {
+                    set listOut "[lindex $listIn $userChoice]"
+                }
+                if {$clearXterm == "yes"} {
+                    catch {exec clear >@ stdout} ww
+                }
+                break;
+            } else {
+                puts "You did not enter a legal value. A to Add, R to Retry, S for select and continue"
+                after 2000
+                continue;
+            }
+        } else {
+            puts "Error: You must select a number 1 through [expr $x - 1]\n";
+            continue;
+        }
+
+    }
+    puts "\nRETURN:\n[join $listOut "\n"]\n"
+    return $listOut;
+}
+#
+#
+#
+#  Single question
+#
+#
+proc SingleQuestion {args} {
+
+   parse_args SingleQuestion $args {
+        head             "This is a Menu"
+        q1               "What"
+        choices          "This That TheOther"
+        chAppendList     "null"
+        chPrependList    "null"
+        menuWidth        100
+        keyWidth         5
+        headerPadChar    "-"
+        barChar          "-"
+        clearXterm       "yes"
+        clearXtermInfo   ""
+        all              "no"
+        simple           "no"
+    }
+    catch {flush stdin}
+    set uChoice "ok"
+    puts " "
+    puts -nonewline "$q1 : ";
+    flush stdout;
+    set uChoice [gets stdin];
+    return $uChoice
+}
+# -----------------------------------------------------------------
+# 
+#
+# simple yes no script
+#
+# inputs: question and init yes/no
+# -----------------------------------------------------------------
+proc menuYesNo {q yn} {
+
+    set def $yn
+    puts " "
+    while {1} {
+        puts -nonewline "${q}? Y/N \[$yn] : "
+        flush stdout;
+        set ans [gets stdin]
+        if {[string trim $ans] == ""} {
+            if {[regexp -nocase "y" $yn]} {
+                set out "yes"
+                break;
+            } else {
+                set out "no"
+                break;
+            }
+        } else {
+            if {[regexp -nocase "y" $ans]} {
+                set out "yes"
+                break;
+            } elseif {[regexp -nocase "n" $ans]} {
+                set out "no"
+                break;
+            } else {
+                puts "Your answer must be Yes|y|No|n"
+                continue
+            }
+        }
+    }
+    puts "You selected $out"
+    return $out
+}
+# -------------------------------------------------------------------
+# proc imenu
+#
+# The i_main menu
+#
+# -------------------------------------------------------------------
+proc imenu {} {
+    global MAIN
+
+        set iList {
+            "Cleanup all DUTs"
+            "Init Ixia"
+            "Results Summary"
+            "Set and Show DUTs_info"
+            "exit"
+        }
+
+        set sList [NumberedMenu -head "What would you like to do" \
+                    -question1 "What do you want to do?" \
+                    -choices $iList \
+                    -menuWidth        75 \
+                    -keyWidth         3 \
+                    -headerPadChar    "=" \
+                    -chAppendList     "null" \
+                    -chPrependList    "null" \
+                    -barChar          "-" \
+                    -clearXterm       "yes" \
+                    -simple           "yes" \
+                    -clearXtermInfo   "" ]
+
+        if {[lsearch $sList "Cleanup all DUTs"] >= 0} {
+            CleanTestBedCfgs;
+            return;
+        }
+        if {[lsearch $sList "Results Summary"] >= 0} {
+            save_test_report "[get_result_dir { $randomIndex }]/report.exr"
+            gen_text_report "[get_result_dir]/report.exr" "stdout" "[file tail [pwd]]" $MAIN(cfg)
+            return;
+        }
+        if {[lsearch $sList "Change Modules"] >= 0} {
+            _changeFeature -m [SingleQuestion -q1 "What module do you want"]
+            return;
+        }
+        if {[lsearch $sList "Init Ixia"] >= 0} {
+            smallIxiaInit;
+            return;
+        }
+        if {[lsearch $sList "Set and Show DUTs_info"] >= 0} {
+            _get_duts_info show print
+        }
+        if {[lsearch $sList "Last TCL Error"] >= 0} {
+            global errorInfo
+            puts $errorInfo;
+            return;
+        }        
+        if {[lsearch $sList "exit"] >= 0} {
+            return;
+        }
+}

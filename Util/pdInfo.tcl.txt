@@ -1,0 +1,113 @@
+#!/usr/bin/expect --
+
+load [lindex [glob "/usr/lib/libexpect*so*"] 0]
+source SiebelAccess.tcl
+
+
+proc printUsage { } {
+     puts "\r"
+     puts "Usage:./pdInfo.tcl <pd name>"
+     puts "Ex: ./pdInfo.tcl PD2-178884043"
+}
+
+proc printInfo { } {
+    puts "\n*********************************************************************"
+    puts "***  Please read the PD informations in the following sequence -  ***"
+    puts "***  Owner, Creation Date, Created By, Status, Severity, Priority ***"
+    puts "***  PD Headline, PD Description                                  ***"
+    puts "*********************************************************************\n"
+}
+
+proc getSql { pd } {
+     set SQL "select owner.login PD_Owner, pd.created, created.login PD_Created_by, \
+             pd.status_cd, pd.SEVERITY_CD, pd.OTH_PRIORITY_CD, pd.ABSTRACT, pd.DESC_TEXT \
+             from siebel.s_employee owner, siebel.s_employee created, siebel.s_prod_defect \
+             pd where owner.row_id = pd.OWNER_EMP_ID and created.row_id = pd.created_by and \
+             pd.defect_num ='$pd'" 
+    return $SQL;
+}
+
+proc getPdInput { } {
+   puts -nonewline "\n Enter the PD number (Q to quit): "
+   flush stdout
+   set pd [gets stdin]
+   while { $pd == "" } {
+       puts -nonewline "\n Enter the PD number (Q to quit): "
+       flush stdout
+       set pd [gets stdin]
+   }
+  return $pd
+}
+
+proc isValidPdName { pd } {
+     set ret [regexp {(PD)[0-9](-)([0-9]+)} $pd]
+     if { $ret == 0 } {
+          puts "ERROR: Invalid PD name"
+     }
+     return $ret
+}
+
+#************************************************************************
+#                  MAIN CODE 
+#************************************************************************
+
+set pd ""
+
+
+if { [lsearch $argv "-help"] > -1} {
+      printUsage
+      exit
+}
+
+if { [lsearch $argv "?"] > -1} {
+      printUsage
+      exit
+}
+
+if { $argc<1 } {
+     printInfo 
+     set pd [getPdInput] 
+     if { $pd == "q" || $pd == "Q" || [isValidPdName $pd] == 0 } {
+        exit
+     }
+} else {
+     printInfo 
+     sleep 3
+     set pd [lindex $argv 0]
+     if { [isValidPdName $pd] == 0 } {
+         exit
+     }
+}
+
+set lda [OpenSiebelSession]
+set hdl [LoginSiebel $lda]
+
+set SQL [getSql $pd] 
+set rowData [ExecuteSQL $hdl $SQL]
+puts "\n $pd : $rowData"
+set ans ""
+while { 1 } {
+   while { $ans == "" } {
+       puts -nonewline "\n Any more PD ?? (y/n) :"
+       flush stdout
+       set ans [gets stdin]
+   }
+   if { $ans == "n" || $ans == "N" } {
+        break
+   } else {
+       set pd [getPdInput] 
+       if { $pd == "q" || $pd == "Q" || [isValidPdName $pd] == 0 } {
+          break
+       }
+      set SQL [getSql $pd]
+      set rowData [ExecuteSQL $hdl $SQL]
+      puts "\n $pd : $rowData"
+   }
+
+ set ans ""
+ set pd ""
+}
+
+LogoutSiebel $hdl
+CloseSiebelSession $lda
+

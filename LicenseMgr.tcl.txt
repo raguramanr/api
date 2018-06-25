@@ -1,0 +1,65 @@
+
+##################################################################
+#
+#  This function will enable the license of the switch.
+#
+#  Input Variables:
+#      - <currentLicense> - current license level of the switch
+#        It may have the following values edge, advancededge
+#      - <desiredLicense> - desired license level of the switch
+#        It may have the following values advancededge, core
+#
+#  Output Variables:
+#      - none
+#
+#  Return Value:
+#      - returns "ok" if success "error" if failure
+#
+#  [Examples]
+#  1. Enable the license from edge to advancededge
+#     EnableLicense edge advancededge
+#
+#####################################################################
+proc EnableLicense { currentLicense desiredLicense } {
+  global DUTs_info 
+  global whichDutNow
+  set status "error" 
+
+  set parameterList ""
+  lappend parameterList "{Enabled license successfully} exist"
+  if {[GetVersion DUT$whichDutNow 1]<"11.6.0.19"} {
+     if [info exists DUTs_info(DUT${whichDutNow},pre_${currentLicense}_${desiredLicense})] {   
+        set status [CheckKeyValue "enable license [set DUTs_info(DUT${whichDutNow},pre_${currentLicense}_${desiredLicense})]" $parameterList]
+     } else {
+        report_start_test "Error enable license"
+        result_error " DUTs_info(DUT${whichDutNow},pre_${currentLicense}_${desiredLicense}) Variable not found in cfg file"
+        report_end_test
+     }
+  } else {
+     if [info exists DUTs_info(DUT${whichDutNow},${currentLicense}_${desiredLicense})] {   
+       set status [CheckKeyValue "enable license [set DUTs_info(DUT${whichDutNow},${currentLicense}_${desiredLicense})]" $parameterList]
+     } else {
+        report_start_test "Error enable license"
+        result_error " DUTs_info(DUT${whichDutNow},${currentLicense}_${desiredLicense}) Variable not found in cfg file"
+        report_end_test
+     }
+
+     set ver [GetVersion DUT${whichDutNow}]
+     set platform [GetPlatform DUT${whichDutNow}]
+     if { ([CompareRelease $ver 12.1.0.0] > 0) && ([regexp -nocase "X250e|X450e" $platform] ==  1) } {
+        if [info exists DUTs_info(DUT${whichDutNow},bgp)] {   
+           set checkList ""
+           lappend checkList "{ServiceProviderEdge} exist"
+           set status [CheckKeyValue "show license" $checkList -reportResults 0]
+           if {$status != "ok"} {
+              set status [CheckKeyValue "enable license [set DUTs_info(DUT${whichDutNow},bgp)]" $parameterList]
+           }
+           unset checkList
+        } else {
+           result_error " DUTs_info(DUT${whichDutNow},bgp) Variable not found in cfg file"
+        }
+     }
+  }
+  unset parameterList
+  return $status
+} 

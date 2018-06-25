@@ -1,0 +1,314 @@
+
+proc CheckIpv6BiForwarding {args} {
+	parse_args CheckIpv6BiForwarding $args {
+     	txPortId "1"
+     	rxPortId "2"
+     	protocol "ipV6"
+     	sTag      "none"
+     	dTag      "none"
+     	nHeader  "tcp"
+	trafficClass "3"
+        flowLabel "0"
+        hopLimit "255"
+	sGIpAddr "0.0.0.0"
+     	dGIpAddr "0.0.0.0"
+     #	inSaMac "00:00:00:00:00:01;"
+    # 	inDaMac "00:00:00:00:00:02"
+        inSaMac "00:a1:f1:00:00:01"
+        inDaMac "FF:FF:FF:FF:FF:FF"
+     	sIpAddr "3ffa:10::204:96ff:fe10:7c02"
+     	dIpAddr "3ffa:20::204:96ff:fe10:7c00"
+     	frameSize "128"
+     	percentage "100"
+     	sPort "0"
+     	dPort "0"
+     	numFrames "1"
+    	tcpSynFlag "false"
+     	tcpFinFlag "false"
+     	tcpRstFlag "false"
+     	tcpAckFlag "false"
+     	tcpPushFlag "false"
+     	tcpUrgFlag "false"
+     	icmpType "0"
+     	icmpCode "0"
+     	#ttlDecr "1"
+     	checkPortList {"20 forwarded"}
+     	filePt "NULL"
+     	applyFilter "0"
+     	udfEnable "false"
+     	udfInitval "00"
+     	udfOffset "0"
+     	udfCountertype "c8"
+     	udfContinuousCount "false"
+     	#ipOptions ""
+	sIpMask "ffff:ffff:ffff:ffff:0000:0000:0000:0000"
+        dIpMask "ffff:ffff:ffff:ffff:0000:0000:0000:0000"
+   	}
+
+	 global TrafficGen
+	switch -exact -- $TrafficGen {
+                stc -
+		ixia -
+                ixvm {
+	
+   	#get the maximum card being used in the test, ignore the passed parameter
+   	set maxPorts [lindex [lindex $checkPortList  \
+                    [expr [llength $checkPortList] -1]] 0]
+   	set numIxiaCd [GetNumIxiaCd $maxPorts]
+   	if { $sGIpAddr == "0.0.0.0" } { set sGIpAddr $dIpAddr }
+   	if { $dGIpAddr == "0.0.0.0" } { set dGIpAddr $sIpAddr }
+   	global startCardNum
+        global TrafficGen
+   	set pPattern "abcd"
+
+   	#map portId to Ixia port
+   	if {$rxPortId == $txPortId} {
+      	result_error "Invalid port specification: txPortId=rxPortId"
+      	return
+  	 }
+
+   	MapIxiaPortId $txPortId txChas txCard txPort
+   	if {$rxPortId == 0} {
+      	#then just choose some random port different the txPort
+      	MapIxiaPortId $txPortId rxChas rxCard rxPort
+      	if {$txPort == 1} {set rxPort 2} else {set rxPort 1}
+   	} else {
+      	MapIxiaPortId $rxPortId rxChas rxCard rxPort
+   	}
+
+ 	#setup tag
+   	if { $sTag == "none" } {
+      		set wTag "false"
+      		set tagValue $sTag
+   	} else {
+      		set wTag "true"
+      		set tagValue $sTag
+   	}
+   	if { $dTag != "none" } {
+      		lappend wTag "true"
+      		lappend tagValue $dTag
+   	} else {
+      		lappend wTag "false"
+      		lappend tagValue $dTag
+   	}
+
+   	#if { $protocol == "arp" } { report_start_test    \
+         # "Message $protocol L2 forwarding check on Txport $txPortId"
+  	# } elseif {(($protocol== "arpip") || \
+        #      ($protocol=="ipV6"))} {report_start_test \
+        #  "Message $protocol L3 forwarding check on Txport $txPortId"
+   	#} else {
+      	#report_start_test "Message $protocol L3 forwarding  \
+            #check on Txport $txPortId"
+   	#}
+
+        report_start_test "Message $protocol L3 forwarding \
+                                  check on Txport $txPortId"
+
+  	 #set to user input, will be overwritten when using learn_arp function
+   	 set testResult "good"
+   	 #generate ARP protocol server, if rxPort is set, protocol=arp
+   
+    	 global one2oneArray
+     	# Create mapping
+        if {$TrafficGen != "ept"} {
+     	map new -type                                             one2one
+     	map config -type                        		  one2one
+        }
+     	map add $txChas $txCard $txPort $rxChas $rxCard $rxPort
+     	stream setDefault
+     	protocol setDefault
+     	protocol config -ethernetType                             ethernetII
+     	protocol config -name                                     ipV6
+
+
+        if {$TrafficGen != "ept"} {
+     	ipV6 setDefault
+#	ipV6 config -trafficClass                      $trafficClass
+#        ipV6 config -flowLabel                         $flowLabel
+#        ipV6 config -hopLimit                          $hopLimit
+#	ipV6  addExtensionHeader                       $nHeader
+#	ipV6  config -nextHeader                       $nHeader
+
+     	ipV6 config -sourceAddr                        $sIpAddr
+
+     	ipV6 set                                       $txChas $txCard $txPort
+
+	 #Other port be configured for arp response too
+	
+	ipV6 setDefault
+        ipV6 config -sourceAddr                         $dIpAddr
+        ipV6 set                                          $rxChas $rxCard $rxPort
+        } else {
+     	ipV6 config -sourceAddr                        $sIpAddr
+        ipV6 config -sourceAddr                         $dIpAddr
+        }
+
+	#send_neighborDiscovery_frames one2oneArray
+	#getNeighborDiscovery $txPortId
+	#getNeighborDiscovery $rxPortId
+     #	set destMacAddrTx [SendArpRequest  $txPortId  $sIpAddr  $sTag]
+#
+#     	if {$destMacAddrTx == "NO_ARP_REPLY"} {
+#      	  result_debug "Expect an arp reply, but got none on port $txPortId"
+#      	  set testResult "bad"
+#    	 } else {
+#    	    result_debug "Got an arp reply on Tx port  \
+#                                $txPortId. MAC: |$destMacAddrTx|"
+#    	 }
+#    	 set destMacAddrRx [SendArpRequest $rxPortId $dIpAddr $dTag ]
+#    	 if {$destMacAddrRx == "NO_ARP_REPLY"} {
+#    	    result_error "Expect an arp reply, but got none on port $rxPortId"
+#    	  set testResult "bad"
+#    	} else {
+#    	    result_debug "Got an arp reply on Rx port  \
+#                        $rxPortId. MAC: |$destMacAddrRx|"
+#    	}
+#   	if {$protocol=="arp"} {report_end_test; return}
+  	 
+
+  
+
+	if {[regexp -nocase "ipV6" $protocol]} {
+   
+
+      	# Portid 1-8, 12-24 are on DUT1 and 9-12 are on DUT2
+     	if {($txPortId>=9) && ($txPortId<=12)} {
+        	set destMacAddrList [GetDUTMac "DUT2"]
+     	} else {
+        	set destMacAddrList [GetDUTMac "DUT1"]
+     	}
+	
+     	if {($rxPortId>=9) && ($rxPortId<=12)} {
+        	lappend destMacAddrList [GetDUTMac "DUT2"]
+     	} else {
+        	lappend destMacAddrList [GetDUTMac "DUT1"]
+     	}
+   	}
+
+         foreach checkPort $checkPortList {
+        lappend portMonitorList [lindex $checkPort 0]
+        }
+         
+ 
+        ClearPortsStats $portMonitorList
+        result_debug "Clearing all satitistics"
+        
+        StartPortsCapture $portMonitorList 	
+	 # Send an ip packet for ipf learning across both switches  \
+             #in order for fast path fwding in actual ip send
+     if {(($txPortId>=9)&&($txPortId<=12))||(($rxPortId>=9)&&($rxPortId<=12))} {
+ 
+                 set frameSent [ixiaConf_2Ports_ipv6 -numIxiaCd $numIxiaCd \
+                -startCardNum $startCardNum -txChas $txChas -txCard $txCard \
+                -txPort $txPort -frameSize $frameSize \
+                -rxChas $txChas -rxCard $rxCard -rxPort $rxPort \
+                -percentage $percentage -pDstPort $dPort -pSrcPort $sPort \
+                -direction "2Way" -flowLabel $flowLabel -trafficClass  \
+                $trafficClass -type $icmpType -code $icmpCode -applyFilter \
+                $applyFilter -hopLimit $hopLimit -tcpSynFlag $tcpSynFlag  \
+                -tcpFinFlag $tcpFinFlag -tcpRstFlag $tcpRstFlag \
+                -tcpAckFlag $tcpAckFlag -tcpPushFlag $tcpPushFlag \
+                -tcpUrgFlag $tcpUrgFlag -dataPattern $pPattern -wTag $wTag \
+                -tagNo $tagValue -ipProtocol $protocol \
+                -dMacAddr $destMacAddrList  -sIpAddr $sIpAddr \
+                -nHeader $nHeader -udfEnable $udfEnable -udfInitval  \
+                $udfInitval -udfOffset $udfOffset -udfCountertype \
+                $udfCountertype -udfContinuousCount $udfContinuousCount \
+                 -dIpAddr $dIpAddr -numFrames 1 -sIpMask $sIpMask \
+                -dIpMask $dIpMask]
+
+ 	}
+
+
+	# Send an ip packet
+ 		set frameSent [ixiaConf_2Ports_ipv6 -numIxiaCd $numIxiaCd \
+                -startCardNum $startCardNum -txChas $txChas -txCard $txCard \
+                -txPort $txPort -frameSize $frameSize \
+                -rxChas $txChas -rxCard $rxCard -rxPort $rxPort \
+                -percentage $percentage -pDstPort $dPort -pSrcPort $sPort \
+                -direction "2Way" -flowLabel $flowLabel -trafficClass  \
+                $trafficClass -type $icmpType -code $icmpCode -applyFilter \
+                $applyFilter -hopLimit $hopLimit -tcpSynFlag $tcpSynFlag  \
+                -tcpFinFlag $tcpFinFlag -tcpRstFlag $tcpRstFlag \
+               	-tcpAckFlag $tcpAckFlag -tcpPushFlag $tcpPushFlag \
+                -tcpUrgFlag $tcpUrgFlag -dataPattern $pPattern -wTag $wTag \
+                -tagNo $tagValue -ipProtocol $protocol \
+                -dMacAddr $destMacAddrList  -sIpAddr $sIpAddr \
+                -nHeader $nHeader -udfEnable $udfEnable -udfInitval  \
+                $udfInitval -udfOffset $udfOffset -udfCountertype \
+                $udfCountertype -udfContinuousCount $udfContinuousCount \
+                 -dIpAddr $dIpAddr -numFrames $numFrames -sIpMask $sIpMask \
+                -dIpMask $dIpMask]
+
+
+   	if {$numFrames >= 10} {
+     		ixiaCheckTxDone $txChas $txCard $txPort $numFrames $txPortId
+     		ixiaCheckTxDone $rxChas $rxCard $rxPort $numFrames $txPortId
+   	}
+          
+       StopPortsCapture $portMonitorList
+        if {$TrafficGen != "ept"} {
+        set data [captureBuffer cget -frame]
+         }
+	result_debug "FrameSentIP: $frameSent"
+   	#retrieve data from ixia
+  	#find how many expected packets was received
+
+   	foreach checkPort $checkPortList {
+     		 set portId [lindex $checkPort 0]
+      		MapIxiaPortId $portId chasisId card port
+      		set doesItForward($portId) 0
+
+
+
+      	if {$applyFilter} {
+        	 set framesReceived [lindex [ixiaUserDefinedStat1 $portId $filePt] 1]
+      	} else {
+         	 stat get statAllStats $chasisId $card $port
+         	 set framesReceived [stat cget -framesReceived]
+      	}
+
+      
+	result_debug "actual Frames Received on port $portId is  \
+                             $framesReceived and sent frames=$numFrames"
+      	if {$framesReceived >= $numFrames} {
+        	 set doesItForward($portId) 1
+      	}
+   	}
+
+   	#now check received data against checkList to see if matched
+   	foreach checkPort $checkPortList {
+      		set portId [lindex $checkPort 0]
+      		set portFlag [lindex $checkPort 1]
+      	switch -- $portFlag \
+        	 "forwarded" {
+            		set shouldForward 1
+          	} "notForwarded" {
+            		set shouldForward 0
+          	} default {
+           		 set shouldForward $portFlag
+          	}
+
+      	if { ($doesItForward($portId) == $shouldForward) } {
+        	 result_debug "Forwarding on port $portId checked Okay.\
+                                               Was $portFlag"
+      	} else {
+        	 result_error "Forwarding criteria failed on port $portId."
+        
+                set testResult "bad"
+      	}
+   	}
+
+ 	if {$testResult == "good"} {
+     		result_ok "Check data forwarding passed"
+   	}  else {
+     		result_error "Check data forwarding failed"
+  	}
+
+  		report_end_test
+	}
+	}
+}
+
+

@@ -1,0 +1,1626 @@
+
+################################################################## 
+# Procedure Name: GetDestMacAddress
+#   
+# Description:
+#     This proc is used to get the 6 bytes destination mac address from mac header.
+#     Any packet/frame does not matter
+#
+# Input args: rawFrame
+# Output args: none
+# Return value: 6 byte hex string
+# Typical usage:
+#             GetDestMacAddress frame
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc GetDestMacAddress { rawFrame } {
+   return [string range $rawFrame 0 16]
+}
+
+################################################################## 
+# Procedure Name: GetSourceMacAddress
+#   
+# Description:
+#     This proc is used to get the 6 bytes source mac address from mac header.
+#     Any packet/frame does not matter
+#
+# Input args: rawFrame
+# Output args: none
+# Return value: 6 byte hex string
+# Typical usage:
+#             GetSourceMacAddress frame
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: CaptureTraffic
+##################################################################
+proc GetSourceMacAddress { rawFrame } {
+   return [string range $rawFrame 18 34]
+}
+
+################################################################## 
+# Procedure Name: GetSenderMacAddress
+#   
+# Description:
+#     This proc is used to get the 6 bytes mac address from the sender
+#     harware address in ARP protocol. Supports tagged frames too.
+#     Any packet/frame does not matter
+#
+# Input args: rawFrame
+# Output args: none
+# Return value: 6 byte hex string or -1 on error
+# Typical usage:
+#             GetSenderMacAddress frame
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: CaptureTraffic
+##################################################################
+proc GetSenderMacAddress { rawFrame } {
+  set type [string range $rawFrame 36 40]
+  switch -- $type \
+    "08 06" {
+    return [string range $rawFrame 66 82]
+  } "81 00" {
+    return [string range $rawFrame 78 94] ;# tagged frame
+  } default {
+    result_debug "Unknown Type: $type"
+    #just return the type
+    return -1
+  }
+}
+
+################################################################## 
+# Procedure Name: GetIpOption
+#   
+# Description:
+#     This proc is used to get IP header option.
+#     IP options include standard ip option beyond 20 bytes header length.
+#     Supports tagged frames too.
+#
+# Input args: rawFrame, optionName
+# Output args: None.
+# Return value: Hex value of optionName or -1 on error
+# Typical usage:
+# GetIpOption frame RouterAlertOption
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: CaptureTraffic
+##################################################################
+proc GetIpOption { rawFrame optionName } {
+   set type [string range $rawFrame 36 40]
+
+   # if tagged, get rid of type and tag field from 36 to 47
+   if {$type == "81 00"} {
+     set leftRawFrame [string range $rawFrame 0 35] 
+     set rightRawFrame [string range $rawFrame 48 [string length $rawFrame]] 
+     set rawFrame [format "%s%s" $leftRawFrame $rightRawFrame]
+   }
+
+   switch -- $optionName {
+      "RouterAlertOption" {
+         return [string range $rawFrame 102 112]
+      } "RecordRouteOption" {
+         # (Ted) change the pointer to the correct length
+         #set pointerValue [string trimleft [string range $rawFrame 108 109] 0]
+         set pointerValue [string trimleft [string range $rawFrame 105 106] 0]
+         set pointerValue [hextodec $pointerValue] 
+	 if {$pointerValue < 0} {
+	     ;# pointerValue == -1 if hextodec is passed blank entry
+	     ;# hextodec passed blank entry if trimleft is passed 00 (APL)
+	     return -1
+	 }
+         #set pointerValue [expr $pointerValue - 4]     
+         set pointerValue [expr $pointerValue - 3]
+         return [string range $rawFrame 102 [expr 109 + [expr $pointerValue * 3]]]
+      } "TimeStampOption" {
+         set pointerValue [string trimleft [string range $rawFrame 108 109] 0]
+         set pointerValue [hextodec $pointerValue]
+	 if {$pointerValue < 0} {
+	      return -1
+	 }	 
+         return [string range $rawFrame 102 [expr 102 + [expr $pointerValue - 1]*3 - 2]]
+      } "StreamIDOption" {
+         return [string range $rawFrame 102 112]
+      } "SecurityOption" {
+         return [string range $rawFrame 102 133]
+      }  "EndOfOptionListOption" {
+         return [string range $rawFrame 102 103]
+      } default {
+         result_debug "Unknown optionName supplied: $optionName"
+         #just return the type
+         return -1
+      }
+   }
+}  
+
+################################################################## 
+# Procedure Name: GetTargetMacAddress
+#   
+# Description:
+#     This proc is used to get the 6 bytes mac address from the target
+#     harware address in ARP protocol. Supports tagged frames too.
+#     Any packet/frame does not matter
+#
+# Input args: rawFrame
+# Output args: None.
+# Return value: 6 byte hex string or -1 on error
+# Typical usage:
+# GetTargetMacAddress frame
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: CaptureTraffic
+##################################################################
+proc GetTargetMacAddress { rawFrame } {
+  set type [string range $rawFrame 36 40]
+  switch -- $type \
+    "08 06" {
+    return [string range $rawFrame 96 112]
+  } "88 8E" { ;# EAPOL Frame
+    return [string range $rawFrame 96 112]
+  } "81 00" {
+    return [string range $rawFrame 108 124] ;# tagged frame
+  } default {
+    result_debug "Unknown Type: $type"
+    #just return the type
+    return -1
+  }
+}
+
+################################################################## 
+# Procedure Name: GetTTL
+#   
+# Description:
+#     This proc is used to get the decimal ttl value from an ip packet header
+#     Supports tagged frames too.
+#
+# Input args: rawFrame
+# Output args: None.
+# Return value: Integer or -1 on error
+# Typical usage:
+# GetTTL frame
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: CaptureTraffic
+##################################################################
+proc GetTTL { rawFrame } {
+   set type [string range $rawFrame 36 40]
+   switch -- $type \
+      "08 00" {
+      return [hextodec [string range $rawFrame 66 67]]         
+   }  "81 00" {
+      return [hextodec [string range $rawFrame 78 79]]      ;#tagged frame   
+   } default {
+      result_debug "Unknown Type: $type"
+      #just return the type
+      return -1
+   }
+   
+}
+
+################################################################## 
+# Procedure Name: GetICMPType
+#   
+# Description:
+#     This proc is used to get the decimal icmp type value from an icmp packet header
+#     Supports tagged frames too.
+#
+# Input args: rawFrame
+# Output args: None.
+# Return value: Integer or -1 on error
+# Typical usage:
+# GetICMPType frame
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: CaptureTraffic
+##################################################################
+proc GetICMPType { rawFrame } {
+   set type [string range $rawFrame 36 40]
+   switch -- $type \
+      "08 00" {
+      return [hextodec [string range $rawFrame 102 103]]         
+   }  "81 00" {
+      return [hextodec [string range $rawFrame 114 115]]      ;#tagged frame   
+   } default {
+      result_debug "Unknown IP Type: $type"
+      #just return the type
+      return -1
+   }
+}
+
+################################################################## 
+# Procedure Name: GetICMPCode
+#   
+# Description:
+#     This proc is used to get the decimal icmp code value from an icmp packet header
+#     Supports tagged frames too.
+#
+# Input args: rawFrame
+# Output args: None.
+# Return value: Integer or -1 on error
+# Typical usage:
+# GetICMPCode frame
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: CaptureTraffic
+##################################################################
+proc GetICMPCode { rawFrame } {
+   set type [string range $rawFrame 36 40]
+   switch -- $type \
+      "08 00" {
+      return [hextodec [string range $rawFrame 105 106]]         
+   }  "81 00" {
+      return [hextodec [string range $rawFrame 117 118]]      ;#tagged frame   
+   } default {
+      result_debug "Unknown IP Type: $type"
+      #just return the type
+      return -1
+   }
+}
+
+################################################################## 
+# Procedure Name: GetICMPId
+#   
+# Description:
+#     This proc is used to get the decimal icmp id value from an icmp packet header
+#     Supports tagged frames too.
+#
+# Input args: rawFrame
+# Output args: None.
+# Return value: short Integer or -1 on error
+# Typical usage:
+# GetICMPId frame
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: CaptureTraffic
+##################################################################
+proc GetICMPId { rawFrame } {
+   set type [string range $rawFrame 36 40]
+   switch -- $type \
+      "08 00" {
+      return [GetShortIntOffset $rawFrame 114]         
+   }  "81 00" {
+      return [GetShortIntOffset $rawFrame 126]      ;#tagged frame   
+   } default {
+      result_debug "Unknown IP Type: $type"
+      #just return the type
+      return -1
+   }
+}
+
+################################################################## 
+# Procedure Name: GetICMPSequence
+#   
+# Description:
+#     This proc is used to get the decimal icmp sequence value from an icmp packet header
+#     Supports tagged frames too.
+#
+# Input args: rawFrame
+# Output args: None.
+# Return value: Short integer or -1 on error
+# Typical usage:
+# GetICMPSequence frame
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: CaptureTraffic
+##################################################################
+proc GetICMPSequence { rawFrame } {
+   set type [string range $rawFrame 36 40]
+   switch -- $type \
+      "08 00" {
+      return [GetShortIntOffset $rawFrame 120]         
+   }  "81 00" {
+      return [GetShortIntOffset $rawFrame 132]      ;#tagged frame   
+   } default {
+      result_debug "Unknown IP Type: $type"
+      #just return the type
+      return -1
+   }
+}
+
+################################################################## 
+# Procedure Name: GetTOSHex
+#   
+# Description:
+#     This proc is used to get the hex value of TOS field from an ip packet header
+#     Supports tagged frames too.
+#
+# Input args: rawFrame
+# Output args: None.
+# Return value: 2 byte hex value or -1 on error
+# Typical usage:
+# GetTOSHex frame
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: CaptureTraffic
+##################################################################
+proc GetTOSHex { rawFrame } {
+   set type [string range $rawFrame 36 40]
+   switch -- $type \
+      "08 00" {
+      return [string range $rawFrame 45 46]       
+   }  "81 00" {
+      return [string range $rawFrame 57 58]      ;#tagged frame   
+   } default {
+      result_debug "Unknown Type: $type"
+      #just return the type
+      return -1
+   }
+   
+}
+
+################################################################## 
+# Procedure Name: GetIpTotalLength
+#   
+# Description:
+#     This proc is used to get the decimal value of length from an ip packet header
+#     Supports tagged frames too.
+#
+# Input args: rawFrame
+# Output args: None.
+# Return value: Integer or -1 on error
+# Typical usage:
+# GetIpTotalLength frame
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: CaptureTraffic
+##################################################################
+proc GetIpTotalLength { rawFrame } {
+   set type [string range $rawFrame 36 40]
+   switch -- $type \
+      "08 00" {
+      return [GetShortIntOffset $rawFrame 48]   
+   }   "81 00" {
+      return [GetIpTotalLength [string range $rawFrame 12 end ]]          ;# tagged  
+   } default {
+      result_debug "Unknown Type: $type"
+      return -1
+   }
+   
+}
+
+################################################################## 
+# Procedure Name: GetSourceIPAddress
+#   
+# Description:
+#     This proc is used to get the source IP address a.b.c.d from an ip packet header
+#     Supports tagged frames too.
+#
+# Input args: rawFrame
+# Output args: None.
+# Return value: IP Address or -1 on error
+# Typical usage:
+# GetSourceIPAddress frame
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: CaptureTraffic
+##################################################################
+proc GetSourceIPAddress { rawFrame } {
+   set type [string range $rawFrame 36 40]
+   switch -- $type \
+      "08 00" {
+      return [GetIPAddressOffset $rawFrame 78]          ;#source address   
+   }   "81 00" {
+      return [GetSourceIPAddress [string range $rawFrame 12 end ]]     ;#source address, tagged  
+   }   "08 06" {
+      return [GetIPAddressOffset $rawFrame 84]          ;#source address   
+   }   "88 8E" {
+       result_debug "EAPOL Frame-NO SRC IP"
+       return -1
+   } default {
+      result_debug "Unknown Type: $type"
+      return -1
+   }
+   
+}
+
+################################################################## 
+# Procedure Name: GetDestIPAddress
+#   
+# Description:
+#     This proc is used to get the destination IP address a.b.c.d from an ip packet header
+#     Supports tagged frames too.
+#
+# Input args: rawFrame
+# Output args: None.
+# Return value: IP Address or -1 on error
+# Typical usage:
+# GetDestIPAddress frame
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: CaptureTraffic
+##################################################################
+proc GetDestIPAddress { rawFrame } {
+   set type [string range $rawFrame 36 40]
+   switch -- $type \
+      "08 00" {
+      return [GetIPAddressOffset $rawFrame 90]          ;#dest address   
+   }   "81 00" {
+      return [GetDestIPAddress [string range $rawFrame 12 end ]]          ;#dest address for tagged frame   
+   }   "08 06" {
+      return [GetIPAddressOffset $rawFrame 114]          ;#dest address 
+   }   "88 8E" {
+       result_debug "EAPOL Frame-NO DEST IP"
+       return -1  
+   } default {
+      result_debug "Unknown Type: $type"
+      return -1
+   }
+   
+}
+
+################################################################## 
+# Procedure Name: GetTagId
+#   
+# Description:
+#     This proc is used to get the 12 bit decimal value of tag id from a tagged frame
+#
+# Input args: rawFrame
+# Output args: None.
+# Return value: Short integer or -1 on error
+# Typical usage:
+# GetTagId frame
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: CaptureTraffic
+##################################################################
+proc GetTagId { rawFrame } {
+   set type [string range $rawFrame 36 40]
+   switch -- $type \
+      "81 00" {
+         return [GetShortInt "0[string range $rawFrame 43 46]" ]
+      } "88 A8" {
+	 return [GetShortInt "0[string range $rawFrame 43 46]" ]
+      } "91 00" {
+         return [GetShortInt "0[string range $rawFrame 43 46]" ]
+      } "default" {
+         result_debug "Not a tag packet: $type. Wanted Tag"
+         return -1
+      }
+}
+
+################################################################## 
+# Procedure Name: GetIPFragmentFlags
+#   
+# Description:
+#     This proc is used to fragmentation flags from a tagged/untagged IP packet
+#
+# Input args: rawFrame
+# Output args: None.
+# Return value: 2 byte hex value or -1 on error
+# Typical usage:
+#     set prevPktFragFlag [GetIPFragmentFlags $dataFrame]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: CaptureTraffic
+##################################################################
+proc GetIPFragmentFlags { rawFrame } {
+   set type [string range $rawFrame 36 40]
+   switch -- $type \
+      "08 00" {
+      return [hextodec [string range $rawFrame 60 61]]
+   }   "81 00" {
+      return [hextodec [string range $rawFrame 72 73]]
+   } default {
+      result_debug "Unknown Type: $type"
+      return -1
+   }
+}
+
+################################################################## 
+# Procedure Name: GetIPFragmentOffset
+#   
+# Description:
+#     This proc is used to fragmentation offset from a tagged/untagged IP packet
+#
+#
+# Input args: rawFrame
+# Output args: None.
+# Return value: Integer or -1 on error
+# Typical usage:
+#     set fragOffset [GetIPFragmentOffset $rawFrame]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: CaptureTraffic
+##################################################################
+proc GetIPFragmentOffset { rawFrame } {
+   set type [string range $rawFrame 36 40]
+   switch -- $type \
+      "08 00" {
+      return [expr [hextodec [string range $rawFrame 63 64]]*8]   ;# in bits
+   }   "81 00" {
+      return [expr [hextodec [string range $rawFrame 75 76]]*8]   ;# in bits
+   } default {
+      result_debug "Unknown Type: $type"
+      return -1
+   }
+}
+
+################################################################## 
+# Procedure Name: GetIPSourcePort
+#   
+# Description:
+#     This proc is used to get the decimal source port from tcp/udp packet header
+#     Supports tagged frames too.
+#
+# Input args: rawFrame
+# Output args: None.
+# Typical usage:
+# Return value: Short integer or -1 on error
+# GetIPSourcePort frame
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: CaptureTraffic
+##################################################################
+proc GetIPSourcePort { rawFrame } {
+   set type [string range $rawFrame 36 40]
+   switch -- $type \
+      "08 00" {
+      return [GetShortIntOffset $rawFrame 102]
+   }   "81 00" {
+      return [GetIPSourcePort [string range $rawFrame 12 end ]]          ;# for tagged frame   
+   } default {
+      result_debug "Unknown Type: $type"
+      return -1
+   }
+   
+}
+
+################################################################## 
+# Procedure Name: GetIPDestPort
+#   
+# Description:
+#     This proc is used to get the decimal destination port from tcp/udp packet header
+#     Supports tagged frames too.
+#
+# Input args: rawFrame
+# Output args: None.
+# Return value: Short integer or -1 on error
+# Typical usage:
+# GetIPDestPort frame
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: CaptureTraffic
+##################################################################
+proc GetIPDestPort { rawFrame } {
+   set type [string range $rawFrame 36 40]
+   switch -- $type \
+      "08 00" {
+      return [GetShortIntOffset $rawFrame 108]
+   }   "81 00" {
+      return [GetIPDestPort [string range $rawFrame 12 end ]]          ;# for tagged frame   
+   } default {
+      result_debug "Unknown Type: $type"
+      return -1
+   }
+   
+}
+
+################################################################## 
+# Procedure Name: GetIPTCPBGPType
+#   
+# Description:
+#     This proc is used to get the type of tcp type in a bgp control packet
+#
+#
+# Input args: rawFrame
+# Output args: None.
+# Return value: 2 bytes hex string or -1 on error
+# Typical usage:
+# GetIPTCPBGPType frame
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: CaptureTraffic
+##################################################################
+proc GetIPTCPBGPType { rawFrame } {
+   set type [string range $rawFrame 36 40]
+   switch -- $type \
+      "08 00" {
+      return [hextodec [string range $rawFrame 216 217]]
+   }   "81 00" {
+      return [hextodec [string range $rawFrame 228 229]]
+   } default {
+      result_debug "Unknown Type: $type"
+      return -1
+   }
+}
+
+################################################################## 
+# Procedure Name: GetBGPNotificationErrorCode
+#   
+# Description:
+#     This proc is used to get the error code from a BGP notification control packet
+#
+#
+# Input args: rawFrame
+# Output args: None.
+# Return value: 2 bytes hex string or -1 on error
+# Typical usage:
+# GetBGPNotificationErrorCode frame
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: CaptureTraffic
+##################################################################
+proc GetBGPNotificationErrorCode { rawFrame } {
+   set type [string range $rawFrame 36 40]
+   switch -- $type \
+      "08 00" {
+      return [hextodec [string range $rawFrame 219 220]]
+   }   "81 00" {
+      return [hextodec [string range $rawFrame 231 232]]
+   } default {
+      result_debug "Unknown Type: $type"
+      return -1
+   }
+}
+
+################################################################## 
+# Procedure Name: GetBGPUpdateOriginTypes
+#   
+# Description:
+#     This proc is used to get the origin types from a BGP update control packet
+#
+#
+# Input args: rawFrame
+# Output args: None.
+# Return value: List of integers or -1 on error
+# Typical usage:
+# GetBGPUpdateOriginTypes frame
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: CaptureTraffic
+##################################################################
+proc GetBGPUpdateOriginTypes {rawFrame} {
+   set messageType [GetMessageType $rawFrame]
+   set origins ""
+   if {$messageType=="IP_BGPv4_UPDATE"} {
+      set type [string range $rawFrame 36 40]
+      # if tagged, get rid of type and tag field from 36 to 47
+      if {$type == "81 00"} {
+        set leftRawFrame [string range $rawFrame 0 35]
+        set rightRawFrame [string range $rawFrame 48 [string length $rawFrame]]
+        set rawFrame [format "%s%s" $leftRawFrame $rightRawFrame]
+      }
+      set routeLengths [GetBGPUpdateLengths $rawFrame]
+      set originStartLoc 240    ;# First origin found at 240 in a IP_TCP_BGP packet
+      set startLoc 210
+      result_debug "the routeLengths $routeLengths"
+      for {set i 0} {$i<[llength $routeLengths]} {incr i} {
+         lappend origins [string range $rawFrame [expr $originStartLoc] [expr $originStartLoc+1]]
+         set originStartLoc [expr $startLoc+[expr [lindex $routeLengths $i]*3]+30]
+#         result_debug "the origins $origins and originStartLoc $originStartLoc"
+         incr startLoc [expr [lindex $routeLengths $i]*3]
+      }
+   }
+   return $origins
+}
+
+################################################################## 
+# Procedure Name: GetBGPNotificationErrorSubcode
+#   
+# Description:
+#     This proc is used to get the notification error sub code from a BGP notification control packet
+#
+#
+# Input args: rawFrame
+# Output args: None.
+# Return value: 2 hex byte string or -1 on error
+# Typical usage:
+# GetBGPNotificationErrorSubcode frame
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: CaptureTraffic
+##################################################################
+proc GetBGPNotificationErrorSubcode { rawFrame } {
+   set type [string range $rawFrame 36 40]
+   switch -- $type \
+      "08 00" {
+      return [hextodec [string range $rawFrame 222 223]]
+   }   "81 00" {
+      return [hextodec [string range $rawFrame 234 235]]
+   } default {
+      result_debug "Unknown Type: $type"
+      return -1
+   }
+}
+
+################################################################## 
+# Procedure Name: GetDot1pPriority
+#   
+# Description:
+#     This proc is used to get the hex value of dot1p tag priority from tagged mac frame
+#
+# Input args: rawFrame
+# Output args: None.
+# Return value: Integer
+# Typical usage:
+# GetDot1pPriority frame
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: CaptureTraffic
+##################################################################
+proc GetDot1pPriority { rawFrame } {
+   set tmp [string range $rawFrame 42 42]
+   set priority [expr 0x$tmp / 2 ]
+   result_debug "--- priority=$priority"
+   return $priority
+}
+
+################################################################## 
+# Procedure Name: GetByteOffset
+#   
+# Description:
+#     This proc is used to get the decimal value of a byte from a given offset in a asciihexdata
+#
+# Input args: asciiHexData: Hex data to scan from, offsetStart: start of the offset to get a byte
+# Output args: None.
+# Return value: Integer
+# Typical usage:
+# GetByteOffset frame 40
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: CaptureTraffic
+##################################################################
+proc GetByteOffset { asciiHexData offsetStart } {
+   set offsetEnd [expr $offsetStart + 1]
+   return [hextodec [string range $asciiHexData $offsetStart $offsetEnd]]
+} 
+
+################################################################## 
+# Procedure Name: GetShortInt
+#   
+# Description:
+#     This proc is used to get the integer value of a 2 bytes hex data
+#
+# Input args: asciiHexData: Hex data to scan from
+# Output args: None.
+# Return value: Integer
+# Typical usage:
+# GetShortInt asciiHexData
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: CaptureTraffic
+##################################################################
+proc GetShortInt { asciiHexData } {
+   set byte1 [hextodec [string range $asciiHexData 0 1]]
+   set byte0 [hextodec [string range $asciiHexData 3 4]]
+   return [expr $byte1 * 256 + $byte0]
+}      
+
+################################################################## 
+# Procedure Name: GetShortIntOffset
+#   
+# Description:
+#     This proc is used to get the integer value of a 2 bytes hex data at a given offset value
+#
+# Input args: asciiHexData: Hex data to scan from, offsetStart:Start of the offset to get bytes from
+# Output args: None.
+# Return value: short Integer
+# Typical usage:
+# GetShortIntOffset asciiHexData offsetStart
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: CaptureTraffic
+##################################################################
+proc GetShortIntOffset { asciiHexData  offsetStart} {
+   set offsetEnd [expr $offsetStart + 5]
+   set shortIntHex [string range $asciiHexData $offsetStart $offsetEnd]      
+   return [GetShortInt $shortIntHex]
+} 
+
+################################################################# 
+# Procedure Name: GetIntOffset
+#   
+# Description:
+#     This proc is used to get the integer value of a 4 bytes hex data at a given offset value
+#
+# Input args: asciiHexData: Hex data to scan from, offsetStart:Start of the offset to get bytes from
+# Output args: None.
+# Return Value: Integer
+# Typical usage:
+# GetIntOffset asciiHexData offsetStart
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: CaptureTraffic
+##################################################################
+proc GetIntOffset { asciiHexData  offsetStart} {
+   set offsetEnd [expr $offsetStart + 4]
+   set shortIntHex1 [string range $asciiHexData $offsetStart $offsetEnd]
+   set offsetStart  [expr $offsetStart + 6]
+   set offsetEnd [expr $offsetStart + 4]
+   set shortIntHex0 [string range $asciiHexData $offsetStart $offsetEnd]
+   set shortInt1 [GetShortInt $shortIntHex1]
+   set shortInt0 [GetShortInt $shortIntHex0]
+   #puts "HexOffsets:|$shortIntHex1|$shortIntHex0|$shortInt1|$shortInt0"
+   set temp [expr abs(double($shortInt1 * 65536)) + $shortInt0]
+   regexp {[0-9]*} $temp out
+   return $out
+}
+
+################################################################# 
+# Procedure Name: GetIPAddressOffset
+#   
+# Description:
+#     This proc is used to get the ip address of the form a.b.c.d a
+#     given offset value from a rawFrame
+#
+# Input args: rawFrame: Hex data to scan from, offsetStart:Start of the offset to get bytes from
+# Output args: None.
+# Return Value: IpAddress
+# Typical usage:
+# GetIPAddressOffset asciiHexData offsetStart
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: CaptureTraffic
+##################################################################
+proc GetIPAddressOffset { rawFrame offsetStart} {
+   set offsetEnd [expr $offsetStart + 11]
+   set IP [string range $rawFrame $offsetStart $offsetEnd]
+   #puts "IPAddress: $IP"   
+   return [byte2IpAddr $IP]
+}
+
+
+################################################################# 
+# Procedure Name: DecodeEapolFrame
+#   
+# Description:
+#     This proc is used to decode an EAPoL Packet
+#
+# Input args: rawFrame: Hex data to scan from, offsetStart:Start of the offset to get bytes from
+# Output args: 
+# Return Value: Complete EAP Frame Type
+# Typical usage:
+#   Decoding a EAPoL frames in GetMessageType
+#
+# Category: CaptureTraffic
+##################################################################
+proc DecodeEapolFrame { rawFrame } {
+
+    set ver [string range $rawFrame 42 43]
+    set type [string range $rawFrame 45 46]
+
+    switch -- $type \
+       "00"  {
+        set returnVal "EAP_V$ver" 
+        set eapCode [string range $rawFrame 54 55]  ;# Req(1) Resp(2) Succ(3) Fail(4)
+        set eapType [string range $rawFrame 66 67]  ;# Identity(1) Notify(2)
+		                                    ;# NAK(3) MD5-Chal(4) One Time Pass(5) 
+                                                    ;# GenricTokenCard(6) TLS(13)
+        result_debug "DEBUG:ver:$ver type:$type  eapCode:$eapCode  eapType:$eapType"
+
+        switch -- $eapCode \
+          "01" {
+           set returnVal "[set returnVal]_REQUEST"
+	} "02" {
+           set returnVal "[set returnVal]_RESPONSE"
+	} "03" {
+	    set returnVal "[set returnVal]_SUCCESS"
+	} "04" {
+           set returnVal "[set returnVal]_FAILURE"
+	} default {
+	    result_debug "Warning unknown EAP Code"
+	    set returnVal "[set returnVal]_$eapCode"
+	}
+    
+        switch -- $eapType \
+          "01" {
+           set returnVal "[set returnVal]_IDENTITY"
+	} "02" {
+           set returnVal "[set returnVal]_NOTIFY"
+	} "03" {
+	   set returnVal "[set returnVal]_NAK"
+	} "04" {
+           set returnVal "[set returnVal]_MD5_CHAL"
+	} "05" {
+           set returnVal "[set returnVal]_ONE_TIME_PASSWORD"
+	} "06" {
+           set returnVal "[set returnVal]_GENERIC_TOKEN_CARD"
+	} "0D" {
+           set returnVal "[set returnVal]_TLS"
+	} default {
+	    set returnVal "[set returnVal]_$eapType"
+	    result_debug "Warning unknown EAP Data Type"
+	}
+
+	return $returnVal
+
+    }  "01"  { 
+	return "EAPOL_START"
+    }  "02"  { 
+	return "EAPOL_LOGOFF"
+    }  "03"  { 
+	return "EAPOL_KEY"
+    }  "04"  { 
+	return "EAPOL_ENCAP_ASF_ALERT"
+    }  default  {
+	result_debug "Unknown Type: Ver:$ver EAPOL_$type"
+	return "EAPOL_$type"
+    }
+}
+
+
+################################################################# 
+# Procedure Name: GetMessageType
+#   
+# Description:
+#     This proc is used to get the type of protocol and specific type in
+#     that protocol. Currently, this proc supports, ICMP, IGMP, DVMRP, 
+#     RIP, PIM, OSPF, TCP, UDP, ARP and IPX extensively.
+#     Supports tagged frames too.
+#
+# Input args: rawFrame
+# Output args: None.
+# Return value: Automation supported message type or "FAIL" in error
+# Typical usage:
+# GetMessageType frame
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+
+#                          VerifyTraffic)
+# Category: CaptureTraffic
+##################################################################
+proc GetMessageType { rawFrame } {
+   
+   set type [string range $rawFrame 36 40]
+   # if tagged, get rid of type and tag field from 36 to 47
+   if {$type == "81 00"} {
+     set leftRawFrame [string range $rawFrame 0 35] 
+     set rightRawFrame [string range $rawFrame 48 [string length $rawFrame]] 
+     set rawFrame [format "%s%s" $leftRawFrame $rightRawFrame]
+   }
+
+   #Assuming MPLS contains the IP packet. 8847 is for carrying unicast layer 3 packets.
+   set type [string range $rawFrame 36 40]
+   if {$type == "88 47"} {
+     set leftRawFrame [string range $rawFrame 0 35] 
+     set rightRawFrame [string range $rawFrame 54 [string length $rawFrame]] 
+     set rawFrame [format "%s%s %s %s" $leftRawFrame 08 00 $rightRawFrame]
+   }
+
+   set type [string range $rawFrame 36 40]
+   
+#   result_debug "the type $type"
+   switch -- $type \
+      "08 00" {
+         set IpType [string range $rawFrame 69 70]
+         switch -- $IpType \
+            "01"  { 
+               return "IP_ICMP"
+         }  "02"  {
+            set version [string range $rawFrame 102 102]
+            set RouterAlertStatus [string range $rawFrame 42 43]
+            if {$RouterAlertStatus == "46"} {
+            set type [string range $rawFrame 114 115]
+            #puts "type:$type"
+            } else {
+            set type [string range $rawFrame 102 103]
+            #puts "type:$type"
+            }
+            
+            
+            switch -glob -- $type \
+               "11"  { 
+                  return "IP_IGMPv2_QUERRY"
+            }  "12"  { 
+                  return "IP_IGMPv1_REPORT"
+            }  "13"  { 
+                  set MinorMajorVersion [string range $rawFrame 120 124]
+                  if {$MinorMajorVersion == "FF 03"} {
+                     #version 3
+                     set subType [string range $rawFrame 105 106]
+                     switch -- $subType \
+                        "01" {
+                           return "IP_DVMRPv3_PROBE"
+                     }  "02" {
+                           return "IP_DVMRPv3_REPORT"
+                     }  "07" {
+                           return "IP_DVMRPv3_PRUNE"
+                     }  "08" {
+                           return "IP_DVMRPv3_GRAFT"
+                     }  "09" {
+                           return "IP_DVMRPv3_GRAFT_ACK"
+                     }  default   {
+                           result_debug "IP_DVMRPv3_$subType"
+                           return "IP_DVMRPv3_$subType"     
+                     }
+                  } else {
+                     set subType [string range $rawFrame 105 106]
+                     switch -- $subType \
+                        "01" {
+                           return "IP_DVMRPv${version}_RESPONSE"
+                     }  "02" {
+                           return "IP_DVMRPv${version}_REQUEST"
+                     }  "03" {
+                           return "IP_DVMRPv${version}_NONMEMBER_REPORT"
+                     }  default   {
+                           result_debug "IP_DVMRPv${version}_$subType"
+                           return "IP_DVMRPv${version}_$subType"     
+                     }
+                  }                  
+            }  "16"  { 
+                  return "IP_IGMPv2_REPORT"
+            }  "17"  { 
+                  return "IP_IGMPv2_LEAVE"
+            }  default  { 
+                  result_debug "Unknown Type: IP_IGMP_$type"
+                  return "IP_IGMP_$type"
+            }
+               
+         }  "06"  {
+            set srcPort [GetIPSourcePort $rawFrame]
+            set dstPort [GetIPDestPort $rawFrame]
+            #result_debug "The srcPort $srcPort and dstPort $dstPort"
+            if {$srcPort=="179"||$dstPort=="179"} {    ;# Start port for BGP is 179
+               set bgpType [GetIPTCPBGPType $rawFrame ]
+            } else {
+               set bgpType ""
+            }
+            switch -- $bgpType \
+               "1"  { 
+                  return "IP_BGPv4_OPEN"
+            }  "2"  { 
+                  return "IP_BGPv4_UPDATE"
+            }  "3"  { 
+                  return "IP_BGPv4_NOTIFICATION"
+            }  "4"  { 
+                  return "IP_BGPv4_KEEPALIVE"
+            }  default  {
+               return "IP_TCP"            
+            }
+         }  "11"  {
+               set portSource [GetShortIntOffset $rawFrame 102]
+               set portDest [GetShortIntOffset $rawFrame 108]
+               if { ($portSource == "520") && ($portDest == "520") } {
+                  set command [string range $rawFrame 126 127]
+                  set version [hextodec [string range $rawFrame 129 130]]
+                  switch -- $command \
+                     "01"   {
+                        return "IP_RIPv${version}_REQUEST"
+                  }  "02"   {
+                        return "IP_RIPv${version}_REPLY"
+                  }  default   {
+                        return "IP_RIPv${version}_$command"     
+                  }
+               } elseif { ($portSource == "646") || ($portDest == "646") } {
+                  set command [string range $rawFrame 156 160]
+                  switch -- $command \
+                     "00 01"   {
+                        return "LDP Notification Message"
+                  }  "01 00"   {
+                        return "LDP Hello Message"
+                  }  "02 00"   {
+                        return "LDP Initialization Message"
+                  }  "02 01"   {
+                        return "LDP Keep Alive Message"
+                  }  "03 00"   {
+                        return "LDP Address Message"
+                  }  "03 01"   {
+                        return "LDP Address Withdraw Message"
+                  }  "04 00"   {
+                        return "LDP Label Mapping Message"
+                  }  "04 01"   {
+                        return "LDP Label Request Message"
+                  }  "04 04"   {
+                        return "LDP Label Abort request Message"
+                  }  "04 02"   {
+                        return "LDP Label Withdraw Message"
+                  }  "04 03"   {
+                        return "LDP Label Release Message"
+                  }  default   {
+                        return "LDP Message Type Not Known"     
+                  }
+               } elseif {($portSource == "3503") || ($portDest == "3503")} {
+                  set command [string range $rawFrame 138 139]
+                  switch -- $command \
+                     "01"   {
+                        result_debug "mpls echo request"
+                        return "MPLS Echo Request"
+                  }  "02"   {
+                        set returnCode [string range $rawFrame 144 145]
+                        result_debug "mpls echo reply"
+                        return "MPLS Echo Reply"
+                  } 
+               } else {
+                  return "IP_UDP"
+               }
+         }  "59"  {
+            set type [string range $rawFrame 105 106]
+            set version [string range $rawFrame 103 103]
+            switch -- $type \
+               "01"  { 
+                  return "IP_OSPFv${version}_HELLO"
+            }  "02"  { 
+                  return "IP_OSPFv${version}_DATABASE"
+            }  "03"  { 
+                  return "IP_OSPFv${version}_LINK_REQUEST"
+            }  "04"  { 
+                  return "IP_OSPFv${version}_LINK_UPDATE"
+            }  "05"  { 
+                  return "IP_OSPFv${version}_LINK_ACK"
+            }  default  { 
+                  result_debug "Unknown Type: IP_OSPFv${version}_$type"
+                  return "IP_OSPFv${version}_$type"
+            }
+         }  "67"  {
+            set type [string range $rawFrame 103 103]
+            set version [string range $rawFrame 102 102]
+            switch -- $type \
+               "0"  { 
+                  return "IP_PIMv${version}_HELLO"
+            }  "1"  { 
+                  set nullReg [string range $rawFrame 114 114]
+                  if {$nullReg==4} {
+                     return "IP_PIMv${version}_NULL_REGISTER"                  
+                  } else {
+                     return "IP_PIMv${version}_REGISTER"
+                  }
+            }  "2"  { 
+                  return "IP_PIMv${version}_REGISTER_STOP"
+            }  "3"  { 
+                  return "IP_PIMv${version}_JOIN_PRUNE"
+            }  "4"  { 
+                  return "IP_PIMv${version}_BOOTSTRAP"
+            }  "5"  { 
+                  return "IP_PIMv${version}_ASSERT"
+            }  "6"  { 
+                  return "IP_PIMv${version}_GRAFT"
+            }  "7"  { 
+                  return "IP_PIMv${version}_GRAFT_ACK"
+            }  "8"  { 
+                  return "IP_PIMv${version}_CANDIDATE_RP_AD"
+            }  default  { 
+                  result_debug "Unknown Type: IP_PIMv${version}_$type"
+                  return "IP_PIMv${version}_$type"
+            }
+
+         } "70" { #VRRP packet
+             return "VRRP_PACKET"
+         }  "2E" { 
+            set ihL [string range $rawFrame 43 43]
+            if {$ihL == "5" } {
+               set parVal [string range $rawFrame 105 106]
+            } elseif {$ihL == "6" } {
+	       set parVal [string range $rawFrame 117 118]
+            }
+            switch $parVal {
+               "01" {return "RSVP Path Message" }
+               "02" {return "RSVP Resv Message" }
+               "03" {return "RSVP PathErr Message" } 
+               "04" {return "RSVP ResvErr Message" }
+               "05" {return "RSVP PathTear Message" }
+               "06" {return "RSVP ResvTear Message" }
+               "07" {return "RSVP ResvConf Message" }
+               "0C" {return "RSVP Bundle Message" }
+               "0D" {return "RSVP Ack Message"}
+               "0F" {return "RSVP SRefresh Message" } 
+               "14" {
+                     set cType [string range $rawFrame 135 136]
+                     if {$cType == "01"} {
+                        return "RSVP Hello_Request Message" 
+                     } elseif {$cType == "02" } {
+                        return "RSVP Hello_Ack Message"
+                     }
+                    }
+               "default" {return "Not a Valid RSVP Message $parVal $ihL" }
+            }
+         } default  {
+               result_debug "Unknown Type: IP_$IpType"
+               return "IP_$IpType"
+         }
+   }  "08 06" {
+         set op [string range $rawFrame 60 64]
+         switch -- $op \
+            "00 01"  { 
+               return "ARP_REQUEST"
+         }  "00 02"  { 
+               return "ARP_REPLY"
+         }  "00 03"  { 
+               return "RARP_REQUEST"
+         }  "00 04"  { 
+               return "RARP_REPLY"
+         }  default  {
+               result_debug "Unknown Type: ARP_$op"
+               return "ARP_$op"
+         }
+   }  "88 8E" { ;# EAPOL Frame
+	 return [DecodeEapolFrame $rawFrame]
+   }  "00 26" {
+         #EMISTP and DOT1D
+         set type [GetBPDUType $rawFrame]
+         result_debug "the type $type"
+         switch -- $type \
+            "00"  { 
+               return "BPDU_CONFIG"
+         }  "80"  { 
+               return "BPDU_NOTIFICATION"
+         }  default  {
+               result_debug "Unknown Type: BPDU_$type"
+               return "BPDU_$type"
+         }
+   }  "00 27" {
+         #DOT1W
+         set type [GetBPDUType $rawFrame]
+         switch -- $type \
+            "02"  {
+               return "BPDU_CONFIG_DOT1W"
+         }  "80"  { 
+               return "BPDU_NOTIFICATION_DOT1W"
+         }  default  {
+               result_debug "Unknown Type: BPDU_$type"
+               return "BPDU_$type"
+         }
+   } "00 69" {
+         #DOT1S
+         set type [GetBPDUType $rawFrame]
+         switch -- $type \
+            "02"  {
+               return "BPDU_CONFIG_DOT1S"
+         }  "80"  {
+               return "BPDU_NOTIFICATION_DOT1S"
+         }  default  {
+               result_debug "Unknown Type: BPDU_$type"
+               return "BPDU_$type"
+         }
+   }  "00 32" {
+         # PVST-PLUS
+         set type [GetBPDUType $rawFrame "1"]
+         switch -- $type \
+            "00"  { 
+               return "BPDU_CONFIG_PVST"
+         }  "80"  { 
+               return "BPDU_NOTIFICATION_PVST"
+         }  default  {
+               result_debug "Unknown Type: BPDU_$type"
+               return "BPDU_$type"
+         }         
+   }  "00 33" {
+         # PVST-DOT1W
+         set type [GetBPDUType $rawFrame "1"]
+         switch -- $type \
+            "00"  { 
+               return "BPDU_CONFIG_PVST_DOT1W"
+         }   "02"  { 
+               return "BPDU_CONFIG_PVST_DOT1W"
+         }  "80"  { 
+               return "BPDU_NOTIFICATION_PVST_DOT1W"
+         }  default  {
+               result_debug "Unknown Type: BPDU_$type"
+               return "BPDU_$type"
+         }         
+   } "81 37" {
+      set op [string range $rawFrame 135 136]
+      switch -- $op \
+         "01"  {
+            if {[string range $rawFrame 90 94] == "04 53"} {
+               return "ENETII_IPXRIP_REQUEST"
+            } elseif {[string range $rawFrame 90 94] == "04 52"} {
+               return "ENETII_IPXSAP_REQUEST"
+            } 
+         } "02"  { 
+            if {[string range $rawFrame 90 94] == "04 53"} {
+               return "ENETII_IPXRIP_REPLY"
+            } elseif {[string range $rawFrame 90 94] == "04 52"} {
+               return "ENETII_IPXSAP_REPLY"
+            }
+         } "04" {
+            if {[string range $rawFrame 90 94] == "04 52"} {
+               return "ENETII_IPXSAP_GNSREPLY"
+            }
+         } default  {
+            if {[string range $rawFrame 90 94] == "04 53"} {
+                  return "ENETII_IPXRIP"
+            } elseif {[string range $rawFrame 90 94] == "04 52"} {
+               return "ENETII_IPXSAP"
+            } else {
+               result_debug "Unkown ENETII Type: [string range $rawFrame 90 94]"
+               return "FAIL"
+            }
+         }
+      } "86 DD" {
+        set proto [string range $rawFrame 60 61]
+        switch -- $proto \
+           "11" {
+                result_debug "IPV6 - UDP Packet"
+                set srcPort [string range $rawFrame 162 166]
+                set dstPort [string range $rawFrame 168 172]
+                if { $srcPort == $dstPort && $srcPort == "02 09" } {
+                   result_debug "RIPng packet"
+                   set cmd [string range $rawFrame 186 187]
+                   if { $cmd == "01" } {
+                       return "RIPNG_REQUEST"
+                   } else {
+                       return "RIPNG_UPDATE"
+                   }
+                }
+        }
+      } default {
+         set ether_proto [string range $rawFrame 42 49]
+         #result_debug "the ether_proto:|$ether_proto|"
+         switch -regexp $ether_proto \
+            "E0 E0 03" {
+                set ripOrSap [string range $rawFrame 99 103]
+                set reqOrRep [string range $rawFrame 144 145]
+                if {($ripOrSap == "04 53") && ($reqOrRep == "01")} {
+                   return "ENET8022_IPXRIP_REQUEST"
+                } elseif {($ripOrSap == "04 53") && ($reqOrRep == "02")} {
+                   return "ENET8022_IPXRIP_REPLY" 
+                } elseif {($ripOrSap == "04 52") && ($reqOrRep == "01")} {
+                   return "ENET8022_IPXSAP_REQUEST"
+                } elseif {($ripOrSap == "04 52") && ($reqOrRep == "02")} {
+                   return "ENET8022_IPXSAP_REPLY"
+                } elseif {($ripOrSap == "04 52") && ($reqOrRep == "04")} {
+                   return "ENET8022_IPXSAP_GNSREPLY"
+                } elseif {$ripOrSap == "04 53"} {
+                   return "ENET8022_IPXRIP"
+                } elseif {$ripOrSap == "04 52"} {
+                   return "ENET8022_IPXSAP"
+                } else {
+                   result_debug "Unknown ENET8022 Type: $ether_proto"
+                   return "FAIL"
+                }
+            } "FF FF.*" {
+               ;# No LLC for 802.3, IPX header(FFFF) directly after length
+               set ripOrSap [string range $rawFrame 90 94]
+               set reqOrRep [string range $rawFrame 135 136]
+               if {($ripOrSap == "04 53") && ($reqOrRep == "01")} {
+                  return "ENET8023_IPXRIP_REQUEST"
+               } elseif {($ripOrSap == "04 53") && ($reqOrRep == "02")} {
+                  return "ENET8023_IPXRIP_REPLY" 
+               } elseif {($ripOrSap == "04 52") && ($reqOrRep == "02")} {
+                  return "ENET8023_IPXSAP_REPLY"
+               } elseif {($ripOrSap == "04 52") && ($reqOrRep == "01")} {
+                  return "ENET8023_IPXSAP_REQUEST"
+               } elseif {($ripOrSap == "04 52") && ($reqOrRep == "04")} {
+                   return "ENET8023_IPXSAP_GNSREPLY"
+               } elseif {$ripOrSap == "04 53"} {
+                  return "ENET8023_IPXRIP"
+               } elseif {$ripOrSap == "04 52"} {
+                  return "ENET8023_IPXSAP"
+               } else {
+                  result_debug "Unknown ENET8023 Type: $ether_proto"
+                  return "FAIL"
+               }
+            } "AA AA 03" {
+             set ripOrSap [string range $rawFrame 114 118]
+             set reqOrRep [string range $rawFrame 159 160]
+	     set edp [string range $rawFrame 114 115]
+	     result_debug "EDP 114-115 was $edp"
+             if {($ripOrSap == "04 53") && ($reqOrRep == "01")} {
+                return "ENETSNAP_IPXRIP_REQUEST"
+             } elseif {($ripOrSap == "04 53") && ($reqOrRep == "02")} {
+                return "ENETSNAP_IPXRIP_REPLY" 
+             } elseif {($ripOrSap == "04 52") && ($reqOrRep == "02")} {
+                return "ENETSNAP_IPXSAP_REPLY"
+             } elseif {($ripOrSap == "04 52") && ($reqOrRep == "01")} {
+                return "ENETSNAP_IPXSAP_REQUEST"
+             } elseif {($ripOrSap == "04 52") && ($reqOrRep == "04")} {
+                return "ENETSNAP_IPXSAP_GNSREPLY"
+             } elseif {$ripOrSap == "04 53"} {
+                return "ENETSNAP_IPXRIP"
+             } elseif {$ripOrSap == "04 52"} {
+                return "ENETSNAP_IPXSAP"
+             } elseif {$edp == "99"} {
+		 return "EDP"
+             } else {
+                result_debug "Unknown ENETSNAP Type: $ether_proto"
+                return "FAIL"
+             }
+         } default {
+            result_debug "Unknown Type: $type"
+            #just return the type
+            return $type
+         }
+   }
+}
+
+################################################################# 
+# Procedure Name: GetMacCRC
+#   
+# Description:
+##     This proc is used to get the hex value of MAC CRC
+#
+# Input args: rawFrame
+# Output args: None.
+# Return value: hex string
+# Typical usage:
+# GetMacCRC rawFrame
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: CaptureTraffic
+##################################################################
+proc GetMacCRC {rawFrame} {
+    set frameLength [string length $rawFrame]
+    return [string range $rawFrame [expr $frameLength - 5] end ]
+}
+
+################################################################# 
+# Procedure Name: GetIPHeaderChecksum
+#   
+# Description:
+#     This proc is used to get the 2 byte hex checksum from an ip packet header
+#
+# Input args: rawFrame
+# Output args: None.
+# Return value: hex string or -1 on error
+# Typical usage:
+# GetIPHeaderChecksum rawFrame
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: CaptureTraffic
+##################################################################
+proc GetIPHeaderChecksum {rawFrame} {
+set type [string range $rawFrame 36 40]
+   switch $type {
+      "08 00" { return [string range $rawFrame 72 76] }
+      "81 00" { return [string range $rawFrame 84 88] }    ;#tagged frame
+      default {
+          result_debug "Unknown Type: $type (not IP packet)"
+          return -1
+      }
+   }
+}
+
+################################################################# 
+# Procedure Name: CheckTTLExpired
+#   
+# Description:
+#     This proc is used to check if the ttl is expired in ip header
+#
+# Input args: rawFrame
+# Output args: None.
+# Return value: 1 on success or 0 on failure
+# Typical usage:
+# CheckTTLExpired rawFrame
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: CaptureTraffic
+##################################################################
+proc CheckTTLExpired { rawFrame } {
+   set arrayframe [split $rawFrame];
+   if { ([lindex $arrayframe 23] == "01") && ([lindex $arrayframe 34] == "03") } {
+       return 1;               
+   } elseif { ([lindex $arrayframe 23] == "01") && ([lindex $arrayframe 34] == "0B") } {
+       return 1;     
+   } else {
+       return 0;    
+   }
+}
+
+################################################################# 
+# Procedure Name: GetVrrpPacketType
+#   
+# Description:
+#     This proc is used to get the VRRP packet type
+#
+# Input args: rawFrame
+# Output args: None.
+# Return value: packet type
+# Typical usage:
+# set packetType [GetVrrpPacketType $rawFrame]
+#
+# Category Types CaptureTraffic,VerifySwitchOutput
+#                        
+# Category: CaptureTraffic
+##################################################################
+proc GetVrrpPacketType { rawFrame } {
+     set packetType [hextodec [string index $rawFrame 103]]
+     return $packetType
+}
+
+################################################################# 
+# Procedure Name: GetVrrpId
+#   
+# Description:
+#     This proc is used to get the VRRP ID
+#
+# Input args: rawFrame
+# Output args: None.
+# Return value: VRID
+# Typical usage:
+# set packetType [GetVrrpId $rawFrame]
+#
+# Category Types CaptureTraffic,VerifySwitchOutput
+#                        
+# Category: CaptureTraffic
+##################################################################
+proc GetVrrpId { rawFrame } {
+     set vrid [hextodec [string range $rawFrame 105 106]]
+     return $vrid
+}
+
+################################################################# 
+# Procedure Name: GetVrrpIpAddress
+#   
+# Description:
+#     This proc is used to get the virtual IP address from VRRP packet
+#
+# Input args: rawFrame
+# Output args: None.
+# Return value: VRID
+# Typical usage:
+# set packetType [GetVrrpId $rawFrame]
+#
+# Category Types CaptureTraffic,VerifySwitchOutput
+#                        
+# Category: CaptureTraffic
+##################################################################
+proc GetVrrpIpAddress { rawFrame } {
+   set offsetStart 126
+   set offsetEnd [expr $offsetStart + 11]
+   set IP [string range $rawFrame $offsetStart $offsetEnd]
+   return [byte2IpAddr $IP]
+}
+
+##################################################################
+# Procedure Name: CheckMoreFragBit
+#
+# Description:
+#     This proc is used to check the fragmentation flags for both  tagged/untagged IP packet
+#
+# Input args: rawFrame
+# Output args: None.
+# Return value: 1 on pass or 0 on error
+# Typical usage:
+#     set prevPktFragFlag [CheckMoreFragBit $dataFrame]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: CaptureTraffic
+##################################################################
+proc CheckMoreFragBit {rawFrame} {
+     set type [string range $rawFrame 36 40]
+     switch -- $type \
+       "81 00" {
+          set flags [string range $rawFrame 72 72]
+	  if { ($flags == "2") || ($flags == "3") || \
+             ($flags == "6") || ($flags == "7") }   {
+            return 1
+          } else {
+            return 0
+          }
+       } "08 00" {
+          set flags [string range $rawFrame 60 60]
+	  if { ($flags == "2") || ($flags == "3") || \
+             ($flags == "6") || ($flags == "7") }   {
+            return 1
+          } else {
+            return 0
+          }
+       } default {
+           result_debug "Unknown Type: $type"
+           return 0
+       }
+}

@@ -1,0 +1,73 @@
+################################################################################
+#
+#
+################################################################################
+proc CheckInbandTestCaseSkip {args} {
+    parse_args CheckVpexTestCaseSkip $args {
+        dutList        "1"
+        testNo         "null"
+        time1          "null"
+    }
+
+    global DUTs_info
+
+    set mess "Inband Network Not Up"
+    #
+    # Enforce the rules for this proc
+    #
+    if {($testNo == "null" || $time1 == "null")} {
+        puts "\n\nThe -testNo and -time1 arguments are required to close the feature files.\n"
+        return;
+    }
+
+    set exitTests 0;
+    foreach d $dutList {
+        if {[info exists DUTs_info(DUT${d},InbandNetConnected)] && \
+               !$DUTs_info(DUT${d},InbandNetConnected)} {
+            incr exitTests;
+        }
+    }
+
+    if {$exitTests > 0} {
+        set myLevel [info level]
+        set tree [ProcEvalTree]
+        set tLen [llength $tree]
+        if {[regexp -nocase "execute" [lindex $tree 0]]} {
+            if {$tLen > 3} {
+                set lev [expr $tLen - 2]
+            } else {
+                set lev 1
+            }
+        } else {
+            set lev [expr [info level] - 1]
+        }
+        if {$lev > 1 && $testNo == "dummy"} {
+            set time1 [clock seconds]
+            set testNo "skipProc"
+            CleanTestBedCfgs;
+            result_debug "I am returning info level $lev"
+            result_debug "Skipped Test from library proc. $mess"
+            report_start_test "Skipped Test from library proc: $mess"
+            result_skip "Skipped Test: $mess"
+            report_end_test
+            set time2 [clock seconds]
+            result_p "Time for $testNo = [expr $time2-$time1] secs\n\n"
+            close_result_file
+            report_end_test
+            return -code return -level $lev
+        } else {
+            result_debug "Skipped Test: $mess"
+            report_start_test "Skipped Test: $mess"
+            result_skip "Skipped Test: DUT $mess"
+            report_end_test
+            set time2 [clock seconds]
+            result_p "Time for $testNo = [expr $time2-$time1] secs\n\n"
+            close_result_file
+            report_end_test
+            return -code return
+        }
+    } else {
+        result_debug "Skip requirements okay.  Continue with Test"
+        return 1;
+    }
+}

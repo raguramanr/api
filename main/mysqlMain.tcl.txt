@@ -1,0 +1,646 @@
+#!/usr/bin/tclsh
+
+
+
+source ../Lib/parse_args.tcl
+source ../Lib/mainLib.tcl
+source ./cfg/common.cfg
+package require Tclx
+
+proc regPrintUsage {} {
+    puts "\r"
+    puts "usage:\n"
+    puts "   mysqlMain.tcl -module <module name> -regId <regression_id>"
+    puts "\nOR, if new regression:\n"
+    puts "   mysqlMain.tcl -module <module name> -platform <platform_name> -build <build_num>"
+    puts "\nOptional arguments for both of above:\n"
+    puts "         \[-mode <mode>\] \[-cfg <cfg file>] \[-lst <lst> | -tcList <moduleList>\]"
+    puts "         \[-rerun y|n\] \[-debugLevel <error debug level>\] \[-verCheck y|n\] \[-help\]"
+    puts "         \[-moduleArg <module specific arg>\] \[-subversion <subversion variable>\] \[-efence <process list>\] \[-saveConfigPerTest <enable save config per test>\] \[-cliFlag NO_REBOOT|NO_REBOOT_NO_DOWNLOAD\]"
+    puts "\n"
+    puts "    -module:     Feature to run - e.g: VRRP \(case insensitive\)"
+    puts "    -regId:      Regression ID from the mysql Website - e.g: 385"
+    puts "    -platform:   Platform name to upload on \(from runReg.cfg\) - e.g: JAG_FUNC_IPR,1"
+    puts "    -build:      Build number to use when uploading - e.g: 11.5.0.13"
+    puts "    -mode:       auto | dev | autodev"
+    puts "    -cfg:        cfg filename, path optional - e.g: cfg/p1_asp_g48t.cfg"
+    puts "    -lst:        quick | pass | all"
+    puts "    -tcList:     List of test cases names to run. Do not specify this if rerun option is \"y\""
+    puts "    -rerun:      Default \"n\"; if \"y\", will run all the failed testcases from the first run of module."
+    puts "    -efence:     list of efence activated processes."
+    puts "    -saveConfigPerTest:     enable save config per test."
+    puts "    -debugLevel: Debug level 0|1|2|3. The level at which the debug information is dumped when script encounters an error. Default 0 \(no debug\)"
+    puts "    -verCheck:   Version check; if \"n\", will not check that the build name specified matches with the actual version loaded on the DUT's. Default y."
+    puts "    -cliFlag:    Optional only for \"cli\" regression \(NO_REBOOT|NO_REBOOT_NO_DOWNLOAD\)"
+    puts "    -qId:        Regression system queue ID SC_######_###### or RTP_######_######"
+    puts "    -TrafficGen: ixia or ixvm or stc"
+    puts "    -harness:    tcl,itest,all - Which harness to execute"
+    puts "    -comment:    note passed to main.tcl for comment or control of global args"
+    puts "    -help:       Print this usage help"
+}
+
+#Validate args
+proc ValidateMysqlMainArgs { args } {
+
+    global regId queueId 
+    global logFileId
+    global mysql_handler
+
+    parse_args ValidateMysqlMainArgs $args {
+	rerun "n"
+	tcList "all"
+	regId "null"
+	module "null"
+	platform "null"
+	build "null"
+        subversion "null"
+	efence "no"
+	saveConfigPerTest "no"
+	debugLevel "0"
+    }
+
+    if { $regId != "null" } {
+        # is that regId actually a queueId ? - ex: SC_060614_124245
+        if [regexp -nocase {[a-z]} $regId] {
+          puts $logFileId "regId was queueId $regId"
+          set queueId $regId
+          # do we have platform?
+          if {$platform != "null"} {
+            set platformInfoList [DetermineCfgRegTypeSubTypeFromPlatform $platform]
+
+            set defaultCfg [lindex $platformInfoList 0]
+            set regType    [lindex $platformInfoList 1]
+            set regSubType [lindex $platformInfoList 2]
+            set regPath    "[GetRegPath $regType $regSubType]"
+
+            puts $logFileId "defaultCfg  = $defaultCfg"
+            set platform_id [mysqlsel $mysql_handler \
+                            "SELECT platform_id FROM platform_table \
+                             WHERE platform_cfg_file_name='$defaultCfg'" -flatlist]
+            #result_debug "platform_id = $platform_id"
+            puts $logFileId " validateArgs platform_id = $platform_id"
+          } else {
+            set platform_id "null"
+          }
+
+          # do we have existing regId queueId build?
+          puts $logFileId "do we have existing regId queueId $queueId build $build platform_id $platform_id ?"
+          set regId [GetRegressionIdFromQueueId $queueId $build $platform_id $module ]
+          if { $regId == "" } {
+            set regId "null"
+          }
+        } else {
+          set queueId "null"
+        }
+    }
+
+    # Either regId or platform+build MUST exist
+    if { ($regId == "null") && ($queueId == "null") } {
+	# Regression ID is not given
+	if { ($platform == "null") || ($build == "null") } {
+	    puts $logFileId "Error: Either Regression ID or Platform+Build must be supplied."
+	    regPrintUsage
+	    exit
+	}
+    } else {
+	# Regression ID is given
+	if { ((($platform != "null") || (($build != "null") && ($build != "0.0.0.0"))) \
+               && ($queueId == "null")) } {
+             puts $logFileId "platform = $platform build = $build"
+            puts $logFileId "queueId = $queueId"
+	    puts $logFileId "Error: Either Regression ID or Platform+Build must be supplied, but not any combination of the above."
+	    regPrintUsage
+	    exit
+	}
+    }
+
+    # tcList cannot coexist with rerun option.
+    if { [regexp -nocase "y" $rerun] && ($tcList != "all") } {
+	puts $logFileId "Error: rerun option cannot be Y with tcList given. Do not include tcList."
+	regPrintUsage
+	exit
+    }
+
+    # Module name must be supplied
+    if { $module == "null" } {
+	puts $logFileId "Error: Module name must be specified."
+	regPrintUsage
+	exit
+    }
+    
+    # Grant removed 7/28 to enable passing in a filename from the queuing system
+    #if { ($debugLevel < 0 ) || ($debugLevel >= 4) } {
+	 #puts $logFileId "Error: Debug Level must be between 0 and 4."
+	 #regPrintUsage
+	 #exit
+    #}
+}
+
+proc ValidateDUTVersions { build cfg mode } {
+
+    global logFileId
+    # All of the below variables are required as global at this stage because Login assumes them to exist in global scope.
+    global numDUT verCheck
+    global DUT1_CONNECT DUT2_CONNECT DUT3_CONNECT DUT4_CONNECT DUT5_CONNECT
+    global DUT1_IP DUT2_IP DUT3_IP DUT4_IP DUT5_IP connectionTimeout 
+    global supportedPlatform i386Platform
+
+    global powerCyclerRetry
+    puts $logFileId "Location [pwd] ValidateDUTVersions  build cfg mode = $build $cfg $mode"
+    #source ../main/cfg/common.cfg
+
+    if { [regexp -nocase "^n" $verCheck] } {
+        puts $logFileId "verCheck was specified as no. Will not check DUT versions."
+        result_ok "verCheck was specified as no. Will not check DUT versions."
+        return
+    }
+
+    puts "\nVerify that all DUT's in $cfg are loaded with version $build\n"
+    puts  $logFileId  "\nVerify that all DUT's in $cfg are loaded with version $build\n"
+
+    # Source cfg file, with or without a cfg/.... specified
+    if { (![regexp -nocase "^cfg" $cfg]) && (![regexp -nocase {/} $cfg]) } {
+        if { ![file exists $cfg] } {
+            set cfg "cfg/$cfg"
+        }
+    }
+    set cfg [string trim $cfg]
+    puts $logFileId "Using config file: ($cfg)"    
+    puts "Using config file: ($cfg)"    
+    source $cfg
+    
+    if { [info exists DUT5_CONNECT] } {
+        set numDUT 5
+    } elseif { [info exists DUT4_CONNECT] } {
+        set numDUT 4
+    } elseif { [info exists DUT3_CONNECT] } {
+        set numDUT 3
+    } elseif { [info exists DUT2_CONNECT] } {
+        set numDUT 2
+    } elseif { [info exists DUT1_CONNECT] } {
+        set numDUT 1
+    }
+
+    # Check each DUT, if $build is not current build, quit!
+    set dutList ""
+    for {set dut 1} {$dut <= $numDUT} {incr dut} {
+        set DUTName [format %s%d DUT $dut]
+        Login [set ${DUTName}_CONNECT] -CheckOperational 0 -masterCheck 0
+        if { $mode == "dev" } {
+            lappend parameterList {{version} 1}
+            set verstr [GetKeyValue "show version" $parameterList]
+        } else {
+            SendACmd "disable clipaging"
+            lappend parameterList {{Image Selected:} 1}
+            lappend parameterList {{Primary ver:} 1}
+            lappend parameterList {{Secondary ver:} 1}
+            set imageList [GetKeyValue "show switch" $parameterList]
+            set imageSelected [lindex $imageList 0]
+            if { [regexp -nocase "primary" $imageSelected] } {
+            set verstr [lindex $imageList 1]
+            } else {
+            set verstr [lindex $imageList 2]
+            }
+        }
+        unset parameterList
+        puts "\nDUT $dut image = $verstr"
+        puts $logFileId "\nDUT $dut image = $verstr"
+
+        if { $verstr != $build } {
+            set dutList "$dutList $dut"
+        }
+
+        global spawn_id
+        exp_send "\035"
+        expect "telnet"
+        exp_send "quit\r"
+        expect ".*"
+        close -i $spawn_id
+    }
+    sleep 3
+    if { $dutList == "" } {
+        puts $logFileId  "All DUT's have the correct image $build loaded."
+        result_ok "All DUT's have the correct image $build loaded."
+    } else {
+        set dutList [string range $dutList 1 end]
+        puts $logFileId "DUT's \{ $dutList \} do not have the correct image. Please download correct image on these DUT's and rerun mysqlMain.tcl"
+        result_error "DUT's \{ $dutList \} do not have the correct image. Please download correct image on these DUT's and rerun mysqlMain.tcl"
+        exit
+    }
+}
+
+################################################################################
+#                                M A I N
+################################################################################
+
+parse_args mysqlMain $argv {
+    module "null"
+    regId "null"
+    queueId "null"
+    platform "null"
+    build "null"
+    subversion "null"
+    obuild ""
+    mode "auto"
+    cfg "null"
+    lst "all"
+    tcList "all"
+    rerun "n"
+    debugLevel "0"
+    verCheck "y"
+    cliFlag ""
+    moduleArg ""
+    efence "no"
+    saveConfigPerTest "no"
+    mainPath ""
+    qId "null"
+    help ""
+    sustaining "0"
+    TrafficGen "ixia"
+    harness "tcl"
+    comment "null"
+}
+
+# Display usage if no arguments given or -help is given
+if { ([llength $argv]  == 0) || ([lsearch $argv "-help"]  > -1) } {
+    regPrintUsage 
+    exit
+}
+
+load [lindex [glob "/usr/lib/libexpect*so*"] 0]
+set LIB_PATH "../Lib"
+lappend auto_path $LIB_PATH
+gen_index ../Lib
+gen_index .
+
+##################################################################
+# MAIN arguments used in lib procs
+##################################################################
+set MAIN(IxiaReady) 1
+set MAIN(RESULTPATH) "Result"
+set MAIN(RESULTDIR) "null";# all script results file will be posted here while running
+set MAIN(REPORTDIR) "null";# ResultDir is renamed to this at the very end.
+set MAIN(SHOWSTDOUT) 1
+
+# ------------------------------------------------------------------------------
+# These 4 calls are REQUIRED for all sublevel libraries that use
+# result_xxxx functions to work.
+set resultDir "Tmp"
+if { ! [file isdirectory $resultDir] } {
+    ;# Create it!
+    file mkdir $resultDir
+}
+
+set tStartTime [clock seconds]
+set tStartDate [clock format [clock seconds] -format "%Y-%m-%d %I.%M.%S%p"]
+set tStartDateString [clock format [clock seconds] -format "%Y-%m-%d_%I.%M.%S%p"]
+
+set fd_res [open_result_file "runall-[clock format [clock seconds] -format "%I.%M%p"]-[pid]"]
+
+source ../Lib/mainLib.tcl
+source ../Lib/platform.tcl
+
+# Default config file
+set cfgFile ../main/runReg.cfg
+
+set cnfgFileFound 1
+# Source config file that has Regression PC information
+if [file exists $cfgFile] {
+    puts "Sourcing $cfgFile now"
+    catch {source $cfgFile} reason
+} else {
+    puts "!!! Configuration file $cfgFile not found !!!"
+    set cnfgFileFound 0
+}
+
+global mysqlIP my_db
+set host $mysqlIP
+set db $my_db
+global host
+global mysql_handler
+
+# connect to database
+puts "connecting to database $db at $host"
+set connStatus [conn_to_db $host $db]
+puts "database $db at $host - status $connStatus"
+
+# Open log file
+set tmStr [clock format [clock seconds] -format "%Y-%m-%d %I.%M.%S%p"]
+
+set logRegId $regId
+set logQueueId $queueId
+
+if { $regId != "null" } {
+   # is that regId actually a queueId ? - ex: SC_060614_124245
+   if [regexp -nocase {[a-z]} $regId] {
+     set logRegId "null"
+     set logQueueId $regId
+   }
+}
+
+set logFileName "../main/Log/M $logRegId $logQueueId $platform $build $module $tmStr.txt"
+if { [catch {open $logFileName w} logFileId] } {
+   puts "ERROR:: Can't Open $logFileName"
+   return
+}
+
+if {!$cnfgFileFound} {
+    result_error "!!! Configuration file $cfgFile not found !!!"
+    return 0
+}
+
+
+puts "###################################################################"
+puts $logFileId  "###################################################################"
+puts "                    MYSQLMAIN.TCL STARTED!"
+puts $logFileId  "                    MYSQLMAIN.TCL STARTED!"
+puts "###################################################################"
+puts $logFileId  "###################################################################"
+puts "[exec date]"
+puts $logFileId  "[exec date]"
+
+puts $logFileId "database $db at $host - status $connStatus"
+
+puts "mysqlMain starts with: \n \
+queueId: $queueId \n \
+regId: $regId \n \
+module: $module \n \
+platform: $platform \n \
+build: $build \n \
+subversion: $subversion \n \
+obuild: $obuild \n \
+mode: $mode \n \
+cfg: $cfg \n \
+lst: $lst \n \
+tcList: $tcList \n \
+efence: $efence \n \
+saveConfigPerTest: $saveConfigPerTest \n \
+rerun: $rerun \n"
+
+puts $logFileId "mysqlMain starts with: \n \
+queueId: $queueId \n \
+regId: $regId \n \
+module: $module \n \
+platform: $platform \n \
+build: $build \n \
+subversion: $subversion \n \
+obuild: $obuild \n \
+mode: $mode \n \
+cfg: $cfg \n \
+lst: $lst \n \
+tcList: $tcList \n \
+efence: $efence \n \
+saveConfigPerTest: $saveConfigPerTest \n \
+rerun: $rerun \n"
+
+ValidateMysqlMainArgs -rerun "$rerun" -tcList "$tcList" -regId "$regId" -module "$module" \
+           -platform "$platform" -build "$build" -subversion $subversion -efence "$efence" \
+           -saveConfigPerTest "$saveConfigPerTest" -debugLevel "$debugLevel"
+
+if { $regId != "null" } {
+    puts "regression_id is supplied, regId = $regId"
+    puts $logFileId  "regression_id is supplied, regId = $regId"
+
+    set cfgRegtypeRegsubtypeList [DetermineCfgRegTypeSubTypeFromRegId $regId]
+    if { $cfgRegtypeRegsubtypeList == -1 } {
+	puts $logFileId "Nice try ... Is the website down or are you?"
+	puts $logFileId "Regression ID $regId does not exist... please double check webpage and try again."
+	exit
+    }
+puts $logFileId "1: cfgRegtypeRegsubtypeList=$cfgRegtypeRegsubtypeList"
+    set defaultCfg [lindex $cfgRegtypeRegsubtypeList 0]
+    set regType    [lindex $cfgRegtypeRegsubtypeList 1]
+    set regSubType [lindex $cfgRegtypeRegsubtypeList 2]
+    set regPath    "[GetRegPath $regType $regSubType]"
+
+    set build [DetermineBuildNumFromRegId $regId]
+} else {
+    puts "regression_id is not supplied, try to find it or create it"
+    puts $logFileId  "regression_id is not supplied, try to find it or create it"
+
+    set platformInfoList [DetermineCfgRegTypeSubTypeFromPlatform $platform]
+puts $logFileId "2: platformInfoList=$platformInfoList"
+    set defaultCfg [lindex $platformInfoList 0]
+    set regType    [lindex $platformInfoList 1]
+    set regSubType [lindex $platformInfoList 2]
+    set regPath    "[GetRegPath $regType $regSubType]"
+
+    set platform_id [mysqlsel $mysql_handler "SELECT platform_id FROM platform_table WHERE platform_cfg_file_name='$defaultCfg'" -flatlist]
+    puts "platform_id = $platform_id"
+    puts $logFileId  "platform_id = $platform_id"
+
+    # Get build ID
+#    regexp {([0-9]+)\.([0-9]+)\.([0-9]+)[\.b]([0-9]+.*)} $build match major minor patch buildnumber
+#    set minorver $major.$minor.$patch
+#    set build_list [mysqlsel $mysql_handler "SELECT build_id FROM build_table WHERE build_minor_release='$minorver' AND build_number='$buildnumber'" -flatlist]
+#    set build_id [lindex $build_list 0]
+    set build_id [GetBuildIdFromBuild $build]
+
+    puts "build_id = $build_id"
+    puts $logFileId  "build_id = $build_id"
+
+    set regId [GetRegressionId -queue_id $queueId -build_id $build_id -platform_id $platform_id -feature_type $regType -feature_sub_type $regSubType]
+}
+
+if { $cfg == "null" } {
+    # user did not specify their own cfgfile to run on; use default
+    set configToRunMain $defaultCfg
+} else {
+    # user specified their own cfgfile to run on; use that one instead of the default
+    set configToRunMain $cfg
+}
+
+puts "defaultCfg = $defaultCfg"
+puts $logFileId  "defaultCfg = $defaultCfg"
+puts "configToRunMain = $configToRunMain"
+puts $logFileId  "configToRunMain = $configToRunMain"
+puts "regType,regSubType = $regType,$regSubType"
+puts $logFileId  "regType,regSubType = $regType,$regSubType"
+puts "build = $build"
+puts $logFileId  "build = $build"
+puts "regression_id = $regId"
+puts $logFileId  "regression_id = $regId"
+
+# Validate correct image on all DUT's
+ValidateDUTVersions $build $configToRunMain $mode
+
+# get regression data
+
+set feature_directory "NULL"
+set regressionModules [mysqlsel $mysql_handler "SELECT feature_directory FROM feature_table WHERE \
+	feature_type='$regType' AND feature_sub_type='$regSubType' AND status = 'Active'" -flatlist]
+foreach regressionModule [lsort $regressionModules] {
+    set match ""
+    set str ""
+    #[regexp -nocase "(^$module)" $regressionModule match str]
+    if {[string tolower [string trim $module]] == [string tolower [string trim $regressionModule]]} {
+        puts $logFileId "\nOK: Module name '$module' found in regression modules."
+        result_ok "Module name $regressionModule found in regression modules."
+	set feature_directory $regressionModule
+	break
+    }
+}
+if { $feature_directory == "NULL" } {
+    puts $logFileId "\nERROR: Module name '$module' does not correspond to any feature name in the mysql database. Check spelling and try again."
+    exit
+}
+
+puts "module = $feature_directory"
+puts $logFileId  "module = $feature_directory"
+
+#######################################################################
+#regexp {([0-9]+)\.([0-9]+)\.([0-9]+)[\.b]([0-9]+.*)} $build  match major minor patch buildnumber
+#set minorver $major.$minor.$patch
+#
+#set build_list [mysqlsel $mysql_handler "SELECT build_id FROM build_table WHERE build_minor_release='$minorver' AND build_number='$buildnumber'" -flatlist]
+#set build_id [lindex $build_list 0]
+#result_debug "build_id = $build_id"
+#set regression_id [lindex [mysqlsel $mysql_handler "SELECT regression_id FROM regression_table WHERE build_id='$build_id' AND \
+#	feature_type='$regType' AND feature_sub_type='$regSubType' AND platform_id='$platform_id'" -flatlist] 0]
+#
+# get platform data
+#set platform_id [mysqlsel $mysql_handler "SELECT platform_id FROM regression_table WHERE regression_id='$regId'" -flatlist]
+#set platform_list [mysqlsel $mysql_handler "SELECT platform_name, platform_blade FROM platform_table WHERE platform_id = '$platform_id'" -flatlist]
+#set platform_name [lindex $platform_list 0]
+#set blade [lindex $platform_list 1]
+#
+#result_debug "platform_list = $platform_list"
+#result_debug "platform_id = $platform_id"
+#result_debug "platform_name = $platform_name"
+#result_debug "blade = $blade"
+#result_debug "build_name $build"
+#
+# get build data
+#set build_list [mysqlsel $mysql_handler "SELECT build_minor_release, build_number FROM build_table WHERE build_id = '$build_id'" -flatlist]
+#result_debug "build_list = $build_list"
+#set build_minor_release [lindex $build_list 0]
+#set build_number [lindex $build_list 1]
+#set build_name "$build_minor_release.$build_number"
+#######################################################################
+
+# get feature_id
+set feature_id [mysqlsel $mysql_handler "SELECT feature_id FROM feature_table WHERE feature_directory = '$feature_directory' AND feature_type = '$regType' AND feature_sub_type = '$regSubType'" -flatlist]
+puts "feature_id $feature_id for feature_directory='$feature_directory'"
+puts $logFileId  "feature_id $feature_id for feature_directory='$feature_directory'"
+
+# get the previous run number
+set run_number_test_result_list [mysqlsel $mysql_handler "SELECT run_number, test_result FROM report_table WHERE regression_id = '$regId' AND feature_id = '$feature_id' ORDER BY report_id DESC LIMIT 1" -flatlist]
+set run_number [lindex $run_number_test_result_list 0]
+set test_result [lindex $run_number_test_result_list 1]
+puts "Previous run_number = $run_number"
+puts $logFileId  "Previous run_number = $run_number"
+puts "test_result = $test_result"
+puts $logFileId  "test_result = $test_result"
+
+# the new run number
+if {($test_result == "aborted") || ($test_result == "NA") || ($test_result == "other") } {
+  set runNumber $run_number
+} else {
+  set runNumber [expr $run_number +1]
+}
+
+puts "new runNumber = $runNumber"
+puts $logFileId  "new runNumber = $runNumber"
+puts "regPath = $regPath"
+puts $logFileId  "regPath = $regPath"
+puts "regId = $regId"
+puts $logFileId  "regId = $regId"
+
+if { [regexp "y" $rerun] } {
+    set tcList [GetFailingTestsForModule -regression_id $regId -feature_type $regType -feature_directory $feature_directory -host $host]
+    puts $logFileId "rerunning testcases: $tcList\n"
+    if { $tcList == "all" } {
+	# If rerun "y" is given and there are no failed testcases, there is no reason to continue. Give error msg and exit.
+	puts $logFileId  "Rerun 'y' was given but there are no failed testcases. Exiting now."	
+	result_error "Rerun 'y' was given but there are no failed testcases. Exiting now."	
+	exit
+    }
+}
+
+#set expected_duration [getExpectedDuration "ASP_FUNC_STD,1" "11.5" "UDP_Forwarding" \
+#                                           "3.2.3" "10.210.1.58" autoweb_db \
+#                                           regression_user extreme ]
+#puts $logFileId "expected_duration $expected_duration"
+#exit
+# set regression status to running
+mysqlexec $mysql_handler "UPDATE regression_table SET status='running' WHERE regression_id = '$regId'"
+
+puts "\tCalling main.tcl -mode $mode -module $feature_directory -cfg $configToRunMain -comment \"$comment\" \
+       -qId $qId -tcList \"$tcList\" -debugLevel $debugLevel -regPath \"$regPath\" -cliFlag \"$cliFlag\" \
+       -obuild \"$obuild\" -moduleArg \"$moduleArg\" -subversion \"$subversion\" -efence \"$efence\" \
+       -saveConfigPerTest \"$saveConfigPerTest\" -TrafficGen \"$TrafficGen\" -harness \"$harness\""
+puts $logFileId  "\tCalling main.tcl -mode $mode -module $feature_directory -cfg $configToRunMain -comment \"$comment\" \
+       -qId $qId -tcList \"$tcList\" -debugLevel $debugLevel -regPath \"$regPath\" -cliFlag \"$cliFlag\" \
+       -obuild \"$obuild\" -moduleArg \"$moduleArg\" -subversion \"$subversion\" -efence \"$efence\" \
+       -saveConfigPerTest \"$saveConfigPerTest\" -TrafficGen \"$TrafficGen\" -harness \"$harness\""
+
+;# Write logs to file before starting
+flush $fd_res
+if {[info exists mainPath]&&$mainPath!=""} {
+   set prevDir [pwd]
+   cd $mainPath
+   set regPath $mainPath/../Functionaltest
+}
+catch { exec {tclsh} ../main/main.tcl \
+	-mode $mode \
+	-module $feature_directory \
+	-cfg $configToRunMain \
+    -qId $qId \
+    -comment "$comment" \
+	-tcList "$tcList" \
+	-debugLevel $debugLevel \
+	-regPath "$regPath" \
+	-cliFlag "$cliFlag" \
+        -moduleArg $moduleArg \
+        -obuild "$obuild" \
+        -moduleArg "$moduleArg" \
+        -TrafficGen "$TrafficGen" \
+        -harness "$harness" \
+	>@stdout } result
+#result_debug "main.tcl returned result: $result"
+puts stderr $result
+puts $logFileId $result
+flush stderr
+if {[info exists mainPath]&&$mainPath!=""} {
+   cd $prevDir
+}
+
+set isFullRun [expr ([string length $tcList]==0)]
+
+puts "\tCalling mysqlAutomate.tcl -regId $regId -module $feature_directory -isFullRun $isFullRun"
+puts $logFileId  "\tCalling mysqlAutomate.tcl -regId $regId -module $feature_directory -isFullRun $isFullRun"
+
+set scmFlag ""
+if {[regexp -nocase "RTP|CIT" $qId]} {
+    set scmFlag "regServer:"
+}
+
+if {!$sustaining} {
+    catch { exec {tclsh} ../main/mysqlAutomate.tcl \
+        -regId $regId \
+        -module $feature_directory \
+        -obuild "$obuild" \
+        -callLocation "mysqlMain: $scmFlag" \
+        -isFullRun $isFullRun } \
+        result
+} else {
+    catch { exec {tclsh} ../main/mysqlAutomate.tcl \
+        -regId $regId \
+        -module $feature_directory \
+        -obuild "$obuild" \
+        -callLocation "mysqlMain: $scmFlag" \
+        -isFullRun $isFullRun \
+        -sustaining $sustaining } \
+        result
+}
+puts "RESULTS OF mysqlAutomate: $result"
+puts $logFileId "RESULTS OF mysqlAutomate: $result"
+
+# set regression status to finished
+mysqlexec $mysql_handler "UPDATE regression_table SET status='finished' WHERE regression_id = '$regId'"
+puts "######################################################################"
+puts $logFileId  "######################################################################"
+puts "                      MYSQLMAIN.TCL FINISHED!"
+puts $logFileId  "                      MYSQLMAIN.TCL FINISHED!"
+puts "######################################################################"
+puts $logFileId  "######################################################################"

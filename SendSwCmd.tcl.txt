@@ -1,0 +1,3349 @@
+##################################################################
+# Procedure Name: FailSafeForceful
+#
+# Description: Blast the login prompt with all failsafe
+#
+# Input args: 
+# Output args: none
+# Typical usage:
+#             FailSafeForceful
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc FailSafeForceful {} {
+    global spawn_id spawn_ids MAIN
+    global connectionTimeout
+
+    set MAIN(FAILSAFEHIT) 1
+    result_debug "Starting Failsafe"
+    set numVers 8
+    set user(9) "admin"; #Dummy
+    set pass(9) ""
+    set vern(9) "Dummy version";
+    set user(10) j/D4pRCG1r/qP/AZfCI0; #16.1
+    set pass(10) Dtyh4XyOkaPnfwKnaUE0
+    set vern(10) "EXOS FailSafe For 16.1";
+    set user(11) 3RzJ6ufoZ1OmwJ4.jEq0; #15.7
+    set pass(11) OaoaFpfogbsQa8HzSpB.
+    set vern(11) "EXOS FailSafe For 15.7";
+    set user(12) OOE7HE2CLqAiRcAIrQL.; #15.6
+    set pass(12) tBvQ85KlVvpHLemlPpB1
+    set vern(12) "EXOS FailSafe For 15.6";
+    set user(13) tHFhUqVdi/O/FH9osCW/; #15.5
+    set pass(13) XjutMy/9dgpFsScenMo.
+    set vern(13) "EXOS FailSafe For 15.5";
+    set user(14) ECFpu2PkznVgPaMc2vu/; #15.4
+    set pass(14) yberyVXQRhoiqdezqKS/
+    set vern(14) "EXOS FailSafe For 15.4";
+    set user(15) zd0eleeil1ofiTMYMoS1; #15.3
+    set pass(15) lvSh4fffJjsRY8s7xoP1
+    set vern(15) "EXOS FailSafe For 15.3";
+    set user(16) 6451ZGd5riah.Ya/6ag0; #15.2
+    set pass(16) F7pfG5uZ42oD9fVADH30
+    set vern(16) "EXOS FailSafe For 15.2";
+
+
+    set timeout 3
+    set i 9
+    set tc 0
+    exp_send "\r"
+    expect {
+        timeout {
+            if {$tc<5} {
+                incr tc
+                exp_send "\r"
+                if {[info exists expect_out(buffer)]} {
+                    puts $expect_out(buffer)
+                }
+                exp_continue;
+            }
+            puts "Hit timeout"
+            set timeout $connectionTimeout
+            if {[info exists expect_out(buffer)]} {
+                puts $expect_out(buffer)
+            }
+            return
+        }
+        "#" {
+            puts "Hit good prompt"
+            set timeout $connectionTimeout
+            return
+        }
+        ">" {
+            puts "Hit good prompt"
+            set timeout $connectionTimeout
+            return
+        }
+        -nocase {\[y/N]:} {
+            puts "Hit good prompt"
+            set timeout $connectionTimeout
+            return
+        }
+        -nocase {\[y/N/q]:} {
+            puts "Hit good prompt"
+            set timeout $connectionTimeout
+            return
+        }
+        "ogin: " {
+            after 1500
+            puts "Login: Send user - $user($i) $vern($i)"
+            send "$user($i)\r"
+            expect "assword: "
+            puts "Password: $pass($i) $vern($i)"
+            send "$pass($i)\r"
+            incr i
+            if {$i>=17} {
+                puts "\n@@@@@\nYour out of luck\n@@@@@";
+                set timeout $connectionTimeout
+                send "\r"
+                return;
+            }
+            exp_continue
+        }
+    }
+    set timeout $connectionTimeout
+}
+
+# Check for login questions
+# i.e.
+# Would you like to disable Telnet? [y/N]: No
+#
+# SNMP access is enabled by default. SNMP uses no encryption, SNMPv3 can be 
+# configured to eliminate this problem.
+#
+# Would you like to disable SNMP? [y/N]: --- Send run msm-failover                    
+proc _checkLoginQuestions {} {
+
+    ;# Loop up to 10 times...
+    for {set i 0} {$i < 10} {incr i} {
+	expect {
+	    "#" { 
+		return
+	    }
+	    ">" { 
+		return
+	    }
+	    -nocase {\[y/N]:} {
+		send "\r"
+	    }
+            -nocase {\[y/N/q]:} {
+                send "\r"
+            }
+	}
+    }
+}
+
+################################################################## 
+# Procedure Name: SendACmd
+#   
+# Description: Sends a CLI command to a DUT
+#              Reboots multiple DUTs simultaneously provided via duts
+#              output from the cmd can be stored in a file by supplying fd_in
+#     
+#     
+#
+# Input args: cmd, fd_result, fd_input, showError
+# Output args: none
+# Typical usage:
+#             SendACmd $cmd
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+
+proc SendACmd {{cmd "NULL"} \
+	{fd_result "NULL"} \
+	{fd_input  "NULL"} \
+	{showError "true"} \
+        {numResend 3}
+	{yesorno "y"} {quit " "}} {
+
+    global spawn_id
+    global spawn_ids
+    global connectionTimeout
+    global whichDutNow whichMsmNow
+    global DUTs_info 
+    global hostname
+    global MaxLoopCount
+    global showSlotAfterPioneerHalErrors
+    global queensFailOverCase bcmPlatform pioneerPlatform
+    global SKIPBROADCOMFDB MAIN supportedPlatform i386Platform
+
+
+    # Set expect log_user for cleaner output.
+    _initOutputOptions
+    # Check for HAL sync required
+    _checkIfHalSyncNeeded $cmd 
+
+    if {![info exists whichMsmNow]} {
+        set whichMsmNow ""
+    }
+    global DUT${whichDutNow}_CONNECT${whichMsmNow}
+    global DUT${whichDutNow}_CONNECT
+
+    set showSlotAfterPioneerHalErrors 1 
+    set queensFailOverCase 0
+    
+    set result ""
+    set exp_out_buf ""
+  
+    set Stacking 0
+    if {[string match "sh*" $cmd] && [string match "*stack*" $cmd] && [string match "*deta*" $cmd]} {     
+        # skiping for sh stacking slot command
+        set Stacking 1
+    }
+
+    #For Aspen platform delay 15 seconds to sync FDB cache on MSM with HW learned FDBs on IO module
+    if {[string match "sh*" $cmd] && [string match "*fdb*" $cmd]} {
+        if {[regexp -nocase $bcmPlatform $DUTs_info(DUT$whichDutNow,platform)]} {
+            if {[info exists SKIPBROADCOMFDB] && $SKIPBROADCOMFDB} {
+                result_print "Skipping the usual 15 second Broadcom show fdb wait"
+            } else {
+                result_print "Sleeping 15 seconds awaiting show fdb completion"
+                exSleep 15
+            }
+        } elseif {[regexp -nocase $pioneerPlatform $DUTs_info(DUT$whichDutNow,platform)]} {
+            if { [string match "*hardware*" $cmd]  } {
+                result_print "Sleeping 2s awaiting show fdb hardware completion"
+                exSleep 2
+            } else {
+                result_print "Sleeping 20s awaiting show fdb completion"
+                exSleep 20
+            }
+        }
+    }
+    if {[info exists DUTs_info(DUT$whichDutNow,platform)] && [regexp -nocase "vpex" $DUTs_info(DUT$whichDutNow,platform)]} {
+        set cmd [_EnhanceVpexCli $cmd]
+    }
+    if {! [regexp -nocase "stack-ports.*bandwidth|bytes|packets" $cmd]} {
+        set cmd [_EnhanceShowPortCli $cmd]
+    }
+    set cmd [_EnhanceStackingCli $cmd]
+
+    if {[regexp -nocase {sh[ow]* *lo[g]*} $cmd]} {
+        set cmd [_EnhanceShowlog $cmd]
+    }
+
+    if {[regexp -nocase {jer[rry]* *} $cmd]} {
+        set cmd [_EnhanceJerryShow $cmd]
+    }
+    #
+    # CLI substitution for version related cli changes
+    #
+    set cmd [_cliSubstitution -cmd $cmd]
+    #
+    # Platform non-support modifications or test case skip
+    #
+    set cmd [_modifyPlatformSendCLI -cmd $cmd]
+
+    set shortCmd [_GetShortCmd $cmd]
+
+    set timeout 5   ;#  This should be more than enough time to see cmd    
+
+    # -- display and send the command
+    # We try to re-send 3 times in the event of cmd truncation
+    result_print "--- Send $cmd"
+    if {$numResend>1} {
+        while {$numResend} {
+            send "$cmd\r"
+            expect  {
+                "closed" {
+                    set loginLoop 0
+                    result_print "\n~~~~~\ntry_login_on_switch detects telnet \
+                    to DUT$whichDutNow Closed Foreign Host\n~~~~~";
+                    # # The connection has been dropped so we have to clean up the spawnId and hostname entries
+                    _clearDutConnectionVars $whichDutNow
+                    if {[Login [set DUT${whichDutNow}_CONNECT] -CheckOperational "0" -masterCheck "0"]<=0} {
+                        result_error "Login is not successful on retry after foreign host closed"
+                        return ""
+                    }
+                    incr numResend -1
+                }
+                -exact "$cmd" {
+                    break
+                }
+                # 22.2 16.2 CR in cli breaks exact
+                "$cmd" {
+                    break
+                }
+                #"$shortCmd" {
+                #    break
+                #}
+                eof {
+                    result_print "\n~~~~~\n~~~~~\n1)Connection to DUT$whichDutNow dropped! \
+                    Reconnect\n~~~~~\n~~~~~";
+                    # The connection has been dropped so we have to clean up the spawnId and hostname entries
+                    _clearDutConnectionVars $whichDutNow
+                    if {[Login [set DUT${whichDutNow}_CONNECT] -CheckOperational "0" -masterCheck "0"]<=0} {
+                        result_error "Login is not successful on retry after connection dropped"
+                        return ""
+                    }
+                    incr numResend -1
+                }
+                timeout {
+                    result_print "SendACmd Timeout($numResend) sending $cmd...."
+                    puts "SendACmd Timeout($numResend) sending $cmd...."
+                    incr numResend -1
+                }
+            }
+        }
+    } else {
+        send "$cmd\r"
+        expect  {
+            -exact "$cmd" {
+            }
+            "$cmd" {
+            }
+            "closed" {
+                set loginLoop 0
+                result_print "\n~~~~~\nSendACmd detects telnet \
+                to DUT$whichDutNow Closed Foreign Host\n~~~~~";
+                _clearDutConnectionVars $whichDutNow
+                if {[Login [set DUT${whichDutNow}_CONNECT] -CheckOperational "0" -masterCheck "0"]<=0} {
+                    result_error "SendACmd is not successful on retry after foreign host closed"
+                    return ""
+                }
+            }
+            eof {
+                result_print "\n~~~~~\n~~~~~\n2)Connection to DUT$whichDutNow dropped! Reconnect\n~~~~~\n~~~~~";
+                # The connection has been dropped so we have to clean up the spawnId and hostname entries
+                _clearDutConnectionVars $whichDutNow
+                Login $DUTs_info(DUT$whichDutNow,connect)  -CheckOperational "0" -masterCheck "0"
+            }
+            timeout {
+                result_print "SendACmd Timeout sending $cmd...."
+                puts "SendACmd Timeout  sending $cmd...."
+            }
+        }
+    }
+
+
+    # For Aspen and Cougar platform delay 5 seconds to sync FDB cache on MSM with HW deleted FDBs on IO module.
+    global bcmPlatform
+    global pioneerPlatform    
+        if {[string match "cl*" $cmd] && [string match "*fdb*" $cmd] && [regexp -nocase $pioneerPlatform $DUTs_info(DUT$whichDutNow,platform)]} {
+            result_print "Sleeping 15s awaiting PIONEER clear fdb completion.... ";
+            exSleep 15;
+        }
+
+    # 07-18-2011: Everest needs delay after clearing fdb.
+    if {[string match -nocase "cl*" $cmd] && [string match "*fdb*" $cmd] && [regexp -nocase "BD-X8" $DUTs_info(DUT$whichDutNow,platform)]} {
+        result_print "Sleeping 15s awaiting EVEREST clear fdb completion.... ";
+        exSleep 15;
+    }
+    # 08-11-2011:  Everest needs delay after clearing counters.
+    if {[string match -nocase "cl*" $cmd] && [string match "*counter*" $cmd] && [regexp -nocase "BD-X8" $DUTs_info(DUT$whichDutNow,platform)]} {
+        result_print "Sleeping 15s awaiting EVEREST clear counters completion.... ";
+        exSleep 5;
+    }
+    if {($numResend == 0) && ($showError!="false")} {
+	result_error "Error sending $cmd to device..."
+#	return ""
+    }
+    
+    ;# Increase timeout
+    set timeout $connectionTimeout   
+    set LoopDetectionCounter 1
+    set pioneerSlotRebootErrors "Erro:HAL.Conduit|Crit:HALIO.CORE.Dump"
+    expect {
+	timeout {
+            result_error "No response from the switch DUT$whichDutNow for $timeout seconds"
+            expect *
+            SaveOutputBuffer $expect_out(buffer)
+	    # -- TODO: check whether there is a promp at the end of the 
+	    #    accumulated buffer, if yes, exit the expect loop no error
+            if {![info exists POWERCYCLE_DUT($whichDutNow)]} {
+              close_result_file
+            }
+            error "No response from the switch DUT$whichDutNow for $timeout seconds"
+         }
+ 
+         "MSM does not support failover" {
+#LK aspen queens hardware does not support run msm-failover hence doing a reboot msm instead of run msm-failover
+           set msmaSpawnId "INVALID"
+           set msmbSpawnId "INVALID"
+           set timeout 10   
+           global DUT${whichDutNow}_CONNECTB
+           getSpawnId [set DUT${whichDutNow}_CONNECT] msmaSpawnId
+           set queensMSMRebootCmd " "
+           if { $msmaSpawnId == $spawn_id } {
+             set queensMSMRebootCmd  "reboot msm a"
+           } elseif {[info exists DUT${whichDutNow}_CONNECTB]} {
+              getSpawnId [set DUT${whichDutNow}_CONNECTB] msmbSpawnId
+              if { $msmbSpawnId == $spawn_id } {     
+                 set queensMSMRebootCmd  "reboot msm b"
+              }
+           }      
+           result_print "--- Send save configuration"
+           send "save configuration\r"
+           expect {
+	          timeout { result_ok "timeout continue" }
+	          "\\?" {
+	                regsub -all "\n\r" $expect_out(buffer) "\n" out_buf
+	                append exp_out_buf $out_buf
+                        if {!$Stacking} {
+                            if {[regexp -nocase {(best, *\?|\\.[0-9]+ \?|\*.\?|Origin|or '\?|checkpoint?|errors?)} $expect_out(buffer) match str]!=1} {
+		                send "y\r"
+	                     }
+                        }
+	          }
+              }
+           sleep 5;
+           set queensFailOverCase 1
+           result_print "--- Send $queensMSMRebootCmd"
+           send "$queensMSMRebootCmd\r"
+               expect {
+	          timeout { result_ok "timeout continue" }
+	          "\\?" {
+	                regsub -all "\n\r" $expect_out(buffer) "\n" out_buf
+	                append exp_out_buf $out_buf
+                        if {!$Stacking} {
+                            if {[regexp -nocase {(best, *\?|\\.[0-9]+ \?|\*.\?|Origin|or '\?|checkpoint?|errors?)} $expect_out(buffer) match str]!=1} {
+		                send "y\r"
+	                     }
+                        }
+	          }
+              }
+             set timeout $connectionTimeout   
+	     exp_continue
+         }
+ 
+         "quit:" { 
+	     send "$quit"   
+	     exp_continue
+	 }
+
+         # EY-06-13-2006: Replaced platform-specifc CLI prompt patterns
+         # with generic regular expression pattern.
+         # EY-06-23-2006: Removed trailing "$" from regular expression.
+         #   It was causing a failure to match the CLI prompt when a debug
+         #   message was printed right after the prompt.
+         -nocase -re "(\\* )?\[a-z0-9()._-]+(:|\\.)\[0-9]+ (#|>) " {
+                # ExtremeWare and ExtremeWare XOS prompt.
+                #
+                # The pattern breaks down as follows:
+                #
+                # (\\* )?        Unsaved config marker
+                # \[a-z0-9._-]+  Platform type or SNMP system name
+                # (:|\\.)        Name and command ID separator
+                # \[0-9]+        Command ID
+                # (#|>)          System or user prompt marker
+                if {[regexp -nocase "\(debug\)" $expect_out(buffer)]} {
+                    set DUTs_info(DUT${whichDutNow}${whichMsmNow},DEBUGENABLED) 1
+                } else {
+                    set DUTs_info(DUT${whichDutNow}${whichMsmNow},DEBUGENABLED) 0
+                }
+                #LK 01/27/2008 Made the below chage as TCP seq # in logs was being treaded as prompt
+                if {[regexp -nocase {(TCP seq #)} $expect_out(buffer) match str]==1} {
+                    append exp_out_buf $expect_out(buffer) 
+                    exp_continue
+                }
+                if {[regexp -nocase $pioneerSlotRebootErrors $expect_out(buffer) match str]==1} {
+                    append exp_out_buf $expect_out(buffer) 
+                    exp_continue
+                }
+                set MAIN(unregister_netdevice) 1
+           }
+        -nocase -re $pioneerSlotRebootErrors {
+            if {$showSlotAfterPioneerHalErrors} {
+             if { 0 } { 
+                 send "show slot\r"
+                       exSleep 5
+                       send "\r"
+                       send "\r"
+                       send "show log\r"
+                       send "\r"
+                       send "\r"
+                       exSleep 5
+              }
+                       set showSlotAfterPioneerHalErrors 0 
+           }
+	         append exp_out_buf $expect_out(buffer) 
+                 exp_continue
+             }
+
+         -nocase -re "installing.*bootrom" {
+             send "y\n";
+             exp_continue;
+         }
+         # SK: 6/23/06 DO NOT ADD MORE SPECIFIC PROMPTS
+         # AS ABOVE PROMPT WILL MATCH
+         -nocase -re "regrouter.* # "                   {}
+         -nocase -re "bd-10808.\[0-9]+ # "	{}
+         -nocase -re "bd-20808.\[0-9]+ # "	{}
+         -nocase -re "bd-20804.\[0-9]+ # "	{}
+         -nocase -re "aspen-8810.\[0-9]+ # "	{}
+         -nocase -re "bd-8810.\[0-9]+ # "	{}
+         -nocase -re "aspen-8806.\[0-9]+ # "	{}
+         -nocase -re "bd-8806.\[0-9]+ # "	{}
+         -nocase -re "aspen.\[0-9]+ # "		{}
+         -nocase -re "summitx450-24\[x,t].\[0-9]+ # "	{}
+         -nocase -re "summitx406-24\[p,t].\[0-9]+ # "	{}
+         -nocase -re "summitx450\[a,e]-24\[p,t].\[0-9]+ # "	{}
+         -nocase -re "bd-pc.\[0-9]+ # "		{}
+         -nocase -re "summit-pc.\[0-9]+ # "	{}
+         -nocase -re "summit.* # "     {}
+         -nocase -re "msm.* # "        {
+         #LK 01/27/2008 Made the below chage as TCP seq # in logs was being treaded as prompt
+         if {[regexp -nocase {(TCP seq #)} $expect_out(buffer) match str]==1} {
+	     append exp_out_buf $expect_out(buffer) 
+                exp_continue
+             }
+         }
+         -nocase -re "bd.* # "         {}
+         -nocase -re "alpine.* # "     {}
+         -nocase -re "Enter debug mode password: "  {}
+#         -nocase -re "enetswitch.* # " {}
+#         -nocase -re "godzilla.* # "   {}
+#         -nocase -re "dut.* # "        {}
+         -nocase -re "exsh.* # "       {}
+         -nocase -re "sh.2.05a# "      {}
+         -nocase -re "\]# "            {}
+         -nocase -re "msmA>"           {}
+         -nocase -re "msmB>"           {}
+         -nocase -re "tftp> "          {}
+	 -nocase -re "\[IO\-\[0-9]+\]#"  {puts "\nIO PROMPT";}
+         "firmware update in progress" { ;#SK3/9/07: POE firmware install 12.0.0.3
+                   exSleep 90
+                }
+         "login: " {
+             set connect _CONNECT
+             set DUTName [format %s%d DUT $whichDutNow]
+             global ${DUTName}_CONNECT
+	     result_warning "***** SendACmd login: ****"
+             
+             Login [set ${DUTName}_CONNECT${whichMsmNow}] -CheckOperational 0 -masterCheck 0
+             if { $queensFailOverCase == 1 } {
+                 result_debug "waiting for slots to become operational"
+                 CheckOperational
+                 set queensFailOverCase 0
+             }
+#	     send "admin\r"
+#             set aaaTimeout 0
+#	     expect {
+#                   "password:" {send "\r"}
+#                    -nocase -re "Error.*service.*not available.*try again" {
+#		    result_debug "\n****Waiting for Authentication Service to Come up***\n"
+#                    exSleep 40
+#                    set aaaTimeout 1
+#                   }
+#                  }
+#             if {$aaaTimeout} {exp_continue}
+#	     _checkLoginQuestions
+#	     send "dis clipaging\r"
+#	     expect -re "#|> $"
+	 }
+
+	 "password: " {
+             set connect _CONNECT
+             set DUTName [format %s%d DUT $whichDutNow]
+             global ${DUTName}_CONNECT
+	     result_warning "***** SendACmd password: ****"
+             Login [set ${DUTName}_CONNECT${whichMsmNow}] -CheckOperational 0 -masterCheck 0
+#	     send "\r"
+#	     expect "login:"
+#	     send "admin\r"
+#	     expect "password:"
+#	     send "\r"
+#	     _checkLoginQuestions
+#	     send "dis clipaging\r"
+#	     expect -re "#|> $"
+	 }
+
+    -nocase "remove existing files from" {
+        send "y\r"
+        exp_continue
+    }
+    # Currently this hits the 16.1 Signature Validation on download
+    -nocase "image is not digitally signed" {
+        puts "Hit Signature"
+        send "y\r"
+        exp_continue
+    }
+    # Press enter to continue: after SSH Key clear - new in 22.2
+    -nocase "press enter to continue: " {
+        puts "SSH zeroization case"
+        send "\r"
+        exp_continue
+    }
+    "\\?" {
+        regsub -all "\n\r" $expect_out(buffer) "\n" out_buf;
+        append exp_out_buf $out_buf;
+        _cliQuestionHandler -buffer $exp_out_buf -cmd $cmd -yesorno $yesorno -stacking $Stacking
+        exp_continue;
+    }
+
+	"\~\>" {
+        puts "pacman prompt"
+		send "c\r"
+		exp_continue
+	}
+#LK 04/10/2009 Temporary workaround to avoid failures on g1_oly
+        -nocase {\[y/N]:} {
+                send "\r"
+	     exp_continue
+        }
+        -nocase {\[y/N/q]:} {
+                send "\r"
+             exp_continue
+        }
+#         -nocase -re "Aspen\[0-9a-zA-Z:]+ > "      {}
+#         -nocase -re "summit\[0-9a-zA-Z:]+ > "     {}
+#         -nocase -re "msm\[0-9a-zA-Z:]+ > "        {}
+#         -nocase -re "bd\[0-9a-zA-Z:]+ > "         {}
+#         -nocase -re "alpine\[0-9a-zA-Z:]+ > "     {}
+#         -nocase -re "enetswitch\[0-9a-zA-Z:]+ > " {}
+#         -nocase -re "godzilla\[0-9a-zA-Z:]+ > "   {}
+#         -nocase -re "dut\[0-9a-zA-Z:]+ > "        {}
+         -nocase -re "root.* # "                   {}
+         -nocase -re "root.*# "                    {}
+         -nocase -re "regrouter.* # "     {}
+
+
+         "yes, no, or cancel)" { send "n/r" }
+	 
+         "n)\\?  " "send $yesorno/r"
+	 
+         "\r" {
+                incr LoopDetectionCounter
+                if {![info exists MaxLoopCount]} {
+                    set MaxLoopCount 15000
+                }
+                if { $LoopDetectionCounter > $MaxLoopCount } {
+                    expect *
+                    SaveOutputBuffer $expect_out(buffer)
+                    close_result_file
+                    error "Loop Condition on Switch Please Debug and Restart regression "
+                } elseif {[regexp -nocase "ESC\\->" $expect_out(buffer)]} {
+                    exSleep 4
+                    send "\033"
+                    exp_continue
+                } elseif {[regexp -nocase "unregister_netdevice:" $expect_out(buffer)]} {
+                    if {![info exists MAIN(unregister_netdevice)]} {
+                        set MAIN(unregister_netdevice) 1
+                    } else {
+                        incr MAIN(unregister_netdevice)
+                    }
+                    if {$MAIN(unregister_netdevice) > 10} {
+                        report_start_test "Unregister NetDevice Hit Power Cycle DUT $whichDutNow";
+                        result_error "unregister_netdevice detected on $whichDutNow - powerCycle if possible"
+                        if {[PowerCycleDUT $whichDutNow]==1} {
+                            result_ok "Successfully power cycled DUT $whichDutNow..."
+                        } else {
+                            result_error "Could not power cycle DUT $whichDutNow..."
+                            puts "@@@ Could not power cycle DUT @@@"
+                            error "Stuck at unregister netdevice"
+                        }
+                        report_end_test
+                    }
+                } else {
+                    regsub -all "\n\r" $expect_out(buffer) "\n" out_buf
+                    append exp_out_buf $out_buf
+                    exp_continue
+                }
+         }
+	
+	     ;#nofeep command - also VM user shell prompt
+         -re "\\$ $" {
+                if {[regexp -nocase "$supportedPlatform|$i386Platform" $expect_out(buffer)] == 1} {
+                    #puts "At \$ prompt on the EXOS"
+                } else {
+                    #puts "At \$ prompt on non-EXOS"
+                }
+         }
+         -re " > $"  {
+                if {[regexp -nocase "$supportedPlatform|$i386Platform" $expect_out(buffer)] == 1} {
+                    #puts "At > prompt on the EXOS"
+                } else {
+                    #puts "At > prompt on non-EXOS"
+                    append exp_out_buf $expect_out(buffer)
+                    exp_continue
+                }
+         }
+         -re "# $" {
+                if {[regexp -nocase "$supportedPlatform|$i386Platform" $expect_out(buffer)] == 1} {
+                    #puts "At # prompt on the EXOS"
+                } else {
+                    #puts "At # prompt on non-EXOS"
+                    append exp_out_buf $expect_out(buffer)
+                    exp_continue
+                }
+      	 }
+
+      	 "ESC\\->" {
+	     # -- wait for data to come
+	     exSleep 4
+	     # -- send esc characters
+	     send "\033"
+	     exp_continue
+      	 }
+
+      	 "for help" {
+      	    # -- wait for data to come
+	     exSleep 4
+	     # -- send esc characters
+	     send "\033"
+	     exp_continue
+      	 }
+
+         full_buffer {
+	    result_print "***************  GOT FULL_BUFFER ****************"
+	    regsub -all "\n\r" $expect_out(buffer) "\n" out_buf
+	    append exp_out_buf $out_buf
+	    exp_continue
+         }
+     }
+
+     append exp_out_buf $expect_out(buffer)
+     regsub -all "\n\r" $exp_out_buf "\n" exp_out_buf
+     regsub -all "\t" $exp_out_buf " " exp_out_buf
+     
+     if {$fd_input != "NULL" } { 
+	     puts -nonewline $fd_input $exp_out_buf 
+     }
+
+     # -- Do not print to the log file if in multiTask
+     if {$MAIN(PRINTTOLOG)} {
+         result_pre $exp_out_buf
+     }
+
+     # Added for PD3-73117302 implementation
+     if {$showError != "false"} {
+        # Only if SendACmd was not called by CheckCmdIllegal
+        _checkCommandAccepted $cmd $exp_out_buf
+     }
+
+     set retVal $exp_out_buf
+     #For certain commands, send and addition command to the switch to verify hal
+     # has synced.  The command will not return until this is true.
+     _sendHalSyncCmd 
+
+     #
+     #  Reset any necessary globals
+     #
+     set DUTs_info(DUT$whichDutNow,checkPointFail) 0
+
+     return $retVal
+}
+
+
+################################################################## 
+# Procedure Name: _checkCommandAccepted
+#   
+# Description: Added for PD3-73117302 implementation. 
+#     If a config command is not accepted by the switch,
+#     SendACmd should report an error, causing testcase to appear as failed.
+#     The following commands are not checked:
+#         download edit exit history install load ls ping reboot save show 
+#         synchronize telnet terminate tftp top unconfigure uninstall upload use
+#     Also, if SendACmd was called by CheckCmdIllegal, then this will not get executed.
+#     The same SendACmd error will only be reported once per testcase.
+#
+# Input args: cmd out_buf
+# Output args: none
+# Typical usage:
+#             _checkCommandAccepted $cmd $out_buf
+#
+# Category Types (Setup,VerifySwitchOutput)
+# Category: Setup
+##################################################################
+proc _checkCommandAccepted { cmd out_buf } {
+
+    global erroredLines
+    global DUT DUTs_info whichDutNow
+
+
+    #
+    # Allow for 4 checkpoint errors.. with a resend of the comand on each
+    #
+    if {[regexp -nocase {.*error:.* cannot .*checkpoint.*} $out_buf]} {
+        if {![info exists DUTs_info(DUT$whichDutNow,checkPointFail)]} {
+            set DUTs_info(DUT$whichDutNow,checkPointFail) 1
+        } else {
+            incr DUTs_info(DUT$whichDutNow,checkPointFail)
+        }
+        if {$DUTs_info(DUT$whichDutNow,checkPointFail) <= 4} {
+            set out_buf ""
+            result_debug "$cmd - _checkCommandAccepted checkpoint error"
+            result_debug "Attempt #$DUTs_info(DUT$whichDutNow,checkPointFail) to wait another 30 seconds for checkpointing"
+            sleep 30
+            SendACmd $cmd
+        }
+    }
+
+    if { ![info exists erroredLines] } {
+        lappend erroredLines "{cannot be executed until configuration checkpoint} 0"
+        lappend erroredLines "{This command cannot be executed while system is recovering from failure} 0"
+        lappend erroredLines "{Ambiguous command} 0"
+        lappend erroredLines "{killing process} 0"
+        lappend erroredLines "{.*Crit:.*} 0"
+        lappend erroredLines "{pid.*died} 0"
+
+        set numOfErroredLines [llength $erroredLines]
+
+        for { set i 1 } { $i <= $numOfErroredLines } { incr i } {
+            set DUT(erroredLines,$i) 0
+        }
+    }
+
+    set doNotCheckCmds {download edit exit history install load ls ping \
+            reboot save show synchronize telnet terminate tftp top unconfigure \
+            uninstall upload use head tail cat ps !kill}
+
+    # If the first word of the command is one of the $doNotCheckCmds items, dont do anything
+    # For matching against $doNotCheckCmds, check only up to the number of letters in first word of $cmd, in case of any cmd abbreviations
+    set mainCmd [lindex $cmd 0]
+    set mainCmdLen [expr [string length $mainCmd] -1]
+    foreach cmdname $doNotCheckCmds {
+        if { [regexp -nocase $mainCmd [string range $cmdname 0 $mainCmdLen]] } {
+            return
+        }
+    }
+
+    # Verify the switch did not output any of the $erroredLines
+    set outList [split $out_buf "\n"]
+    set pid [pid]
+    set outfile [open "Tmp/tmp_$pid" "w"]
+    foreach outputLine $outList {
+        puts $outfile $outputLine
+    }
+    close $outfile
+    set errorFound [GetKeyValue "Tmp/tmp_$pid" $erroredLines 0]
+    file delete Tmp/tmp_$pid
+
+    set lineCount 0
+    foreach checkLine $erroredLines {
+        set errorCode [lindex $errorFound $lineCount]
+        incr lineCount
+        if { ![regexp "KEY_NOT_FOUND" $errorCode] } {
+            incr DUT(erroredLines,$lineCount)
+            if { $DUT(erroredLines,$lineCount) == 1 } {
+                report_start_test "_checkCommandAccepted: Checking validity of <$cmd>"
+                result_error "Command <$cmd> was not properly executed by the switch."
+                if { [regexp "checkpoint" $checkLine] } {
+                    SendACmd "debug ems show trace devmgr all logto file"
+                    ChangeTraceFileName
+                }
+                if { [regexp "pid.*died" $checkLine] } {
+                    result_debug "Found : Process Died"
+                    ChangeCoreFileName
+                }
+                if { [regexp "Crit:DM.Critical.*Node State.*FAIL" $checkLine] } {
+                    SendACmd "show log"
+                    SendACmd "debug ems show trace devmgr all logto file"
+                    ChangeTraceFileName
+                }
+                report_end_test
+            } else {
+                if { ([regexp "pid.*died" $checkLine]) && ($DUT(erroredLines,$lineCount) > 1) } {
+                    result_debug $checkLine
+                    report_start_test "_checkCommandAccepted: Checking validity of <$cmd>"
+                    result_error "Command <$cmd> was not properly executed by the switch."
+                    result_debug "Found : Process Died"
+                    ChangeCoreFileName
+                    report_end_test
+                }
+            }
+        }
+    }
+}
+
+################################################################## 
+# Procedure Name: send_a_sw_cmd_by_s_comm
+#   
+# Description: Internal proc to send cli command to serial com.
+#              Reboots multiple DUTs simultaneously provided via duts
+#     
+#
+# Input args: cmd, fd_result, fd_input
+# Output args: none
+# Typical usage:
+#             send_a_sw_cmd_by_s_comm $cm
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc send_a_sw_cmd_by_s_comm {{cmd "NULL"}        \
+                              {fd_result "NULL"}  \
+                              {fd_input  "NULL"}} {
+   global spawn_id
+   global timeout
+
+   set result ""
+   set flag 0
+   set time1 [clock seconds]
+   result_debug "--- Send $cmd"
+   send "$cmd\r"
+
+   expect {
+      timeout {
+         result_error "No response from the switch for $timeout seconds"
+	 close_result_file
+         exit
+      } 
+      "(yes, no, or cancel)" {
+         set flag 2
+	 send "n\r"
+      }
+      "reboot\\?" {
+	 set flag 2
+	 send "yes\r"
+      }
+      "quit:" {
+         set flag 1
+         send " "
+      }
+      "quit: " {
+         set flag 1
+         send " "
+      }
+      "#" {
+         set flag 0
+      } 
+      "\\?" {
+         set flag 0
+	 send "y\r"
+	 expect "#"
+      }
+      -nocase "n)\\?  " {
+         result_debug "--- (y/n)?  "
+         set flag 0
+         send "y/r"
+      }      
+      "\\->" {
+         set flag 0
+      }
+      "login:" {
+	 set flag 0
+         send "admin\r"                                    
+         expect "password:"
+         send "\r"
+         expect "#"
+      } 
+      "password:" {
+	 set flag 0
+         send "\r"
+         expect "login:"
+         send "admin\r"
+         expect "password:"
+         send "\r"
+         expect "#"
+      }
+   }
+   set exp_out_buf ""
+   regsub -all "\n\r" $expect_out(buffer) "\n" exp_out_buf
+   if {$fd_input != "NULL" } { puts $fd_input $exp_out_buf }
+   append result $exp_out_buf
+
+   while { $flag >= 1 } {
+       expect {
+         timeout {
+            puts "!!!!!! No response from the switch for $timeout seconds !!!!!\n"
+            exit
+         } 
+         "(yes, no, or cancel)" {
+            set flag 2
+	    send "n\r"
+         }
+	     "reboot\\?)" {
+	    set flag 2
+            send "yes\r"
+         }
+         "quit:" {
+             set flag 1
+             send " "
+         }
+         "quit: " {
+             set flag 1
+             send " "
+         }
+         "#" {
+             set flag 0
+         } 
+      	 "\\?" {
+	     if { $flag == 1 } {
+                set flag 0
+	     	send "y\r"
+		expect "#"
+             }
+         }
+         -nocase "n)\\?  " {
+            result_debug "--- (y/n)?  "
+            set flag 0
+            send "y/r"
+         }
+	 "\\->" {
+            set flag 0
+	 }
+         "login:" {
+	     set flag 0
+             send "admin\r"                                    
+             expect "password:"
+             send "\r"
+	     expect "#"
+         } 
+         "password:" {
+             send "\r"
+             expect "login:"
+             send "admin\r"
+             expect "password:"
+             send "\r"
+	     expect "#"
+	 }
+      }
+      set exp_out_buf ""
+      regsub -all "\n\r" $expect_out(buffer) "\n" exp_out_buf
+      regsub -all "\t" $exp_out_buf " " exp_out_buf
+      result_debug "Data:$exp_out_buf"
+      if {$fd_input != "NULL" } { puts $fd_input $exp_out_buf }
+      append result $exp_out_buf
+   }
+   result_pre $result
+   #result_debug "Time for $cmd = [expr $time2-$time1] secs"
+}
+
+################################################################## 
+# Procedure Name: SaveOutputBuffer
+#   
+# Description: Internal proc to save output buffer into log file
+#     
+#
+# Input args: buffer
+# Output args: none
+# Typical usage:
+#             SaveOutputBuffer $expect_out(buffer)
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc SaveOutputBuffer {buffer} {
+   set exp_out_buf ""
+   regsub -all "\n\r" $buffer "\n" exp_out_buf
+   regsub -all "\t" $exp_out_buf " " exp_out_buf
+   result_pre $exp_out_buf
+}
+   
+################################################################## 
+# Procedure Name: CheckDownloadConfig
+#   
+# Description: Download a config file supplied by filename
+#              Then checks for successful download.
+#
+# Input args: tftpServer, filename
+# Output args: none
+# Typical usage:
+#             CheckDownloadConfig $tftpServer $filename
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc CheckDownloadConfig {tftpServer filename {incremental 0} args} {
+
+    parse_args CheckDownloadConfig $args {
+      wait "-1"
+      nameFormat "dynamic"
+   }
+
+   if { $wait >= 0 } {
+       set waitTime $wait
+   } else {
+       set waitTime 60
+       global bcmChassis
+       if  {[regexp -nocase $bcmChassis [GetPlatform]]} {
+	   set waitTime 90
+       }
+   }
+
+   result_debug "Start downloading config $filename from $tftpServer"
+   set status [DownloadConfig $tftpServer $filename $waitTime $incremental -nameFormat $nameFormat]
+
+   report_start_test "Downloading config file $filename from $tftpServer"
+   if {$status == "illegal"} {
+      result_error "Failed to download config file from $tftpServer"
+   } else {
+      result_ok "Config file successfully downloaded from $tftpServer"
+   }
+   report_end_test
+   return $status
+}
+
+################################################################## 
+# Procedure Name: DownloadConfig
+#   
+# Description: Called by CheckDownloadConfig to perform download a config 
+#              file supplied by filename.
+#
+# Input args: TFTPServerIP, filename, wait
+# Output args: none
+# Typical usage:
+#             set status [DownloadConfig $tftpServer $filename $waitTime ]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc DownloadConfig {TFTPServerIP filename {wait 60} {incremental 0} args} {
+   parse_args DownloadConfig $args {
+      nameFormat "dynamic"
+   }
+   global whichDutNow
+   global DUT1_IP
+
+   # -- setup network to tftpserver
+   ConfigGatewayNetwork
+   exSleep 5;
+   if {[CompareRelease [GetVersion DUT$whichDutNow] 11.5]>=0} {
+      regsub -nocase {\.cfg} $filename "" filenamenew
+# LK 05/01/2008 appending the DUT1_IP to filename while getting it from tftp server 
+# which was added while upload to get a unique file name
+      if {$nameFormat == "dynamic"} {
+          set filenamenew ${filenamenew}_$DUT1_IP
+      } else {
+          set filenamenew $filenamenew
+      }
+      set status [CheckCmdLegal "tftp $TFTPServerIP -v [GetVrString $whichDutNow] -g -r $filenamenew.xsf"]
+       if {$status!="illegal"} {
+          SendACmd "load script $filenamenew.xsf"
+          result_debug "wait for $wait sec for load script to complete"
+          exSleep $wait
+          SendACmd "rm $filenamenew.xsf"
+	# fix for 2.5.1 fail in 11.6 version
+       	  UnconfigGatewayNetwork
+       }
+       return $status
+   } else {
+# LK 05/01/2008 appending the DUT1_IP to filename while getting it from tftp server 
+# which was added while upload to get a unique file name
+       set status [CheckCmdLegal "tftp $TFTPServerIP -v [GetVrString $whichDutNow] -g -l downloadedConfig.cfg -r ${filename}_$DUT1_IP"]
+       if {$status!="illegal"} {
+	   SendACmd "use configuration downloadedConfig"
+	   CheckReboot $whichDutNow -save no
+	   # Not sure if should delete it before or after 
+	   #      SendACmd "rm downloadedConfig.cfg"
+       }
+       # -- tear down network to tftpserver
+       UnconfigGatewayNetwork
+       return $status
+   }
+}
+
+################################################################## 
+# Procedure Name: CheckSaveConfig
+#   
+# Description: Save switch configuration
+#              Then check for successful save.
+#
+# Input args: none
+# Output args: none
+# Typical usage:
+#             CheckSaveConfig
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: utility
+##################################################################
+proc CheckSaveConfig {} {
+
+   set status [SaveConfig]
+   report_start_test "save configuration"
+   if {$status == "error"} {
+      result_error "Failed to save configuration"
+   } else {
+      result_ok "success saving configuration"
+   }
+   report_end_test
+   return $status
+}
+
+################################################################## 
+# Procedure Name: SaveConfig
+# 
+# Description: Called by CheckSaveConfig to perform save
+#
+# Input args: none
+# Output args: none
+# Typical usage:
+#             SaveConfig
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: utility
+##################################################################
+proc SaveConfig {} {
+   SendACmd "save"
+   return "ok"
+}
+
+################################################################## 
+# Procedure Name: CheckReboot
+#   
+# Description: Reboots the current DUT, saves the current config
+#              Reboots multiple DUTs simultaneously provided via duts
+#   ### NOTE: Unfortunately, can not perform waitForReboot on all the DUTs, only the last rebooted is checked.
+#   ###       Login eats up all expect buffer leaving nothing for waitForReboot.
+#     
+#     
+#
+# Input args: duts, save
+# Output args: none
+# Typical usage:
+#             CheckReboot 1,2,3 -save no -slots 6
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc CheckReboot {{duts ""} args} {
+    global DUT
+    global DUTs_info MAIN
+    global numDUT
+    global whichDutNow
+
+    parse_args CheckReboot $args {
+        save "yes"
+        maxWait 20
+        masterCheck 1
+        msm "a"
+        waitforloadcfg "no"  ; # used for scalability test cases that have to reboot with huge cfg
+        rebootBpe "yes"
+    }
+    DBug 1 "the CheckReboot args vals: duts $duts, save $save, maxWait $maxWait"
+
+    global whichDutNow
+    global hostname
+    if {$duts==""} {
+        set duts $whichDutNow
+    }
+    set dutList [split $duts ,]
+
+    set connect _CONNECT
+    set rebootSuccessful 0
+    set eofEncountered 0
+
+    foreach i $dutList {
+        set dutMsm($i) a
+    }
+    if {[llength $msm] == 1} {
+        foreach i $dutList {
+            set dutMsm($i) $msm
+        }
+    } else {
+        set i 0
+        foreach item $dutList {
+            set dutMsm($item) [lindex $msm $i]
+            incr i
+        }
+    }
+
+    foreach dut $dutList {
+        set DUTName [format %s%d DUT $dut]
+        global ${DUTName}_CONNECT ${DUTName}_CONNECTB;
+        global ${DUTName}_IP
+        CLIConnectMode -action "forceConsole";# Use the console if in telnet mode
+        set telnetIp [set ${DUTName}_IP]
+        #make sure Login will not reuse the lost telnet spawn id after reboot
+        if {[info exists hostname]} {set hostname [ldelete "$hostname" "telnetIp"]}
+        if {$dutMsm($dut) == "a"} {
+            Login [set ${DUTName}_CONNECT] -masterCheck $masterCheck
+        } else {
+            Login [set ${DUTName}_CONNECTB] -masterCheck $masterCheck
+        }
+        SendACmd "show switch";
+        # EY-06-23-2008: Removed call to DumpNvramContent as the /exos/bin/odo
+        # program currently doesn't echo characters properly on the Stacking
+        # and LynxG platforms.
+        SendACmd "ls"
+        #DumpNvramContent
+        global spawn_id
+        global spawn_ids
+        foreach name $hostname {
+            if { $spawn_id == $spawn_ids($name) } {
+                set ipAddr $name
+            }
+        }
+        result_debug "Rebooting with save $save option..."
+        result_debug "reboot\r"  ;# need to log for debug purposes
+        slow_send "reboot\r"
+        expect {
+            -nocase {\(y/N)} {
+                result_debug "$expect_out(buffer)";
+                send "y\n"
+            }
+            "y - save" {
+                if {[regexp -nocase "^n" $save]} {
+                    result_debug "Sent n"
+                    send "n\n"
+                } else {
+                    result_debug "Sent y"
+                    send "y\n"
+                }
+            }
+        }
+        expect {
+            -nocase "bpe" {
+                if {[regexp -nocase "^n" $rebootBpe]} {
+                    result_debug "Sent n"
+                    send "n\n"
+                } else {
+                    result_debug "Sent y"
+                    send "y\n"
+                }
+                exp_continue
+            }
+            "BootRom > " {
+                #stuck at boot prompt. Try to get past it
+                result_debug "\nCheckReboot BootRom - send boot"
+                send "boot\n"
+            }
+            "login:" {
+                result_debug "\nCheckReboot login: prompt.  Continue to Wait for switch up"
+            }
+            " #" {
+                result_debug "Admin prompt reached after CheckReboot"
+                result_debug "$expect_out(buffer)";
+                set rebootSuccessful 1
+            }
+            " >" {
+                result_debug "User prompt reached after CheckReboot"
+                result_debug "$expect_out(buffer)";
+                set rebootSuccessful 1
+            }
+            eof {
+                #the connection is closed because it is not a console connection
+                #make sure Login will not reuse the lost telnet spawn id
+                #after reboot
+                set rebootSuccessful 1
+                set eofEncountered $DUTName$connect
+                result_debug "connection closed by switch."
+                set hostname [ldelete "$hostname" "$ipAddr"];
+            }
+        }
+        set connectIp $DUTName$connect
+        if {$eofEncountered!=0} {   ;# one of the connect was a telnet
+            exSleep 240
+            #if it's a console connection, login
+            #if it's not a console connection need to spawn the connection and login
+            #in either case calling Login will take care of it
+            if {[Login [set $eofEncountered]] == 0} {
+                result_error "Unable to login to switch after reboot"
+                return 0
+            } else {
+                SendACmd "show switch"
+            }
+        }
+
+        set status [WaitForReboot $maxWait "after sending reboot command to $DUTName" $masterCheck]
+        if {$status == "error"} {
+            report_start_test "Failed to connect to switch after reboot"
+            result_error "Failed to connect to switch after reboot"
+            report_end_test
+            SendACmd "show switch"
+            #return 0
+        }
+        if {[CheckOperational -waitforloadcfg $waitforloadcfg] != 1} {
+            result_error "Some slot is not operational"
+            puts "@@@@ Some slot is not operational @@@@"
+            error "Some slot is not operational"
+        }
+        result_debug "Successfully login"
+        set status "ok"
+        if {[regexp -nocase "^n" $save]} {
+            sleep 2
+            set buf [SendACmd "config default delete port all"] ;# should not do it for saved config
+            set backupStr "Error: This command can only be executed on Master"
+            if {[regexp -nocase $backupStr $buf]} {
+                set xos_version [GetVersion DUT$whichDutNow 4]
+                if {$xos_version < "11.2.0"} {
+                    if { $xos_version >= "10.2.0" } {
+                        set virtualRouter VR-Control
+                    } else {
+                        set virtualRouter VR-1
+                    }
+                    EnableDebugMode  ;# needed as 11.1.1.3 requires debug-mode
+                    global bcmChassis
+                    if {[regexp -nocase $bcmChassis $buf]} {
+                        SendACmd "telnet vr $virtualRouter 10.0.12.2"
+                    } else {
+                        SendACmd "telnet vr $virtualRouter 10.0.10.2"
+                    }
+                } else {
+                    # SendACmd "telnet msm b"
+                    if {[info exists DUT${whichDutNow}_CONNECTB]} {
+                        Login [set DUT${whichDutNow}_CONNECTB] -CheckOperational 0
+                    } else {
+                        SendACmd "telnet msm b"
+                    }
+                }
+                SendACmd "run msm-failover"
+                #         logout   ;# do not send logout as vr-control gets kicked out
+                Login $DUTs_info(DUT$whichDutNow,connect)
+            }
+        }
+        SendACmd "show switch"
+        SendACmd "ls"
+        if {$save == "yes"} {
+            lappend checkKeyList "{Config Booted:.*(Factory Default|default.xsf)} exist"
+            if {[CheckKeyValue "show switch" $checkKeyList -reportResults 0] == "ok"} {
+                EnableDebugMode
+                if {[CompareRelease [GetVersion DUT${numDUT}] "12.0.3.1"] >= 0} {
+                    lappend cfbuff "{^0} exist"
+                    if {[CheckKeyValue "!cat /proc/jffs2_corruption" $cfbuff -reportResults 0] != "ok"} {
+                        result_error "CF corruption happened. Format CF"
+                        SendACmd "!dd if=/dev/hda7 of=/dev/null bs=1024 count=16384"
+                        unset cfbuff
+                    } else {
+                        global cfg
+                        set  message1  "\nOn cfg $cfg
+                        Save reboot went to factory default cf on DUT$whichDutNow while running $MAIN(feature_directory) is ok"
+                        set tempMsgFile   "/tmp/filedoesnot.txt.[pid]"
+                        exec echo $message1 > $tempMsgFile
+                        exec mail -s "Save reboot went to Factory default" sqaauto@extremenetworks.com < $tempMsgFile
+                        exec rm -f $tempMsgFile
+                        SendACmd "show tech"
+                        SendACmd "show log"
+                        SendACmd "debug ems show trace cfgmgr all logto file"
+                        ConfigGatewayNetwork
+                        SendACmd "upload debug  [lindex $DUTs_info(tftpserverlist) 0] vr [GetVrString $dut]" "NULL" "NULL" "true" "3" "n"
+                        UnconfigGatewayNetwork
+                        set timeout 10
+                        # EY-06-23-2008: Removed call to DumpNvramContent as the /exos/bin/odo
+                        # program currently doesn't echo characters properly on the Stacking
+                        # and LynxG platforms.
+                        #DumpNvramContent
+                        result_error "Config Booted is Factory Default after save reboot"
+                    }
+                }
+            }
+
+        }
+        VerifyBpeOperational;# skipped if not a VPEX/BPE
+        CLIConnectMode -action "reconfigure" 
+    }
+    return $status
+}
+
+################################################################## 
+# Procedure Name: WaitForReboot
+#   
+# Description: Internal function that performs a login to the current DUT after waiting for wait time
+#              prints the expect_buffer to log file, comment to report file
+#
+# Input args: comment
+# Output args: none
+# Typical usage:
+#                set status [WaitForReboot "after sending reboot command to $DUTName"]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc WaitForReboot {wait comment {masterCheck 1} {reLogin "true"}} {
+    global whichDutNow connectionTimeout
+    
+    puts "In WaitForReboot"
+    set expect_out(buffer) "No Output:WaitForReboot"
+    set timeout 50
+    set count 0
+    set flag "true"
+    exp_send "\r"
+    while {$flag == "true"} {
+        expect {
+            timeout {
+                if {$count >= 10} {
+                    expect "*"
+                    SaveOutputBuffer $expect_out(buffer)
+                    set timeout $connectionTimeout
+                    return "error"
+                } else {
+                    incr count
+                    set flag "true"
+                    SaveOutputBuffer $expect_out(buffer)
+                    send "\r"
+                    exp_continue;
+                }
+            }
+            full_buffer {
+                set flag "true"
+                SaveOutputBuffer $expect_out(buffer)
+            }
+            "assword:" {
+                set flag "true"
+                SaveOutputBuffer $expect_out(buffer)
+                send "\r"
+                exp_continue;
+            }
+            "available for login" {
+                set flag "true"
+                SaveOutputBuffer $expect_out(buffer)
+                send "\r"
+                exp_continue;
+            }
+            "login:" {
+                set flag "false"
+                if {$wait != 0} {
+                    result_debug "Wait for $wait seconds after logging in for ports to come up\n"
+                    exSleep $wait
+                }
+                SaveOutputBuffer $expect_out(buffer)
+                global stacking
+                if {[regexp -nocase $stacking [GetPlatform]]} {
+                    exSleep 56
+                }
+                if {$reLogin == "true"} {
+                    if {[try_login_on_switch $comment "admin" "" $masterCheck]!=-1} {
+                        set timeout $connectionTimeout
+                        return "ok"
+                    }
+                } else {
+                    set timeout $connectionTimeout
+                    return "ok"
+                }
+            }
+            "System RAM Passed" {
+                send "\033"
+                send "\033"
+            }
+            "boot: " {
+                send "\r"
+            }
+            "Removable" {
+                send "\033"
+                send "\033"
+            }
+            "closed by foreign host" {
+                set loginLoop 0
+                result_print "\n~~~~~\nWait for Reboot telnet \
+                                 to DUT$whichDutNow Closed Foreign Host\n~~~~~";
+                # # The connection has been dropped so we have to clean up the spawnId and hostname entries
+                _clearDutConnectionVars $whichDutNow
+                global DUT${whichDutNow}_CONNECT
+                if {[Login [set DUT${whichDutNow}_CONNECT] -CheckOperational "0" -masterCheck "0"]<=0} {
+                    result_error "Login is not successful on retry after foreign host closed"
+                    set timeout $connectionTimeout
+                    return
+                }
+            }
+            eof {
+                result_print "\n~~~~~\n~~~~~\n1)Wait for Reboot: Connection to DUT$whichDutNow dropped! \
+                                Reconnect\n~~~~~\n~~~~~";
+                # The connection has been dropped so we have to clean up the spawnId and hostname entries
+                _clearDutConnectionVars $whichDutNow
+                global DUT${whichDutNow}_CONNECT
+                if {[Login [set DUT${whichDutNow}_CONNECT] -CheckOperational "0" -masterCheck "0"]<=0} {
+                    result_error "Login is not successful on retry after connection dropped"
+                    set timeout $connectionTimeout
+                    return ""
+                }
+            }
+        }
+    }
+    set timeout $connectionTimeout
+    return "ok"
+}
+
+################################################################## 
+# Procedure Name: slow_send
+#   
+# Description: send a string to the connection character by character 
+#              wait for echo of a character before sending the next one
+#
+#
+# Input args: string
+# Output args: 1 if successful 
+#              0 if not seeing echo character
+# Typical usage:
+#             slow_send "unconfig sw all\r"
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc slow_send { command
+                 { setTimeout 60   } } {
+
+  #get rid of anything in the buffer
+  expect -re ".*"
+  set timeout $setTimeout
+  set command [_EnhanceStackingCli $command]
+  for { set i 0 } {$i < [string length $command] } {incr i} {
+     set character [string index $command $i]
+     exp_send -- $character
+     expect {
+        -ex $character {
+           continue
+        }
+        timeout {
+           result_debug "slow_send not seeing echo character."
+           return 0
+        }
+       "closed by foreign host" {
+           set loginLoop 0
+           global whichDutNow
+           result_print "\n~~~~~\nslow_send detects telnet \
+               to DUT$whichDutNow Closed Foreign Host\n~~~~~";
+           # # The connection has been dropped so we have to clean up the spawnId and hostname entries
+           _clearDutConnectionVars $whichDutNow
+           global DUT${whichDutNow}_CONNECT
+           if {[Login [set DUT${whichDutNow}_CONNECT] -CheckOperational "0" -masterCheck "0"]<=0} {
+               result_error "Login is not successful on retry after foreign host closed"
+               return 0
+           }
+       }	   
+        eof {
+           global whichDutNow
+           result_print "\n~~~~~\ntry_login_on_switch detects telnet to DUT$whichDutNow dropped! Reconnect\n~~~~~";
+           # # The connection has been dropped so we have to clean up the spawnId and hostname entries
+           _clearDutConnectionVars $whichDutNow
+           global DUT${whichDutNow}_CONNECT
+           Login [set DUT${whichDutNow}_CONNECT] -CheckOperational "0" -masterCheck "0"
+        }
+     }
+  }
+  return 1
+}
+
+
+################################################################## 
+# Procedure Name: UnconfigSwAll
+#   
+# Description: proc that unconfigures the current DUT to factory defaults.
+#              Waits for a platform specific waitTime
+#
+#
+# Input args: initial_unconfig - yes if called first time
+# Output args: none
+# Typical usage:
+#             UnconfigSwAll
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc UnconfigSwAll {args} {
+   global hostname
+   global CFG_PLATFORM
+   global whichDutNow DUTs_info
+   global DUT${whichDutNow}_IP
+   global DUT${whichDutNow}_CONNECT DUT${whichDutNow}_CONNECTB
+   global chassis
+   global stacking
+   global stackable
+   global efence
+   set connect _CONNECT
+
+   global numDUT
+   global spawn_id
+   global spawn_ids
+   global commonEfenceProcess
+   global pioneerPlatform
+   global bcmChassis bcmStackable bd8kChassis everestChassis
+
+   parse_args UnconfigSwAll $args {
+        initial_unconfig "no"
+        at "main"
+   }
+
+   #find out the ipAddr of this session in case this is not a console connection
+   #this is the address to use if we need to spawn telnet again after 
+   #unconfig sw
+   set telnetIp [set DUT${whichDutNow}_IP]
+   set connect [set DUT${whichDutNow}_CONNECT]
+   set ipAddr $connect
+   foreach name $hostname {
+      if { $spawn_id == $spawn_ids($name) } {
+         set ipAddr $name
+      }
+   }
+   set telnetIp [set DUT${whichDutNow}_IP]
+   set connect [set DUT${whichDutNow}_CONNECT]
+   #make sure Login will not reuse the lost telnet spawn id after reboot
+   set hostname [ldelete "$hostname" "$telnetIp"];
+   if {$telnetIp == $ipAddr} {
+       set ipAddr $connect
+   }
+   CLIConnectMode -a "forceConsole" -loseCfg "yes"
+
+   if {$at != "download"} {
+       # Get version string for xos_version using GetKeyValue, regular DUTs_info unavailable at start
+       set promptBuf [SendACmd ""]
+       set verList ""
+       lappend verList "{XOS|XCM|NOS|OS version} 1"
+       set xos_version [GetKeyValue "show version" $verList]
+        if {[regexp "KEY_NOT_FOUND" $xos_version]} {
+          puts "Unconfig Switch All failed to get the version"
+          logout
+          set xos_version [GetKeyValue "show version" $verList]
+          
+       }
+       if {[regexp "KEY_NOT_FOUND" $xos_version]} {
+         result_debug "failed to get exos version - generating connectionBad"
+         return "connectionBad"
+       }
+
+        ################################################
+        # Activate Electric Fence
+        ################################################
+        if {[info exists efence]} {
+            set goEfence 1
+            if {!($initial_unconfig == "yes")} {
+                set goEfence 0
+                if {$at != "download"} {
+                    disableEfence
+                }
+            } else {
+                if {([llength $efence] == 1) && ([lindex $efence 0] == "no")} {
+                    set goEfence 0
+                    disableEfence
+                } else {
+
+                    CheckOperational
+                    SendACmd "disable clip"
+                    set getKeyList ""
+                    lappend getKeyList "{Image Selected:} 1"
+                    lappend getKeyList "{Image Booted:} 1"
+                    lappend getKeyList "{Primary ver:} 1"
+                    lappend getKeyList "{Secondary ver:} 1"
+                    set shSwResults [GetKeyValue "show switch" $getKeyList]
+                    result_debug "the MSMs state: $shSwResults"
+                    set partitionSelected [lindex $shSwResults 0]
+                    set partitionBooted [lindex $shSwResults 1]
+                    set primaryBuild [lindex $shSwResults 2]
+                    set secondaryBuild [lindex $shSwResults 3]
+
+                    set preEfenceRebootNeeded false
+                    set xos_version_for_efence $xos_version
+                    if {$partitionBooted != $partitionSelected} {
+                        set preEfenceRebootNeeded true
+                        if {$partitionSelected == "secondary"} {
+                            set xos_version_for_efence $secondaryBuild
+                        } else {
+                            set xos_version_for_efence $primaryBuild
+                        }
+                    }
+
+                    #report_start_test "efence activation on DUT${whichDutNow}"
+                    #if {!([CompareRelease $xos_version_for_efence 12.0.3] >=0)} {
+                    #    result_skip "$xos_version_for_efence doesn't support efence on DUT${whichDutNow}"
+                    #    set goEfence 0
+                    #} elseif {([regexp -nocase "$stacking" $promptBuf] == 1)} {
+                    #    result_skip "skipping efence for a stack on DUT${whichDutNow}"
+                    #    set goEfence 0
+                    #    set goEfence 1 
+                    #} elseif {([regexp -nocase "$stackable" $promptBuf] == 1)} {
+                    #    result_skip "skipping efence for a stackable on DUT${whichDutNow}"
+                    #    set goEfence 0
+                    #    set goEfence 1 
+                    #} elseif {$preEfenceRebootNeeded} {
+                    #    result_debug "rebooting - Image Selected differs from Image Booted"
+                    #    CheckReboot $whichDutNow
+                    #    set xos_version $xos_version_for_efence
+                    #}
+
+                    if {$goEfence} {
+                        result_h1 "Activating Electric Fence on DUT${whichDutNow} MSM A"
+                        # msm A
+                        Login [set DUT${whichDutNow}_CONNECT] -CheckOperational 0 -masterCheck 0
+                        EnableDebugMode
+                        SendACmd "debug epm disable heapdbg process all"
+                        result_ok "disabling  efence for all processes on DUT${whichDutNow}"
+                        exSleep 2
+                        if {[info exist commonEfenceProcess] } {
+                            SendACmd "debug epm enable heapdbg process $commonEfenceProcess"
+                        } else {
+                            SendACmd "debug epm enable heapdbg process hal"
+                        } 
+                        if {[llength $efence] >= 1} {
+                            foreach exosProcess $efence {
+                                SendACmd "debug epm enable heapdbg process $exosProcess"
+                                result_ok "enabling efence for $exosProcess on DUT${whichDutNow}"
+                                exSleep 2
+                            }
+                        }
+                        DisableDebugMode
+                        global DUT${whichDutNow}_CONNECTB
+                        if {[info exists DUT${whichDutNow}_CONNECTB]} {
+                            result_h1 "Activating Electric Fence on DUT${whichDutNow} MSM B"
+                            # msm B
+                            Login [set DUT${whichDutNow}_CONNECTB] -CheckOperational 0 -masterCheck 0
+                            EnableDebugMode
+                            SendACmd "debug epm disable heapdbg process all"
+                            result_ok "disabling  efence for all processes on DUT${whichDutNow} MSM B"
+                            exSleep 2
+                            if {[info exist commonEfenceProcess] } {
+                                SendACmd "debug epm enable heapdbg process $commonEfenceProcess"
+                            } else {
+                                SendACmd "debug epm enable heapdbg process hal"
+                            } 
+                            if {[llength $efence] >= 1} {
+                                foreach exosProcess $efence {
+                                    SendACmd "debug epm enable heapdbg process $exosProcess"
+                                    result_ok "enabling efence for $exosProcess on DUT${whichDutNow}"
+                                    exSleep 2
+                                }
+                            }
+                            DisableDebugMode
+                            Login [set DUT${whichDutNow}_CONNECT] -CheckOperational 0 -masterCheck 0
+                        }
+                    } else {  
+                        disableEfence
+                    }
+                    #report_end_test
+                }
+            }
+        } else {
+            disableEfence
+        }
+   }
+   result_debug "--- Send Unconfig switch to DUT${whichDutNow}"
+   result_debug "Reseting to factory defaults..."
+
+   #
+   # Add code to send unconfigure switch all in download to cover 16.1.1 admin password hash issue
+   #   and support versions lower than 16.1
+   #   Stack cannot be supported due to unc sw all not being supported
+   global DUT${whichDutNow}_Stacking_msma_slot
+   set SystemName "Stack"
+   set pList "";
+   lappend pList "{^SysName:} 1";
+   lappend pList "{^System Type:} 1";
+   lappend pList "{^System Type:} 2";
+   set SystemName [GetKeyValue "show switch" $pList]
+   unset pList;
+   if {[info exists at] && $at == "download" && [regexp {[0-9]} $SystemName] && \
+       ![regexp -nocase "stack" "$SystemName"] && ![regexp -nocase "vpex" $CFG_PLATFORM(${whichDutNow})]} {
+            # Case - in download and not Stack
+            result_debug "DUT${whichDutNow} Now sending unconfig switch ALL in DOWNLOAD for no STACK"
+            send "unconfig switch all\r"
+   } elseif {$initial_unconfig == "yes" && ![regexp -nocase "stack" "$SystemName"] && \
+       ![info exists DUT${whichDutNow}_Stacking_msma_slot] && ![regexp -nocase "vpex" $CFG_PLATFORM(${whichDutNow})] && \
+       ([regexp -nocase "$bd8kChassis|$everestChassis" $SystemName] || \
+        [regexp -nocase $bcmStackable $SystemName])} {
+        result_debug "DUT${whichDutNow} Initial unconfigure - Now sending unconfig switch ALL"
+        send "unconfig switch all\r"
+   } else {
+        result_debug "DUT${whichDutNow} Now sending unconfig switch"
+        send "unconfig switch\r"
+   }
+
+   set timeout 5
+   expect {
+       timeout {
+           puts "No more y/N prompts. Continue"
+       }
+       -nocase {\(y/N)} {
+           puts "@@@@\nDUT$whichDutNow  GOT A Y/N AND SENT YES";
+           send "y\r"
+           exp_continue;
+       }
+   }
+
+   global connectionTimeout
+   set timeout $connectionTimeout;
+
+   set waitcom "Wait for reboot after Unconfigure Switch"
+   set status [WaitForReboot 90 $waitcom 0 "false"];# false to avoid login at this time
+   if {$status == "error"} {
+       report_start_test "Failed to reach a login prompt after unconfigure switch"
+       result_error "Failed to reach a login prompt after unconfigure switch"
+       report_end_test
+   }
+
+   # Proc to handle extra delay. In cases where there may be a delay after login reached
+   _UncSwitchDelay -dut $whichDutNow
+
+   if {[Login $ipAddr -masterCheck 0 -CheckOperational 0] == 0} {
+       if {[info exists at] && $at == "download"} {
+           result_debug "Unable to login to switch after reboot"
+           return 0
+       } else {
+           result_error "Unable to login to switch after reboot"
+           return 0
+       }
+   }
+   if {[CheckOperational] != 1} {
+      result_error "Some slot is not operational"
+      puts "@@@@ Some slot is not operational @@@@"
+      error "Some slot is not operational"
+   }
+   result_debug "$expect_out(buffer)"
+   result_debug "Successfully login"
+   exSleep 3
+   set buf [SendACmd "config default delete port all"]
+   set backupStr "Error: This command can only be executed on Master"
+   if {[regexp -nocase $backupStr $buf]} {
+      if {[info exists DUT${whichDutNow}_CONNECTB]} {
+          Login [set DUT${whichDutNow}_CONNECTB] -CheckOperational 0
+      } else {
+          SendACmd "telnet msm b"
+      }
+      SendACmd "run msm-failover"
+      Login $connect
+      global bcmChassis
+      if {[regexp -nocase $bcmChassis $buf]} {
+          exSleep 100  ;# Aspen resets line cards after failover
+      } else {
+          exSleep 30
+      }
+      if {[CheckOperational] != 1} {
+          result_error "Some slot is not operational"
+          puts "@@@@ Some slot is not operational @@@@"
+          error "Some slot is not operational"
+      }
+      SendACmd ""
+      SendACmd "config default delete port all"
+   }
+   CLIConnectMode -a "reconfigure"
+   #CreateRegLogFilter
+   if {$at != "download"} {
+       VerifyBpeOperational;# skipped if not a bpe platform
+   }
+   return 1
+}
+
+
+################################################################## 
+# Procedure Name: CheckUploadConfig
+#   
+# Description: proc that checks the success/failure of upload config of a file in filename from a list of 
+#              tftp servers tftpServerList
+#
+# Input args: tftpServerList, filename
+# Output args: none
+# Typical usage:
+#             set status [CheckUploadConfig $tftpServerList $filename ]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc CheckUploadConfig {tftpServerList filename} {
+
+   set waitTime 50
+   
+   set tftpServerList [GetRandomTFTPList $tftpServerList]
+   foreach TFTPServerIP $tftpServerList {
+      result_debug "Start uploading config $filename from $TFTPServerIP"
+      set status [UploadConfig $TFTPServerIP $filename $waitTime ]
+
+      if {$status == "legal"} {
+         set status $TFTPServerIP
+         break
+      }
+      flush stdout
+   }
+   report_start_test "Uploading config file $filename to $tftpServerList"
+   if {$status == "illegal"} {
+      result_error "Failed to upload config file to $tftpServerList"
+   } else {
+      result_ok "Config file successfully uploaded to $tftpServerList"
+   }
+   report_end_test
+   return $status
+}
+
+################################################################## 
+# Procedure Name: UploadConfig
+#   
+# Description: proc that uploads config of a file in filename from the tftp server in TFTPServerIP
+#              wait time is optional and it not ussed currently
+#
+# Input args: TFTPServerIP, filename
+# Output args: none
+# Typical usage:
+#             set status [UploadConfig $TFTPServerIP $filename ]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc UploadConfig {TFTPServerIP filename {wait 0}} {
+   global whichDutNow
+   global DUT1_IP
+
+   ConfigGatewayNetwork
+   exSleep 5;
+   result_debug "--- Send upload config $TFTPServerIP $filename"
+   if {[CompareRelease [GetVersion DUT$whichDutNow] 11.5]>=0} {
+      regsub -nocase {\.cfg} $filename "" filenamenew
+# LK 05/01/2008 appending the DUT1_IP to filename while putting it on tftp server to get a unique file name
+      set str [CheckCmdLegal "upload configuration  $TFTPServerIP \
+      ${filenamenew}_$DUT1_IP.xsf vr [GetVrString $whichDutNow]"]
+   } else {
+      SendACmd "save config toBeUploaded"
+# LK 05/01/2008 appending the DUT1_IP to filename while putting it on tftp server to get a unique file name
+      set str [CheckCmdLegal "tftp $TFTPServerIP -v [GetVrString $whichDutNow] -p -l toBeUploaded.cfg -r ${filename}_$DUT1_IP"]
+#   SendACmd "rm toBeUploaded.cfg"
+   }
+   UnconfigGatewayNetwork
+   return $str
+}
+
+################################################################## 
+# Procedure Name: GetBladeInfo
+#   
+# Description: proc that returns the blade info based on platform and slot number
+#              performs checks on the DUT if flag is 3, by default is 1
+# Input args: flag, slot
+# Output args: none
+# Typical usage:
+#             set status [GetBladeInfo 1 3]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc GetBladeInfo {{flag "1"} {slot "1"}} {
+   set pid _[pid];
+    
+   set val "notfound";  
+   if {$flag == "3"} {
+       global stackable i386Stackable
+       if {[regexp -nocase "$stackable|$i386Stackable" [GetPlatform]]} {   
+           lappend parameterList "{sysName:} 1";
+           set val [GetKeyValue "show switch" $parameterList];
+       } else {
+           lappend parameterList "{HW Module Type:} 1";
+           set val [GetKeyValue "show slot $slot" $parameterList];       
+       }
+       return $val;
+   }   
+   
+   set fd_in [open "Tmp/tmp_GetSlot$pid" "w"];
+   SendACmd "show slot" NULL $fd_in;
+   close $fd_in;   
+   
+   set val 0;
+   set fd_in [open "Tmp/tmp_GetSlot$pid" "r"];
+   while {[gets $fd_in line] != -1} {
+      #result_debug "----- Line=|$line|"
+      if {[regexp -nocase -indices "Slot" $line matchedRange] == 1} {
+          #---found the key
+          #puts " ====> $line";
+          incr val;
+      }  
+   }   
+
+   close $fd_in;
+   file delete "Tmp/tmp_GetSlot$pid";
+   
+   set k 0;
+   set y "";
+   lappend parameterList "{State:} 1";  
+   for {set i 1} {$i <= $val} {incr i} {
+       set st [GetKeyValue "show slot $i" $parameterList];    
+       if {$st == "Operational"} {
+           incr k;
+           lappend y $i; 
+       }
+   }           
+   unset parameterList;
+      
+   if {$flag == "1"} {
+       return $k;
+   } else {
+       return $y;
+   }
+}
+
+################################################################## 
+# Procedure Name: SendAndCheckACmd
+#   
+# Description: proc that sends the command's letter one after other evert 10 mili seconds and check for success
+#              the command is supplied in buf
+#              returns passed or failed
+#
+# Input args: buf
+# Output args: none
+# Typical usage:
+#             set status [SendAndCheckACmd $buf]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc SendAndCheckACmd {buf} {
+    result_debug "Send ($buf)";
+    for {set i 0} {$i < [string length $buf]} {incr i 1} {
+        set letter [string index $buf $i];
+        send $letter;
+        expect {
+            "$letter" {
+                after 10;
+             }
+             timeout {
+                 for {set c 0} {$c<10} {incr c} {
+                     send $letter;
+                     expect {
+                         "$letter" {
+                             break;
+                         }
+                         timeout {
+                             after 10;
+                         }
+                     }
+                 }
+             }
+        }
+    }
+    send "\r";
+    return $ret;
+}
+
+################################################################################
+# Procedure Name: ConfigGatewayNetwork   
+# Description: proc to config the gateway vlan: commvlan or mgmt and add default route
+#	       based on the values of global vars: DUTx_IP and defaultRouter etc.  The
+#	       purpose is to dynamically set up the gateway network for tftp service instead
+#	       to have static setup from config files throughout the regression.
+# Input args: n/a
+# Output args: n/a
+# Typical usage:
+#             ConfigGatewayNetwork;
+# Category: Setup
+################################################################################
+proc ConfigGatewayNetwork {} {
+    global switchPort2DefaultRouter;  
+    global defaultRouter;
+    global whichDutNow;
+    global DUT${whichDutNow}_IP;
+    global DUT${whichDutNow}_MASK;
+    global RemoveMgmtNetwork;
+    global MGMT_REG;
+
+
+    set xos_version [GetVersion DUT$whichDutNow 4]
+
+    set ipAddr [set DUT${whichDutNow}_IP]
+
+    if [info exist DUT${whichDutNow}_MASK] {
+        set ipMask [set DUT${whichDutNow}_MASK]
+    } else {
+        set ipMask 24
+    }
+
+    # -------- Check to see if the mgmt vlan is already configured ----------
+    #         Controled by variable RemoveMgmtNetwork in common.cfg
+    set mgmtIpOk 0
+    set mgmtGwOk 0
+    if {[info exists RemoveMgmtNetwork] && !$RemoveMgmtNetwork} {
+        result_debug "\nIf mgmt network is properly configured do not repeat the config"
+        _setShowOutput -screen off -log off -res_fmt on
+        set mgmt_out [SendACmd "show vlan mgmt"]
+        if {[regexp -nocase ".*$ipAddr.*" $mgmt_out]} {
+            result_debug "\nFound the mgmt vlan configure with IP $ipAddr"
+            set mgmtIpOk 1
+        }
+        set mgmt_out [SendACmd "show iproute vr vr-mgmt"]
+        if {[regexp -nocase "default route *$defaultRouter .*" $mgmt_out]} {
+            result_debug "\nFound the mgmt vlan default gateway $defaultRouter"
+            set mgmtGwOk 1
+        }
+        _setShowOutput -screen on -log on -res_fmt on
+        if {$mgmtIpOk && $mgmtGwOk} {
+            result_debug "Mgmt Network is already configured correctly"
+            set MGMT_REG(telnetNeedsConfig) 0
+            return;
+        }        
+    }
+
+    result_debug "\nConfigGatewayNetwork{}: set up gateway vlan $ipAddr/$ipMask on DUT$whichDutNow"
+    if {[regexp -nocase $switchPort2DefaultRouter "mgmt"]} {
+        global supportedPlatform
+        if {[regexp -nocase "$supportedPlatform" [GetPlatform DUT${whichDutNow}]] || \
+        [regexp -nocase "$supportedPlatform" [GetSysType DUT${whichDutNow}]]} {
+            SendACmd "unconfigure mgmt ipaddress"
+            if { $xos_version >= "10.6.0" } {
+                SendACmd "disable auto-provision"
+                exSleep 3
+            }
+            set mgmtOk 0
+            set mCount 1
+            lappend checkKeyList "{Error} notExist"
+            while {!$mgmtOk && $mCount <= 3} {
+                if {[CheckKeyValue "config mgmt ipa $ipAddr/$ipMask" $checkKeyList \
+                              -reportResults 0] != "ok"} {
+                    result_debug "--- Mgmt Configuration Failed on attempt $mCount - DUT${whichDutNow} ---"
+                    SendACmd "disable auto-provision"
+                    SendACmd "disable dhcp vlan mgmt"
+                    SendACmd "unconfigure mgmt ipaddress"
+                    exSleep 3
+                    incr mCount
+                } else {
+                    result_debug "Mgmt Port Configuration Passed"
+                    set mgmtOk 1
+                }
+            }
+            unset checkKeyList
+
+            #SendACmd "config mgmt ipa $ipAddr/$ipMask"
+            set xos_version [GetVersion DUT$whichDutNow 4]
+            if { $xos_version >= "10.2.0" } {
+                set virtualRouter VR-mgmt
+            } else {
+                set virtualRouter VR-0
+            }
+            SendACmd "config ipr add default $defaultRouter vr $virtualRouter";
+        } else {
+            SendACmd "config mgmt ipa $ipAddr/$ipMask"
+        }
+    } else {
+        set gwPort [GetDUTPort $switchPort2DefaultRouter $whichDutNow]
+        SendACmd    "enable port $gwPort";
+        sleep 5
+        set virtualRouter [GetVrString $whichDutNow];
+        SendACmd    "create vlan commvlan vr $virtualRouter";
+        SendACmd    "config commvlan add port $gwPort";
+        SendACmd    "config commvlan ipaddress $ipAddr/$ipMask";
+        SendACmd    "enable ipforwarding vlan commvlan";
+        SendACmd    "config ipr add default $defaultRouter vr $virtualRouter";
+        SendACmd    "show port $gwPort";
+    }
+    set MGMT_REG(telnetNeedsConfig) 0
+}
+
+################################################################################
+# Procedure Name: ConfigFrontPanelGw   
+# Description: proc to config the gateway vlan: commvlan or mgmt and add default route
+#	       based on the values of global vars: DUTx_IP and defaultRouter etc.  The
+#	       purpose is to dynamically set up the gateway network for tftp service instead
+#	       to have static setup from config files throughout the regression.
+# Input args: n/a
+# Output args: n/a
+# Typical usage:
+#             ConfigFrontPanelGw;
+# Category: Setup
+##################################################################
+proc ConfigFrontPanelGw {} {
+    global frontPanelPortToGw;  
+    global fpdefaultRouter;
+    global whichDutNow;
+    global DUT${whichDutNow}_IP_FP;
+    global DUT${whichDutNow}_MASK;
+
+    set ipAddr [set DUT${whichDutNow}_IP_FP]
+
+    if [info exist DUT${whichDutNow}_MASK] {
+        set ipMask [set DUT${whichDutNow}_MASK]
+    } else {
+        set ipMask 24
+    }
+
+    result_debug "\nConfigFrontPanelGw{}: set up gateway vlan $ipAddr/$ipMask on DUT$whichDutNow"
+        set gwPort [GetDUTPort $frontPanelPortToGw $whichDutNow]
+        SendACmd    "enable port $gwPort";
+        sleep 5 
+        #set virtualRouter [GetVrString $whichDutNow];
+        SendACmd    "create vlan commvlan vr vr-default";
+        SendACmd    "config commvlan add port $gwPort";
+        SendACmd    "config commvlan ipa $ipAddr/$ipMask";
+        SendACmd    "enable ipforwarding vlan commvlan"
+        SendACmd    "config ipr add default $fpdefaultRouter vr vr-default";
+}
+################################################################################
+# Procedure Name: GetDutInBandPort
+# Description: Proc to configure the frontpanel port on all or a single DUT.  IP
+# Input args: n/a
+# Output args: n/a
+# Typical usage:
+#             set fpport [GetDutInBandPort]
+# Category: Utility
+##################################################################
+proc GetDutInBandPort {} {
+    global whichDutNow;
+    global DUT${whichDutNow}_IP_FP;
+    global DUT${whichDutNow}_DefaultBlade_FP
+    global frontPanelPortToGw
+
+    if {[info exists DUT${whichDutNow}_DefaultBlade_FP] && [set DUT${whichDutNow}_DefaultBlade_FP] != "0"} {
+        return [set DUT${whichDutNow}_DefaultBlade_FP]:$frontPanelPortToGw
+    } else {
+        return $frontPanelPortToGw
+    }
+}
+################################################################################
+# Procedure Name: ConfigInBandNetwork
+# Description: Proc to configure the frontpanel port on all or a single DUT.  IP
+#              addresses are taken from the config file.  The inband network has
+#              regression servers located on it.  It is isolated from the lab net
+#              completely, except for a single link that allows routing to mgmt
+#              ports.  This enables testing of mgmt and frontpanel ports on a more
+#              isolated lab environment.
+# Input args: DUT
+# Output args: n/a
+# Typical usage:
+#             ConfigFrontPanelGw;
+# Category: Setup
+##################################################################
+proc ConfigInBandNetwork {} {
+    global frontPanelPortToGw;
+    global fpdefaultRouter;
+    global whichDutNow;
+    global DUT${whichDutNow}_IP_FP;
+    global DUT${whichDutNow}_MASK;
+    global DUT${whichDutNow}_DefaultBlade_FP
+    global GetDUTPort
+    global USE_FP_PORT
+    set USE_FP_PORT 1
+    if {$whichDutNow > 2} {
+        puts "InBand ports are only connected to DUT1 and DUT2"
+        return;
+    }
+    if {![info exists DUT${whichDutNow}_IP_FP]} {
+        result_debug "No config file definition for DUT${whichDutNow}_IP_FP"
+        return;
+    }
+    set ipAddr [set DUT${whichDutNow}_IP_FP]
+
+    set ipMask 24
+    if {[info exists DUT${whichDutNow}_DefaultBlade_FP] && [set DUT${whichDutNow}_DefaultBlade_FP] != "0"} {
+        set gwPort [set DUT${whichDutNow}_DefaultBlade_FP]:$frontPanelPortToGw
+    } else {
+        set gwPort $frontPanelPortToGw
+    }
+    result_debug "\nConfigInBandNetwork{}: set up commvlan network $ipAddr/$ipMask on DUT$whichDutNow"
+        SendACmd    "enable port $gwPort";
+        sleep 5
+        SendACmd    "create vlan commvlan vr vr-default";
+        SendACmd    "configure commvlan add port $gwPort";
+        SendACmd    "configure commvlan ipaddress $ipAddr/$ipMask";
+        SendACmd    "enable ipforwarding vlan commvlan"
+        SendACmd    "configure iproute add default $fpdefaultRouter vr vr-default";
+}
+################################################################################
+# Procedure Name: UnconfigInBandNetwork
+# Description: Delete the inband vlan and the static route associatated.
+# Input args: n/a
+# Output args: n/a
+# Typical usage:
+#             UnconfigGatewayNetwork;
+# Category: Setup
+##################################################################
+proc UnconfigInBandNetwork {} {
+    global fpdefaultRouter;
+    global frontPanelPortToGw
+    global whichDutNow;
+    global DUT${whichDutNow}_DefaultBlade_FP
+    global USE_FP_PORT
+    set USE_FP_PORT 0
+
+    if {[info exists DUT${whichDutNow}_DefaultBlade_FP] && [set DUT${whichDutNow}_DefaultBlade_FP] != "0"} {
+        set gwPort [set DUT${whichDutNow}_DefaultBlade_FP]:$frontPanelPortToGw
+    } else {
+        set gwPort $frontPanelPortToGw
+    }
+    SendACmd    "disable port $gwPort";
+    SendACmd    "delete vlan commvlan";
+    SendACmd    "config iproute delete default $fpdefaultRouter vr vr-default";
+}
+################################################################################
+# Procedure Name: UnconfigGatewayNetwork   
+# Description: proc to unconfig the gateway vlan: commvlan or mgmt and delete default route
+#	       based on the values of global vars: DUTx_IP and defaultRouter etc.  The
+#	       purpose is to dynamically remove the commvlan as tftp service is finished
+#	       instead to have static setup from config files throughout the regression.
+# Input args: n/a
+# Output args: n/a
+# Typical usage:
+#             UnconfigGatewayNetwork;
+# Category: Setup
+##################################################################
+proc UnconfigGatewayNetwork {args} {
+    global switchPort2DefaultRouter; 
+    global defaultRouter;
+    global whichDutNow;
+    global RemoveMgmtNetwork;
+ 
+    parse_args UnconfigGatewayNetwork $args {
+        force   0
+    }
+    
+    if {[regexp -nocase $switchPort2DefaultRouter "mgmt"] && \
+            ([info exists RemoveMgmtNetwork] && $RemoveMgmtNetwork || $force)} {
+        result_debug "\nUnconfigGatewayNetwork{}: delete gateway vlan on DUT$whichDutNow"
+        SendACmd    "disable auto-provision";
+        SendACmd    "unconf mgmt ipaddress";
+        global supportedPlatform
+        if {[regexp -nocase "$supportedPlatform" [GetPlatform DUT${whichDutNow}]] || \
+               [regexp -nocase "$supportedPlatform" [GetSysType DUT${whichDutNow}]]} {
+            set xos_version [GetVersion DUT$whichDutNow 4]
+            if { $xos_version >= "10.2.0" } {
+                set virtualRouter VR-mgmt
+            } else {
+                set virtualRouter VR-0
+            }
+            SendACmd    "config ipr del default $defaultRouter vr $virtualRouter";
+        }
+    } elseif {[regexp -nocase $switchPort2DefaultRouter "mgmt"] && [info exists RemoveMgmtNetwork] && !$RemoveMgmtNetwork} {
+        #         Controled by variable RemoveMgmtNetwork in common.cfg
+        result_debug "\nLeave the mgmt network in place"
+        return;
+    } else {   
+        set gwPort [GetDUTPort $switchPort2DefaultRouter $whichDutNow]
+        SendACmd    "disable port $gwPort";       
+        set virtualRouter [GetVrString $whichDutNow];
+        SendACmd    "delete commvlan";
+        SendACmd    "config ipr delete default $defaultRouter vr $virtualRouter";  
+    }
+}
+
+################################################################################
+# Procedure Name: UnconfigDutToDefault   
+# Description: proc to unconfig the specified DUTs back to factory default except
+#	       clipaging and idletimeout are disabled for automation purpose
+# Input args: dutList
+# Output args: n/a
+# Typical usage:
+#             UnconfigDutToDefault "1 2 3";
+# Category: Setup
+##################################################################
+proc UnconfigDutToDefault {{dutList "1"}} {
+  
+    global DUTs_info
+    foreach dutNo $dutList {
+        global DUT${dutNo}_CONNECT
+        Login [set DUT${dutNo}_CONNECT];
+        UnconfigSwAll;
+        SendACmd "config default delete port all"
+        SendACmd "disable clip"
+        SendACmd "disable idletimeout"
+        if {[info exists DUTs_info(DUT${dutNo},coreFileTarget)]} {
+            SendACmd "configure debug core-dumps $DUTs_info(DUT${dutNo},coreFileTarget)"
+        }
+    }
+}
+##################################################################
+# Procedure Name: CheckTftpPut
+#
+# Description: proc that checks the put of pol file from given dir to tftp servers
+#
+#
+# Input args: fileLocation
+# Output args: none
+# Typical usage:
+#             set status [CheckTftpCopy $TFTPServerIP $fileLocation ]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc CheckTftpPut {fileLocation args} {
+  parse_args CheckTftpPut $args {
+      nameFormat "dynamic"
+   }
+
+   global tcl_platform
+   global tftpServerList
+   global tftpServerLogin
+   global tftpServerPasswd
+   global tftpServerTftpboot
+   global DUT1_IP
+   set targetFile [file tail $fileLocation]
+   if {$nameFormat == "dynamic"} {
+# LK 04/30/2008 appending the DUT1_IP to filename while putting it on tftp server to get a unique file name
+   set targetFile ${targetFile}_$DUT1_IP
+   }
+   set tStartTime [clock seconds]
+   set pid [pid]
+   set fd_out [open "Tmp/tmp_$pid$tStartTime" "w"];
+   puts $fd_out "put $fileLocation $targetFile"
+   puts $fd_out "quit"
+   close $fd_out
+   report_start_test "Putting the policy to tftp servers"
+   set tftpServerList [GetRandomTFTPList $tftpServerList]
+   foreach TFTPServerIP $tftpServerList {
+      result_debug "Putting $fileLocation onto tftp Server $TFTPServerIP as $targetFile"
+      if {[catch {exec /usr/bin/tftp $TFTPServerIP < ./Tmp/tmp_$pid$tStartTime} reason]} {
+         result_debug "error: $reason"
+         set status failed
+      } else {
+        result_ok "File successfully put on tftpservers: $tftpServerList"
+        set status passed
+      }
+   }
+   file delete ./Tmp/tmp_$pid$tStartTime
+   report_end_test
+   return $status 
+}
+##################################################################
+# Procedure Name: CheckTftpPutMulti
+#
+# Description: proc that checks the put of multiple pol file from given dir to tftp servers
+#
+#
+# Input args: "filename list"
+# Output args: none
+# Typical usage:
+#             set status [CheckTftpPutMulti "Tmp/file1 Tmp/file2 Tmp/file3 Tmpfile4" ]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc CheckTftpPutMulti {{nameList} args} {
+ parse_args CheckTftpPutMulti $args {
+      nameFormat "dynamic"
+   }
+
+   global tcl_platform
+   global tftpServerList
+   global tftpServerLogin
+   global tftpServerPasswd
+   global tftpServerTftpboot
+   global DUT1_IP MAIN
+
+   set statFailed 0
+   foreach fName $nameList {
+      if {[info exists MAIN(user)] && $MAIN(user) == "autotest-rtp"} {
+          puts "chmod sudo as autotest-rtp"
+          if {[catch {exec sudo chmod 777 $fName} rea]} {
+              puts "Failed the chmod 777 tmp file: $rea"
+          }
+      } else {
+          puts "user set file privs"
+          if {[catch {exec chmod 777 $fName} rea]} {
+              puts "Failed the chmod 777 tmp file: $rea"
+          }
+      }
+      set targetFile [file tail $fName]
+   if {$nameFormat == "dynamic"} {
+# LK 04/30/2008 appending the DUT1_IP to filename while putting it on tftp server to get a unique file name
+      set targetFile ${targetFile}_$DUT1_IP
+     }
+
+      set tStartTime [clock seconds]
+      set pid [pid]
+      set fd_out [open "Tmp/tmp_$pid$tStartTime" "w"];
+      puts $fd_out "put $fName $targetFile"
+      puts $fd_out "quit"
+      close $fd_out
+      report_start_test "Putting the policy to tftp servers"
+      set tftpServerList [GetRandomTFTPList $tftpServerList]
+      foreach TFTPServerIP $tftpServerList {
+         result_debug "Putting $fName onto tftp Server $TFTPServerIP as $targetFile"
+         if {[catch {exec /usr/bin/tftp $TFTPServerIP < ./Tmp/tmp_$pid$tStartTime} reason]} {
+            result_debug "error: $reason"
+            incr statFailed
+         } else {
+            result_ok "File successfully put $targetFile on tftpservers: $tftpServerList"
+         }
+      }
+      file delete ./Tmp/tmp_$pid$tStartTime
+      report_end_test
+   }
+   if {$statFailed >=1} {
+      set status failed
+   } else {
+      set status passed
+   }
+   
+   return $status 
+}
+##################################################################
+# Procedure Name: CheckTftpGet
+#  
+# Description: proc that checks the get of pol file in given dir from tftp servers
+#
+#
+# Input args: fileName
+# Output args: none
+# Typical usage:
+#             set status [CheckTftpGet $fileName ]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc CheckTftpGet {{fileName} args} {
+
+   parse_args CheckTftpGet $args {
+      confGw "yes"
+      nameFormat "dynamic"
+	  filetype "pol"
+   }
+   global tftpServerList
+   global switchPort2DefaultRouter
+   global whichDutNow
+   global DUT1_IP
+
+   if  {[regexp -nocase $confGw "yes"]} {
+      ConfigGatewayNetwork
+      after 5000   ;# needs a delay or else reachability cant be made
+   }
+   set rtValue ""
+   set pid [pid]
+   # NOTE: We do not need to randomize the server list here; its already done in CheckTftpPut
+  foreach tftpServer $tftpServerList {
+    set fd_in [open "Tmp/temp_$pid" "w"]
+    set virtualRouter [GetVrString $whichDutNow]
+   if {$nameFormat == "dynamic"} {
+# LK 04/30/2008 appending the DUT1_IP to filename while getting it from tftp server 
+# which was added while upload to get a unique file name
+    set buff [SendACmd "tftp $tftpServer -v $virtualRouter -g -r ${fileName}_$DUT1_IP -l $fileName.$filetype" NULL $fd_in]
+   } else {
+    set buff [SendACmd "tftp $tftpServer -v $virtualRouter -g -r ${fileName} -l $fileName.$filetype" NULL $fd_in]
+   }
+   close $fd_in
+    set fd_in [open "Tmp/temp_$pid" "r"]
+    set rtValue [check_illegality $fd_in]
+    if {[string compare "legal" $rtValue]==0} {
+      close $fd_in
+      file delete "Tmp/temp_$pid"
+      break
+    }
+    close $fd_in
+    file delete "Tmp/temp_$pid"
+  }
+
+   report_start_test "Getting the policy from tftp servers"
+   if {[string compare "illegal" $rtValue]==0} {
+        result_error "Failed to get file from tftpservers: $tftpServerList"
+   } else {
+# SK: PD is fixed as of 11.0.0.20
+#      if {![regexp -nocase "BD-marnier|10808" [GetPlatform DUT${whichDutNow}]]} {
+#         # Fix for PD2-232904551 
+#         EnableDebugMode
+#         SendACmd "!mv $fileName.pol /root/config"
+#      }
+      result_ok "File successfully got from tftpservers: $tftpServerList"
+   }
+   report_end_test
+   if  {[regexp -nocase $confGw "yes"]} {
+      UnconfigGatewayNetwork
+   }
+   if {[catch {file delete "/tftp/$targetFile"} reason]} {
+      catch {file delete "/tftp2/$targetFile"} reason
+   }
+   return $rtValue
+}
+
+##################################################################
+# Procedure Name: CheckTftpGetMulti
+#  
+# Description: proc that checks the get of multiple pol files from tftp servers
+#
+#
+# Input args: nameList
+# Output args: none
+# Typical usage:
+#             set status [CheckTftpGetMulti "Tmp/name1 Tmp/name2" ]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc CheckTftpGetMulti {dut {nameList ""} {filetype "pol"} } {
+   global tftpServerList
+   global switchPort2DefaultRouter
+   global whichDutNow
+   global DUTs_info
+   global DUT1_IP
+
+   Login $DUTs_info(DUT$dut,connect)
+   ConfigGatewayNetwork
+   after 5000   ;# needs a delay or else reachability cant be made
+   set rtValue ""
+   set statFailed 0
+   foreach fName $nameList {
+      set pid [pid]
+      # NOTE: We do not need to randomize the server list here; its already done in CheckTftpPut
+      foreach tftpServer $tftpServerList {
+         set fd_in [open "Tmp/temp_$pid" "w"]
+         set virtualRouter [GetVrString $whichDutNow]
+# LK 04/30/2008 appending the DUT1_IP to filename while getting it from tftp server 
+# which was added while upload to get a unique file name
+# added for netlogin web 
+		set buff [SendACmd "tftp $tftpServer -v $virtualRouter -g -r ${fName}_$DUT1_IP -l $fName.$filetype" NULL $fd_in]
+         close $fd_in
+         set fd_in [open "Tmp/temp_$pid" "r"]
+         set rtValue [check_illegality $fd_in]
+         if {[string compare "legal" $rtValue]==0} {
+            close $fd_in
+            file delete "Tmp/temp_$pid"
+            break
+         }
+         close $fd_in
+         file delete "Tmp/temp_$pid"
+      }
+      ##############################################################
+      report_start_test "Getting the policy from tftp servers"
+      ##############################################################
+      if {[string compare "illegal" $rtValue]==0} {
+           result_error "Failed to get file $fName from tftpservers: $tftpServerList"
+           incr statFailed
+           return "illegal"
+      } else {
+         result_ok "File successfully got $fName from tftpservers: $tftpServerList"
+      }
+      report_end_test
+      
+      if {[catch {file delete "/tftp/$targetFile"} reason]} {
+         catch {file delete "/tftp2/$targetFile"} reason
+      }
+   }
+   UnconfigGatewayNetwork
+   if {$statFailed>=1} {
+      return "illegal"
+   } else {
+      return "legal"
+   }
+}
+##################################################################
+# Procedure Name: CheckTftpGetMultiWrapper
+#  
+# Description: proc that checks the get of multiple pol files from tftp servers
+#
+#
+# Input args: nameList
+# Output args: none
+# Typical usage:
+#             set status [CheckTftpGetMultiWrapper "Tmp/name1 Tmp/name2" ]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc CheckTftpGetMultiWrapper {dut {nameList ""}} {
+   global regRouterMGMTPorts
+
+   if {[CheckTftpGetMulti $dut "$nameList"] == "legal"} {
+      return "legal";
+   } else {
+      if {[info exists regRouterMGMTPorts]} {
+         set portList [split $regRouterMGMTPorts]
+         foreach portnum $portList {
+            if { $portnum == "" } {
+               continue
+            }
+            lappend pList $portnum
+         }
+         set portList [join $pList ","]
+         set status [EnableRegRouterMgmtLinks $portList]
+         if {$status == "Error"} {
+            return illegal
+         } else {
+            return [CheckTftpGetMulti $dut "$nameList"];
+         }
+      } else {
+         return illegal
+      }
+   }
+
+}
+
+##################################################################
+# Procedure Name: _EnhanceShowPortCli
+#  
+# Description: 
+#
+# Input args: cmd
+# Output args: 
+# Typical usage:
+#             
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Utility
+##################################################################
+proc _EnhanceShowPortCli {cmd} {
+   global whichDutNow
+
+   set cmdToReturn $cmd
+   if {[regexp -nocase {^sh[ow]* *por[ts]*} $cmd]&&![regexp -nocase "clean$|no-refresh$" $cmd] && \
+                ![regexp -nocase "info|redun|shar|util|protocol|buffer|debounce|group|link-scan" $cmd]} {
+      set majmin [GetVersion DUT${whichDutNow} majmin]
+      if {$majmin>=11.3} {
+         # For 11.3 onwards, add no-refresh/clean in show ports cli
+         set cmdToReturn "$cmd no-refresh"
+      }
+   }
+   return $cmdToReturn
+}
+
+proc _EnhanceShowlog {cmd} {
+
+   set cmdToReturn $cmd
+   regsub {(sh[ow]* * lo[g]* *) (war*|cri*|deb*|err*|inf*|not*)} $cmd "\\1 severity \\2" cmdToReturn
+   return $cmdToReturn
+}
+
+proc _EnhanceJerryShow {cmd} {
+   global whichDutNow
+   set cmdToReturn $cmd
+   if {[CompareRelease [GetVersion DUT$whichDutNow] 12.1] >= 0} {
+      regsub {(jer[rry]* *sh[ow]* *) (vl[an]*.*|upm*.*)} $cmd "debug show \\2" cmdToReturn
+      regsub {(jer[rry]* (vl[an]*.*|upm*.*) *sh[ow]* *)} $cmd "debug \\2 show " cmdToReturn
+   }
+   return $cmdToReturn
+}
+
+##################################################################
+# Add ability to match cmd echo from the terminal with CR added
+#   due to column width settings in 22.2 and 16.2
+#
+#
+#
+#
+#
+#
+##################################################################
+proc _GetShortCmd {cmd} {
+   if {[string length $cmd] > 200} {
+       set a [string range $cmd 0 190]
+       set l [expr [string length $cmd] - 2]
+       set b [string range $cmd $l end]
+       set regExCmd "${a}.*${b}"
+       #puts "\nRegEx cli to match:\n$regExCmd"
+       return $regExCmd
+   } else {
+       return $cmd
+   }
+}
+##################################################################
+# Procedure Name: _EnhanceStackingCli
+#  
+# Description: 
+#
+# Input args: cmd
+# Output args: 
+# Typical usage:
+#             
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Utility
+##################################################################
+proc _EnhanceStackingCli {cmd} {
+   global whichDutNow
+
+   if {![info exists whichDutNow]} {
+      set whichDutNow 1
+   }
+
+   set cmdToReturn $cmd
+   global DUT${whichDutNow}_Stacking_msmb_slot DUT${whichDutNow}_Stacking_msma_slot
+   if {[regexp -nocase "msm *a|slot *a$|slot *a " $cmd]} {
+      if [info exists DUT${whichDutNow}_Stacking_msma_slot] {
+         regsub -all -nocase "msm *a" $cmd "slot [set DUT${whichDutNow}_Stacking_msma_slot]" cmdToReturn
+         regsub -all -nocase "slot *a" $cmdToReturn "slot [set DUT${whichDutNow}_Stacking_msma_slot]" cmdToReturn
+       }
+   } elseif {[regexp -nocase "msm *b|slot *b$|slot *b " $cmd]} {
+      if [info exists DUT${whichDutNow}_Stacking_msmb_slot] {
+         regsub -all -nocase "msm *b" $cmd "slot [set DUT${whichDutNow}_Stacking_msmb_slot]" cmdToReturn
+         regsub -all -nocase "slot *b" $cmdToReturn "slot [set DUT${whichDutNow}_Stacking_msmb_slot]" cmdToReturn
+      }
+   }
+   if {[regexp -nocase "run *msm-fail" $cmd]} {
+      if [info exists DUT${whichDutNow}_Stacking_msma_slot] {
+         regsub -all -nocase "msm-fa" $cmd "fa" cmdToReturn
+      }
+   }
+   return $cmdToReturn
+}
+##################################################################
+#
+#
+#
+#
+##################################################################
+proc _EnhanceVpexCli {cmd} {
+    global whichDutNow
+
+    set exceptions "edp"
+    if {![info exists whichDutNow]} {
+        set whichDutNow 1
+    }
+    if {![regexp -nocase {[0-9]+} $whichDutNow]} {
+        set whichDutNow 1
+    }
+    set cmdToReturn $cmd
+
+    if {[regexp -nocase {dis[able]{0,4}.*po[rts]{0,3} all} $cmd]} {
+        if {[regexp -nocase "$exceptions" $cmd]} {
+            return $cmdToReturn
+        }
+        set dutPortList [_getDutPorts -dut $whichDutNow]
+        set newPorts [regsub "all" $cmd $dutPortList cmdToReturn]
+        return $cmdToReturn
+    } elseif {[regexp -nocase {rest[art]{0,3}.*po[rts]{0,3} ([0-9:,\- ]+|all)} $cmd allmatch myPorts]} {
+        if {[regexp -nocase "all" $myPorts]} {
+            set myPorts [_getDutPorts -dut $whichDutNow]
+        }
+        result_debug "VPEX Restart port replace condition - disable/enable ports $myPorts"
+        exp_send "disable port $myPorts \r"
+        expect {
+            -nocase -re "(\\* )?\[a-z0-9()._-]+(:|\\.)\[0-9]+ (#|>) " {
+                result_debug "\nVPEX Restart port replaced - disable ports $myPorts"
+            }
+            timeout {
+                result_debug "\nTimeout on disable vpex port"
+            }
+        }
+        exp_send "enable port $myPorts \r"
+        expect {
+            -nocase -re "(\\* )?\[a-z0-9()._-]+(:|\\.)\[0-9]+ (#|>) " {
+                result_debug "\nVPEX Restart port replaced - enable ports $myPorts"
+            }
+            timeout {
+                result_debug "\nTimeout on disable vpex port"
+            }
+        }
+        return ""
+    } elseif {[regexp -nocase {en[able]{0,4} learn.*po[rts]{0,3} all} $cmd]} {
+        result_debug "\nVPEX shared links will not allow all. Only enable ports of interest"
+        set dutPortList [_getDutPorts -dut $whichDutNow]
+        set newPorts [regsub "all" $cmd $dutPortList cmdToReturn]
+        return $cmdToReturn
+    } else {
+        return $cmdToReturn
+    }
+
+}
+##################################################################
+# Procedure Name: DumpNvramContent 
+#
+# Description:
+#
+# Input args: 
+# Output args:
+# Typical usage:
+#
+#
+# Category: Utility
+##################################################################
+proc DumpNvramContent {} {
+   global whichDutNow
+
+   if {![info exists whichDutNow]} {
+      set whichDutNow 1
+   }
+    EnableDebugMode
+    SendACmd "ls"
+    SendACmd "!df"
+    
+      send "!sh\r"
+      exSleep 5
+      expect {
+        "/exos/bin #" {result_debug "$expect_out(buffer)";  send "/exos/bin/odo\r" }
+        timeout { result_debug "$expect_out(buffer)"; send "/exos/bin/odo\r" }
+      }
+      exSleep 5
+      expect {
+         -exact "->" {result_debug "$expect_out(buffer)"; send "nvram\r"  }
+        timeout { result_debug "$expect_out(buffer)"; send "nvram\r"; }
+      }
+      exSleep 5
+      expect {
+        -exact "->" {result_debug "$expect_out(buffer)"; send "lv\r"  }
+       timeout { result_debug "$expect_out(buffer)"; send "lv\r" }
+      }
+     exSleep 5
+     expect {
+        -exact "->" {result_debug "$expect_out(buffer)"; send "quit\r"  }
+       timeout { result_debug "$expect_out(buffer)"; send "quit\r"}
+    }
+    exSleep 5
+    expect {
+     -exact "/exos/bin #" {result_debug "$expect_out(buffer)"; send "exit\r"  }
+       timeout { result_debug "$expect_out(buffer)"; send "exit\r"}
+    }
+     result_debug "$expect_out(buffer)";
+}
+proc disableEfence { } {
+         EnableDebugMode
+         set efenceBuf [SendACmd "debug epm show heapdbg"]
+         if {([regexp -nocase "not" $efenceBuf])} {
+             result_debug "$efenceBuf"
+	 } else {
+             result_debug "Efence is enabled for process $efenceBuf"
+             result_debug "Disabling efence for all process now"
+             SendACmd "debug epm disable heapdbg process all"
+         }
+}
+
+proc SendACmdWithoutReLogin { {cmd "NULL"} {expectedMsg "closed"} {cmdTimeout 60} {yesorno "y"} } {
+      set timeout $cmdTimeout
+      set exp_out_buf ""
+      exp_send "$cmd\r"
+      expect {
+             "$expectedMsg" {
+             append exp_out_buf $expect_out(buffer)
+             result_ok "Test Passed :"
+             }
+             "\\?" {
+             		regsub -all "\n\r" $expect_out(buffer) "\n" out_buf
+		        append exp_out_buf $out_buf
+                	if {[regexp -nocase {(best, *\?|\\.[0-9]+ \?|\*.\?|Origin|or '\?|checkpoint?|errors?)} $expect_out(buffer) match str]!=1} {
+                 	;# For debug hal show platform ipv4Mc (checkpoint?|errors?)
+                 	;#  ? in bgp specific routes
+                 	send "$yesorno\r"
+             		}
+             		exp_continue
+             }
+             "yes, no, or cancel)" { send "n/r" }
+             "n)\\?  " "send $yesorno/r"
+             timeout {
+                     send "/r"
+                     expect *
+                     append exp_out_buf $expect_out(buffer)
+                     result_error "Test Failed: Did not got expected message $expectedMsg"
+             }
+      }
+return $exp_out_buf
+}
+proc SendACmdWithoutReLogin { {cmd "NULL"} {expectedMsg "closed"} {cmdTimeout 60} {yesorno "y"} } {
+      set timeout $cmdTimeout
+      set exp_out_buf ""
+      exp_send "$cmd\r"
+      expect {
+             "$expectedMsg" {
+             append exp_out_buf $expect_out(buffer)
+             result_ok "Test Passed :"
+             }
+             "\\?" {
+             		regsub -all "\n\r" $expect_out(buffer) "\n" out_buf
+		        append exp_out_buf $out_buf
+                	if {[regexp -nocase {(best, *\?|\\.[0-9]+ \?|\*.\?|Origin|or '\?|checkpoint?|errors?)} $expect_out(buffer) match str]!=1} {
+                 	;# For debug hal show platform ipv4Mc (checkpoint?|errors?)
+                 	;#  ? in bgp specific routes
+                 	send "$yesorno\r"
+             		}
+             		exp_continue
+             }
+             "yes, no, or cancel)" { send "n/r" }
+             "n)\\?  " "send $yesorno/r"
+             timeout {
+                     send "/r"
+                     expect *
+                     append exp_out_buf $expect_out(buffer)
+                     result_error "Test Failed: Did not got expected message $expectedMsg"
+             }
+      }
+return $exp_out_buf
+}
+##################################################################
+# Procedure Name: formatExternalCF 
+# Description:
+# Input args: 
+# Output args:
+# Typical usage:
+# Category: Utility
+##################################################################
+proc formatExternalCF {} {
+   global whichDutNow
+   if {![info exists whichDutNow]} {
+      set whichDutNow 1
+   }
+    set timeout 25   ;#  This should be more than enough time to  format a bad CF    
+    SendACmd "save"
+    EnableDebugMode
+    send "!sh\r"
+    expect {
+        "/exos/bin #" { 
+                      send "umount /mnt/a\r" ; sleep 5; send "\r"
+         }
+         timeout { result_debug "$expect_out(buffer)"; }
+      }
+      expect {
+        "/exos/bin #" { 
+                      send "mkfs.vfat /dev/hdc1\r" ; sleep 5; send "\r"
+                      }
+        timeout { result_debug "$expect_out(buffer)"; }
+      }
+      expect {
+        "/exos/bin #" { 
+                      send "mount /dev/hdc1 /mnt/a\r" ; sleep 5; send "\r"
+                      }
+        timeout { result_debug "$expect_out(buffer)"; }
+      }
+      expect {
+     "/exos/bin #" { 
+                   send "exit\r" ; sleep 2; send "\r"
+                    }
+       timeout { send "exit\r"}
+    }
+    sleep 2;
+    result_debug "$expect_out(buffer)";
+    SendACmd "ls /usr/local/ext"
+}
+#####################################################################
+# A wrapper for for ConfigGwNetwork to enable forking
+#
+#####################################################################
+proc ConfigGwNetworkOnDut {dut} {
+    global DUT[set dut]_CONNECT DUTs_info
+
+    if {![info exists DUTs_info(DUT[set dut],version)]} {
+        set DUTs_info(DUT[set dut],version) "15.1.1.1"
+    }
+    Login [set DUT[set dut]_CONNECT] -CheckOperational 0 -masterCheck 0
+    ConfigGatewayNetwork
+
+}
+#####################################################################
+# proc _setShowOutput
+#
+#   Turn on/off printing to stdout,log or to harness result_fmt
+#
+# Args: screen  - on/off print to stdout via expect log_user  
+#       log     - on/off pass to result_pre
+#       res_fmt - on/off formatted result_debug/error etc.
+#
+# Typical usage:
+#       _setShowOutput -screen off -log off -res_fmt off
+#
+#####################################################################
+proc _setShowOutput {args} {
+    global MAIN
+
+    parse_args CheckDownloadConfig $args {
+        screen     "on"
+        log        "on"
+        res_fmt    "on"
+    }
+
+    switch $screen  {
+        on    {
+            set MAIN(SHOWSTDOUT) 1
+            log_user 1
+        }
+        off {
+            set MAIN(SHOWSTDOUT) 0
+            log_user 0
+        }
+        default  {
+            set MAIN(SHOWSTDOUT) 1
+            log_user 1
+        }
+    }
+
+    switch $log  {
+        on    {
+            set MAIN(PRINTTOLOG) 1
+        }
+        off {
+            set MAIN(PRINTTOLOG) 0
+        }
+        default  {
+            set MAIN(PRINTTOLOG) 1
+        }
+    }
+
+
+    switch $res_fmt  {
+        on    {
+            set MAIN(SHOWRESULT_FMT) 1
+        }
+        off {
+            set MAIN(SHOWRESULT_FMT) 0
+        }
+        default  {
+            set MAIN(SHOWRESULT_FMT) 1
+        }
+    }
+
+}
+#####################################################################
+# proc _initOutputOptions
+#
+#   Verify the stdout,log and res_fmt vars and set if not set
+#
+#
+# Typical usage
+#   _initOutputOptions
+#
+#####################################################################
+proc _initOutputOptions {} {
+    global MAIN
+
+    if ![info exists MAIN(SHOWSTDOUT)] {
+        set MAIN(SHOWSTDOUT) 1
+        catch {log_user 1} why
+    } elseif {$MAIN(SHOWSTDOUT) == 1} {
+        catch {log_user 1} why
+    } elseif {$MAIN(SHOWSTDOUT) == 0} {
+        catch {log_user 0} why
+    } else {
+        set MAIN(SHOWSTDOUT) 1
+        catch {log_user 1} why
+    }
+
+    if ![info exists MAIN(PRINTTOLOG)] {
+        set MAIN(PRINTTOLOG) 1
+    }
+    if ![info exists MAIN(SHOWRESULT_FMT)] {
+        set MAIN(SHOWRESULT_FMT) 1
+    }
+}
+######################################################################
+# Procedure: _cliQuestionHandler 
+#
+# Handle different cases for yes no prompts that are not 
+#    default
+#
+#
+#
+#
+#
+######################################################################   
+proc _cliQuestionHandler {args} {
+    global MAIN
+    parse_args _cliQuestionHandler $args {
+        buffer    "none" 
+        cmd       "none"
+        yesorno   "none"
+        stacking  0
+    }
+    # No query conditions where question marks are appearing 
+    if {!$stacking} {
+        if {[regexp -nocase {(best, *\?|\\.[0-9]+ \?|\*.\?|Origin|or '\?|checkpoint?|errors?)} $buffer] != 1 &&
+        [regexp -nocase {Port  *Mode  *State  *Cost  *Flags  *Priority  *Port ID  *Designated Bridge} $buffer] != 1 &&
+        ![regexp -nocase {MAC Address/Mask +Password \(encrypted\) +Port} $buffer]} {
+            # For debug hal show platform ipv4Mc (checkpoint?|errors?)
+            #  ? in bgp specific routes
+            send "$yesorno\r";
+            puts "\nGeneral Question Mark Case - control response with SendACmd -yesorno default Yes"
+            return;
+        }
+    }
+
+    # - Add case for Clear log with FIPs mode on
+    if {[regexp -nocase {cl[ear]{0,3}.*lo[g]{0,1}} $cmd]} {
+        puts "Clear log default answer is yes"
+        send "Yes\r";
+    }
+}
+######################################################################
+# Procedure: ShellSend
+#
+#
+# Send a command to the exos shell.  Prompt matching and timeout
+#                adjusted.
+#
+#
+#
+#
+#
+######################################################################
+proc ShellSend {cmd args} {
+    global DUTs_info whichDutNow whichMsmNow connectionTimeout MAIN
+    parse_args ShellSend $args {
+        yesorno  "yes"
+    }
+
+    if {![info exists connectionTimeout]} {
+        set connectionTimeout 120
+    }
+    set exp_shout_buf ""
+    set timeout 30;# only allow 10 sec for for shell to return a prompt
+    result_print "--- Send $cmd"
+    send "$cmd\r"
+    expect {
+        -exact "$cmd" {
+            if {[regexp -nocase "bcm\.shell" $cmd]} {
+                send "\r"
+            }
+            # We want to match the echoed command and continue to the next expect
+        }
+        "$cmd" {
+            # We want to match the echoed command and continue to the next expect
+        }
+        eof {
+            result_debug "Connection dropped while in the shell"
+            send "exit\r";
+            set timeout $connectionTimeout
+            return
+        }
+        timeout {
+            result_debug "No echo response while in EXOS shell after sending $cmd "
+            send "exit\r";
+            set timeout $connectionTimeout
+            return
+        }
+    }
+    expect {
+        timeout {
+            result_error "No response from the switch DUT$whichDutNow for $timeout seconds"
+            expect *
+            regsub -all "\n\r" $expect_out(buffer) "\n" sh_out_buf;
+            append exp_shout_buf $sh_out_buf;
+        }
+        -nocase -re "(\\* )?\[a-z0-9()._-]+(:|\\.)\[0-9]+ (#|>) " {
+            # Hit a regular EXOS prompt.. Hope you intended to exit
+        }
+        -re "# $" {
+            # Hit a root shell prompt
+        }
+        -nocase -re "BCM\.\[0-9]+> " {
+            #puts "hits shell prompt" 
+        }
+        -re "\\$ $" {
+            # Hit a user/admin shell prompt
+            # To recover this we need to logout, log back in enabledebug, go to the shell and resend.
+            result_debug "At shell user/admin prompt.  Need to recover the root # prompt"
+            send "exit\r" 
+            expect {
+                -nocase -re "(\\* )?\[a-z0-9()._-]+(:|\\.)\[0-9]+ (#|>) " {
+                    set timeout $connectionTimeout
+                    logout null -closeSession false
+                    global DUT${whichDutNow}_CONNECT${whichMsmNow}
+                    set conn [set DUT${whichDutNow}_CONNECT${whichMsmNow}]
+                    Login $conn
+                    EnableDebugMode
+                    set timeout 8
+                    if {[regexp -nocase "bcm\.shell|\!sh" $cmd]} {
+                        send "$cmd\r"
+                    } else {
+                        send "!sh\r"
+                    }
+                    expect {
+                        -nocase -re "# $|bcm\.\[0-9]+> " {
+                            # great recovery
+                            if {![regexp -nocase "bcm\.shell|\!sh" $cmd]} {
+                                send "$cmd\r"
+                                expect -re "# $|bcm\.\[0-9]+>"
+                            }
+                            set timeout $connectionTimeout
+                            puts "$expect_out(buffer)"
+                            return;
+                        }
+                    }
+                }
+                -re "\\$ $" {
+                    # exit didn't work.  bail
+                    send "exit\r"
+                    set timeout $connectionTimeout
+                    return;
+                }
+                timeout {
+                    set timeout $connectionTimeout
+                    return;
+                }
+            }
+
+        }
+        "\\?" {
+            regsub -all "\n\r" $expect_out(buffer) "\n" sh_out_buf;
+            append exp_shout_buf $sh_out_buf;
+            send "$yesorno\r"
+            exp_continue;
+        }
+        -nocase -re "system reboot" {
+            result_debug "A shell command just caused a reboot."
+        }
+    }
+    append exp_shout_buf $expect_out(buffer)
+    regsub -all "\n\r" $exp_shout_buf "\n" exp_shout_buf
+    regsub -all "\t" $exp_shout_buf " " exp_shout_buf
+
+    # -- Do not print to the log file if in multiTask
+    if {$MAIN(PRINTTOLOG)} {
+        result_pre $exp_shout_buf
+    }
+    set timeout $connectionTimeout
+}

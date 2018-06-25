@@ -1,0 +1,2256 @@
+#!/usr/bin/tclsh
+
+########################################################################
+#  Procedure Name: snmpCheckStpdParameters
+#  
+#  Description:
+#  This procedure checks the stpd parameters.
+#
+#  Input Variables:
+#    session        - Session identifier which identifies the connection
+#                     with the DUT
+#    name           - Stp domain name 
+#    rootcost       - Root Path Cost 
+#    bmaxage        - Bridge MaxAge 
+#    bhellotime     - Bridge Hello Time 
+#    bforwarddelay  - Bridge Forward Delay 
+#    holdtime       - Stpd Domain Hold Time
+#    dmaxage        - Domain MaxAge 
+#    dhellotime     - Domain Hello Time 
+#    dforwarddelay  - Domain Forward Delay 
+#    bridgeid       - Domain Bridge Id
+#    designatedroot - Stpd Domain Designated Root
+#    priority       - Bridge priority 
+#    ports          - Physical port for which entry contains STP info.
+#    portstate      - Port state of this port number in this STPD
+#    portpriority   - Port priority of this port number in this STPD
+#    rootport       - Port of the root port of this bridge for this STPD
+#    numports       - Number of physical ports belonging to this STPD
+#    stpstate       - Enabled/Disabled state of STP on this STPD
+#    portmode       - Port mode of this port in this STPD
+#    rstpstatus     - Enabled/Disabled state of Rapid STP in this STPD
+#    stptag         - StpId of this STPD which appears as the 802.1Q tag
+#    rrfailover     - Enabled/Disabled state of Rapid Root Failover for 
+#                     this bridge on this STPD
+#    topchanges     - The number of topology changes detected by this bridge
+#    timesincetop   - The time since a topology changes was last
+#                     detected by this bridge
+#    portstpstate   - Enabled/Disabled state of this STP instance on this port
+#    portpathcost   - Port mode of this port in this STPD
+#    portdescost    - Path cost for this STPD, of the Designated Port
+#    portdesroot    - Root bridge identifier, for this STPD
+#    portdesbridge  - Bridge identifier for the bridge considered to be 
+#                     Designated Bridge
+#
+#  Optional Args:
+#    fd              - File descriptor of open log file   
+#    comment         - Comments to be logged in log file
+# 
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    0 - On failure 
+#    1 - On success 
+#
+#  Possible Usage:
+#    snmpCheckStpdParameters -session $sessionid -name "spanname1"
+#                            -rootcost 0 -ports 2:5 -portpriority 3
+#                            -portmode "emistp"
+##########################################################################
+
+proc snmpCheckStpdParameters { args } {
+    parse_args snmpCheckStpdParameters $args {
+       session        ""
+       name           ""
+       rootcost       ""
+       bmaxage        ""
+       bhellotime     ""
+       bforwarddelay  ""
+       dmaxage        ""
+       dhellotime     ""
+       dforwarddelay  ""
+       holdtime       ""
+       bridgeid       ""
+       designatedroot ""
+       priority       ""
+       ports          ""
+       portstate      ""
+       portpriority   ""
+       rootport       ""
+       numports       ""
+       stpstate       ""
+       portmode       ""
+       rstpstatus     ""
+       stpdtag        ""
+       rrfailover     ""
+       topchanges     ""
+       timesincetop   ""
+       portstpstate   ""
+       portpathcost   ""
+       portdescost    ""
+       portdesroot    ""
+       portdesbridge  ""
+       fd             "NULL"
+       comment        "snmpCheckStpdParameters"
+    }
+ 
+    set func "snmpCheckStpdParameters:" 
+    set retVal 0
+    set MAX_STPDS 512
+
+    if { $session == "" || $name == "" } {
+       error "$func SNMP session id, STP Domain name must be specified"
+       return $retVal 
+    }   
+    if { $ports != "" } {
+       set ports [snmpUtilParsePortList $ports]
+    }
+
+    snmpDebug DEBUG "session is $session, STP Domain name is $name " $fd
+    result_debug "\n-- Checking STP Domain parameters for $name --"
+
+    report_start_test "$comment"
+    
+    # --- Check for the STPD name
+    set instance 1
+    if { $name != "" } {
+       if { $name != "s0" } {
+          while {$instance <= $MAX_STPDS} {
+             set result [snmpGet -session $session \
+                                 -oid extremeStpDomainStpdName.$instance]
+             snmpDebug DEBUG "snmpGet- $result\n" $fd
+             set stpdInstance [snmpUtilGetVal str $result]
+             if {[string compare [string tolower $name] \
+                                 [string tolower $stpdInstance]] == 0} {
+                break
+             } else {
+                snmpDebug DEBUG "The STP Domain Name $stpdInstance" $fd
+             }
+             incr instance
+          }   
+        }
+        if { $instance == $MAX_STPDS } {
+           result_debug "Rao snmpGet- Error, Timed-out"
+           return $retVal
+        }
+    }
+
+    # --- Check for the STPD time since topology changes
+    if { $timesincetop != "" } {
+        set result [snmpGet -session $session \
+                        -oid extremeStpDomainTimeSinceTopologyChange.$instance]
+        snmpDebug DEBUG "snmpGet- $result\n" $fd
+        set topCVal [expr [snmpUtilGetVal timetick $result] / 100]
+        set val1 [expr $timesincetop + 4]
+        if {$topCVal <= $val1} {
+           result_ok "STPD Parameter: Topology changes since $timesincetop \
+                      seconds exists.PASS"
+           set retVal 1
+        } else {
+           result_error "STPD Parameter: Topology changes \
+                         expected $timesincetop but got $topCVal. FAIL"
+        }
+    }
+
+    # --- Check for the STPD no. of topology changes
+    if { $topchanges != "" } {
+        set result [snmpGet -session $session \
+                            -oid extremeStpDomainTopChanges.$instance]
+        snmpDebug DEBUG "snmpGet- $result\n" $fd
+        set topVal [snmpUtilGetVal counter $result]
+        if {$topchanges == $topVal} {
+           result_ok "STPD Parameter: Topology changes $topchanges exists.PASS"
+           set retVal 1
+        } else {
+           result_error "STPD Parameter: Topology changes expected \
+                         $topchanges but got $topVal. FAIL"
+        }
+    }
+
+    # --- Check for the STPD rapid root failover
+    if { $rrfailover != "" } {
+        set result [snmpGet -session $session \
+                            -oid extremeStpDomainRRFailoverEnabled.$instance]
+        snmpDebug DEBUG "snmpGet- $result\n" $fd
+       
+        set rrfailVal [snmpUtilGetVal inttext $result]
+        if { [string compare [string tolower $rrfailVal] \
+                           [string tolower $rrfailover]] == 0 } {
+           result_ok "STPD Parameter: Rapid Root Failover state \
+                      is $rrfailover exists. PASS"
+        } else {
+           result_error "STPD Parameter: Rapid Root Failover state \
+                      expected is $rrfailover but got $rrfailVal. FAIL"
+        }
+    }
+
+    # --- Check for the STPD tag
+    if { $stpdtag != "" } {
+        set result [snmpGet -session $session \
+                            -oid extremeStpDomainStpdTag.$instance]
+        snmpDebug DEBUG "snmpGet- $result\n" $fd
+        set stpVal [snmpUtilGetVal int $result]
+        if {$stpdtag == $stpVal} {
+           result_ok "STPD Parameter: Stpd Tag $stpdtag exists. PASS"
+           set retVal 1
+        } else {
+           result_error "STPD Parameter: Stpd Tag expected $stpdtag \
+                         but got $stpVal. FAIL"
+        }
+    }
+
+    # --- Check for the STPD root cost
+    if { $rootcost != "" } {
+        set result [snmpGet -session $session \
+                            -oid extremeStpDomainRootCost.$instance]
+        snmpDebug DEBUG "snmpGet- $result\n" $fd
+        set costVal [snmpUtilGetVal int $result]
+        if {$rootcost == $costVal} {
+           result_ok "STPD Parameter: Root cost $rootcost exists. PASS"
+           set retVal 1
+        } else {
+           result_error "STPD Parameter: Root cost expected $rootcost \
+                         but got $costVal. FAIL"
+        }
+    }
+
+    # --- Check for the STPD rapid STP is enabled
+    if {$rstpstatus != "" } {
+        set result [snmpGet -session $session \
+                            -oid extremeStpDomainRstpEnabled.$instance]
+        snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+        set rstpVal [snmpUtilGetVal inttext $result]
+        if { [string compare [string tolower $rstpVal] \
+                           [string tolower $rstpstatus]] == 0 } {
+           result_ok "STPD Parameter: Rapid STP state \
+                      is $rstpstatus exists. PASS"
+           set retVal 1
+        } else {
+           result_error "STPD Parameter: Rapid STP state \
+                      expected is $rstpstatus but got $rstpVal. FAIL"
+        }
+    }
+
+    # --- Check for the STPD bridge priority
+    if { $priority != "" } {
+        set result [snmpGet -session $session \
+                            -oid extremeStpDomainBridgePriority.$instance]
+        snmpDebug DEBUG "snmpGet- $result\n" $fd
+        set priVal [snmpUtilGetVal int $result]
+        if {$priority == $priVal} {
+           result_ok "STPD Parameter: Priority $priority exists. PASS"
+           set retVal 1
+        } else {
+           result_error "STPD Parameter: Priority expected $priority \
+                         but got $priVal. FAIL"
+        }
+    }
+
+
+    # --- Check for the STPD maxage
+    if { $dmaxage != "" } {
+        set result [snmpGet -session $session \
+                            -oid extremeStpDomainMaxAge.$instance]
+        snmpDebug DEBUG "snmpGet- $result\n" $fd
+        set ageVal [expr [snmpUtilGetVal int $result]/ 100]
+        if {$dmaxage == $ageVal} {
+           result_ok "STPD Parameter: MaxAge $dmaxage exists. PASS"
+           set retVal 1
+        } else {
+           result_error "STPD Parameter: MaxAge expected $dmaxage \
+                         but got $ageVal. FAIL"
+        }
+    }
+
+    # --- Check for the STPD bridge maxage
+    if { $bmaxage != "" } {
+        set result [snmpGet -session $session \
+                            -oid extremeStpDomainBridgeMaxAge.$instance]
+        snmpDebug DEBUG "snmpGet- $result\n" $fd
+        set ageVal [expr [snmpUtilGetVal int $result]/ 100]
+        if {$bmaxage == $ageVal} {
+           result_ok "STPD Parameter: Bridge MaxAge $bmaxage exists. PASS"
+           set retVal 1
+        } else {
+           result_error "STPD Parameter: Bridge MaxAge expected $bmaxage \
+                         but got $ageVal. FAIL"
+        }
+    }
+
+    # --- Check for the STPD hello time
+    if { $dhellotime != "" } {
+        set result [snmpGet -session $session \
+                            -oid extremeStpDomainHelloTime.$instance]
+        snmpDebug DEBUG "snmpGet- $result\n" $fd
+        set helloVal [expr [snmpUtilGetVal int $result]/ 100]
+        if {$dhellotime == $helloVal} {
+           result_ok "STPD Parameter: HelloTime $dhellotime exists. PASS"
+           set retVal 1
+        } else {
+           result_error "STPD Parameter: HelloTime expected $dhellotime \
+                         but got $helloVal. FAIL"
+        }
+    }
+
+    # --- Check for the STPD bridge hello time
+    if { $bhellotime != "" } {
+        set result [snmpGet -session $session \
+                            -oid extremeStpDomainBridgeHelloTime.$instance]
+        snmpDebug DEBUG "snmpGet- $result\n" $fd
+        set helloVal [expr [snmpUtilGetVal int $result]/ 100]
+        if {$bhellotime == $helloVal} {
+           result_ok "STPD Parameter: Bridge HelloTime $bhellotime exists. PASS"
+           set retVal 1
+        } else {
+           result_error "STPD Parameter: Bridge HelloTime expected $bhellotime \
+                         but got $helloVal. FAIL"
+        }
+    }
+
+    # --- Check for the STPD forward delay
+    if { $dforwarddelay != "" } {
+        set result [snmpGet -session $session \
+                            -oid extremeStpDomainForwardDelay.$instance]
+        snmpDebug DEBUG "snmpGet- $result\n" $fd
+        set delayVal [expr [snmpUtilGetVal int $result]/ 100]
+        if {$dforwarddelay == $delayVal} {
+           result_ok "STPD Parameter: Forward delay $dforwarddelay exists. PASS"
+           set retVal 1
+        } else {
+           result_error "STPD Parameter: Forward delay expected $dforwarddelay \
+                         but got $delayVal. FAIL"
+        }
+    }
+
+    # --- Check for the STPD bridge forward delay
+    if { $bforwarddelay != "" } {
+        set result [snmpGet -session $session \
+                            -oid extremeStpDomainBridgeForwardDelay.$instance]
+        snmpDebug DEBUG "snmpGet- $result\n" $fd
+        set delayVal [expr [snmpUtilGetVal int $result]/ 100]
+        if {$bforwarddelay == $delayVal} {
+           result_ok "STPD Parameter: Bridge Forward delay $bforwarddelay \
+                      exists.PASS"
+           set retVal 1
+        } else {
+           result_error "STPD Parameter: Bridge Forward delay expected \
+                         $bforwarddelay but got $delayVal. FAIL"
+        }
+    }
+
+    # --- Check for the STPD hold time
+    if { $holdtime != "" } {
+        set result [snmpGet -session $session \
+                            -oid extremeStpDomainHoldTime.$instance]
+        snmpDebug DEBUG "snmpGet- $result\n" $fd
+        set holdTimeVal [expr [snmpUtilGetVal int $result]/ 100]
+        if {$holdtime == $holdTimeVal} {
+           result_ok "STPD Parameter: HoldTime $holdtime exists. PASS"
+           set retVal 1
+        } else {
+           result_error "STPD Parameter: HoldTime expected $holdtime \
+                         but got $holdTimeVal. FAIL"
+        }
+    }
+
+    # --- Check for the STPD bridge id
+    if { $bridgeid != "" } {
+        set result [snmpGet -session $session \
+                            -oid extremeStpDomainBridgeId.$instance]
+        snmpDebug DEBUG "snmpGet- $result\n" $fd
+        set bridgeVal [snmpUtilGetVal hex $result]
+        set delim ":"
+        regsub -all { } $bridgeVal $delim bridgeValue
+        set bridgeValue [string trimright $bridgeValue ':']
+        if { $bridgeid == $bridgeValue } {
+           result_ok "STPD Parameter: Bridge Id $bridgeid exists. PASS"
+           set retVal 1
+        } else {
+           result_error "STPD Parameter: Bridge Id expected $bridgeid \
+                         but got $bridgeValue. FAIL"
+        }
+    }
+
+    # --- Check for the STPD designated root
+    if { $designatedroot != "" } {
+        set result [snmpGet -session $session \
+                            -oid extremeStpDomainDesignatedRoot.$instance]
+        snmpDebug DEBUG "snmpGet- $result\n" $fd
+        set designatedVal [snmpUtilGetVal hex $result]
+        set delim ":"
+        regsub -all { } $designatedVal $delim designatedValue
+        set designatedValue [string trimright $designatedValue ':']
+        if { $designatedroot == $designatedValue } {
+           result_ok "STPD Parameter: Designated Root $designatedroot \
+                      exists. PASS"
+           set retVal 1
+        } else {
+           result_error "STPD Parameter: Designated Root expected \
+                        $designatedroot but got $designatedValue. FAIL"
+        }
+    }
+
+    # --- Check for the STPD port state
+    if { ($ports != "") && ($portstate != "") } {
+       set result [snmpGet -session $session \
+                           -oid extremeStpPortPortState.$instance.$ports]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set portVal [snmpUtilGetVal inttext $result]
+       if { [string compare [string tolower $portVal] \
+                          [string tolower $portstate]] == 0 } {
+          result_ok "STPD Port Parameter: Port state for port#$ports \
+                     is $portstate exists. PASS"
+       } else {
+          result_error "STPD Port Parameter: Port state for port#$ports \
+                       expected $portstate but got $portVal. FAIL"
+       }
+    }
+ 
+    # --- Check for the STPD root port
+    if { $rootport != "" } {
+       if { $rootport != 0 } {
+           set rootport [snmpUtilParsePortList $rootport]
+       }
+       set result [snmpGet -session $session \
+                           -oid extremeStpDomainRootPortIfIndex.$instance]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+       set rootVal [snmpUtilGetVal int $result]
+       if {$rootport == $rootVal} {
+          result_ok "STPD Parameter: Root port $rootport exists. PASS"
+          set retVal 1
+       } else {
+          result_error "STPD Parameter: Root port expected $rootport \
+                        but got $rootVal. FAIL"
+       }
+    }
+
+    # --- Check for the STPD number of ports
+    if { $numports != "" } {
+        set result [snmpGet -session $session \
+                            -oid extremeStpDomainNumPorts.$instance]
+        snmpDebug DEBUG "snmpGet- $result\n" $fd
+        set portsVal [snmpUtilGetVal int $result]
+        if {$numports == $portsVal} {
+           result_ok "STPD Parameter: Number of ports $numports exists. PASS"
+           set retVal 1
+        } else {
+           result_error "STPD Parameter: Number of ports expected $numports \
+                        but got $portsVal. FAIL"
+        }
+    }
+
+    # --- Check for the STPD STP state
+    if { $stpstate != "" } {
+        set result [snmpGet -session $session \
+                            -oid extremeStpDomainStpEnabled.$instance]
+        snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+        set stpVal [snmpUtilGetVal inttext $result]
+        if { [string compare [string tolower $stpVal] \
+                           [string tolower $stpstate]] == 0 } {
+           result_ok "STPD Parameter: STP state \
+                      is $stpstate exists. PASS"
+        } else {
+           result_error "STPD Parameter: STP state \
+                        expected $stpstate but got $stpVal. FAIL"
+        }
+    }
+
+    # --- Check for the STPD port designated bridge
+    if { ($ports != "") && ($portdesbridge != "") } {
+       set result [snmpGet -session $session \
+                           -oid extremeStpPortDesignatedBridge.$instance.$ports]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+       set rootVal [snmpUtilGetVal hex $result]
+       set delim ":"
+       regsub -all { } $rootVal $delim rootValue
+       set rootValue [string trimright $rootValue ':']
+       if { $portdesbridge == $rootValue } {
+          result_ok "STPD Port Parameter: Designated Bridge $portdesbridge \
+                     exists. PASS"
+          set retVal 1
+       } else {
+          result_error "STPD Port Parameter: Designated Bridge expected \
+                        $portdesbridge but got $rootValue. FAIL"
+       }
+    }
+
+    # --- Check for the STPD port designated port
+    if { ($ports != "") && ($portdesroot != "") } {
+       set result [snmpGet -session $session \
+                           -oid extremeStpPortDesignatedRoot.$instance.$ports]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+       set rootVal [snmpUtilGetVal hex $result]
+       set delim ":"
+       regsub -all { } $rootVal $delim rootValue
+       set rootValue [string trimright $rootValue ':']
+       if { $portdesroot == $rootValue } {
+          result_ok "STPD Port Parameter: Designated root $portdesroot \
+                     exists. PASS"
+          set retVal 1
+       } else {
+          result_error "STPD Port Parameter: Designated root expected \
+                        $portdesroot but got $rootValue. FAIL"
+       }
+    }
+
+    # --- Check for the STPD port designated cost
+    if { ($ports != "") && ($portdescost != "") } {
+       set result [snmpGet -session $session \
+                           -oid extremeStpPortDesignatedCost.$instance.$ports]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+       set portVal [snmpUtilGetVal int $result]
+       if {$portdescost == $portVal} {
+          result_ok "STPD Port Parameter: Designated cost is $portdescost \
+                     exists. PASS"
+          set retVal 1
+       } else {
+          result_error "STPD Port Parameter: Designated cost expected \
+                        $portdescost but got $portVal. FAIL"
+       }
+    }
+
+    # --- Check for the STPD port path cost
+    if { ($ports != "") && ($portpathcost != "") } {
+       set result [snmpGet -session $session \
+                           -oid extremeStpPortPathCost.$instance.$ports]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+       set pathVal [snmpUtilGetVal int $result]
+       if {$portpathcost == $pathVal} {
+          result_ok "STPD Port Parameter: Path cost is $portpathcost \
+                     exists. PASS"
+          set retVal 1
+       } else {
+          result_error "STPD Port Parameter: Path cost expected $portpathcost \
+                        but got $pathVal. FAIL"
+       }
+    }
+
+    # --- Check for the STPD port STP state
+    if { ($ports != "") && ($portstpstate != "") } {
+       set result [snmpGet -session $session \
+                           -oid extremeStpPortStpEnabled.$instance.$ports]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set stpVal [snmpUtilGetVal inttext $result]
+       if { [string compare [string tolower $stpVal] \
+                          [string tolower $portstpstate]] == 0 } {
+          result_ok "STPD Port Parameter: STP state on port#$ports \
+                     is $portstpstate exists. PASS"
+       } else {
+          result_error "STPD Port Parameter: STP state on port#$ports \
+                       expected $portstpstate but got $stpVal. FAIL"
+       }
+    }
+
+    # --- Check for the STPD port priority
+    if { ($ports != "") && ($portpriority != "") } {
+       set result [snmpGet -session $session \
+                           -oid extremeStpPortPortPriority.$instance.$ports]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+       set portPriVal [snmpUtilGetVal int $result]
+       if {$portpriority == $portPriVal} {
+          result_ok "STPD Port Parameter: Priority $portpriority exists. PASS"
+          set retVal 1
+       } else {
+          result_error "STPD Port Parameter: Priority expected $portpriority \
+                        but got $portPriVal. FAIL"
+       }
+    }
+
+    # --- Check for the STPD port mode of operation
+    if { ($ports != "") && ($portmode != "") } {
+       set result [snmpGet -session $session \
+                           -oid extremeStpPortPortMode.$instance.$ports]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+       set modeVal [snmpUtilGetVal inttext $result]
+       if { [string compare [string tolower $modeVal] \
+                          [string tolower $portmode]] == 0 } {
+          result_ok "STPD Port Parameter: Port mode on port#$ports \
+                     is $portmode exists. PASS"
+       } else {
+          result_error "STPD Port Parameter: Port mode on port#$ports \
+                        expected $portmode but got $modeVal. FAIL"
+       }
+     }
+
+    report_end_test
+    snmpDebug DEBUG "$func - End\n" $fd
+    return $retVal
+}
+
+########################################################################
+#  Procedure Name: snmpSetDefaultStpdParameters 
+#  
+#  Description:
+#  This procedure sets the stpd "s0" parameters.
+#
+#  Input Variables:
+#    session        - Session identifier which identifies the connection
+#                       with the DUT
+#    name           - Stp domain name (s0)
+#    priority       - Stp priority 
+#    ports          - Physical port for which entry contains STP info.
+#    portpriority   - Stp port priority 
+#    portpathcost   - Port to the path cost of path to STP
+#    maxage         - Bridge MaxAge used by all the bridges
+#    hellotime      - Bridge HelloTime used by all the bridges
+#    forwarddelay   - Bridge ForwardDelay used by all the bridges
+#
+#  Optional Args:
+#    fd              - File descriptor of open log file   
+#    comment         - Comments to be logged in log file
+# 
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    0 - On failure 
+#    1 - On success 
+#
+#  Possible Usage:
+#    snmpSetDefaultStpdParameters -session $sessionid -name s0 -priority 1
+#                                 -ports 3:4 -portpriority 3
+##########################################################################
+
+proc snmpSetDefaultStpdParameters { args } {
+    parse_args snmpSetDefaultStpdParameters $args {
+       session        ""
+       name           ""
+       priority       ""
+       ports          ""
+       portpriority   ""
+       portpathcost   ""
+       maxage         ""
+       hellotime      ""
+       forwarddelay   ""
+       fd             "NULL"
+       comment        "snmpSetDefaultStpdParameters"
+    }
+ 
+    set func "snmpSetDefaultStpdParameters:" 
+    set retVal 0
+
+    if { $session == "" } {
+       error "$func SNMP session id must be specified"
+       return $retVal 
+    }   
+
+    if { $name != "s0" } {
+       error "$func STPD name s0 must be specified"
+       return $retVal 
+    }   
+
+    if { $ports != "" } {
+       set ports [snmpUtilParsePortList $ports "Index"]
+     }
+    snmpDebug DEBUG "session is $session" $fd
+    result_debug "\n-- Setting STP Domain \"s0\" parameters --"
+
+    # --- Set STPD bridge priority
+    if { $priority != "" } {
+       set result [snmpSet -session $session \
+                           -oid dot1dStpPriority.0 \
+                           -type i -val $priority] 
+       snmpDebug LOG "$func snmpSet STPD Priority - $result" $fd
+    }
+
+    # --- Set STPD bridge maxage
+    if { $maxage != "" } {
+       set result [snmpSet -session $session \
+                           -oid dot1dStpBridgeMaxAge.0 \
+                           -type i -val $maxage] 
+       snmpDebug LOG "$func snmpSet STPD Bridge MaxAge - $result" $fd
+    }
+
+    # --- Set STPD bridge hellotime
+    if { $hellotime != "" } {
+       set result [snmpSet -session $session \
+                           -oid dot1dStpBridgeHelloTime.0 \
+                           -type i -val $hellotime] 
+       snmpDebug LOG "$func snmpSet STPD Bridge HelloTime - $result" $fd
+    }
+
+    # --- Set STPD bridge forward delay
+    if { $forwarddelay != "" } {
+       set result [snmpSet -session $session \
+                           -oid dot1dStpBridgeForwardDelay.0 \
+                           -type i -val $forwarddelay] 
+       snmpDebug LOG "$func snmpSet STPD Bridge Forward Delay - $result" $fd
+    }
+
+    # --- Set STPD port priority and port path cost
+    if { $ports != "" } {
+       if { $portpriority != "" } { 
+          set result [snmpSet -session $session \
+                              -oid dot1dStpPortPriority.$ports \
+                              -type i -val $portpriority] 
+          snmpDebug LOG "$func snmpSet port priority - $result" $fd
+        }
+       if { $portpathcost != "" } { 
+          set result [snmpSet -session $session \
+                              -oid dot1dStpPortPathCost.$ports \
+                              -type i -val $portpathcost] 
+          snmpDebug LOG "$func snmpSet port path cost - $result" $fd
+        }
+    }
+
+    snmpDebug DEBUG "$func - End\n" $fd
+}
+
+################################################################################
+#  Procedure Name: snmpSetStpFlagOnVlan
+#
+#  Description:
+#  This procedure enables STP protocol on a vlan with the specified 
+#  vlan name in the given DUT.
+#
+#  Input Variables:
+#    session  - Session identifier which identifies the connection
+#               with the DUT
+#    name     - Name of the VLAN on which STP is to be enabled
+#    status   - Enable/Disable, default set to enable
+#
+#  Optional Args:
+#    fd       - File descriptor for logging the command outputs
+#    comment  - Comments to be logged in log file
+#
+#  Output Variables:
+#     None
+#
+#  Return Variables:
+#    Logs the error message - On failure
+#
+#  Possible Usage:
+#    snmpSetStpFlagOnVlan -session $sessionid -vlanid "vl" -status "enable" 
+################################################################################
+proc snmpSetStpFlagOnVlan {args} {
+
+    parse_args snmpSetStpFlagOnVlan $args {
+       session ""
+       vlanid  "0"
+       status  "enable"
+       fd      "NULL"
+       comment "snmpSetStpFlagOnVlan"
+    }
+
+    set func "snmpSetStpFlagOnVlan:"
+    set retVal 0
+
+    if { $session == "" || $vlanid == 0} {
+       error "$func session and vlanid must be specified"
+       return $retVal
+    }
+
+    snmpDebug DEBUG "$func session-$session vlanid-$vlanid - Start" $fd
+    result_debug "\n-- Enabling STP protocol for this VLAN interface--"
+
+    set value 0
+    if {$status == "enable"} {
+       set value 1
+    } elseif {$status == "disable" } {
+       set value 2
+    } else {
+       result_error "The status should be either enable/disable"
+       return $retVal
+    }
+
+    set result [snmpSet -session $session \
+                        -oid extremeVlanIfIgnoreStpFlag.$vlanid -type i \
+                        -val $value]
+    set retVal 1
+
+    snmpDebug LOG "$func snmpSet-$result - End\n" $fd
+
+    snmpDebug DEBUG "$func - End\n" $fd
+
+    return $retVal
+}
+
+################################################################################
+#  Procedure Name: snmpSetBpduFlagOnVlan
+#
+#  Description:
+#  This procedure enables Bpdu flag on a vlan with the specified
+#  vlan name in the given DUT.
+#
+#  Input Variables:
+#    session  - Session identifier which identifies the connection
+#               with the DUT
+#    name     - Name of the VLAN on which BPDU's to be ignored by 
+#               Spanning Tree process
+#    status   - Enable/Disable, default set to enable
+#
+#  Optional Args:
+#    fd       - File descriptor for logging the command outputs
+#    comment  - Comments to be logged in log file
+#
+#  Output Variables:
+#     None
+#
+#  Return Variables:
+#    Logs the error message - On failure
+#
+#  Possible Usage:
+#    snmpSetBpduFlagOnVlan -session $sessionid -vlanid "v1" -status "enable"
+################################################################################
+proc snmpSetBpduFlagOnVlan {args} {
+
+    parse_args snmpSetBpduFlagOnVlan $args {
+       session ""
+       vlanid  "0"
+       status  "enable"
+       fd      "NULL"
+       comment "snmpSetBpduFlagOnVlan"
+    }
+
+    set func "snmpSetBpduFlagOnVlan:"
+    set retVal 0
+
+    if { $session == "" || $vlanid == 0} {
+       error "$func session and vlanid must be specified"
+       return $retVal
+    }
+
+    snmpDebug DEBUG "$func session-$session vlanid-$vlanid - Start" $fd
+    result_debug "\n-- Enabling VLAN's BPDU's to be ignored by the STP --"
+
+    set value 0
+    if {$status == "enable"} {
+       set value 1
+    } elseif {$status == "disable"} {
+       set value 2
+    } else {
+       result_error "The status should be either enable/disable"
+       return $retVal
+    }
+
+    set result [snmpSet -session $session \
+                        -oid extremeVlanIfIgnoreBpduFlag.$vlanid -type i \
+                        -val $value]
+    set retVal 1
+
+    snmpDebug LOG "$func snmpSet-$result - End\n" $fd
+
+    snmpDebug DEBUG "$func - End\n" $fd
+
+    return $retVal
+}
+
+##############################################################################
+#  Procedure Name: snmpCheckDefaultStpdParameters
+#  
+#  Description:
+#  This procedure checks the stpd parameters.
+#
+#  Input Variables:
+#    session            - Session identifier which identifies the connection
+#                         with the DUT
+#    name               - Stp domain name 
+#    protocol           - protocol specification dot1d, dot1w 
+#    priority           - Bridge priority 
+#    designatedroot     - Stpd Domain Designated Root
+#    rootcost           - Root Path Cost 
+#    maxage             - STP MaxAge 
+#    hellotime          - STP Hello Time 
+#    forwarddelay       - STP Forward Delay 
+#    bridgemaxage       - Bridge MaxAge 
+#    bridgehellotime    - Bridge Hello Time 
+#    bridgeforwarddelay - Bridge Forward Delay 
+#    holdtime           - Stpd Domain Hold Time
+#    topchanges         - Total number of topology changes detected by this 
+#                         bridge
+#    timesincetop       - The time since a topology changes was last
+#                         detected by this bridge
+#    ports              - Physical port for which entry contains STP info.
+#    portpriority       - Port priority of this port number in this STPD
+#    portstate          - Port state of this port number in this STPD
+#    portstatus         - Port status enable/disable of this port number in 
+#                         this STPD
+#    portpathcost       - Port path cost of this port number in this STPD
+#    portdroot          - Port designated root of this port number in this STPD
+#    portdcost          - Port designated cost of this port number in this STPD
+#    portdbridge        - Port designated bridge of this port number in 
+#                         this STPD
+#    portftransitions   - Number of times the port has transitioned from 
+#                         learning to forwarding state
+#
+#
+#  Optional Args:
+#    fd                 - File descriptor of open log file   
+#    comment            - Comments to be logged in log file
+# 
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    0 - On failure 
+#    1 - On success 
+#
+#  Possible Usage:
+#    snmpCheckDefaultStpdParameters -session $sessionid -name "s0"
+#                                   -priority 4 -maxage 20 -topchanges 1
+#                                   -port 2:4 -portstate "listening" 
+################################################################################
+
+proc snmpCheckDefaultStpdParameters { args } {
+    parse_args snmpCheckDefaultStpdParameters $args {
+       session             ""
+       name                ""
+       protocol            ""
+       priority            ""
+       designatedroot      ""
+       rootcost            ""
+       rootport            ""
+       maxage              ""
+       hellotime           ""
+       forwarddelay        ""
+       bridgemaxage        ""
+       bridgehellotime     ""
+       bridgeforwarddelay  ""
+       holdtime            ""
+       topchanges          ""
+       timesincetop        ""
+       ports               ""
+       portpriority        ""
+       portstate           ""
+       portstatus          ""
+       portpathcost        ""
+       portdroot           ""
+       portdcost           ""
+       portdbridge         ""
+       portftransitions    ""
+       fd                  "NULL"
+       comment             "snmpCheckDefaultStpdParameters"
+    }
+ 
+    set func "snmpCheckDefaultStpdParameters:" 
+    set retVal 0
+
+    if { $session == "" || $name != "s0" } {
+       error "$func SNMP session id, STP Domain name (s0) must be specified"
+       return $retVal 
+    }   
+
+    snmpDebug DEBUG "session is $session, STP Domain name is $name" $fd
+    result_debug "\n-- Checking STP Domain s0 parameters --"
+
+    report_start_test "$comment"
+    
+    # --- Check for the STPD s0 protocol
+    if { $protocol != "" } {
+        set result [snmpGet -session $session \
+                            -oid dot1dStpProtocolSpecification.0]
+        snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+        set protoVal [snmpUtilGetVal inttext $result]
+        if { [string compare [string tolower $protoVal] \
+                           [string tolower $protocol]] == 0 } {
+           result_ok "STPD s0 Parameter: Protocol is $protocol exists. PASS"
+           set retVal 1
+        } else {
+           result_error "STPD s0 Parameter: Protocol \
+                        expected $protocol but got $protoVal. FAIL"
+        }
+    }
+    
+    # --- Check for the STPD s0 since topology changes
+    if { $timesincetop != "" } {
+        set result [snmpGet -session $session \
+                        -oid dot1dStpTimeSinceTopologyChange.0]
+        snmpDebug DEBUG "snmpGet- $result\n" $fd
+        set topCVal [expr [snmpUtilGetVal timetick $result]/ 100]
+        set val1 [expr $timesincetop + 4]
+        if {$timesincetop <= $val1} {
+           result_ok "STPD s0 Parameter: Topology changes since $timesincetop \
+                      exists.PASS"
+           set retVal 1
+        } else {
+           result_error "STPD s0 Parameter: Topology changes since \
+                         expected $timesincetop but got $topCVal. FAIL"
+        }
+    }
+
+    # --- Check for the STPD s0 no. of topology changes
+    if { $topchanges != "" } {
+         set result [snmpGet -session $session -oid dot1dStpTopChanges.0]
+         snmpDebug DEBUG "snmpGet- $result\n" $fd
+         set topVal [snmpUtilGetVal counter $result]
+         if {$topchanges == $topVal} {
+            result_ok "STPD s0 Parameter: Topology changes $topchanges \
+                       exists. PASS"
+            set retVal 1
+         } else {
+            result_error "STPD s0 Parameter: Topology \
+                          changes expected $topchanges but got $topVal. FAIL"
+         }
+     }
+
+    # --- Check for the STPD s0 priority
+    if { $priority != "" } {
+        set result [snmpGet -session $session -oid dot1dStpPriority.0]
+        snmpDebug DEBUG "snmpGet- $result\n" $fd
+        set priVal [snmpUtilGetVal int $result]
+        if {$priority == $priVal} {
+           result_ok "STPD s0 Parameter: Priority $priority exists. PASS"
+           set retVal 1
+        } else {
+           result_error "STPD s0 Parameter: Priority expected $priority \
+                         but got $priVal. FAIL"
+        }
+    }
+
+    # --- Check for the STPD s0 designated root
+    if { $designatedroot != "" } {
+        set result [snmpGet -session $session -oid dot1dStpDesignatedRoot.0]
+        snmpDebug DEBUG "snmpGet- $result\n" $fd
+        set designatedVal [snmpUtilGetVal hex $result]
+        set delim ":"
+        regsub -all { } $designatedVal $delim designatedValue
+        set designatedValue [string trimright $designatedValue ':']
+        if { $designatedroot == $designatedValue } {
+           result_ok "STPD s0 Parameter: Designated Root \
+                      $designatedroot exists. PASS"
+           set retVal 1
+        } else {
+           result_error "STPD s0 Parameter: Designated Root expected \
+                         $designatedroot but got $designatedValue. FAIL"
+        }
+    }
+
+    # --- Check for the STPD s0 root cost
+    if { $rootcost != "" } {
+        set result [snmpGet -session $session -oid dot1dStpRootCost.0]
+        snmpDebug DEBUG "snmpGet- $result\n" $fd
+        set costVal [snmpUtilGetVal int $result]
+        if {$rootcost == $costVal} {
+           result_ok "STPD s0 Parameter: Root cost $rootcost exists. PASS"
+           set retVal 1
+        } else {
+           result_error "STPD s0 Parameter: Root cost expected $rootcost \
+                         but got $costVal. FAIL"
+        }
+    }
+
+    # --- Check for the STPD s0 root port
+    if { $rootport != "" } {
+        set rootport [snmpUtilParsePortList $rootport "Index"]
+        set result [snmpGet -session $session -oid dot1dStpRootPort.0]
+        snmpDebug DEBUG "snmpGet- $result\n" $fd
+        set rootVal [snmpUtilGetVal int $result]
+        if {$rootport == $rootVal} {
+           result_ok "STPD s0 Parameter: Root port $rootport exists. PASS"
+           set retVal 1
+        } else {
+           result_error "STPD s0 Parameter: Root port expected $rootport \
+                         but got $rootVal. FAIL"
+        }
+    }
+
+    # --- Check for the STPD s0 maxage
+    if { $maxage != "" } {
+        set result [snmpGet -session $session -oid dot1dStpMaxAge.0]
+        snmpDebug DEBUG "snmpGet- $result\n" $fd
+        set ageVal [expr [snmpUtilGetVal int $result] / 100]
+        if {$maxage == $ageVal} {
+           result_ok "STPD s0 Parameter: MaxAge $maxage exists. PASS"
+           set retVal 1
+        } else {
+           result_error "STPD s0 Parameter: MaxAge expected $maxage \
+                         but got $ageVal. FAIL"
+        }
+    }
+
+    # --- Check for the STPD s0 hello time
+    if { $hellotime != "" } {
+        set result [snmpGet -session $session -oid dot1dStpHelloTime.0]
+        snmpDebug DEBUG "snmpGet- $result\n" $fd
+        set helloVal [expr [snmpUtilGetVal int $result] / 100]
+        if {$hellotime == $helloVal} {
+           result_ok "STPD s0 Parameter: HelloTime $hellotime exists. PASS"
+           set retVal 1
+        } else {
+           result_error "STPD s0 Parameter: HelloTime expected $hellotime \
+                         but got $helloVal. FAIL"
+        }
+    }
+
+    # --- Check for the STPD s0 forwarddelay
+    if { $forwarddelay != "" } {
+        set result [snmpGet -session $session -oid dot1dStpForwardDelay.0]
+        snmpDebug DEBUG "snmpGet- $result\n" $fd
+        set delayVal [expr [snmpUtilGetVal int $result] / 100]
+        if {$forwarddelay == $delayVal} {
+           result_ok "STPD s0 Parameter: Forward Delay $forwarddelay \
+                      exists. PASS"
+           set retVal 1
+        } else {
+           result_error "STPD s0 Parameter: Forward Delay expected \
+                         $forwarddelay but got $delayVal. FAIL"
+        }
+    }
+
+    # --- Check for the STPD s0 hold time
+    if { $holdtime != "" } {
+        set result [snmpGet -session $session \
+                            -oid dot1dStpHoldTime.0]
+        snmpDebug DEBUG "snmpGet- $result\n" $fd
+        set holdTimeVal [expr [snmpUtilGetVal int $result] / 100]
+        if {$holdtime == $holdTimeVal} {
+           result_ok "STPD s0 Parameter: HoldTime $holdtime exists. PASS"
+           set retVal 1
+        } else {
+           result_error "STPD s0 Parameter: HoldTime expected $holdtime \
+                         but got $holdTimeVal. FAIL"
+        }
+    }
+
+    # --- Check for the STPD s0 bridge maxage
+    if { $bridgemaxage != "" } {
+        set result [snmpGet -session $session -oid dot1dStpBridgeMaxAge.0]
+        snmpDebug DEBUG "snmpGet- $result\n" $fd
+        set ageVal [expr [snmpUtilGetVal int $result]/100]
+        if {$bridgemaxage == $ageVal} {
+           result_ok "STPD s0 Parameter: Bridge MaxAge $maxage exists. PASS"
+           set retVal 1
+        } else {
+           result_error "STPD s0 Parameter: Bridge MaxAge expected $maxage \
+                         but got $ageVal. FAIL"
+        }
+    }
+
+    # --- Check for the STPD s0 bridge hello time
+    if { $bridgehellotime != "" } {
+        set result [snmpGet -session $session -oid dot1dStpBridgeHelloTime.0]
+        snmpDebug DEBUG "snmpGet- $result\n" $fd
+        set helloVal [expr [snmpUtilGetVal int $result]/100]
+        if {$bridgehellotime == $helloVal} {
+           result_ok "STPD s0 Parameter: Bridge HelloTime $hellotime exists. \
+                      PASS"
+           set retVal 1
+        } else {
+           result_error "STPD s0 Parameter: Bridge HelloTime expected \
+                         $hellotime but got $helloVal. FAIL"
+        }
+    }
+
+    # --- Check for the STPD s0 bridge forwarddelay
+    if { $bridgeforwarddelay != "" } {
+        set result [snmpGet -session $session -oid dot1dStpBridgeForwardDelay.0]
+        snmpDebug DEBUG "snmpGet- $result\n" $fd
+        set delayVal [expr [snmpUtilGetVal int $result]/100]
+        if {$bridgeforwarddelay == $delayVal} {
+           result_ok "STPD s0 Parameter: Bridge Forward Delay $forwarddelay \
+                      exists. PASS"
+           set retVal 1
+        } else {
+           result_error "STPD s0 Parameter: Bridge Forward Delay expected \
+                         $forwarddelay but got $delayVal. FAIL"
+        }
+    }
+
+    if { $ports != "" } {
+       set ports [snmpUtilParsePortList $ports "Index"]
+ 
+       # --- Check for the STPD s0 port priority
+       if {$portpriority != ""} {
+          set result [snmpGet -session $session \
+                              -oid dot1dStpPortPriority.$ports]
+          snmpDebug DEBUG "snmpGet- $result\n" $fd
+          set portPriVal [snmpUtilGetVal int $result]
+          if {$portpriority == $portPriVal} {
+             result_ok "STP s0 Port Parameter: Priority $portpriority exists. \
+                        PASS"
+             set retVal 1
+          } else {
+             result_error "STPD s0 Port Parameter: Priority expected \
+                           $portpriority but got $portPriVal. FAIL"
+          }
+       }
+       
+       # --- Check for the STPD s0 port state
+       if {$portstate != ""} {
+          set result [snmpGet -session $session \
+                              -oid dot1dStpPortState.$ports]
+          snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+          set portVal [snmpUtilGetVal inttext $result]
+          if { [string compare [string tolower $portVal] \
+                             [string tolower $portstate]] == 0 } {
+             result_ok "STPD s0 Port Parameter: Port state for port#$ports \
+                        is $portstate exists. PASS"
+          } else {
+             result_error "STPD s0 Port Parameter: Port state for port#$ports \
+                          expected $portstate but got $portVal. FAIL"
+          }
+       }
+
+       # --- Check for the STPD s0 port status
+       if { $portstatus != "" } {
+          set result [snmpGet -session $session \
+                              -oid dot1dStpPortEnable.$ports]
+          snmpDebug DEBUG "snmpGet- $result\n" $fd
+  
+          set typeVal [snmpUtilGetVal inttext $result]
+          if { [string compare [string tolower $typeVal] \
+                             [string tolower $portstatus]] == 0 } {
+             result_ok "STPD s0 Port Parameter: Port status for port#$ports \
+                        is $portstatus exists. PASS"
+             set retVal 1
+          } else {
+             result_error "STPD s0 Port Parameter: Port status for port#$ports \
+                          expected $portstatus but got $typeVal. FAIL"
+          }
+       }
+
+       # --- Check for the STPD s0 port path cost
+       if { $portpathcost != "" } {
+           set result [snmpGet -session $session \
+                               -oid dot1dStpPortPathCost.$ports]
+           snmpDebug DEBUG "snmpGet- $result\n" $fd
+           set costVal [snmpUtilGetVal int $result]
+           if {$portpathcost == $costVal} {
+              result_ok "STPD s0 port Parameter: Port path cost \
+                         $portpathcost exists. PASS"
+              set retVal 1
+           } else {
+              result_error "STPD s0 port Parameter: Port path \
+                            cost expected $portpathcost but got $costVal. FAIL"
+           }
+       }
+
+       # --- Check for the STPD s0 port designated root
+       if { $portdroot != "" } {
+           set result [snmpGet -session $session \
+                               -oid dot1dStpPortDesignatedRoot.$ports]
+           snmpDebug DEBUG "snmpGet- $result\n" $fd
+           set designatedVal [snmpUtilGetVal hex $result]
+           set delim ":"
+           regsub -all { } $designatedVal $delim designatedValue
+           set designatedValue [string trimright $designatedValue ':']
+           if { $portdroot == $designatedValue } {
+              result_ok "STPD s0 Port Parameter: Designated Root $portdroot \
+                         exists. PASS"
+              set retVal 1
+           } else {
+              result_error "STPD s0 Port Parameter: Designated Root \
+                            expected $portdroot but got $designatedVal. FAIL"
+           }
+       }
+
+       # --- Check for the STPD s0 port designated cost
+       if { $portdcost != "" } {
+           set result [snmpGet -session $session \
+                               -oid dot1dStpPortDesignatedCost.$ports]
+           snmpDebug DEBUG "snmpGet- $result\n" $fd
+           set costVal [snmpUtilGetVal int $result]
+           if {$portdcost == $costVal} {
+              result_ok "STPD s0 port Parameter: Port designated path cost \
+                         $portdcost exists. PASS"
+              set retVal 1
+           } else {
+              result_error "STPD s0 port Parameter: Port designated path cost \
+                            expected $portdcost but got $costVal. FAIL"
+           }
+       }
+
+       # --- Check for the STPD s0 port designated bridge
+       if { $portdbridge != "" } {
+           set result [snmpGet -session $session \
+                               -oid dot1dStpPortDesignatedBridge.$ports]
+           snmpDebug DEBUG "snmpGet- $result\n" $fd
+           set designatedVal [snmpUtilGetVal hex $result]
+           set delim ":"
+           regsub -all { } $designatedVal $delim designatedValue
+           set designatedValue [string trimright $designatedValue ':']
+           if { $portdbridge == $designatedValue } {
+              result_ok "STPD s0 Port Parameter: Designated \
+                         Bridge $portdbridge exists. PASS"
+              set retVal 1
+           } else {
+              result_error "STPD s0 Port Parameter: Designated Bridge \
+                            $portdbridge not found. FAIL"
+           }
+       }
+
+       # --- Check for the STPD s0 no. of forward transitions
+       if { $portftransitions != "" } {
+            set result [snmpGet -session $session \
+                                -oid dot1dStpPortForwardTransitions.0]
+            snmpDebug DEBUG "snmpGet- $result\n" $fd
+            set forwardTVal [snmpUtilGetVal counter $result]
+            if {$portftransitions == $forwardTVal} {
+               result_ok "STPD s0 Port Parameter: No. of forward transitions \
+                          $portftransitions exists. PASS"
+               set retVal 1
+            } else {
+               result_error "STPD s0 Port Parameter: No. of forward \
+                             transitions expected $portftransitions but got \
+                             $forwardtVal. FAIL"
+            }
+        }
+    }
+
+    report_end_test
+    snmpDebug DEBUG "$func - End\n" $fd
+    return $retVal
+}
+
+############################################################################
+#  Procedure Name: snmpCheckDot1qParameters
+#  
+#  Description:
+#  This procedure checks the Dot1q parameters.
+#
+#  Input Variables:
+#    session            - Session identifier which identifies the connection
+#                         with the DUT
+#    name               - Stp domain name 
+#    versionno          - Version number of IEEE 802.1Q that device supports 
+#    maxvlanid          - Max no. IEEE 802.1Q VLAN ID that device supports  
+#    maxsupportedvlans  - Max no. IEEE 802.1Q VLANs that device supports  
+#    numvlans           - Current no. of IEEE 802.1Q VLANs that 
+#                         are configured in this device 
+#    gvrpstatus         - Gvrp status enable/disable for the device
+#
+#  Optional Args:
+#    fd                 - File descriptor of open log file   
+#    comment            - Comments to be logged in log file
+# 
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    0 - On failure 
+#    1 - On success 
+#
+#  Possible Usage:
+#    snmpCheckDot1qParameters -session $sessionid -versionno 1
+#                             -maxvlanid 4095 -numvlans 3
+##############################################################################
+
+proc snmpCheckDot1qParameters { args } {
+    parse_args snmpCheckDot1qParameters $args {
+       session           ""
+       versionno         ""
+       maxvlanid         ""
+       maxsupportedvlans ""
+       numvlans          ""
+       gvrpstatus        ""
+       fd                "NULL"
+       comment           "snmpCheckDot1qParameters"
+    }
+ 
+    set func "snmpCheckDot1qParameters:" 
+    set retVal 0
+
+    if { $session == "" } {
+       error "$func SNMP session id must be specified"
+       return $retVal 
+    }   
+
+    snmpDebug DEBUG "session is $session" $fd
+    result_debug "\n-- Checking Dot1q Base group parameters --"
+
+    report_start_test "$comment"
+
+    # --- Check for the dot1q version number
+    if { $versionno != "" } {
+        set result [snmpGet -session $session \
+                            -oid dot1qVlanVersionNumber.0]
+        snmpDebug DEBUG "snmpGet- $result\n" $fd
+        set typeVal [snmpUtilGetVal inttext $result]
+        if { [string compare [string tolower $typeVal] \
+                           [string tolower $versionno]] == 0 } {
+           result_ok "Dot1q Parameter: Version no. $versionno exists. PASS"
+           set retVal 1
+        } else {
+           result_error "Dot1q Parameter: Version no. expected $versionno \
+                         but got $typeVal. FAIL"
+        }
+    }
+    
+    # --- Check for the dot1q maximum vlan id
+    if { $maxvlanid != "" } {
+        set result [snmpGet -session $session -oid dot1qMaxVlanId.0]
+        snmpDebug DEBUG "snmpGet- $result\n" $fd
+        set maxVal [snmpUtilGetVal int $result]
+        if {$maxvlanid == $maxVal} {
+           result_ok "Dot1q Parameter: MaxVlanId $maxvlanid exists. PASS"
+           set retVal 1
+        } else {
+           result_error "Dot1q Parameter: MaxVlanId expected $maxvlanid but \
+                         got $maxVal. FAIL"
+        }
+    }
+    
+    # --- Check for the dot1q maximum supported vlans
+    if { $maxsupportedvlans != "" } {
+        set result [snmpGet -session $session -oid dot1qMaxSupportedVlans.0]
+        snmpDebug DEBUG "snmpGet- $result\n" $fd
+        set maxsVal [snmpUtilGetVal gauge $result]
+        if {$maxsupportedvlans == $maxsVal} {
+           result_ok "Dot1q Parameter: Max supported Vlans \
+                      $maxsupportedvlans exists. PASS"
+           set retVal 1
+        } else {
+           result_error "Dot1q Parameter: Max supported Vlans \
+                         expected $maxsupportedvlans but got $maxsVal. FAIL"
+        }
+    }
+    
+    # --- Check for the dot1q number of vlans
+    if { $numvlans != "" } {
+        set result [snmpGet -session $session -oid dot1qNumVlans.0]
+        snmpDebug DEBUG "snmpGet- $result\n" $fd
+        set numVal [snmpUtilGetVal gauge $result]
+        if {$numvlans == $numVal} {
+           result_ok "Dot1q Parameter: No. of Vlans \
+                      $numvlans exists. PASS"
+           set retVal 1
+        } else {
+           result_error "Dot1q Parameter: No. of Vlans \
+                        expected $numvlans but got $numVal. FAIL"
+        }
+    }
+
+    # --- Check for the dot1q GVRP status
+    if { $gvrpstatus != "" } {
+        set result [snmpGet -session $session -oid dot1qGvrpStatus.0]
+        snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+        set typeVal [snmpUtilGetVal inttext $result]
+        if { [string compare [string tolower $typeVal] \
+                           [string tolower $gvrpstatus]] == 0 } {
+           result_ok "Dot1q Parameter: Gvrp status $gvrpstatus exists. PASS"
+        } else {
+           result_error "Dot1q Parameter: Gvrp status expected $gvrpstatus \
+                         but got $typeVal. FAIL"
+        }
+    }
+
+    report_end_test
+    snmpDebug DEBUG "$func - End\n" $fd
+    return $retVal
+}
+
+#############################################################################
+#  Procedure Name: snmpCheckDot1qTpFdbTable
+#  
+#  Description:
+#  This procedure checks the Dot1qTpFdb Table.
+#
+#  Input Variables:
+#    session            - Session identifier which identifies the connection
+#                         with the DUT
+#    fdbid              - Identity of this filtering database 
+#    tpfdbaddress       - Unicast MAC address for which the device has
+#                         forwarding /filtering information 
+#    tpfdbport          - Port number of the port on which frame having
+#                         src address equal to corresponding tpfdbaddress  
+#    tpfdbstatus        - Status of entry 
+#
+#  Optional Args:
+#    fd                 - File descriptor of open log file   
+#    comment            - Comments to be logged in log file
+# 
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    0 - On failure 
+#    1 - On success 
+#
+#  Possible Usage:
+#    snmpCheckDot1qTpFdbTable -session $sessionid -fdbid 4094 -tpfdbport 3:4
+#                             -tpfdbstatus "learned" 
+#                             -tpfdbaddress "01:80:C0:12:21:12"
+##############################################################################
+
+proc snmpCheckDot1qTpFdbTable { args } {
+    parse_args snmpCheckDot1qTpFdbTable $args {
+       session           ""
+       fdbid             ""
+       tpfdbaddress      ""
+       tpfdbport         ""
+       tpfdbstatus       ""
+       fd                "NULL"
+       comment           "snmpCheckDot1qTpFdbTable"
+    }
+ 
+    set func "snmpCheckDot1qTpFdbTable:" 
+    set retVal 0
+
+    if { $session == "" || $fdbid == "" || $tpfdbaddress == ""} {
+       error "$func SNMP session id, fdb id, fdb mac address must be specified"
+       return $retVal 
+    }   
+
+    snmpDebug DEBUG "session is $session, id $fdbid, address $tpfdbaddress" $fd
+    result_debug "\n-- Checking Dot1q TpFdbTable entries--"
+
+    report_start_test "$comment"
+    
+    if { $tpfdbport != "" } {
+      set tpfdbport [snmpUtilParsePortList $tpfdbport]
+
+      # --- Check for the dot1qTpFdbTable port number
+      set result [snmpGet -session $session \
+                          -oid dot1qTpFdbPort.$fdbid.$tpfdbaddress]
+      snmpDebug DEBUG "snmpGet- $result\n" $fd
+      set portVal [snmpUtilGetVal int $result]
+      if {$tpfdbport == $portVal} {
+         result_ok "Dot1q Tp Fdb Port no: $tpfdbport exists. PASS"
+         set retVal 1
+      } else {
+         result_error "Dot1q Tp Fdb Port no: expected $tpfdbport but \
+                       got $portVal. FAIL"
+      }
+   }
+
+   # --- Check for the dot1qTpFdbTable fdb status
+   if { $tpfdbstatus != "" } {
+       set result [snmpGet -session $session \
+                           -oid dot1qTpFdbStatus.$fdbid.$tpfdbaddress]
+       snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+        set typeVal [snmpUtilGetVal inttext $result]
+        if { [string compare [string tolower $typeVal] \
+                           [string tolower $tpfdbstatus]] == 0 } {
+           result_ok "Dot1q Tp Fdb Port Status: $tpfdbstatus exists. PASS"
+        } else {
+           result_error "Dot1q Tp Fdb Port Status: expected $tpfdbstatus \
+                         but got $typeVal. FAIL"
+        }
+   }
+
+   report_end_test
+   snmpDebug DEBUG "$func - End\n" $fd
+   return $retVal
+}
+
+#############################################################################
+#  Procedure Name: snmpCheckDot1qPortVlanTable
+#  
+#  Description:
+#  This procedure checks the per port control and status information
+#  for VLAN configuration in the device.
+#
+#  Input Variables:
+#    session                 - Session identifier which identifies the 
+#                              connection with the DUT
+#    portno                  - Port no. on which to check the status 
+#    pvid                    - The VLAN ID assigned to untagged 
+#                              frames received on this portno.
+#    acceptableframetype     - To accept/discard untagged frames
+#                              for this portno.
+#    ingressfiltering        - True/False, whether to accept/discard 
+#                              incoming frames on this portno.
+#    gvrpstatus              - Gvrp status enable/disable on this portno.
+#    gvrpfailedregistrations - Total no. of failed Gvrp registrations on this 
+#                              portno.
+#    gvrplastpduorigin       - Src MAC address of the last GVRP message 
+#                              received on this portno.
+#
+#  Optional Args:
+#    fd                      - File descriptor of open log file   
+#    comment                 - Comments to be logged in log file
+# 
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    0 - On failure 
+#    1 - On success 
+#
+#  Possible Usage:
+#    snmpCheckDot1qPortVlanTable -session $sessionid -portno 4:3 -pvid 4093
+#                                -acceptableframetype "admitall"
+##############################################################################
+
+proc snmpCheckDot1qPortVlanTable { args } {
+    parse_args snmpCheckDot1qPortVlanTable $args {
+       session                  ""
+       portno                   ""
+       pvid                     ""
+       acceptableframetype      ""
+       ingressfiltering         ""
+       gvrpstatus               ""
+       gvrpfailedregistrations  ""
+       gvrplastpduorigin        ""
+       fd                       "NULL"
+       comment                  "snmpCheckDot1qPortVlanTable"
+    }
+ 
+    set func "snmpCheckDot1qPortVlanTable:" 
+    set retVal 0
+
+    if { $session == "" || $portno == ""} {
+       error "$func SNMP session id, port no must be specified"
+       return $retVal 
+    }   
+
+    snmpDebug DEBUG "session is $session" $fd
+    result_debug "\n-- Checking Dot1q Port Vlan Table Entry Parameters--"
+
+    report_start_test "$comment"
+
+    set portno [snmpUtilParsePortList $portno]
+
+    # --- Check for the dot1qPortVlanTable Pvid
+    if { $pvid != "" } {
+        set result [snmpGet -session $session \
+                            -oid dot1qPvid.$portno]
+        snmpDebug DEBUG "snmpGet- $result\n" $fd
+        set portVal [snmpUtilGetVal gauge $result]
+        if {$pvid == $portVal} {
+           result_ok "Dot1q Port Vlan Table: Pvid $pvid exists. PASS"
+           set retVal 1
+        } else {
+           result_error "Dot1q Port Vlan Table: Pvid expected $pvid \
+                         but got $portVal. FAIL"
+        }
+    }
+    
+    # --- Check for the dot1qPortVlanTable acceptable frames type
+    if { $acceptableframetype != "" } {
+        set result [snmpGet -session $session \
+                            -oid dot1qPortAcceptableFrameTypes.$portno]
+        snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+        set typeVal [snmpUtilGetVal inttext $result]
+        if { [string compare [string tolower $typeVal] \
+                           [string tolower $acceptableframetype]] == 0 } {
+           result_ok "Dot1q Port Vlan Table: Accept Frame type is \
+                      $acceptableframetype exists. PASS"
+        } else {
+           result_error "Dot1q Port Vlan Table: Accept Frame type \
+                         expected $acceptableframetype but got $typeVal. FAIL"
+        }
+    }
+
+    # --- Check for the dot1qPortVlanTable ingress filtering
+    if { $ingressfiltering != "" } {
+        set result [snmpGet -session $session \
+                            -oid dot1qPortIngressFiltering.$portno]
+        snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+        set typeVal [snmpUtilGetVal inttext $result]
+        if { [string compare [string tolower $typeVal] \
+                           [string tolower $ingressfiltering]] == 0 } {
+           result_ok "Dot1q Port Vlan Table: Ingress filtering is \
+                      $ingressfiltering exists. PASS"
+        } else {
+           result_error "Dot1q Port Vlan Table: Ingress filtering \
+                         expected $ingressfiltering but got $typeVal. FAIL"
+        }
+    }
+
+    # --- Check for the dot1qPortVlanTable GVRP status
+    if { $gvrpstatus != "" } {
+        set result [snmpGet -session $session -oid dot1qPortGvrpStatus.$portno]
+        snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+        set typeVal [snmpUtilGetVal inttext $result]
+        if { [string compare [string tolower $typeVal] \
+                           [string tolower $gvrpstatus]] == 0 } {
+           result_ok "Dot1q Port Vlan Table: Gvrp status is \
+                      $gvrpstatus exists. PASS"
+        } else {
+           result_error "Dot1q Port Vlan Table: Gvrp status is \
+                         expected $gvrpstatus but got $typeVal. FAIL"
+        }
+    }
+
+    # --- Check for the dot1qPortVlanTable GVRP failed registrations
+    if { $gvrpfailedregistrations != "" } {
+        set result [snmpGet -session $session \
+                            -oid dot1qPortGvrpFailedRegistrations.$portno]
+        snmpDebug DEBUG "snmpGet- $result\n" $fd
+        set failVal [snmpUtilGetVal counter $result]
+        if {$gvrpfailedregistrations == $failVal} {
+           result_ok "Dot1q Port Vlan Table: No. of failed GVRP registrations \
+                      $gvrpfailedregistrations exists. PASS"
+           set retVal 1
+        } else {
+           result_error "Dot1q Port Vlan Table: No. of failed GVRP \
+                        registrations expected $gvrpfailedregistrations \
+                        but got $failVal. FAIL"
+        }
+    }
+
+    # --- Check for the dot1qPortVlanTable GVRP last pdu origin
+    if { $gvrplastpduorigin != "" } {
+        set result [snmpGet -session $session \
+                            -oid dot1qPortGvrpLastPduOrigin.$portno]
+        snmpDebug DEBUG "snmpGet- $result\n" $fd
+        set lastVal [snmpUtilGetVal mac $result]
+        if {$gvrplastpduorigin == $lastVal} {
+           result_ok "Dot1q Port Vlan Table: Src MAC address of the last GVRP \
+                      message $gvrplastpduorigin exists. PASS"
+           set retVal 1
+        } else {
+           result_ok "Dot1q Port Vlan Table: Src MAC address of the last GVRP \
+                      message expected $gvrplastpduorigin but \
+                      got $lastVal. FAIL"
+        }
+    }
+
+    report_end_test
+    snmpDebug DEBUG "$func - End\n" $fd
+    return $retVal
+}
+
+############################################################################
+#  Procedure Name: snmpCheckDot1dPortPriorityTable
+#  
+#  Description:
+#  This procedure checks the per port control and status information
+#  associated with this transparent bridge.
+#
+#  Input Variables:
+#    session            - Session identifier which identifies the connection
+#                         with the DUT
+#    setoption          - Set to true to set defaultuserpriority object value
+#    portno             - Port no. on which to check the status 
+#    defaultuserpriority- The default ingress User Priority for this portno.
+#    numtrafficclasses  - The no. of egress traffic classes supported on
+#                         this portno.
+#
+#  Optional Args:
+#    fd                 - File descriptor of open log file   
+#    comment            - Comments to be logged in log file
+# 
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    0 - On failure 
+#    1 - On success 
+#
+#  Possible Usage:
+#    snmpCheckDot1qPortPriorityTable -session $sessionid -portno 4
+#                                    -defaultuserpriority 6
+#############################################################################
+
+proc snmpCheckDot1qPortPriorityTable { args } {
+    parse_args snmpCheckDot1qPortPriorityTable $args {
+       session                  ""
+       setoption                "false"
+       portno                   ""
+       defaultuserpriority      ""
+       numtrafficclasses        ""
+       fd                       "NULL"
+       comment                  "snmpCheckDot1qPortPriorityTable"
+    }
+ 
+    set func "snmpCheckDot1qPortPriorityTable:" 
+    set retVal 0
+
+    if { $session == "" || $portno == ""} {
+       error "$func SNMP session id, port no must be specified"
+       return $retVal 
+    }   
+
+    snmpDebug DEBUG "session is $session" $fd
+
+    report_start_test "$comment"
+
+    set portno [snmpUtilParsePortList $portno]
+
+    # --- Set dot1qPortPriorityTable default user priority
+    if { $setoption != "false" } {
+       if { $defaultuserpriority <= 7 } {
+          result_debug "\n-- Setting Dot1q Port Priority Table Parameters--"
+          set result [snmpSet -session $session \
+                              -oid dot1dPortDefaultUserPriority.$portno \
+                              -type i -val $defaultuserpriority]
+
+          snmpDebug DEBUG "$func snmpSet-$result \n" $fd
+          set retVal 1
+       } else {
+          result_error "The value of default user priority should be less \
+                        the 7"
+       }
+       report_end_test
+       snmpDebug DEBUG "$func - End\n" $fd
+       return $retVal
+    }
+
+    result_debug "\n-- Checking Dot1q Port Priority Table Parameters--"
+
+    # --- Check for the dot1qPortPriorityTable default user priority
+    if { $defaultuserpriority != "" } {
+        set result [snmpGet -session $session \
+                            -oid dot1dPortDefaultUserPriority.$portno]
+        snmpDebug DEBUG "snmpGet- $result\n" $fd
+        set userVal [snmpUtilGetVal int $result]
+        if {$defaultuserpriority == $userVal} {
+           result_ok "Dot1q Port Priority Table: Ingress User priority \
+                      $defaultuserpriority exists. PASS"
+           set retVal 1
+        } else {
+           result_error "Dot1q Port Priority Table: Ingress User priority \
+                      expected $defaultuserpriority but got $userVal. FAIL"
+        }
+    }
+    
+    # --- Check for the dot1qPortPriorityTable no. of traffic classes
+    if { $numtrafficclasses != "" } {
+        set result [snmpGet -session $session \
+                            -oid dot1dPortNumTrafficClasses.$portno]
+        snmpDebug DEBUG "snmpGet- $result\n" $fd
+        set trafficVal [snmpUtilGetVal int $result]
+        if {$numtrafficclasses == $trafficVal} {
+           result_ok "Dot1q Port Priority Table: No. of egress traffic \
+                      $numtrafficclasses exists. PASS"
+           set retVal 1
+        } else {
+           result_error "Dot1q Port Priority Table: No. of egress traffic \
+                      expected $numtrafficclasses but got $trafficVal. FAIL"
+        }
+    }
+
+    report_end_test
+    snmpDebug DEBUG "$func - End\n" $fd
+    return $retVal
+}
+#############################################################################
+#  Procedure Name: snmpCreateDot1qVlanStaticTable
+#
+#  Description:
+#  This procedure creates a vlan with the specified vlan name
+#  in the given DUT.
+#
+#  Input Variables:
+#    session              - Session identifier which identifies the connection
+#                           with the DUT
+#    staticname           - Name of the VLAN to be created
+#    egressports          - Set of the ports which are permanently assigned to
+#                           egress list for this VLAN
+#    forbiddenegressports - Set of the ports which are prohibited by mgmt
+#                           from being included in egress list for this VLAN 
+#    untaggedports        - Set of the ports which should transmit 
+#                           egress packets for this VLAN
+#
+#  Optional Args:
+#    fd                   - File descriptor for logging the command outputs
+#    comment              - Comments to be logged in log file
+#
+#  Output Variables:
+#     None
+#
+#  Return Variables:
+#    Logs the error message - On failure
+#    vlan identifier - On success
+#
+#  Possible Usage:
+#    snmpCreateDot1qVlanStaticTable -session $sessionid -name "vlanStatic"
+#############################################################################
+
+proc snmpCreateDot1qVlanStaticTable { args } {
+    parse_args snmpCreateDot1qVlanStaticTable $args {
+       session              ""
+       staticname           ""
+       egressports          ""
+       forbiddenegressports ""
+       untaggedports        ""
+       fd                   "NULL"
+       comment              "snmpCreateDot1qVlanStaticTable"
+    }
+
+    set func "snmpCreateDot1qVlanStaticTable:"
+
+    if { $session == "" || $staticname == "" } {
+       error "$func session and static vlan name must be specified"
+       return
+    }
+
+    snmpDebug LOG "$func sess-$session vlanname-$staticname fd-$fd -Start" $fd
+
+    result_debug "\n-- Creating Static VLAN $staticname using \
+                       Dot1qVlanStaticTable--"
+
+    set vlanIfIndex [snmpGet -session $session \
+                             -oid extremeNextAvailableVirtIfIndex.0]
+
+    snmpDebug LOG "$func snmpGet-$vlanIfIndex" $fd
+
+    set res [snmpUtilGetVal int $vlanIfIndex]
+
+    # --- Create dot1qVlanStaticTable entry
+    set result [snmpSet -session $session \
+                -oid dot1qVlanStaticName.$res -type s -val $staticname \
+                -oid dot1qVlanStaticEgressPorts.$res -type d \
+                -val "$egressports" \
+                -oid dot1qVlanForbiddenEgressPorts.$res -type d \
+                -val "$forbiddenegressports" \
+                -oid dot1qVlanStaticUntaggedPorts.$res -type d \
+                -val "$untaggedports" \
+                -oid dot1qVlanStaticRowStatus.$res -type i -val "4"]
+
+    snmpDebug LOG "$func snmpSet-$result" $fd
+
+    snmpDebug LOG "$func result-$res -End\n" $fd
+    return $res
+}
+
+##########################################################################
+#  Procedure Name: snmpDeleteDot1qVlanStaticTableEntry
+#
+#  Description:
+#  This procedure deletes a vlan with the specified vlan name
+#  in the given DUT created using snmpCreateDot1qVlanStaticTableEntry.
+#
+#  Input Variables:
+#    session - Session identifier which identifies the connection
+#              with the DUT
+#    vlanid  - VlanIdIndex of the VLAN to be deleted
+#
+#  Optional Args:
+#    fd      - File descriptor for logging the command outputs
+#    comment - Comments to be logged in log file
+#
+#  Output Variables:
+#     None
+#
+#  Return Variables:
+#    Logs the error message - On failure
+#
+#  Possible Usage:
+#    snmpDeleteDot1qVlanStaticTableEntry -session $sessionid -vlanid 123
+###########################################################################
+proc snmpDeleteDot1qVlanStaticTableEntry {args} {
+
+    parse_args snmpDeleteDot1qVlanStaticTableEntry $args {
+       session  ""
+       vlanid   "0"
+       fd       "NULL"
+       comment  "snmpDeleteDot1qVlanStaticTableEntry"
+    }
+
+    set func "snmpDeleteDot1qVlanStaticTableEntry:"
+
+    if { $session == "" || $vlanid == 0} {
+       error "$func session and vlanid must be specified"
+       return 0
+    }
+
+    snmpDebug DEBUG "$func session-$session vlanid-$vlanid - Start" $fd
+
+    result_debug "\n-- Deleting VLAN created using \
+                       snmpCreateDot1qVlanStaticTable --"
+
+    # --- Delete dot1qVlanStaticTable entry
+    set result [snmpSet -session $session \
+                        -oid dot1qVlanStaticRowStatus.$vlanid -type i -val 6]
+
+    snmpDebug LOG "$func snmpSet-$result" $fd
+
+    snmpDebug DEBUG "$func snmpSet-$result - End\n" $fd
+
+    return 1
+}
+
+########################################################################
+#  Procedure Name: snmpCheckDot1dBaseGroupParameters 
+#  
+#  Description:
+#  This procedure checks for dot1dBase group parameters.
+#
+#  Input Variables:
+#    session        - Session identifier which identifies the connection
+#                     with the DUT
+#    baddress       - MAC address used by this bridge
+#    baseports      - Number of ports controlled by this bridge
+#    basetype       - Type of bridging this bridge can perform
+#                     unknown
+#                     transparent-only
+#                     sourceroute-only
+#                     srt 
+#
+#  Optional Args:
+#    fd             - File descriptor of open log file   
+#    comment        - Comments to be logged in log file
+# 
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    0 - On failure 
+#    1 - On success 
+#
+#  Possible Usage:
+#    snmpCheckDot1dBaseGroupParameters -session $sessionid -baseports 2
+#                                      -basetype "transparent"
+##########################################################################
+
+proc snmpCheckDot1dBaseGroupParameters { args } {
+    parse_args snmpCheckDot1dBaseGroupParameters $args {
+       session        ""
+       baddress       ""
+       baseports      ""
+       basetype       ""
+       fd             "NULL"
+       comment        "snmpCheckDot1dBaseGroupParameters"
+    }
+ 
+    set func "snmpCheckDot1dBaseGroupParameters:" 
+    set retVal 0
+
+    if { $session == "" } {
+       error "$func SNMP session id must be specified"
+       return $retVal 
+    }   
+
+    snmpDebug DEBUG "session is $session" $fd
+    result_debug "\n-- Checking dot1dBase group parameters --"
+
+    report_start_test "$comment"
+
+    # --- Check dot1dBase group bridge address
+    if { $baddress != "" } {
+       set result [snmpGet -session $session \
+                           -oid dot1dBaseBridgeAddress.0]
+
+        snmpDebug DEBUG "snmpGet- $result\n" $fd
+        set macVal [snmpUtilGetVal hex $result]
+        set delim ":"
+        regsub -all { } $macVal $delim macValue
+        set macValue [string trimright $macValue ':']
+        if { $baddress == $macValue } {
+           result_ok "Dot1dBase Group Parameter: Bridge \
+                         Address $baddress exists. PASS"
+           set retVal 1
+        } else {
+           result_error "Dot1dBase Group Parameter: Bridge \
+                         Address expected $baddress but got $macValue. FAIL"
+        }
+    }
+
+    # --- Check dot1dBase group no. of ports
+    if { $baseports != "" } {
+        set result [snmpGet -session $session -oid dot1dBaseNumPorts.0]
+        snmpDebug DEBUG "snmpGet- $result\n" $fd
+        set baseVal [snmpUtilGetVal int $result]
+        if {$baseports == $baseVal} {
+           result_ok "Dot1dBase Group Parameter: Number of ports \
+                      $baseports exists. PASS"
+           set retVal 1
+        } else {
+           result_error "Dot1dBase Group Parameter: Number of ports \
+                         expected $baseports but got $baseVal. FAIL"
+        }
+    }
+
+    # --- Check dot1dBase group type of bridging
+    if { $basetype != "" } {
+        set result [snmpGet -session $session -oid dot1dBaseType.0]
+        snmpDebug DEBUG "snmpGet- $result\n" $fd
+
+        set typeVal [snmpUtilGetVal inttext $result]
+        if { [string compare [string tolower $typeVal] \
+                           [string tolower $basetype]] == 0 } {
+           result_ok "Dot1dBase Group Parameter: Bridging type \
+                      is $basetype exists. PASS"
+        } else {
+           result_error "Dot1dBase Group Parameter: Bridging type \
+                         expected $basetype but got $typeVal. FAIL"
+        }
+    }
+
+    report_end_test
+    snmpDebug DEBUG "$func - End\n" $fd
+}
+
+
+################################################################################
+#  Procedure Name: snmpSetFdbAgingTime
+#
+#  Description:
+#  This procedure sets time for aging out dynamically learnt forwarding
+#  information in the given DUT.
+#
+#  Input Variables:
+#    session  - Session identifier which identifies the connection
+#               with the DUT
+#    agetime  - Aging time interval
+#
+#  Optional Args:
+#    fd       - File descriptor for logging the command outputs
+#    comment  - Comments to be logged in log file
+#
+#  Output Variables:
+#     None
+#
+#  Return Variables:
+#    Logs the error message - On failure
+#
+#  Possible Usage:
+#    snmpSetFdbAgingTime -session $sessionid -agetime 50
+################################################################################
+proc snmpSetFdbAgingTime {args} {
+
+    parse_args snmpSetFdbAgingTime $args {
+       session ""
+       agetime ""
+       fd      "NULL"
+       comment "snmpSetFdbAgingTime"
+    }
+
+    set func "snmpSetFdbAgingTime:"
+    set retVal 0
+
+    if { $session == "" || $agetime == 0} {
+       error "$func session and aging time must be specified"
+       return $retVal
+    }
+
+    snmpDebug DEBUG "$func session-$session aging time-$agetime - Start" $fd
+    result_debug "\n-- Setting Fdb Aging time  --"
+
+    set result [snmpSet -session $session \
+                        -oid dot1dTpAgingTime.0 -type i -val $agetime]
+    set retVal 1
+
+    snmpDebug LOG "$func snmpSet-$result - End\n" $fd
+
+    snmpDebug DEBUG "$func - End\n" $fd
+
+    return $retVal
+}
+#############################################################################
+#  Procedure Name: snmpCheckDot1dTpPortTable
+#  
+#  Description:
+#  This procedure checks the Dot1dTpPort Table.
+#
+#  Input Variables:
+#    session            - Session identifier which identifies the connection
+#                         with the DUT
+#    port               - Port no. of the port for which the entry contains
+#                         transparent bridging 
+#    portmaxinfo        - Maximum size of the INFO field that this port will 
+#                         receive and transmit
+#    portinframes       - No. of frames received by this port 
+#    portoutframes      - No. of frames transmitted by this port
+#    portindiscards     - No. of valid frames received which were discarded by 
+#                         Forwarding process 
+#
+#  Optional Args:
+#    fd                 - File descriptor of open log file   
+#    comment            - Comments to be logged in log file
+# 
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    0 - On failure 
+#    1 - On success 
+#
+#  Possible Usage:
+#    snmpCheckDot1dTpPortTable -session $sessionid -port 2:3 -portmaxinfo 1500
+#                              -portinframes 500 -fd fd
+##############################################################################
+
+proc snmpCheckDot1dTpPortTable { args } {
+    parse_args snmpCheckDot1dTpPortTable $args {
+       session           ""
+       port              ""
+       portmaxinfo       ""
+       portinframes      ""
+       portoutframes     ""
+       portindiscards    ""
+       fd                "NULL"
+       comment           "snmpCheckDot1dTpPortTable"
+    }
+ 
+    set func "snmpCheckDot1dTpPortTable:" 
+    set retVal 0
+
+    if { $session == "" && $port == ""} {
+       error "$func SNMP session id, port number must be specified"
+       return $retVal 
+    }   
+
+    snmpDebug DEBUG "session is $session, port number $port" $fd
+    result_debug "\n-- Checking Dot1d TpPortTable entries--"
+
+    report_start_test "$comment"
+    
+    if { $port != "" } {
+       set port [snmpUtilParsePortList $port]
+
+       # --- Check for the dot1dTpPortTable port max info
+       if { $portmaxinfo != "" } {
+          set result [snmpGet -session $session \
+                              -oid dot1dTpPortMaxInfo.$port]
+          snmpDebug DEBUG "snmpGet- $result\n" $fd
+          set maxInfoVal [snmpUtilGetVal int $result]
+          if {$portmaxinfo == $maxInfoVal} {
+             result_ok "Dot1dTpPortTable Port max info: $portmaxinfo \
+                        exists. PASS"
+             set retVal 1
+          } else {
+             result_error "Dot1dTpPortTable Port max info: expected \
+                           $portmaxinfo but got $maxInfoVal. FAIL"
+          }
+       }
+
+       # --- Check for the dot1dTpPortTable port in frames
+       if { $portinframes != "" } {
+          set result [snmpGet -session $session \
+                              -oid dot1dTpPortInFrames.$port]
+          snmpDebug DEBUG "snmpGet- $result\n" $fd
+          set inFrameVal [snmpUtilGetVal counter $result]
+          if {$portinframes == $inFrameVal} {
+             result_ok "Dot1dTpPortTable Port Inframes: $portinframes \
+                        exists. PASS"
+             set retVal 1
+          } else {
+             result_error "Dot1dTpPortTable Port Inframes: expected \
+                           $portinframes but got $inFrameVal. FAIL"
+          }
+       }
+
+       # --- Check for the dot1dTpPortTable port out frames
+       if { $portoutframes != "" } {
+          set result [snmpGet -session $session \
+                              -oid dot1dTpPortOutFrames.$port]
+          snmpDebug DEBUG "snmpGet- $result\n" $fd
+          set outFrameVal [snmpUtilGetVal counter $result]
+          if {$portoutframes == $outFrameVal} {
+             result_ok "Dot1dTpPortTable Port Outframes: $portoutframes \
+                        exists. PASS"
+             set retVal 1
+          } else {
+             result_error "Dot1dTpPortTable Port Outframes: expected \
+                           $portoutframes but got $outFrameVal. FAIL"
+          }
+       }
+
+       # --- Check for the dot1dTpPortTable port in discards
+       if { $portindiscards != "" } {
+          set result [snmpGet -session $session \
+                              -oid dot1dTpPortInDiscards.$port]
+          snmpDebug DEBUG "snmpGet- $result\n" $fd
+          set inDiscardsVal [snmpUtilGetVal counter $result]
+          if {$portindiscards == $inDiscardsVal} {
+             result_ok "Dot1dTpPortTable Port InDiscards: $portindiscards \
+                        exists. PASS"
+             set retVal 1
+          } else {
+             result_error "Dot1dTpPortTable Port InDiscards: expected \
+                           $portindiscards but got $inDiscardsVal. FAIL"
+          }
+       }
+    }
+
+    report_end_test
+    snmpDebug DEBUG "$func - End\n" $fd
+    return $retVal
+}

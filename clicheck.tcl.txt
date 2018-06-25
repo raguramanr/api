@@ -1,0 +1,285 @@
+
+proc CLICheck {fileList index dummy1 dummy2} {
+
+   ################################################################
+   set testNo "CLICheck";
+   set title "CLI Save/Reboot and Upload/Download Config Check";
+   ################################################################
+
+   # ----- Test variables setup
+   set fd_res [open_result_file "$testNo"];
+   set time1 [clock seconds];
+
+   result_h1 "$title";
+   report_start_test "$title";
+
+   global DUT1_CONNECT;
+   global DUT1_SETUP;
+   global DUTs_info;
+   global moduleRegression;
+   global optionalFlag;
+   global tftpServerList;
+   global switchPort2DefaultRouter
+
+   Login $DUT1_CONNECT;
+
+   set time2 [clock seconds];
+   result_p "*** Time for $testNo = [expr $time2-$time1] secs\n\n";
+   close_result_file;
+   report_end_test;
+
+   set path "../../cli-ew/$moduleRegression";
+   puts "DEBUG: fileList: $fileList"
+   set fileList [split $fileList "\n"];
+   puts "DEBUG: fileList: $fileList";
+   set firstFile	true
+   foreach line $fileList {
+#      set filename1 [string trimleft $filename " "];
+#      set filename [string trimleft $filename1 "\t"];
+      regsub -all "\t" $line " " line
+      regsub -all ";" $line " " line
+      regsub -all " +" $line " " line
+      set line [string trimleft $line " "];
+      set filename [lindex [split $line " "] 0];
+      puts "DEBUG: filename: $filename";
+      if {$filename == "" || [string index $filename 0] == "#"} {
+          continue;
+      }
+      set fn "$path/$filename.cli";
+   
+      puts "filename: <$fn>";
+      #puts "index $index";
+      puts "***************** PWD: [pwd]  fn: $fn *****************"
+if { 1 } {
+      set CLIList [LoadCLIFile $fn];
+      set listLength [llength $CLIList];  
+      if {$listLength == 0} { continue; }
+      set xos_version [cliGetVersion DUT1 4]
+      set firstLine [lindex $CLIList 0];
+      if {[CheckSkipVersion $firstLine $xos_version]} { 
+          puts "DEBUG: $filename.cli skipped - $xos_version in $firstLine";
+          continue; 
+      }
+
+      set fd_res1 [open_result_file "$filename"];      
+      set time1 [clock seconds];
+
+      set testcaseNo "$filename";
+      ################################################
+      set subTest "$moduleRegression $filename";
+      ################################################
+      result_h2 "$subTest";
+      report_start_test "$subTest";
+      
+#      RunSetupScript $DUT1_CONNECT $DUT1_SETUP;
+#      if { $firstFile == "false" } { UnconfigSwAll }
+# --- no unconfig sw all in cli cfg files, always unconfig sw all automatically
+      UnconfigSwAll;
+      for {set i 1} {$i <= 3} {incr i} {
+         SendACmd "config default delete port all"
+         SendACmd "disable clipaging"
+        # EnableDebugMode
+        # SendACmd "!echo dump_stack > /sys/module/watchdog/parameters/watchdog_warn_behavior"
+         # --- if the network port is mgmt, make sure it is up
+         if {![regexp -nocase $switchPort2DefaultRouter "mgmt"]} {
+            break;
+         }
+         if { [isMgmtPortUp] == "ok" } { break }
+         UnconfigSwAll
+      }
+
+      # --- for mariner platforms, set up User VR first
+      if { 1 } {
+         global gnssPlatform
+         set gnssPlatform "BD-10808|mariner|olympic";
+#         set gnssPlatform "olympic";
+      }
+      global gnssPlatform
+      if {[regexp -nocase "$gnssPlatform" [GetPlatform DUT1]] &&
+          $moduleRegression != "vr"} {
+         set rebootuploadNo "$testcaseNo.0";
+         ################################################
+         set subTest "$rebootuploadNo Setup User VR First";
+         ################################################
+         result_h2 "$subTest";
+         report_start_test "$subTest";
+         global DUT1_DefaultBlade
+         global DUTs_info
+        
+         set userVR "vr-user";
+         lappend parameterList "{Ports available: } 1";
+         set ports [GetKeyValue "show slot $DUT1_DefaultBlade" $parameterList];
+         unset parameterList;
+         SendACmd "config vr vr-default delete ports ${DUT1_DefaultBlade}:1-$ports";
+         SendACmd "create virtual-router $userVR";
+         SendACmd "config vr vr-user add ports ${DUT1_DefaultBlade}:1-$ports";
+         SendACmd "config vr vr-user add protocol bgp";
+         SendACmd "config vr vr-user add protocol ospf";
+         SendACmd "config vr vr-user add protocol pim";
+         SendACmd "config vr vr-user add protocol rip";
+         SendACmd "virtual-router $userVR";
+         set DUTs_info(UserVR) "$userVR";
+         lappend parameterList "{vr-user *.* +$ports +bopr} exist";
+         CheckKeyValue "show virtual-router" $parameterList \
+                -comment "User VR vr-user created with bgp, ospf, pim and rip protocols";
+         unset parameterList;
+         # --- need to reload cli file
+         set CLIList [LoadCLIFile $fn];
+         report_end_test
+      }
+      set firstFile	false
+      # get the start_session here   
+      # parse CLIList
+      set s 0;
+      set lngth 0;
+      while {1} {
+          set retparameters [Start_Session_Parser $CLIList $lngth];          
+          #result_debug "---> [lindex $retparameters 0]";
+          #result_debug "---> [lindex $retparameters 1]";      
+          set lngth [lindex $retparameters 1];
+          set CLISession [lindex $retparameters 0];         
+          if {$lngth == "NO_DATA"} {
+              break;
+          }
+          
+          incr s;
+          set rebootuploadNo "$testcaseNo.$s";
+          ################################################
+          set subTest "$rebootuploadNo Executing commands and check CLI outputs before save and reboot";
+          ################################################
+          result_h2 "$subTest";
+          report_start_test "$subTest";
+                  
+          if {[regexp -nocase "NO_REBOOT" $optionalFlag] && 
+	      [regexp -nocase "NO_DOWNLOAD" $optionalFlag] } {
+             RunCommandAndCheck $CLISession $rebootuploadNo "firstlast";
+	  } else {
+             RunCommandAndCheck $CLISession $rebootuploadNo "first";
+	  }
+      
+          report_end_test;
+
+          if {![regexp -nocase "NO_REBOOT" $optionalFlag] } {
+             CheckReboot;   
+             if {[regexp -nocase "$gnssPlatform" [GetPlatform DUT1]] &&
+                $moduleRegression != "vr"} {
+                SendACmd "virtual-router $userVR";
+             }
+	     sleep 20
+             incr s;
+             set rebootuploadNo "$testcaseNo.$s";
+                
+             ################################################
+             set subTest "$rebootuploadNo Checking CLI outputs after save and reboot";
+             ################################################
+             result_h2 "$subTest";
+             report_start_test "$subTest";
+
+	     if { $optionalFlag == "NO_DOWNLOAD" } {
+                RunCommandAndCheck $CLISession $rebootuploadNo "secondlast";
+             } else {
+if { 1 } {
+                RunCommandAndCheck $CLISession $rebootuploadNo "second";
+} else {
+                RunCommandAndCheck $CLISession $rebootuploadNo "secondlast";
+}
+	     }
+             report_end_test;
+          }      
+
+if { 1 } {
+          if {![regexp -nocase "NO_DOWNLOAD" $optionalFlag] } {
+             set tmpTime [clock seconds];
+             incr s;
+             set rebootuploadNo "$testcaseNo.$s";  
+             ################################################
+             set subTest "$rebootuploadNo Checking CLI outputs after upload and download config";
+             ################################################
+             result_h2 "$subTest";
+             report_start_test "$subTest"; 
+             
+             Login $DUT1_CONNECT;
+	     set filename "temp__${DUT1_CONNECT}_${tmpTime}.cfg";
+             regsub -all { } $filename {_} filename;
+             set tftpServer [CheckUploadConfig $tftpServerList $filename];
+             if {$tftpServer == "error"} {
+                 report_start_test "$rebootuploadNo.0.1 could not Upload";
+                 result_error "$rebootuploadNo.0.1 could not Upload";
+                 report_end_test;
+             } else {
+                 report_start_test "$rebootuploadNo.0.1 able to Upload";
+                 result_ok "$rebootuploadNo.0.1 able to Upload";
+                 report_end_test;
+             }
+             set status [CheckDownloadConfig $tftpServer $filename];
+             if {$status == "error"} {
+                 report_start_test "$rebootuploadNo.0.2 could not Download";
+                 result_error "$rebootuploadNo.0.2 could not Download";
+                 report_end_test;
+             } else {
+                 report_start_test "$rebootuploadNo.0.2 able to Download";
+		 SendACmd "show switch"
+                 result_ok "$rebootuploadNo.0.2 able to Download";
+                 report_end_test;             
+             }             
+             sleep 30
+             if {[regexp -nocase "$gnssPlatform" [GetPlatform DUT1]] &&
+                $moduleRegression != "vr"} {
+                SendACmd "virtual-router $userVR";
+             }
+#             RunCommandAndCheck $CLISession $rebootuploadNo "false";
+             RunCommandAndCheck $CLISession $rebootuploadNo "thirdlast";
+             report_end_test;
+          }
+}
+          if {$lngth == 0} {   
+              break;
+          } else {
+              incr lngth;
+          }   
+      } 
+      report_end_test;
+      set time2 [clock seconds]
+      result_p "*** Time for $testcaseNo = [expr $time2-$time1] secs\n\n"
+      close_result_file;         
+   }
+   }
+}
+
+proc Start_Session_Parser {CLISessionList lngth} {
+
+    set flag 0;
+    if {[info exist buffer]} {unset buffer }
+    set listLength [llength $CLISessionList];  
+    #puts "listLength = $listLength";  
+    #puts "lngth = $lngth"; 
+    for {set i $lngth}  {$i <= $listLength} {incr i} {
+        set line [string tolower [lindex $CLISessionList $i]];
+        set line [string trim $line];          
+        if {[regexp -nocase "end_session" $line] } {
+            set flag $i;
+            break;  
+        } elseif {[regexp -nocase "start_session" $line] } {
+            if {[info exist buffer]} {unset buffer }        
+        } else {
+            if {[string length $line]} {
+                lappend buffer $line;
+            }    
+        }
+    }    
+    if {$lngth != 0} {
+        if {[info exist buffer]} {
+           lappend retval $buffer;
+           lappend retval $flag;        
+           return $retval;
+        } else {
+           lappend retval "NO_DATA";
+           lappend retval "NO_DATA";        
+           return $retval;       
+        }
+    } else {
+        lappend retval $buffer;
+        lappend retval $flag;        
+        return $retval;
+    }    
+}

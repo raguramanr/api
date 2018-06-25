@@ -1,0 +1,126 @@
+
+proc CheckIxia {} {
+
+# ----- Environment variables setup
+global DUTPortMappingArray
+global portMappingList
+global GetDUTPortMapping
+global ixiaPortMappingArray
+global initFile
+
+source $initFile
+
+   set TxRxPortList {}
+   set stat 0
+   set retFlag1 0
+   result_debug "portMappingList is $portMappingList"
+   
+   foreach port $portMappingList {
+   set ixiaPort  [lindex $port 1]
+   if {[regexp -nocase "A|KEY" $ixiaPort]} {
+   incr stat
+     }
+   }
+     if {$stat == 0} {
+     foreach port $portMappingList {
+     result_ok "port is $port"
+     set IxiaPortId [lindex $port 0]
+     set DutPortId [lindex $port 1]
+     set DUT [lindex $port 2] 
+	result_debug "IxiaPortId-$IxiaPortId, DutPortId-$DutPortId, DUT-$DUT"
+	set DUTName DUT$DUT
+	set retD [DisableLink_DutIxia [MapDUTPortId $IxiaPortId $DUT] DUT$DUT]
+        
+	set maxWait 7
+	MapIxiaPortId $IxiaPortId chasis card port
+	set maxWaitCounter $maxWait
+        while { $maxWaitCounter } {
+            port get $chasis $card $port
+	    set ab [port cget -linkState]
+            if {[port cget -linkState] == 0} {
+		result_ok "FOUND LINK DOWN for IxiaPortId:$IxiaPortId! after $maxWaitCounter secs"
+                incr retFlag1
+                break
+            } else {
+                result_debug "Waitng for IxiaPortId:$IxiaPortId linkUp after $maxWaitCounter secs"
+                incr maxWaitCounter -1
+		sleep 1
+            }
+        }
+
+	set retE [EnableLink_DutIxia [MapDUTPortId $IxiaPortId $DUT] DUT$DUT]
+
+	set maxWaitCounter $maxWait
+        while { $maxWaitCounter } {
+            port get $chasis $card $port
+           if {[port cget -linkState] == 1} {
+                result_ok "FOUND LINK UP for IxiaPortId:$IxiaPortId! after $maxWaitCounter secs"
+                incr retFlag1
+                break
+            } else {
+                result_debug "Waiting for IxiaPortId:$IxiaPortId linkUp after $maxWaitCounter secs"
+                incr maxWaitCounter -1
+		sleep 1
+
+            }
+        }
+
+    }   
+}
+set numPort [llength $portMappingList]
+result_debug "numPort is $numPort and retFlag1 is $retFlag1"
+ 	if {$retFlag1 == [expr $numPort*2]} {
+        IxiaPortsInit
+	return "connectionOkay"
+        } else {
+	return "connectionBad"
+	}
+
+}
+
+proc EnableLink_DutIxia {portIdList DUTName} {
+   global ${DUTName}_CONNECT;
+   global DUTs_info;
+
+   global spawn_id
+   set pid _[pid]
+   Login [set ${DUTName}_CONNECT];
+   set result 1
+   foreach portId $portIdList {
+       set fd_in [open "Tmp/tmp_EnableLink$pid" "w"]
+       SendACmd "enable port $portId" NULL $fd_in
+       close $fd_in
+       set fd_in [open "Tmp/tmp_EnableLink$pid" "r"]
+       set rtValue [check_illegality $fd_in]
+       close $fd_in
+       if { $rtValue == "illegal" } {
+          set result 0
+       }
+       sleep 1
+   }
+   return $result
+}
+
+proc DisableLink_DutIxia {portIdList DUTName} {
+   global ${DUTName}_CONNECT;
+   global DUTs_info;
+
+   global spawn_id
+   set pid _[pid]
+   Login [set ${DUTName}_CONNECT];
+   set result 1
+   foreach portId $portIdList {
+       set fd_in [open "Tmp/tmp_DisableLink$pid" "w"]
+       SendACmd "disable port $portId" NULL $fd_in
+       close $fd_in
+       set fd_in [open "Tmp/tmp_DisableLink$pid" "r"]
+       set rtValue [check_illegality $fd_in]
+       close $fd_in
+       if { $rtValue == "illegal" } {
+          set result 0
+       }
+       sleep 1
+   }
+   return $result
+}
+

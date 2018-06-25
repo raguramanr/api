@@ -1,0 +1,137 @@
+##############################################################################
+# Figure out which VM link to take down.
+#
+#
+#
+##############################################################################
+proc _vmDisableEnablePorts {args} {
+    global MAIN whichDutNow trunkPortList portMappingList VBOXINFO spawn_ids
+    global VBOXSERVER whichMsmNow spawn_id
+    global DUT${whichDutNow}_CONNECT${whichMsmNow}
+    parse_args _vmTakeDownPorts $args {
+        ports  "null"
+        state  "disable"
+    }
+    regsub -all {[ ]+,|,[ ]+} $ports "," ports
+    regsub -all {[ ]+} $ports "," ports
+    set outports ""    
+    if {[regexp "," $ports]} {
+        set portList [split $ports ","]
+        foreach p $portList {
+            if {[regexp "\-" $p]} {
+                set portList2 [split $p "-"]
+                set l [lindex $portList2 0]
+                set h [lindex $portList2 1]
+                while {$l<=$h} {
+                    lappend outports $l
+                    incr l
+                }
+            } else {
+                lappend outports $p
+            }
+        }
+    } elseif {[regexp "\-" $ports]} {
+        set portList [split $ports "-"]
+        set l [lindex $portList 0]
+        set h [lindex $portList 1]
+        while {$l<=$h} {
+            lappend outports $l
+            incr l
+        }  
+    } else {
+        set outports $ports
+    }
+    set remoteList ""
+    foreach p $outports {
+        set hitPort($p) 0
+        foreach ind $trunkPortList {
+            set one [lindex $ind 0]
+            set two [lindex $ind 1]
+            set three [lindex $ind 2]
+            if {![info exists cc($one,$two)]} {
+                set cc($one,$two) 1
+            } else {
+                incr cc($one,$two)
+            }
+            if {$one == $whichDutNow && $three == $p} {
+                set remoteDut $two
+                set remotePort [GetATrunkPort $remoteDut $whichDutNow $cc($one,$two)]
+                #lappend remoteList "$whichDutNow $p"
+                lappend remoteList "$remoteDut $remotePort"
+                unset cc($one,$two)
+                set hitPort($p) 1
+                break;
+            }
+        }
+        if {!$hitPort($p)} {
+            #must be connected to an ixia
+            foreach ind2 $portMappingList {
+                if {[lindex $ind2 2] == $whichDutNow && [lindex $ind2 1] == $p} {
+                    set hitPort($p) 1
+                    lappend remoteList "skip"
+                    break;
+                }
+            }
+        }
+    }
+    #        _vmDisableEnablePorts -state "disable" -ports "1,2,3,5"
+    #        _vmDisableEnablePorts -ports "1,2,3,5" -state "enable"
+    puts "remlist $remoteList"
+    #_setShowOutput -screen off -log off -res_fmt off
+    LoginVBox
+    foreach pair $remoteList {
+        if {[lindex $pair 0] == "skip" || [lindex $pair 0] == 0} {
+            continue;
+        }
+        if {[regexp -nocase "dis" $state]} {
+            linuxSendACmd "VBoxManage controlvm [set VBOXINFO([lindex $pair 0],name)] setlinkstate[expr [lindex $pair 1] + 1] off"
+        }
+        if {[regexp -nocase "ena" $state]} {
+            linuxSendACmd "VBoxManage controlvm [set VBOXINFO([lindex $pair 0],name)] setlinkstate[expr [lindex $pair 1] + 1] on"
+        }
+    }
+    if [catch {close -i $spawn_id} reason] {
+        puts "Failed to close spawn_id $spawn_id Reason: $reason"
+    }
+    if [catch {wait} x] {
+        puts "Failed on wait : reason $x"
+    }
+    Login [set DUT${whichDutNow}_CONNECT${whichMsmNow}] -masterCheck 0 -CheckOperational 0
+    #_setShowOutput -screen on -log on -res_fmt on
+}
+#######################################################################
+#
+#
+#
+#######################################################################
+proc LoginVBox {} {
+    global VBOXSERVER VBOXUSER VBOXPASS
+    login_linux $VBOXSERVER $VBOXUSER $VBOXPASS NULL "ssh"
+}
+#######################################################################
+#
+#
+#
+#######################################################################
+proc powerCycleVM {DUT mode} {
+    global MAIN trunkPortList portMappingList VBOXINFO spawn_ids
+    global spawn_id hostname VBOXSERVER
+    global DUT${DUT}_CONNECT
+    LoginVBox
+    if {[regexp -nocase "of|reb|oot" $mode]} {
+        linuxSendACmd "VBoxManage controlvm [set VBOXINFO($DUT,name)] poweroff"
+        linuxSendACmd "VBoxManage snapshot [set VBOXINFO($DUT,name)] restore primary"
+        after 1000
+    }
+    if {[regexp -nocase "on|reb|oot" $mode]} {
+        linuxSendACmd "VBoxManage startvm [set VBOXINFO($DUT,name)] -type headless"
+    }
+    if [catch {close -i $spawn_id} reason] {
+        puts "Failed to close spawn_id $spawn_id Reason: $reason"
+    }
+    if [catch {wait} x] {
+        puts "Failed on wait : reason $x"
+    }
+    set spawn_ids($VBOXSERVER) "INVALID"
+    set hostname [ldelete $hostname $VBOXSERVER]
+}

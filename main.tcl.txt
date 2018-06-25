@@ -1,0 +1,1456 @@
+#!/usr/bin/tclsh
+
+source ../Lib/parse_args.tcl
+source ../Lib/mainLib.tcl
+source ../Lib/filetools.tcl
+source ../Util/iTest.cfg
+
+package require http 1.0;
+package require Tclx
+
+# Global Variables
+global ezinfofile env
+global initsend mySock
+global TrafficGen
+global MAIN_LOG; # main_log.txt file descriptor
+global currentTestNumber
+global NEWBUILD
+global OLDBUILD
+global efence
+global subversion
+global enableSaveConfigPerTest
+global enableAbortTestCondition
+global gHeapTracingProcess
+global heapTraceEnabled
+global DEBUGFAILLOCK FAILLOCK
+global modName regPath showErrorData configurationFile
+global DUTs_info tStartDateString
+global bcmLynx CTLIST
+global lynxIncludeModList regressionModules
+global HEADERFORMAT;# the formatting for headers and notifications
+global MAIN;# single dem array of important main.tcl stateful info
+global FEATMAIN;# 2 dem array of important feature stateful info
+global FEATPLAT;# Feature support per test bed using a dut list and sysType list. in ct.lst
+# ----- Test variables setup
+set clitestDir "cli-ew"
+set skipCount 0
+set _VERSION 6.0 ;# define here as global variable.  Will change later
+set VERSION 6    ;# define here as global variable.  Will change later
+set returnFlag "NULL"
+set runMode    0
+set MAIN(ifPipe)   "NULL"
+set MAIN(initFile) "NULL"
+set MAIN(skipIxInit) 0
+set MAIN(CCIMAINDEBUG) 0
+set MAIN(initAdminCheck) 1;# first login check if the console is at a user prompt.
+set retFlag ""
+set licenseList {l2edge edge advancededge core advancedcore mpls}
+set ITESTMODS [concat $istdMods(functional,All) $irtrMods(functional,All)];#from iTest.cfg above
+set debugLevel 0
+set currentTestNumber main
+set DEBUGFAILLOCK 0
+set FAILLOCK "no"
+set powerCyclerRetry 0
+set MAIN(user) [id effective user]
+#       Report variables
+set MAIN(timeFile) "NULL"
+set MAIN(tSetupDuration) 0;
+set MAIN(tCheckConnectionDuration) 0;
+set MAIN(testDuration) 0;
+set MAIN(startexecution) 0
+set MAIN(FAILSAFEHIT) 0;
+set FEATPLAT(SupportedTypes) "";# Ex VXLAN ct.lst = [list "$bcmx690|$bcmx870|$bcmx770|$bcmx670_G2" "$bcmxG2"]
+set FEATPLAT(SupportedDUTs) ""; #                 = [list "1 2 3"  "4 5"]
+set FEATPLAT(NoSupportTypes) ""; # 03-2017 not coded yet
+set FEATPLAT(NoSupportDUTs) "";# 03-2017 not coded yet
+set CTLIST(quick) "";# check common.cfg for all mixes quick_pass, quick_pass_all etc. Lib/tests_to_exec.tcl
+set tSetupDuration 0;
+set tCheckConnectionDuration 0;
+set testDuration 0;
+set tStartTime [clock seconds]
+set tStartDate [clock format [clock seconds] -format "%Y-%m-%d %I.%M.%S%p"]
+set tStartDateString [clock format [clock seconds] -format "%Y-%m-%d_%I.%M.%S%p"]
+set passCount 0
+set failCount 0
+set skipCount 0
+set testDuration 0
+set testHour 0
+set testMin 0
+set testSec 0
+#       Report directory structure variables
+#  Note - resultDir name = "timestamp $randomIndex"
+set resultDir "NULL";# NULL forces creation of a new resultDir (also global resultDir)
+set MAIN(RESULTPATH) "Result"
+set MAIN(RESULTDIR) "null";# all script results file will be posted here while running
+set MAIN(REPORTDIR) "null";# ResultDir is renamed to this at the very end.
+set optionalPath "";# optional location for the Report directory
+set optionalFlag "null";# used for cliFlag by default.
+# ---------------------------------------------------------------------------------------
+# The help output on invalid or too few args
+# ---------------------------------------------------------------------------------------
+proc print_usage {} {
+    puts "\r"
+    puts {Usage: main.tcl -mode <mode> -module <module> -cfg <config file> \n \
+    [-lst <test list>|-tcList] [-regPath <regression Path>] [-testlinkplan <testlinkplan>] \n \
+    [-build <xos build1>] [-subversion <subversion>] [-obuild <xos build2>] [-cliFlag <cliFlag>]\n \
+    [-moduleArg <module specific arg>] [-debugLevel <error debug level>] \n \
+    [-efence <process list>] [-saveConfigPerTest <yes/no>] [-stopRegOn <condition to abort>] \n \
+    [-qId <regserver queue id>] [-heapTracingProcess <process list>] [-ezinfofile <infofile>] \n \
+    [-ezkillfile <id>] [-harness <all|tcl|itest>] \n \
+    [-launchserver <on|off>] [-comment <text comments>]}
+    puts {   <mode>: auto|dev|autodev}
+    puts {      (auto: Official automation run from start, performs unconfig, checkConnection)}
+    puts {      (dev: Development run using init file, skips unconfig, checkConnection)}
+    puts {      (autodev: Official automation run using init file, skips checkConnection)}
+    puts {   <module>: L2|L3|IGMPS|QOS-AC (case insensitive, nearest match accepted)}
+    puts {   <cfg>: Path of the config file name (e.g. short/ptgm4x6.2.2b4.cfg)}
+    puts {   [<lst>]: test list (all|pass|quick|userDefined). By default all, userDefined is a filename value in module)}
+    puts {   [<regPath>]: regression Path (func|snmp|per|stres. By default function, case insensitive, nearest match accepted)}
+    puts {         If running CLI test, give regPath as ../CLItest/uploadanddownload.}
+    puts {   [<testlinkplan>]: TestLink test plan name.  All plan cases with a scriptPath will execute}
+    puts {   [<clean | c>]: If running in dev mode the allcleanup cli script can be run to insure no cfg on switch}
+    puts {   [<cliFlag>]: cliFlag (NO_REBOOT|NO_REBOOT_NO_DOWNLOAD, optional with regPath clitest)}
+    puts {   [<debugLevel>]: debug level 1|2|3. The level at which the debug information is dumped when script encounters an error}
+    puts {   [<subversion>]: subversion variable if any, used for private testing}
+    puts {   [<efence>]: list of efence activated processes}
+    puts {   [<saveConfigPerTest>]: enable saving of switch configuration before start of each test supported from  release 12.1}
+    puts {   [<stopRegOn>]: testFailure|coreDump|anyFailure conditions which will cause regression to abort}
+    puts {   [<qId>]: SC_######_######|RTP_######_###### the id of the currently running queue}
+    puts {   [<heapTracingProcess>]: process for which heaptracing is required}
+    puts {   [<TrafficGen>]: default = ixia.  ixia|ixvm|stc}
+    puts {   [<harness>]: all|tcl|itest|tpb|testlink which harness cases to execute}
+    puts {   [<trackport>]: official use only}
+    puts {   [<launchserver>]: on|off default: on Starts a server which can interact with regression}
+    puts {   [<comment>]: null default: could be just a note but mostly for retext control options}
+    puts "\r"
+}
+
+# ------------------------------------------------------------------------------
+#
+#      Start MAIN functionality
+#
+#
+# ------------------------------------------------------------------------------
+
+# checking command parameters
+if {$argc<3} {
+    puts "Not enough parameters"
+    print_usage
+    puts stderr "Not enough parameters"
+    return
+}
+
+parse_args main $argv {
+    mode "null"
+    module "null"
+    cfg "null"
+    lst "dev"
+    tcList "all"
+    regPath "Functional"
+    cc ""
+    clean "no"
+    c     "null"
+    cliFlag ""
+    testlinkplan "null"
+    build ""
+    subversion ""
+    obuild ""
+    moduleArg ""
+    debugLevel "0"
+    randomIndex "unknown"
+    efence "no"
+    saveConfigPerTest "no"
+    stopRegOn "null"
+    qId "null"
+    heapTracingProcess "no"
+    ezinfofile ""
+    ezkillfile ""
+    TrafficGen "ixia"
+    harness "tcl"
+    trackport  "null"
+    launchserver "off"
+    comment      "null"
+}
+
+
+# ---------------------------------------------------------
+# ----             ARGUMENT VERIFCATION                ----
+# ---------------------------------------------------------
+
+    ############################################################
+    #  -mode is meant to determine the run state of this current test
+    #     the switch command is mostly self explanitory.
+    #    auto      =  results will be copied to a central repository
+    #                 as well as to the "Report" directory
+    #    autodev   =  same as auto plus init file used instead of
+    #                 systemsetup and getdutinfo to save time
+    #    dev       =  systemsetup and getdutinfo skipped and init
+    #                 file sourced to save time
+    #############################################################
+    set mode [string tolower $mode]
+    switch $mode  {
+        "auto"    {
+            puts "\n\nThis is an official automation run."
+            puts "The cfg file setup script and check connections will be run"
+            set runMode 0;
+            set MAIN(runMode) 0;
+                }
+        "autodev" {
+            puts "\n\nThis is an autodev run";
+            puts "The setup script is being run";
+            puts "Using the initFile from a previous run";
+            set runMode 1;
+            set MAIN(runMode) 1;
+        }
+        "dev"     {
+            puts "\n\nDEVELOPMENT RUN NO UNCONFIG BOXES"
+            puts "Using the initFile from a previous run"
+            set runMode 2;
+            set MAIN(runMode) 2;
+        }
+        default  {
+            puts "\n\nNo -mode define!! Using -mode auto";
+            puts "The cfg file setup script and check connections will be run";
+            set runMode 0;
+            set MAIN(runMode) 0;
+        }
+    }
+
+    ## module setup
+    if {$module == "null"} {
+        puts "\n\n-module is a required argument"
+        exit 1
+    } else {
+        puts "Setting to run regression for module $module"
+    }
+    ## cfg check
+    if {$cfg == "null"} {
+        puts "\n\n-cfg is a required argument"
+        exit 1
+    }
+
+    # check test vendor selection
+    set TrafficGen [string tolower $TrafficGen]
+    switch -exact -- $TrafficGen {
+        stc -
+        ixvm -
+        stcvm -
+        ixia -
+        ept -
+        none {
+            puts "main.tcl: Test vendor selection - $TrafficGen"
+        }
+        default {
+            result_error "main.tcl: Invalid test vendor selected ($TrafficGen)\n \
+                 - must be one of IXIA,IXVM,STC or NONE. Aborting..."
+            exit 1
+        }
+    }
+    switch -exact -- $harness {
+        all {puts "\nExecuting tcl and iTest cases - tcl runs first"}
+        tcl {puts "\nExecuting tcl cases Only"}
+        itest {puts "\nExecuting iTest cases Only"}
+        tpb {puts "\nExecuting in TPB mode"}
+        testlink {puts "\nExecuting in TestLink mode"}
+        default {
+            puts "main.tcl: Invalid harness type.  \n\
+               Must be \"all\" \"tcl\" \"tpb\" \"testlink\" or \"itest\". Aborting..."
+            exit 1
+        }
+    }
+    if { $tcList == "" } {
+        puts "Fatal Error: tcList cannot be empty. \n\
+           Specify 'all' or do not give -tcList option."
+        exit 1
+    }
+    if { $testlinkplan != "null" && $harness != "tpb"} {
+        #If testplan does not appear in json exit
+        puts "You are in Test Link Mode"
+        puts "Your results will post to TestLink/$testlinkplan/$module/Report"
+    }
+    if {$c != "null"} {
+        set clean $c
+    }
+    switch -nocase -regexp $clean {
+        y.* {
+            set clean yes
+        }
+        n.* {
+            set clean no
+        }
+        c.* {
+            set clean cli
+        } default {
+            set clean yes
+        }
+    }
+    # Verify the regPath
+    set MAIN(mainPath) [pwd]
+    set MAIN(origRegPath) $regPath
+    set regPath [_verifyRegPathArg -regPath $regPath];# Full/real path. Not the short one passed in
+    set MAIN(regPath) $regPath;# More portable
+    set MAIN(feature_type) [file tail $regPath];#
+
+    # Rename a bunch of stuff - for compatibility
+    set enableAbortTestCondition $stopRegOn
+    set enableSaveConfigPerTest $saveConfigPerTest
+    set gHeapTracingProcess $heapTracingProcess
+    set heapTraceEnabled "no"
+    set NEWBUILD $build
+    set OLDBUILD $obuild
+
+    # Verify the module / feature / testplan to run
+    set module [_verifyModuleNameArg $regPath $module];# Set the full, verified module name
+    set DUTs_info(current_module) $module
+    set MAIN(module) $module;# Full path, not just the short one passed into the arg
+    set modName [file tail $module]; # modName is feature_directory name
+    
+    # Make some cli args more portable
+    set MAIN(randomIndex) $randomIndex 
+    set MAIN(cliFlag)     $cliFlag
+    set MAIN(build)       $build
+    set MAIN(subversion)  $subversion
+    set MAIN(efence)      $efence
+    set MAIN(qId)         $qId
+    set MAIN(lst)         $lst
+    set MAIN(clean)       $clean
+
+# ------------------------------------------------------
+# ----   Set harness paths and source important files
+# ------------------------------------------------------
+
+    # -- Normalize the current directory --
+    set curAutoRoot [_setCurrentAutoDir]
+    set MAIN(autoRoot) $curAutoRoot;# More portable
+    set LIB_PATH ${curAutoRoot}/Lib
+    set MAIN(LIB_PATH) $LIB_PATH
+    set SYSTEM_LIB_PATH ${curAutoRoot}/SystemTest/Lib
+    set MAIN(SYSTEM_LIB_PATH) $SYSTEM_LIB_PATH
+
+    # -- Remove user ixia environment variables from the auto_path
+    set auto_path [_cleanAutoPath -remove ixia]
+    lappend auto_path $LIB_PATH
+    lappend auto_path $SYSTEM_LIB_PATH
+
+    # Load TrafficGen specific libraries
+    switch -exact -- $TrafficGen {
+        stc {
+            set MAIN(IxInitialized) 0
+        }
+        ixia {
+            set MAIN(IxInitialized) 0
+        }
+        ept {
+        }
+        default {
+        }
+    }
+
+    # -------  Create the main and lib tclIndex files -------
+    gen_index "./../Lib"
+    if {[file isdirectory ./../SystemTest/Lib]} {
+        gen_index "./../SystemTest/Lib"
+    }
+
+    puts "\nDEBUG: Appending $LIB_PATH to autopath:$auto_path"
+
+# -------------------------------------------------------------
+# -- Source important harness files. runReg,common and test bed
+# -------------------------------------------------------------
+    if [catch {source "../main/runReg.cfg"} rea] {
+        puts "*** WARNING: Unable to source runReg.cfg:$rea............... ***"
+        puts "*** WARNING: Application level variables may not be defined. ***"
+        exit -1
+    }
+    set sourceFile ""
+    # backtracked path needed for other utilties outside main to work
+    if [catch {source "../main/cfg/common.cfg"} rea] {
+        puts "*** WARNING: Unable to source common.cfg:$rea............... ***"
+        puts "*** WARNING: Application level variables may not be defined. ***"
+        exit -1
+    }
+    if {$cfg != "null"} {
+        set sourceFile $cfg
+        if {([regexp -nocase "^short" $sourceFile]&&[regexp -nocase {/} $sourceFile]) || \
+                  [regexp -nocase "^pt" $sourceFile]} {
+            puts "regPath:$regPath  module:$module  sourceFile: $sourceFile"
+            #set sourceFile [format %s/%s/%s $regPath $module $sourceFile]
+            set sourceFile [format %s/%s $module $sourceFile]
+            set sourceFile [string trim $sourceFile];
+        } elseif {![regexp -nocase "^cfg" $sourceFile] && ![regexp -nocase {/} $sourceFile]} {
+            if {[file exists $sourceFile]==0} {
+                set sourceFile [format %s/%s cfg $sourceFile]
+                set sourceFile [string trim $sourceFile];
+            }
+        }
+        puts "Using config file: ($sourceFile)"
+    }
+    if {[file exists $sourceFile] == 0} {
+        puts "Cannot find config file: $sourceFile\n"
+        puts stderr "Cannot find config file: $sourceFile"
+        return
+    }
+    set configurationFile $sourceFile
+    set MAIN(sourceFile)  $sourceFile
+    set MAIN(cfg)         [file tail $cfg]
+    puts "**** ABOUT TO source test bed cfg $sourceFile ****"
+    if [catch {source $sourceFile} reason] {
+        puts "*** ERROR: Unable to source $sourceFile :$rea............... ***"
+        puts "*** ERROR: Application level variables may not be defined. ***"
+        exit -1
+    }
+    # --------  Reset globals which are initialized in common.cfg
+    set MAIN(feature_directory) $modName;
+
+    # Get the repo info
+    set MAIN(REPO_VERSION) [_getRepoVersion]
+# --------------------------------------------------------------------------------
+# ----  Configurations for regression types / paths other than Functionaltest ----
+# --------------------------------------------------------------------------------
+    if { [regexp -nocase "cli" $regPath] && [info exists ixiaCh1] } {
+        unset ixiaCh1 ;# prevent Ixia from initializing for CLI run
+        set optionalFlag $cliFlag
+    }
+    # If regPath is snmp then check whether SNMP configuraiton file exists or not
+    if {[regexp -nocase "snmp" $regPath]} {
+        source ./../Lib/snmplib.tcl
+        if {[file exists "../main/cfg/snmp.cfg"] == 0} {
+            puts stderr "Cannot find SNMP config file: cfg/snmp.cfg"
+            return
+        } else {
+            source ../main/cfg/snmp.cfg
+            snmpInit
+            puts "ENVIRONMENT VARIABLE = $env(MIBS)"
+            puts "                       $env(MIBDIRS)"
+            puts "                       $env(SNMPCONFPATH)"
+        }
+    }
+    set optionalPath ""
+    set optionalFlag $cliFlag
+# ----------------------------------------------------------------
+#  The comment arg allows for various random variables to be set
+#     in main by the handler below. Do it below sourcing cfg files
+#     becauses comment may be used to overwrite the defaults
+# ----------------------------------------------------------------
+    if {$comment != "null"} {
+        _commentHandler "$comment"
+    }
+# ----------------------------------------------------------------
+# Error handling, report structure, main communication socket
+#
+# ----------------------------------------------------------------
+    # -- Make sure directory structure exists in main folder
+    _createSupportDirectories -dirList "Report Result Tmp Tmp2 Log"
+    
+    # ----------   Set up global error display levels ----------
+    # Set the showErrorData flag for multiple level debug
+    # showErrorData = 0 means don't dump debug info in result_error
+    # showErrorData != 0 means dump debug info in result_error a this level
+    set showErrorData $debugLevel
+    unset debugLevel   
+
+    # --------------------------------------------------------------------
+    # Test Plan Builder Controlled TCL --
+    #    TPB starts main.tcl from a wrapper in this directory tpb_main.tcl
+    #    TPB uses the socket to pass tests to main.tcl and receive results
+    # --------------------------------------------------------------------   
+    if {$harness == "tpb"} {
+        global useSocket
+        set useSocket 0
+        if {$trackport != "null"} {
+            set useSocket 1
+        }
+
+        # --- TPB controller may run main.tcl as root. Set user to regLogin
+        if {[id effective user] == "root"} {
+            puts "\nTPB Controller SETTING USER TO $regLogin\n"
+            id user $regLogin
+            set MAIN(user) $regLogin
+        }
+        puts "TPBMainClearConsole $qId $modName $regPath $useSocket"
+        TPBMainClearConsole $qId $modName $regPath $useSocket
+        set initsend "TPB Control Session Started"
+        if {$launchserver == "on" || $trackport != "null"} {
+            if {![OpenTPBControlPort  -port "$trackport"]} {
+                puts "";
+                exit;
+            }
+        }
+    }
+
+# --------------------------------------------------------------
+# Expect and traffic gen libraries
+# --------------------------------------------------------------
+    ############################################################
+    # Load Expect
+    ############################################################
+    load [lindex [glob "/usr/lib/libexpect*so*"] 0]
+    # --- increase the default buffer
+    match_max -d 200000
+    log_user 0
+
+
+    ############################################################
+    # Setup the Ixia libraries
+    ############################################################
+    if {[info exists ixiaCh1] && [regexp -nocase {[0-9]\.[0-9]+} $ixiaCh1]} {
+        SetIxiaEnv "$ixiaPath($ixiaCh1)"
+        lappend auto_path [file join $env(IXIA_HOME) "lib"]
+    }
+
+# --------------------------------------------------------------
+# Register this scipt and testbed with tracking db and open tracking socket
+# --------------------------------------------------------------
+    set MAIN(TrackInit) [OpenTrackingPort -cfg "[file tail $cfg]" -script_name "MAIN" ]
+
+# --------------------------------------------------------------
+# Decide the how to run main.
+#   - In the module, for a single run
+#   - A TestLink run, jumping between different directories
+# --------------------------------------------------------------
+
+    # Save the base auto_path which holds all TCL necessary up
+    #     until this point.  No test case TCL procs are in yet
+    set MAIN(auto_path_clean) $auto_path;
+
+    if {$testlinkplan == "null"} {
+        # ----------------------------------------------------------
+        # If in single module mode LEGACY MAIN.TCL
+        # ----------------------------------------------------------
+        cd $module
+        set REG_PATH [pwd]
+        set MAIN(REG_PATH) [pwd]
+
+        # Create supporting dirctories for this feature
+        _createSupportDirectories -dirList "Report Result Tmp Log"    
+        
+        if {[regexp -nocase "^../clitest" $regPath]} {
+            set reportPath "./Report";
+            set moduleRegression [file tail $module]
+            puts "the moduleRegression $moduleRegression"
+            if {![file isdirectory $reportPath]} {
+                file mkdir $reportPath;
+            }
+            set reportPath "./Report";
+            set resultPath "./Result";
+            set tmpPath "./Tmp";
+            set logPath "./Log";
+            set LIB_PATH "../../../Lib"
+            lappend auto_path $LIB_PATH
+            set auto_path [linsert $auto_path 0 ..]
+        } else {
+            set auto_path [linsert $auto_path 0 . ]
+            gen_index .
+            lappend MAIN(indexedList) [pwd];# track fresh indexes
+            # --- load module directory libs in other locations ---
+            if {[file exists lib_links.tcl]} {
+                catch {source lib_links.tcl}
+            }
+        }
+        puts "\n\nmain.tcl CUR DIR: [pwd]"
+        # ----------------------------------------------------------------
+        # Depending on your run type - create the dir to hold results
+        # ----------------------------------------------------------------
+        #
+        #    If normal module run  (testlinkplan=null)
+        #       ./Result/<timestamp>_<autogenindex>
+        #    Passing in randomIndex to main or resetting randomIndex = qid
+        #       ./Result/<timestamp>_<randomIndex>
+        #    Setting global MAIN(RESULTPATH) to override "./Result"
+        #       For SystemSetup -
+        #       set MAIN(RESULTPATH) "$MAIN(autoRoot)/TestLink/$testlinkplan/Result"
+        #       For feature_dirs during the run
+        #       set MAIN(RESULTPATH) "$MAIN(autoRoot)/TestLink/$testlinkplan/$modName/Result"
+        # ----------------------------------------------------------------
+        get_result_dir $randomIndex;# Create resultDir, set global
+    } else {
+        # -------------------------------------------------------------
+        # Test Link Mode
+        #   -Always execute from within the main dir.
+        #   -Adjust the auto_path for feature_directories
+        #   -Change the resultDir to where you want the results to post
+        #
+        #   Note: executeTestLink below is the first time main.tcl will
+        #       know which feature_directories are going to be executed
+        # -------------------------------------------------------------
+        lappend tlDirs "../TestLink"
+        lappend tlDirs "../TestLink/$testlinkplan"
+        _createSupportDirectories -dirList $tlDirs
+        set MAIN(RESULTPATH) "$MAIN(autoRoot)/TestLink/$testlinkplan/Result"
+        set MAIN(RESULTDIR) [get_result_dir $randomIndex];#
+    }
+    # My need to move this.  Probably will be used for variable dir posting
+    set MAIN(optionalPath) $optionalPath
+# -------------------------------------------------------------------
+# -------------------------------------------------------------------
+
+# Start the run
+
+# -------------------------------------------------------------------
+# Set the xterm title if the common.cfg flag is on
+# -------------------------------------------------------------------
+SetTerminalTitle -add "MAIN GetDutsInfo"
+
+# --------------------------------------------------------------------
+# Harness specific / Test bed variable gathering
+# --------------------------------------------------------------------
+    #dummy first file
+    set fd_main_skip [open_result_file "skipTestsList"];
+    close_result_file
+
+    # --- Create the main_log file for capturing harness related log messages
+    open_mainlog_file; # open main_log.txt in the result dir. (WriteToMainLog $text)
+
+    # #########################################################
+    # ---- Open the main.txt result file to hold init dut learn
+    # #########################################################
+    _initDUTs_infoArray;
+    set numDUT $MAIN(NODECOUNT)
+    set fd_res [open_result_file "init_switchinfo"]
+    result_h1 "[file tail [pwd]] Test"
+    if {$MAIN(runMode) < 2 || $harness == "tpb"} {
+
+        # --------------------------------------------------------
+        # Gather DUTs_info variables that are not Software Related
+        #   - loop to get the DUT count and build multitask procs
+        # --------------------------------------------------------
+        set getInfoList ""
+        foreach dut $MAIN(DUTLIST) {
+            puts "***** DUT${dut}_CONNECT=[set DUT${dut}_CONNECT] ***** "
+            puts "***** numDUT=$dut ***** "
+            _SetPartitionVars -dut $dut;# Get port info from cfg file
+            set wayToBootPart($dut) "setupScript"
+            Login [set DUT${dut}_CONNECT] -masterCheck 1 -CheckOperational 1
+            SendACmd "disable log display"
+            lappend getInfoList  "_get_HW_DUTs_info -dut $dut -checkOperational 0"
+            if {[info exists DEFAULT_XSF_AUTO_CREATE] && $DEFAULT_XSF_AUTO_CREATE} {
+                lappend makeXsfList "CreateDefaultXsf -dut $dut"
+            }
+        }
+        foreach sBy $MAIN(STDBYLIST) {
+            if {[info exists DEFAULT_XSF_AUTO_CREATE] && $DEFAULT_XSF_AUTO_CREATE} {
+                lappend makeXsfList "CreateDefaultXsf -dut none -standby $sBy"
+            }
+        }
+        result_debug "------------------  Gather DUT Information  ------------------"
+        MultiTask $getInfoList
+        _printMultiTaskOutput;# show the output in order + in result file
+        #_printDutsInfoVars
+    } else {
+        foreach dut $MAIN(DUTLIST) {
+            puts "***** DUT${dut}_CONNECT=[set DUT${dut}_CONNECT] ***** "
+            puts "***** numDUT=$dut ***** "
+            set wayToBootPart($dut) "setupScript";# should be dev mode so not needed.
+            _SetPartitionVars -dut $dut;# Get port info from cfg file
+            Login [set DUT${dut}_CONNECT] -masterCheck 0 -CheckOperational 0
+            lappend cleancliList "allCleanup $dut"
+        }
+        if {$MAIN(runMode) == "2" && ($MAIN(clean) == "cli" || $MAIN(clean) == "yes")} {
+            puts "\n\n# ------------------------------------------------------------------"
+            puts "               S T A R T I N G     PARALLEL CLI CLEANUP"
+            puts "# ------------------------------------------------------------------"
+            _setShowOutput -screen off -log off -res_fmt on
+            MultiTask $cleancliList
+            _setShowOutput -screen on -log on -res_fmt on
+            puts "\n# ------------------------------------------------------------------"
+            puts "               E N D               PARALLEL CLI CLEANUP"
+            puts "# ------------------------------------------------------------------"
+        }
+    }
+    # ----- Just in case failsafe passwords where hit in a fork, we need to log back in
+    if {$MAIN(FAILSAFEHIT)} {
+        set fDUT 1
+        while { $fDUT <= $MAIN(NODECOUNT) } {
+            Login [set DUT${fDUT}_CONNECT] -CheckOperational 1
+            incr fDUT 1
+        }
+    }
+    close_result_file;# end of main.txt
+# -------------------------------------------------------------------------------------
+# Check Feature content available for this test bed
+# -------------------------------------------------------------------------------------
+    if {$testlinkplan != "null"} {
+        #_validTestLinkSupport
+    } else {
+        set fd_res [open_result_file "main"]
+        result_h1 "[file tail [pwd]] Starting Test"
+        set MAIN(NOFEATSUPPORT) 0
+        # ---------------------------------------------------------------------
+        #          FEATURE SUPPORT ON THIS PLATFORM SECTION
+        #
+        #      Use the global MAIN(NOFEATSUPPORT) 0|1
+        #      if a skip is found the next section will end main    
+        # ---------------------------------------------------------------------
+
+        # ---------------------------------------------------------
+        # bcmLynx feature checks
+        # ---------------------------------------------------------
+        if {[regexp -nocase $bcmLynx $DUTs_info(DUT1,platform)]} {
+            result_debug "DUT platform is $DUTs_info(DUT1,platform) a bcmLynx"
+            if {[lsearch $lynxIncludeModList [file tail $module]] == -1 } {
+                result_debug "This module [file tail $module] skipped for Lynx platform"
+                if {$harness == "tpb"} {
+                    result_debug "Skip all TPB cases for this feature"
+                    #_TPBLynxExecution
+                } else {
+                    #report_start_test "Lynx Skip $MAIN(feature_directory) on $DUTs_info(DUT1,platform)"
+                    #result_skip "Lynx Skip $MAIN(feature_directory) on $DUTs_info(DUT1,platform)"
+                    #report_end_test;
+                }
+                set MAIN(NOFEATSUPPORT) 1
+            }
+        }
+        # ---------------------------------------------------------
+        # Other feature support checking
+        #
+        # use plats_to_run(all) OR plats_to_skip(all)
+        # ---------------------------------------------------------
+
+        if {[catch {source ./completetests.lst} reason]} {
+            puts "Sourcing [pwd] completetest.lst failed: $reason"
+        } else {
+            if {[info exists FEATPLAT(SupportedTypes)] && [info exists FEATPLAT(SupportedDUTs)]} {
+                if {$FEATPLAT(SupportedTypes) != "all"} {
+                    set p 0
+                    foreach sysNStr $FEATPLAT(SupportedTypes) {
+                        if {[regexp -nocase "all" [lindex $FEATPLAT(SupportedDUTs) $p]]} {
+                            for {set d 1} {$d<=$MAIN(NODECOUNT)} {incr d} {
+                                if {![regexp -nocase "$sysNStr" $DUTs_info(DUT$d,sysType)]} {
+                                    result_debug \
+                                     "$DUTs_info(DUT$d,sysType) System Type Not supported by $MAIN(feature_directory):$sysNStr"
+                                    set MAIN(NOFEATSUPPORT) 1
+                                }
+                            }
+                        } else {
+                            foreach d [lindex $FEATPLAT(SupportedDUTs) $p] {
+                                if {$p > $MAIN(NODECOUNT)} {
+                                    result_error "There are not $p DUTs in this Test Bed.  Wrong test bed type?"
+                                    set MAIN(NOFEATSUPPORT) 1
+                                    TrackingCleanup
+                                    exit;
+                                }
+                                if {![regexp -nocase "$sysNStr" $DUTs_info(DUT$d,sysType)]} {
+                                    result_debug \
+                                     "$DUTs_info(DUT$d,sysType) System Type Not supported by $MAIN(feature_directory):$sysNStr"
+                                    set MAIN(NOFEATSUPPORT) 1
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if {[info exists FEATPLAT(PlatNoSupport)] && [info exists FEATPLAT(NoSupportDuts)]} {
+                set p 0
+                foreach platStr $FEATPLAT(PlatNoSupport) {
+                    if {[regexp -nocase "all|any" [lindex $FEATPLAT(NoSupportDuts) $p]]} {
+                        for {set d 1} {$d<=$MAIN(NODECOUNT)} {incr d} {
+                            if {[regexp -nocase "$platStr" $DUTs_info(DUT$d,platform)]} {
+                                result_debug \
+                                 "$DUTs_info(DUT$d,platform) Platform Not supported by $MAIN(feature_directory):$platStr"
+                                set MAIN(NOFEATSUPPORT) 1
+                            }
+                        }
+                    } else {
+                        foreach d [lindex $FEATPLAT(NoSupportDuts) $p] {
+                            if {$p > $MAIN(NODECOUNT)} {
+                                result_error "There are not $p DUTs in this Test Bed.  Wrong test bed type?"
+                                set MAIN(NOFEATSUPPORT) 1
+                                TrackingCleanup
+                                exit;
+                            }
+                            if {[regexp -nocase "$platStr" $DUTs_info(DUT$d,platform)]} {
+                                result_debug \
+                                 "$DUTs_info(DUT$d,platform) Platform Not supported by $MAIN(feature_directory):$platStr"
+                                set MAIN(NOFEATSUPPORT) 1
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    };# End the non test link TCL skip check
+# --------------------------------------------------------------------
+#  Cleanup and exit main.tcl for features that are not supported
+#  on this test bed
+# --------------------------------------------------------------------
+    if {$MAIN(NOFEATSUPPORT)} {
+        set retFlag testSkipped
+        ;# Setup Durations with a not covered feature
+        set tSetupStart [clock seconds]
+        set tSetupDuration [expr $tSetupStart - $tStartTime]
+        set MAIN(tSetupDuration) $tSetupDuration
+
+        if {$harness == "tpb"} {
+            result_debug "Skip all TPB cases for this feature"
+            _TPBLynxExecution
+            result_debug "End Skip all TPB cases for this feature"
+        } else {
+            _initCompleteTests -regPath $MAIN(regPath) -module $modName \
+                 -version $DUTs_info(DUT1,version) -platform $DUTs_info(DUT1,platform) \
+                 -lst $lst
+            #CTLIST(quick_pass_all_dev)
+            if ([info exists CTLIST($LSTGROUPING($lst))]) {
+                if {[set fd_main_skip [open "[get_result_dir]/skipTestsList.txt"\
+                  "w"]] == -1} {
+                       return -1
+                }
+                set MAIN(MAKESKIPRESULTFILE) 1;# create the tc.txt result files and put entries in report.txt
+                foreach st $CTLIST($LSTGROUPING($lst)) {
+                    if {[regexp -nocase "init|end" $st]} {
+                        continue;
+                    }
+                    if {[catch {eval $st} tc]} {
+                    } else {
+                        puts $fd_main_skip "$tc"
+                    }
+                }
+                set MAIN(MAKESKIPRESULTFILE) 0
+                close $fd_main_skip
+            }
+        }
+        save_incrementally_run_data
+        set repDir [create_report_directory "$sourceFile" "no" "$optionalPath" "" "$subversion" "$qId"]
+        if {$harness == "tpb"} {
+            set dir [string trimleft [pwd] "$autoPath"]
+            set link "http://${RESWEB}/${dir}/${repDir}/"
+            puts "\n\n@@@@ TPB TCL Report Link @@@@"
+            puts "\"$link\""
+            puts "@@@@ Test Builder END Report Link @@@@\n"
+        }
+
+        # Cleanup all of the main.tcl harness files..move to report dir
+        set returnFlag [_cleanAndStoreResults -returnFlag $retFlag]
+
+
+        # -----------------------------------------------------------------------------
+        # Print to stderr so any tracking wrapper can make decisions
+        # -----------------------------------------------------------------------------
+        puts stderr $returnFlag
+        flush stderr
+        # -----------------------------------------------------------------------------
+        # Module mode of main.tcl runs regressions from with the feature dir
+        #    Return to main directory
+        # -----------------------------------------------------------------------------
+        puts "Made it to the feature end - location [pwd]"
+        cd $MAIN(mainPath)
+        puts "Made it to the end of main - location [pwd]"
+        return $returnFlag
+    }
+# --------------------------------------------------------------------
+# END of CLEANUP FOR FEATURES NOT SUPPORTED ON THIS TEST BED
+# --------------------------------------------------------------------
+
+# --------------------------------------------------------------------
+# Continue for supported fetures.
+# --------------------------------------------------------------------
+    ############################################################
+    # MODE auto,autodev,dev Init Setup
+    ############################################################
+    set MAIN(initFile) [GetInitFileName $curAutoRoot $cfg]
+
+    # -- MAIN(runMode) > 0 check for the init and verify source of init
+    #    If this fails, change to MAIN(runMode) 0 and create a new initFile
+    #    source the init file with VerifyInitFile
+    if {($MAIN(runMode) >= 1) && (![file exists $MAIN(initFile)]) || \
+        ($MAIN(runMode) >= 1 && ![VerifyInitFile $MAIN(initFile)])} {
+        puts "\n@\n@\nInit check failed\n@\n@"
+        set MAIN(runMode) 0
+    }
+    if {$MAIN(runMode) == 0} {
+        catch {open $MAIN(initFile) "w"} MAIN(ifPipe)
+        if {[regexp -nocase "denied" $MAIN(ifPipe)]} {
+            puts "@\n@\nNO INIT FILE WILL BE CREATED. ERROR OPENING FILE\n@\n@"
+            set MAIN(ifPipe) NULL
+        }        
+    }
+    ############################################################
+    # --- Take ownership of the traffic generator
+    ############################################################
+    # Spirent is auto set if the chassis is defined in the cfg
+    if {[info exists ixiaCh1] && [info exists SPIRENTCH1] && ![regexp -nocase {[0-9]+\.\[0-9]+} $ixiaCh1]} {
+        set TrafficGen stc
+    }
+    switch -exact -- $TrafficGen {
+        stc {
+            set ::_DEBUG 0
+            set MAIN(skipIxInit) 0; set MAIN(IxiaReady) 1;
+            set ::LABSERVER $stcLabserver($SPIRENTCH1)
+            set env(IXIA_HOME) null
+            lappend auto_path "/auto/ixia_5_70/lib/mpexpr-1.1/"
+            overWriteProcs $LIB_PATH [file join $LIB_PATH spirent]
+            source [file join $LIB_PATH ePTLib ePTUtils.tcl]
+            logcmd set auto_path [linsert $auto_path 1 $stcPath($SPIRENTCH1)]
+            #logcmd lappend auto_path $stcPath($SPIRENTCH1)
+            stcInit $LABSERVER
+            package require Mpexpr
+            puts "\n\nPackage Require SpirentTestCenter - Ch:$SPIRENTCH1 LS:$::LABSERVER"
+            logcmd package require SpirentTestCenter
+            GenerateDUTPortMapping; # Add here temporarily b/c called in SystemSetup
+            set returnFlag "connectionOkay"
+            ReservePorts
+            set MAIN(IxInitialized) 1
+        }
+        ixia -
+        ixvm {
+            if {[shareDevInit] == -1} {
+                set returnFlag "connectionBad"
+                result_error " IXIA Reservation FAILED"
+            } else {
+                set MAIN(IxInitialized) 1
+                result_debug " IXIA Reservation OK"
+    # move this
+                if {[file exists "license.lst"]} {
+                    source "./license.lst"
+                    result_debug "license.lst file found. sourcing the contents"
+                }
+            }
+        }
+        ept {
+        }
+        default {
+        }
+    }
+# ----------------------------------------------------------------------------
+#   Start the run.
+#   - run setup script for auto and autodev
+#   - get DUTs info if auto mode
+#   - checkConnections
+# ---------------------------------------------------------------------------
+    if {($MAIN(runMode) != "2")} {
+        # ----  NOT dev mode, unc sw will happen, create default.xsf ----
+        if {[info exists DEFAULT_XSF_AUTO_CREATE] && $DEFAULT_XSF_AUTO_CREATE} {
+            result_debug "------------------  Create default.xsf of all DUTs  ------------------"
+            _setShowOutput -screen off -log off -res_fmt off
+            MultiTask $makeXsfList
+            _setShowOutput -screen on -log on -res_fmt on
+        }
+        # ----  Execute the setup script from bottom of cfg file  ----
+        set runSetupRetVal [_multiRunSetupScript]
+        if {$runSetupRetVal==-1} {
+            puts stderr "testSkipped"
+            if {[set fd_main_skip [open "[get_result_dir]/skipTestsList.txt"\
+            "w"]] == -1} {
+                return -1
+            }
+            puts $fd_main_skip "FeatureSkipped"
+            close $fd_main_skip
+            return -1
+        } elseif { $runSetupRetVal=="REGROUTER_FAILED" } {
+            puts stderr $returnFlag
+            flush stderr
+            return $runSetupRetVal
+        }
+
+        #added following definition to aid per module report-mailing
+        global DUTs_info
+
+        set DUTs_info(current_module) $module
+
+        #Capture the number of DUT for the MAIN(ifPipe) setup file
+        if {$MAIN(ifPipe) != "NULL"} {
+            puts $MAIN(ifPipe) "set numDUT $numDUT"
+        }
+
+        if {$MAIN(runMode) == 0} {
+            global eware_dut
+            set dutlst ""
+
+            if {[set rc [get_DUTs_info]] != 0} {
+                result_error "Error $rc while calling get_DUTs_info.";
+                close_result_file;
+                return -2;
+            }
+
+        }
+    }
+
+    ;# Setup Durations with a covered feature
+    set tSetupStart [clock seconds]
+    set tSetupDuration [expr $tSetupStart - $tStartTime]
+    set MAIN(tSetupDuration) $tSetupDuration
+    set tCheckConnectionDuration 0
+
+    #############################################################################
+    # Verify the test bed connections and gather port variables
+    #############################################################################
+    #  Skip SystemSetup if "autodev" or "dev" are selected
+    if {$MAIN(runMode) == 0 && ![regexp -nocase "^../clitest" $regPath]} {
+        # added for checkConnection overRide if necessary
+        if {$cc != ""} {
+            set checkConnection $cc;
+        }
+
+        switch -exact -- $TrafficGen {
+            stc {
+                set returnFlag [SystemSetup]
+                set tCheckConnectionDuration [expr [clock seconds] - $tSetupStart]
+                set MAIN(tCheckConnectionDuration) $tCheckConnectionDuration
+            }
+            ixia -
+            ixvm {
+                if {[info exists ixiaCh1]} {
+                    if {![regexp -nocase "no_ixia" $ixiaCh1]} {
+                        set returnFlag [SystemSetup]
+                        set tCheckConnectionDuration [expr [clock seconds] - $tSetupStart]
+                        set MAIN(tCheckConnectionDuration) $tCheckConnectionDuration
+                    } else {
+                        set returnFlag connectionOkay
+                    }
+                } else {
+                    set returnFlag connectionOkay
+                }
+            }
+            default {
+                # no test equipment selected, assume connection OK
+                set returnFlag connectionOkay
+            }
+        }
+    } else {
+        if {$MAIN(runMode)==0 && $MAIN(ifPipe) != "NULL"} {
+            close $MAIN(ifPipe);
+            set MAIN(ifPipe) "NULL"
+        }
+        source $MAIN(initFile); # Get all test bed variables from the main/Tmp/DUTsINFO tmp file
+        set returnFlag connectionOkay
+        foreach dut $MAIN(DUTLIST) {
+            set connect [set DUT${dut}_CONNECT]
+            Login $connect -CheckOperational 0
+            set buf [SendACmd "clear log st"]  ;# Check if MSM is backup, abort
+            set backupStr "Error: This command can only be executed on Master"
+            if {[regexp -nocase $backupStr $buf]} {
+                result_error "Backup encountered, aborting"
+                return -1
+            }
+            
+            # set correct time
+            set tm [exec date "+%m %d %Y %H %M %S"]
+            set timeCmd "configure time "
+            append timeCmd $tm
+            SendACmd $timeCmd
+            
+            SendACmd "disable clipa"
+            SendACmd "disable idletime"
+            SendACmd "disable edp ports all"
+            SendACmd "con edp advertisement-interval 60 holddown-interval 180"
+            SendACmd "configure default delete port all"
+            SendACmd "disable stp s0"
+            if {[CompareRelease [GetVersion DUT${dut}] 22.2.0.26]>=0} {
+                SendACmd "configure cli column 248"
+            }
+            global DUTs_info bcmStackable bcmPlatform
+            if {[info exists DUTs_info(DUT${dut},coreFileTarget)]} {
+                SendACmd "configure debug core-dumps $DUTs_info(DUT${dut},coreFileTarget)"
+            }
+        }
+        switch -exact -- $TrafficGen {
+            stc {
+            }
+            ixia -
+            ixvm {
+                if {$ixiaCh1 != "NO_IXIA"} {
+                    smallIxiaInit
+                }
+            }
+            ept {
+            }
+            default {
+            }
+        }
+    }
+    if {$MAIN(ifPipe) != "NULL"} {
+       flush $MAIN(ifPipe)
+    }
+# ---------------------------------------------------------------------------------
+# End of Variable Gathering and CheckConnections
+# ---------------------------------------------------------------------------------
+if {$retFlag == "testSkipped"} {
+    set tEndTime [clock seconds]
+    set MAIN(MainDuration) [expr $tEndTime-$tStartTime]
+
+    result_debug "\n\n*** Time for [file tail [pwd]] Regression test = $MAIN(MainDuration) seconds"
+    result_debug "***    ( [formatSeconds $MAIN(MainDuration)] )\n\n"
+
+    # -----------------------------------------------------------------------------
+    # Move the execution to the final request.
+    # -----------------------------------------------------------------------------
+    set returnFlag [lindex $returnFlag 0]
+    _cleanAndStoreResults -returnFlag $returnFlag
+
+    # -----------------------------------------------------------------------------
+    # Print to stderr so any tracking wrapper can make decisions
+    # -----------------------------------------------------------------------------
+    puts stderr $returnFlag
+    flush stderr
+    # -----------------------------------------------------------------------------
+    # Module mode of main.tcl runs regressions from with the feature dir
+    #    Return to main directory
+    # -----------------------------------------------------------------------------
+    close_result_file
+    TrackingCleanup
+    puts "Made it to the feature end - location [pwd]"
+    cd $MAIN(mainPath)
+    puts "Made it to the end of main - location [pwd]"
+    exit;
+}
+
+# -----------------------------------------------------------------------
+# Create EXOS log filter on the test bed
+# -----------------------------------------------------------------------
+CreateRegLogFilter
+# -----------------------------------------------------------------------
+# Create debug cli procedure and source commands
+# -----------------------------------------------------------------------
+CalculateDebug $modName $showErrorData;
+# -----------------------------------------------------------------------
+# Figure out what tests to run
+# -----------------------------------------------------------------------
+set MAIN(initAdminCheck) 0;# At this point admin is assumed. Avoid hitting in script
+
+    _initCompleteTests -regPath $MAIN(regPath) -module $modName \
+        -platform $DUTs_info(DUT1,platform) -lst $lst \
+        -version $DUTs_info(DUT1,version)
+
+# If tests_to_run not defined so far, try to source now
+# If this were a re-run, we would use a pt_xxx cfg file which would contain
+# tests_to_run in it.  In this case, we don't need to "figure out" which
+# tests to run.
+    set fName ""
+
+    ;# Go to the CLITest/<module> directory to source completetests.lst
+    set curDir [pwd]
+    if [regexp -nocase "CLItest" $curDir] {
+        puts "Temporily changing directory to  ../../$clitestDir/$modName"
+        cd ../../$clitestDir/$modName
+    } 
+    set testsToRun [calculateTestToRun $lst [GetPlatform]]
+    array set init_tests_to_run $testsToRun
+    array set tests_to_run $testsToRun
+
+    ;# Go back to old directory
+    cd $curDir
+
+
+#    _initCompleteTests -regPath $MAIN(regPath) -module $modName \
+#                           -platform $DUTs_info(DUT1,platform) -lst $lst
+
+result_debug "DEBUG PRINTING -- tests to run [parray tests_to_run]"
+
+AddTestbedInfoToDUTs_info;
+
+#only start test if connections checked to be okay
+#then eval each tests_to_run array var based on version index
+
+if { $returnFlag == "connectionOkay" } {
+    set MAIN(startexecution) 1
+    set MAIN(timeFile) "[get_result_dir { $randomIndex }]/execTime.txt"
+    
+    result_debug  "*********** DUT1 VERSION : [GetVersion DUT1] Your HARNESS: $harness timefile $MAIN(timeFile) *****************"
+
+    
+
+    if {$harness == "itest"} {
+        # This case is for tcList passed in or a lst file from rdureg, which is similar to tcList
+        if {$tcList != "all" || [file exists $lst]} {
+               if {$tcList != "all"} {
+                   set outList $tcList
+               } else {
+                   set outList ""
+                   foreach testcase $init_tests_to_run(all) {
+                       lappend outList $testcase
+                   }
+		   set tcList $outList
+               }
+        }
+    } elseif {$harness == "tcl" || $harness == "all"} {
+        # This case is for tcList passed in or a lst file from rdureg, which is similar to tcList
+        if {$tcList != "all" || [file exists $lst]} {
+             if {$harness == "all"} {
+                global lst
+                result_debug "Test case list defined on command line: $tcList"
+                unset tests_to_run
+                set tests_to_run [list]
+                set tmpTCList ""
+                if {$tcList != "all"} {
+                    foreach testcase $tcList {
+                        lappend tmpTCList $testcase
+                    }
+                } else {
+                    foreach testcase $init_tests_to_run(all) {
+                        puts $testcase
+                        lappend tmpTCList $testcase
+                    }
+                }
+                puts "tmpTCList is $tmpTCList"
+                puts "[GetCfgTestList $DUTs_info(DUT1,platform) $tmpTCList [GetVersion DUT1] inList outList]"
+                puts "TCL Cases: $inList"
+                foreach testcase $inList {
+                    set tests_to_run "$tests_to_run\n$testcase"
+                }
+                puts "outList: $outList"
+                set tcList $outList
+                puts "NEW tcList $tcList"
+                set lst "custom"
+            } else {
+                global lst
+                result_debug "Test case list defined on command line: $tcList"
+                unset tests_to_run
+                set tests_to_run [list]
+                if {$tcList != "all"} {
+                    foreach testcase $tcList {
+                        set tests_to_run "$tests_to_run\n$testcase"
+                    }
+                } else {
+                    foreach testcase $init_tests_to_run(all) {
+                        set tests_to_run "$tests_to_run\n$testcase"
+                    }
+                }
+                set lst "custom"
+            }
+        }
+
+        if { [array size tests_to_run] == 0 } {
+            ;# Convert old list style to array
+            set tempList $tests_to_run
+            unset tests_to_run
+            set tests_to_run(all) $tempList
+            puts "set tests_to_run(all) $tempList"
+        }
+
+        set testtorunNo 1
+
+        ;# Array of tests_to_run() lists. i.e. tests_to_run(all), tests_to_run(7.0),etc.
+        set indexList [array names tests_to_run]      
+        mainSort indexList
+
+        ;# create the reportdir.txt filedirectory
+        create_report_directory $sourceFile no $optionalPath "" $subversion $qId
+    
+        foreach arrayIndex $indexList {
+            puts "Index Loop $arrayIndex"
+            set ver [string tolower $arrayIndex]
+
+            if { ("$ver" == "all") || ("$ver" == "null") \
+                   || [CompareRelease $ver [GetVersion DUT1 ]] <= 0 } {
+
+                if {[regexp -nocase "clitest" $regPath]} {
+                    set returnFlag [executeCLITestsToRun $tests_to_run($ver) \
+                        $regPath $testtorunNo]
+
+                    if {$returnFlag == "testCompleted"} {
+                        incr testtorunNo
+                        cleanup
+                    }
+                } else {
+                    if {$harness == "tcl" || $harness == "all"} {
+                        set returnFlag [executeTestsToRun $tests_to_run($ver)]
+                        if { ($returnFlag==-1) || ($returnFlag == "testSkipped") || ($returnFlag == "REGROUTER_FAILED") } {
+                            break
+                        }
+                        if {$FAILLOCK=="yes" && $returnFlag == "testCompleted" && $DEBUGFAILLOCK > 0} {
+                            puts "Main.tcl hit user lock on fail case"
+                            break
+                        }
+                    }
+               }
+
+           } else {
+               set returnFlag "testSkipped"
+           }
+        }
+    } elseif {$harness == "tpb"} {
+        set testtorunNo 1
+        ;# create the reportdir.txt filedirectory
+        create_report_directory $sourceFile no $optionalPath "" $subversion $qId
+
+        set what [GetCleanTestList dev]
+        set verList [GetVerSkipList dev]
+        puts "*****\n*****ALL:\n$what\n*****\n*****"
+        puts "*****\n*****VERSKIP:\n$verList\n*****\n*****"
+        set mydev [GetCleanTestList devonly]
+        puts "*****\n*****DEVONLY:\n$mydev\n*****\n*****"
+        set mydebug [GetCleanTestList debugonly]
+        puts "*****\n*****DEBUGONLY:\n$mydebug\n*****\n*****"
+
+        set elist ""
+        if {[file isfile license.lst] && \
+            [regexp $bcmLynx $DUTs_info(DUT1,platform)]} {
+            source license.lst
+            foreach edgetc $license_to_run(edge) {
+                lappend elist $edgetc
+            }
+            puts "Found EDGE: $elist"
+        }
+        set ALLPLATTESTS $what
+        set ALLPLATDEV $mydev
+        set ALLPLATDEBUG $mydebug
+        set ALLPLATEDGE $elist
+        set SKIPVERTESTS $verList
+        set currInit ""
+        set currEnd ""
+        set hitPair 0
+        set numInit "A"
+        set numEnd "B"
+        foreach w $what {
+            if {[regexp -nocase "init" $w]} {
+                if {!$hitPair} {
+                    set currInit ""
+                    set numInit ""
+                    set currEnd ""
+                    set numEnd ""
+                }
+                regsub -all "\.init" $w "" myInit
+                set currInit $w
+                set numInit $myInit
+            }
+            if {[regexp -nocase "end" $w]} {
+                regsub -all "\.end" $w "" myEnd
+                set currEnd $w
+                set numEnd $myEnd
+            }
+            if {$numEnd == $numInit} {
+                puts "found pair $currInit - $currEnd"
+                set initEndScript($currInit) $currEnd
+                set INITBYENDSCRIPT($currEnd) $currInit
+                set currInit ""
+                set numInit ""
+                set currEnd ""
+                set numEnd ""
+                set hitPair 1
+            }
+        }
+        set currInit "NULL"
+        set currEnd ""
+        foreach w $what {
+            if {[regexp -nocase "init" $w]} {
+                set currInit $w
+            } elseif {[regexp -nocase "end" $w]} {
+                set currInit NULL
+            } else {
+                if {[info exists initEndScript($currInit)]} {
+                   set blockEnd $initEndScript($currInit)
+                } else {
+                   set blockEnd "NULL"
+                }
+                set TESTPRE($w) $currInit
+                set TESTPOST($w) $blockEnd
+                puts "Prereq $currInit  TestCase $w  TestCleanup $blockEnd"
+            }
+        }
+        set useSocket 0
+        if {$trackport != "null"} {
+            set useSocket 1
+        }
+        create_report_directory $sourceFile no $optionalPath "" $subversion $qId
+        if {[set tpblogfile [open "[get_result_dir { $randomIndex }]/tpblogfile.txt" \
+           "w"]] == -1} {
+              puts "Opening the tpblogfile failed"
+        }
+        set returnFlag "[executeTestsToRunTPB $tpblogfile $useSocket]"
+        close $tpblogfile 
+        if { ($returnFlag==-1) || ($returnFlag == "testSkipped") } {
+            break
+        }
+        global EX_REPORT_DATA
+        #result_debug "\n\n!!! returnFlag:$returnFlag  Returned test data:\n$EX_REPORT_DATA\n\n"
+    }
+    if {($harness == "itest" || $harness == "all") && ([lsearch $ITESTMODS $modName] >= 0 || [lsearch $DEVITESTMODS $modName] >= 0)} {
+        set nDUT 1
+        while { [info exists DUT${nDUT}_CONNECT] } {
+            set connect [set DUT${nDUT}_CONNECT]
+            Login $connect -CheckOperational 0
+            SendACmd "disable log display"
+            logout
+            incr nDUT 1
+	   
+        }
+
+        if {$harness == "all" && $tcList != "all"} {
+            set tcList $outList
+        }
+        # Determine if this is a devlopment module that has a different itar path
+        if {[lsearch $DEVITESTMODS $modName] >= 0} {
+            set MODPATHDEF [lindex $DEVITESTMODPATH [lsearch $DEVITESTMODS $modName]]
+            set ITARPATHDEF [lindex $DEVITESTITARPATH [lsearch $DEVITESTMODS $modName]]
+            result_debug "!!! Changing the modPath to : [lindex $DEVITESTMODPATH [lsearch $DEVITESTMODS $modName]]";
+            result_debug "!!! Changing the itarPath to : [lindex $DEVITESTITARPATH [lsearch $DEVITESTMODS $modName]]";
+        }
+        set iCategory [get_itest_category -modPath "$regPath"]
+        set rPath "[pwd]/[get_result_dir { $randomIndex }]"
+        set jPath "${ITARPATHDEF}/[pid]"
+        # Create the tbml file
+        if {![file isdirectory $jPath]} {
+            puts "Creating dir $jPath"
+            file mkdir $jPath    
+        }
+        if {![regexp -nocase "tbml" $moduleArg]} {
+            CreateTBML -cfg "${fn}.cfg" -path "$jPath" -homeDir "module"
+        } else {
+           if {[file exists ../../main/cfg/$moduleArg]} {
+               file copy ../../main/cfg/$moduleArg $jPath/
+               puts "Hit Mod Arg ../../main/cfg/$moduleArg $jPath"
+               puts ""
+           }  
+        }
+        result_debug "exec_itest -module \"$modName\" -topoDir \"$tbml_sub_dir\" -cfg \"$fn\" \
+            -category \"$iCategory\" \
+            -itarPath \"$ITARPATHDEF\" \
+            -modPath \"$MODPATHDEF\" \
+            -version \"[GetVersion DUT1]\" \
+            -iplatform \"NULL\" \
+            -eplatform \"NULL\" \
+            -qId \"$qId\" \
+            -tcList \"$tcList\" \
+            -resultDir \"$rPath\" \
+            -ntafServer \"$NTAFSERVERDEF\" \
+            -licenseServer \"$LICSERVERDEF\" \
+            -jobDir \"$jPath\""
+
+        set returnFlag [exec_itest -module "$modName" -topoDir "$tbml_sub_dir" -cfg "$fn" \
+            -category "$iCategory" \
+            -itarPath "$ITARPATHDEF" \
+            -modPath "$MODPATHDEF" \
+            -version "[GetVersion DUT1]" \
+            -iplatform "NULL" \
+            -eplatform "NULL" \
+            -qId "$qId" \
+            -tcList "$tcList" \
+            -resultDir "$rPath" \
+            -ntafServer "$NTAFSERVERDEF" \
+            -licenseServer "$LICSERVERDEF" \
+            -list "$lst" \
+            -jobDir "$jPath"]
+
+    }
+} else {
+    ;# create the reportdir.txt file for the case when setup failed
+    save_incrementally_run_data
+    create_report_directory $sourceFile no $optionalPath "" $subversion $qId
+}
+# --- Setup sharing device
+shareDevDeInit;
+
+set tEndTime [clock seconds]
+set MAIN(MainDuration) [expr $tEndTime-$tStartTime]
+
+result_debug "\n\n*** Time for [file tail [pwd]] Regression test = $MAIN(MainDuration) seconds"
+result_debug "***    ( [formatSeconds $MAIN(MainDuration)] )\n\n"
+
+# -----------------------------------------------------------------------------
+# Move the execution to the final request.
+# -----------------------------------------------------------------------------
+set returnFlag [lindex $returnFlag 0]
+_cleanAndStoreResults -returnFlag $returnFlag
+TrackingCleanup
+# -----------------------------------------------------------------------------
+# Print to stderr so any tracking wrapper can make decisions
+# -----------------------------------------------------------------------------
+puts stderr $returnFlag
+flush stderr
+# -----------------------------------------------------------------------------
+# Module mode of main.tcl runs regressions from with the feature dir
+#    Return to main directory
+# -----------------------------------------------------------------------------
+close_result_file
+puts "Made it to the feature end - location [pwd]"
+cd $MAIN(mainPath)
+puts "Made it to the end of main - location [pwd]"

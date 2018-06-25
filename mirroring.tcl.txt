@@ -1,0 +1,980 @@
+
+################################################################
+#  [exIAConfMirroring]
+# 
+#  Proc to enable and configure mirror on EXOS based platforms.
+#   
+#  Input Variables:
+#      - <monitorPort> - required param
+#      - <args> - optional params
+#  Output Variables:
+#      - none
+#
+#  Return Value:
+#      - returns OK on success
+#      - returns error as returned by cli on failure
+#      
+#  [Examples]
+#  if {[exIAConfMirroring [MapDUTPortId 8] -port [MapDUTPortId 5] -tagged no -direction ingress]=="OK"
+#  } {
+#  ....
+#  } else {
+#  ....
+#  }
+################################################################
+proc exIAConfMirroring {monitorPort args} {
+
+    parse_args exIAConfMirroring $args {
+        port "NULL"
+        vlan "NULL"
+        tagged "no"
+        direction "ingress-and-egress"
+    }
+
+    set retVal ""
+    global whichDutNow
+
+    set platform [GetPlatform DUT${whichDutNow}]
+    set ver [GetVersion DUT${whichDutNow}]
+    global i386Platform
+    if {[regexp -nocase $i386Platform $platform]} {
+        return "Platform not supported"
+    }
+
+    # -----------------------------------------------------------
+    # Platform based skip test case - This should not hit. If it does
+    #    copy this skip to the actual test case that needs to skip. Always use dummy in lib dir
+    # -----------------------------------------------------------
+    CheckVpexTestCaseSkip -dut "$whichDutNow" -ctlrPortsStr "$monitorPort" -testNo "dummy" -time1 "dummy"
+
+    if {($vlan == "NULL") && ($port == "NULL")} {
+        set retVal "Invalid Parameter: Can not have both vlan and port not set."
+    } else {
+        # check if vlan is set
+        if {$vlan != "NULL"} {
+            set vlanParam "vlan $vlan"
+            set direction ""
+        } else {
+            set vlanParam ""
+        }
+
+        # check if port list is set
+        if {$port != "NULL"} {
+            set portParam "port $port"
+        } else {
+            set portParam ""
+        }
+    }
+
+    # check if tagged or untagged
+    # tag/untag only supported from 10.2.0.6
+    if {[CompareRelease $ver 10.2.0.6] >=0} {
+        global bcmPlatform 
+        if {[regexp -nocase $bcmPlatform $platform]} {
+            # aspen and cougar does not support this parameter
+            set tagParam ""
+        } else {
+            if {$tagged == "no"} {
+                set tagParam "untagged"
+            } elseif {$tagged == "yes"} {
+                set tagParam "tagged"
+            } else {
+                # error reached
+                result_debug "Error: tagged parameter needs to be either yes or no"
+                set retVal "Invalid Parameter"
+            }
+        }
+        global gnssPlatform
+        if {[regexp -nocase $gnssPlatform $platform]} {
+            # mariner and olympic does not support this parameter
+            set direction ""
+        }
+
+    }
+
+    # now issue commands
+    if {![regexp -nocase "Invalid Parameter" $retVal]} {
+        set retString [SendACmd "enable mirror to port $monitorPort $tagParam"]
+        if {($vlan == "NULL") && ($port == "NULL")} {
+            set retVal $retString
+            result_debug "Error in exIAConfMirroring $retString";
+            result_debug "Command: enable mirror to port $monitorPort $tagParam";
+        } else {
+            if {[regexp -nocase "invalid" $retString] ||
+            [regexp -nocase "Error" $retString]} {
+                set retVal $retString
+                result_debug "Error in exIAConfMirroring $retString";
+                result_debug "Command: enable mirror to port $monitorPort $tagParam";
+            } else {
+                set retString [SendACmd "configure mirror add $portParam $vlanParam $direction"]
+                if {[regexp -nocase "invalid" $retString] ||
+                   [regexp -nocase "Error" $retString]} {
+                    set retVal $retString
+                    result_debug "Error in exIAConfMirroring $retString";
+                    result_debug "Command: enable mirror to port $monitorPort $tagParam";
+                    # clean up because command failed
+                    SendACmd "disable mirror"
+                    SendACmd "delete mirror all"
+                } else {
+                    set retVal "OK"
+                }
+            }
+        }
+    }
+    exSleep 2
+    return $retVal
+}
+
+################################################################
+#  [exOAMirroring]
+# 
+#  Proc to show mirror
+#  a list of vlans or ports may be supplied for multiple mirroring configs
+#   
+#  Input Variables:
+#      - <monitorPort> - required param
+#      - <args> - optional params
+#  Output Variables:
+#      - none
+#
+#  Return Value:
+#      - returns OK
+#      
+#  [Examples]
+#  exOAMirroring [MapDUTPortId 8] -port [MapDUTPortId 5] -tagged no
+################################################################
+proc exOAMirroring {monitorPort args} {
+   parse_args exOAMirroring $args {
+      port "NULL"
+      vlan "NULL"
+      tagged "no"
+      status "up"
+   }
+
+   set retVal ""
+
+   global whichDutNow
+   set platform [GetPlatform  DUT${whichDutNow}]
+   set ver [GetVersion DUT${whichDutNow}]
+   global bcmPlatform
+   if {![regexp -nocase $bcmPlatform $platform]} {
+     if {$tagged=="yes"} {
+        if { [CompareRelease $ver 10.2.0.6] >=0 } {
+           lappend checkMirrorPort "{Mirror to port.*: $monitorPort} exist";
+        } else {
+           lappend checkMirrorPort "{Mirror to port.*: $monitorPort.*} exist";
+        }
+     } else {
+        lappend checkMirrorPort "{Mirror to port.*: $monitorPort.*} exist";
+     }
+   } else {
+      	lappend checkMirrorPort "{Mirror to port.*: $monitorPort} exist";
+   }
+
+   set i 0
+   if {$port!="NULL"} {
+   foreach po $port {
+      set vl [lindex $vlan $i]
+      if {$vl==""} {set vl "NULL"}
+      if {$po!="NULL" && $vl=="NULL"} {
+         lappend checkMirrorPort "{Port.*$po.*all vlans} exist";
+      }
+
+      if {$vl!="NULL" && $po=="NULL"} {
+         lappend checkMirrorPort "{All ports.*vlan $vl} exist";
+      } elseif {$vl!="NULL" && $po!="NULL"} {
+         lappend checkMirrorPort "{Port.*$po.*vlan $vl} exist";
+      }
+      incr i
+   }
+   } elseif {$vlan!="NULL"} {
+   foreach vl $vlan {
+      set po [lindex $port $i]
+      if {$po==""} {set po "NULL"}
+      if {$po!="NULL" && $vl=="NULL"} {
+         lappend checkMirrorPort "{Port.*$po.*all vlans} exist";
+      }
+
+      if {$vl!="NULL" && $po=="NULL"} {
+         lappend checkMirrorPort "{All ports.*vlan $vl} exist";
+      } elseif {$vl!="NULL" && $po!="NULL"} {
+         lappend checkMirrorPort "{Port.*$po.*vlan $vl} exist";
+      }
+      incr i
+   }
+   }
+
+   #added because of the change in the cli show mirror from 15.3
+   if {$ver >= 15.3}  {
+       CheckKeyValue "show mirror" $checkMirrorPort;
+	
+   } else {
+       CheckKeyValue "show mirror" $checkMirrorPort;
+   }
+   return "OK"
+}
+
+################################################################
+#  [exIACheckEnableMirroring]
+# 
+#  Proc to perform CheckCmdLegal on enable mirror cli.
+#  abstracted as it differs on EXOS based platforms.
+#   
+#  Input Variables:
+#      - <monitorPort> - required param
+#      - <args> - optional params
+#  Output Variables:
+#      - none
+#
+#  Return Value:
+#      - returns OK on success
+#      - returns error as returned by cli on failure
+#      
+#  [Examples]
+#  if {[exIACheckEnableMirroring [MapDUTPortId 8] -tagged no]=="OK"} {
+#  ....
+#  } else {
+#  ....
+#  }
+################################################################
+proc exIACheckEnableMirroring {monitorPort args} {
+
+  parse_args exIACheckEnableMirroring $args {
+     tagged "no"
+  }
+
+  set retVal "OK"
+  global whichDutNow
+
+  set platform [GetPlatform  DUT${whichDutNow}]
+  set ver [GetVersion DUT${whichDutNow}]
+   
+global bcmPlatform
+  if {![regexp -nocase $bcmPlatform $platform]} {
+     if {$tagged == "no"} {
+        set tagParam "untagged"
+     } elseif {$tagged == "yes"} {
+        set tagParam "tagged"
+     } else {
+        # error reached
+        result_debug "Error: tagged parameter needs to be either yes or no"
+        set retVal "Invalid Parameter"
+     }
+     if { [CompareRelease $ver 10.2.0.6] >=0 } {
+        CheckCmdLegal "enable mirror to port $monitorPort $tagParam"
+     } else {
+        CheckCmdLegal "enable mirror to port $monitorPort"
+     }
+  } else {
+     CheckCmdLegal "enable mirror to port $monitorPort"
+  }
+  return $retVal
+}
+
+proc mirrorGetHigherPortId {port1 port2} {
+
+   set card1 ""
+   set card2 ""
+   set portNum1 ""
+   set portNum2 ""
+
+   if {[regexp "(.*:)(.*)" $port1 res1 res2 res3] == 1 } {
+           set card1 [string trim $res2 :]
+           set portNum1 [string trim $res3]
+   }
+
+   if {[regexp "(.*:)(.*)" $port2 res1 res2 res3] == 1 } {
+           set card2 [string trim $res2 :]
+           set portNum2 [string trim $res3]
+   }
+
+   if {$card1 > $card2} {
+      set retVal 1
+   } elseif {$card1 < $card2} {
+      set retVal 2
+   } elseif {$portNum1 > $portNum2} {
+      set retVal 1
+   } elseif {$portNum1 < $portNum2} {
+      set retVal 2
+   } else {
+# --- Eqal
+      set retVal 0
+   }
+   return $retVal
+}
+
+proc mirrorGetOddEvenFromMac {macAddr byteNumber} {
+   set bitOffset [expr 3*($byteNumber-1)]
+   set res1 [string index $macAddr $bitOffset]
+   set bitOffset [expr $bitOffset+1]
+   set res2 [string index $macAddr $bitOffset]
+   set res3 [concat $res1$res2]
+
+   set rem [expr 0x$res3 % 2]
+   #result_debug "res3 is $res3 rem is $rem mac addr is $macAddr"
+   if {$rem == 1} {
+     set retVal "odd"
+   } else {
+     set retVal "even"
+   }
+   return $retVal
+}
+
+
+################################################################
+#  [enableRemoteMirroring]
+#               
+#  Proc to enable remote mirroring in all platforms 
+#       
+#  Input Variables:
+#      - monitorPorts - List of monitor ports
+#      - remoteTag    - remoteTag for enabling Remote Mirroring
+#      - <args> - optional params
+#  Output Variables:
+#      - none
+#     
+#  Return Value:
+#      - Ports range
+#
+#  [Examples]
+#  enableRemoteMirroring [MapDUTPortId 1],[MapDUTPortId 3] 100 -loopbackport [MapDUTPortId 5] -tagged no -vlan v1 
+###############################################################
+
+proc enableRemoteMirroring {monitorPorts remoteTag args} {
+
+   parse_args enableRemoteMirroring  $args {
+      loopbackport "NULL"
+      tagged "no"
+      port "NULL"
+      vlan "NULL"
+      direction "ingress-and-egress"
+      }
+
+    set retVal ""
+    set monitorParam ""
+    set loopbackParam ""
+    set tagParam ""
+    global whichDutNow
+    set platform [GetPlatform DUT${whichDutNow}]
+    set ver [GetVersion DUT${whichDutNow}]
+    global i386Platform
+    global gnssPlatform
+    global bcmPlatform
+
+    if {[regexp -nocase $i386Platform $platform]} {
+       return "Platform not supported"
+    }
+      if {($vlan == "NULL") && ($port == "NULL")} {
+         set retVal "Invalid Parameter: Can not have both vlan and port not set."
+        } else {
+                 # check if vlan is set
+            if {$vlan != "NULL"} {
+                set vlanParam "vlan $vlan"
+                set direction ""
+            } else {
+                set vlanParam ""
+            }
+            # check if port list is set
+            if {$port != "NULL"} {
+                set portParam "port $port"
+            } else {
+                set portParam ""
+            }
+        }
+
+   if {[regexp -nocase $gnssPlatform $platform]} {
+      if {$loopbackport != "NULL"} {
+                set loopbackParam "loopback-port $loopbackport"
+        } else {
+                result_debug "Error: Loopback port parameter missing"
+                set retVal "Invalid Parameter"
+        }
+
+        if {$tagged == "no"} {
+                set tagParam "untagged"
+        } elseif {$tagged == "yes"} {
+                set tagParam "tagged"
+        } else {
+                # error reached
+                result_debug "Error: tagged parameter needs to be either yes or no"
+                set retVal "Invalid Parameter"
+        }
+      set direction ""
+      set monitorParam "port-list $monitorPorts"
+    }
+
+    set doSleep 0
+    if {[regexp -nocase $bcmPlatform $platform]} {
+      set doSleep 1
+      if {$loopbackport != "NULL"} {
+            set loopbackParam "loopback-port $loopbackport"
+            set monitorParam "port-list $monitorPorts"
+      } else {
+            set loopbackParam ""
+            if {[regexp "," $monitorPorts]} {
+               result_debug "Error: No loopback port, but multiple ports in port-list" 
+               set retVal "Invalid Parameter"
+            } else {
+                set monitorParam "port $monitorPorts"
+            }
+      }
+     set tagParam ""
+#    #Enable enhanced mode in case of broadcom platforms before enabling remote mirroring
+#    set retString [SendACmd "configure mirror mode enhanced"]
+#    if {[regexp -nocase "invalid" $retString] || [regexp -nocase "Error" $retString]} {
+#       set retVal $retString
+#       result_debug "Error in enabling enhanced mode $retString"
+#       result_debug "configure mirror mode enhanced"
+#       return $retVal
+#    }
+}
+
+     if {![regexp -nocase "Invalid Parameter" $retVal]} {
+                set retString [SendACmd "enable mirror to $monitorParam $loopbackParam $tagParam remote $remoteTag"]
+                if {[regexp -nocase "invalid" $retString] || [regexp -nocase "Error" $retString]} {
+                    set retVal $retString
+                    result_debug "Error in enableRemoteMirroring  $retString";
+                    result_debug "enable mirror to $monitorParam $loopbackParam $tagParam remote $remoteTag";
+                    # clean up because command failed
+                    SendACmd "disable mirror"
+SendACmd "delete mirror all"
+        } else {
+                        if { $doSleep == 1} {
+                                set doSleep 0
+                                exSleep 3
+                        }
+                         set retString [SendACmd "configure mirror add $portParam $vlanParam $direction"]
+                         if {[regexp -nocase "invalid" $retString] || [regexp -nocase "Error" $retString]} {
+                        set retVal $retString
+                         result_debug "Error in enableRemoteMirroring  $retString";
+                         result_debug "configure mirror add $portParam $vlanParam $direction";
+                         # clean up because command failed
+                         SendACmd "disable mirror"
+SendACmd "delete mirror all"
+                        } else {
+                        set retVal "OK"
+                      }
+
+        }
+    }
+return $retVal
+} 
+
+################################################################
+#  [makePortList]
+#
+#  Proc to make the range of ports from list of ports given 
+#  For example: used to verify the mirror ports range in show mirror 
+#
+#  Input Variables:
+#      - <args> - optional params
+#  Output Variables:
+#      - none 
+#
+#  Return Value:
+#      - Ports range 
+#
+#  [Examples]
+#  makePortList "[MapDUTPortId 3] [MapDUTPortId 2] [MapDUTPortId 4] [MapDUTPortId 5]"
+################################################################
+
+proc makePortList {portlist} {
+set portlist [lrmdups $portlist]
+set portlist [lsort -integer $portlist]
+
+set listlen [llength $portlist]
+set finallist ""
+set version [GetVersion DUT1 majmin]
+if { $listlen == 1} {
+return $portlist
+}
+
+for {set i 0} { $i < $listlen } {} {
+        set num1 [lindex $portlist $i]
+        for { set j [expr $i + 1] } { $j < $listlen} { incr j} {
+        set num2 [lindex $portlist $j]
+        if { $num2 != [expr $num1 + 1] } {
+                if { $j == [expr $i + 1] } {
+                   append finallist "$num1,.*"
+                  set i $j
+                } else {
+                        set num1 [lindex $portlist $i]
+                        set i $j
+                        incr j -1
+                        set num2 [lindex $portlist $j]
+                        append finallist "$num1-$num2, "
+                }
+                        set j $listlen
+                   if { $i == [expr $listlen - 1] } {
+                                set num1 [lindex $portlist $i]
+                                append finallist $num1
+                                set i $listlen
+                   } 
+
+        } else {
+                if { $j != [expr $listlen - 1] } {
+                set num1 [lindex $portlist $j]
+                } else {
+                        set num1 [lindex $portlist $i]
+                        set num2 [lindex $portlist $j]
+                        append finallist "$num1-$num2"
+                        set j $listlen
+                        set i $listlen
+                }
+        }
+        }
+}
+return $finallist
+}
+
+
+################################################################
+#  [makeChassisPortList]
+#
+#  Proc to make the range of ports from list of ports given for Chassis
+#  For example: used to verify the mirror ports range in show mirror
+#
+#  Input Variables:
+#      - <args> - optional params
+#  Output Variables:
+#      - none
+#
+#  Return Value:
+#      - Ports range
+#
+#  [Examples]
+#  makeChassisPortList "[MapDUTPortId 3] [MapDUTPortId 2] [MapDUTPortId 4] [MapDUTPortId 5]"
+################################################################
+
+proc makeChassisPortList {portlist} {
+set listlen [llength $portlist]
+set finallist ""
+set portnum ""
+set cardlist ""
+set version [GetVersion DUT1 majmin]
+#set version 16.5
+if { $listlen == 1 } {
+        return $portlist
+}
+
+foreach port1 $portlist {
+if {[regexp "(.*:)(.*)" $port1 res1 res2 res3] == 1 } {
+           lappend cardlist [string trim $res2 :]
+}
+}
+
+set cardlist [lrmdups $cardlist]
+set cardlist [ lsort -integer $cardlist]
+set cardlen [llength $cardlist]
+
+for {set i 0} {$i < $cardlen } {incr i} {
+        set cardportlist ""
+        set cardnum [lindex $cardlist $i]
+        foreach port1 $portlist {
+                if {[regexp "(.*:)(.*)" $port1 res1 res2 res3] == 1 } {
+                        set card1 [string trim $res2 :]
+                        if {[string compare $cardnum $card1]== 0} {
+                                lappend cardportlist [string trim $res3]
+                        }
+                }
+        }
+set cardportlist1 [makePortList $cardportlist]
+regsub -all ", " $cardportlist1 ",.*$cardnum:" cardportlist2
+append finallist1 "$cardnum:"
+append finallist1 $cardportlist2
+if { $i < [expr $cardlen -1]} {
+   append finallist1 ",.*"
+}
+}
+return $finallist1
+}
+
+
+################################################################
+#  [exOARemoteMirroring]
+#
+#  Proc to verify the remote mirroring configuration
+#
+#  Input Variables:
+#      - <args> - optional params
+#  Output Variables:
+#      - none
+#
+#  Return Value:
+#      - returns "OK" on success 
+#
+#  [Examples]
+# exOARemoteMirroring [GetATrunkPort 1 2 1] -vlan v1 -remoteTag 101 \
+#    -loopbackport [GetATrunkPort 1 2 3]
+################################################################
+
+proc exOARemoteMirroring {monitorPort args} {
+   parse_args exOAMirroring $args {
+      port "NULL"
+      vlan "NULL"
+      tagged "no"
+      status "up"
+      remoteTag "NULL"
+      loopbackport ""
+   }
+   
+   set retVal ""
+   global whichDutNow
+   global gnssPlatform bcmChassis
+   
+   set platform [GetPlatform  DUT${whichDutNow}]
+   set ver [GetVersion DUT${whichDutNow}]
+
+   if { $loopbackport == "NULL"} {
+   global bcmPlatform
+   if {![regexp -nocase $bcmPlatform $platform]} {
+     if {$tagged=="yes"} {
+        if { [CompareRelease $ver 10.2.0.6] >=0 } {
+           lappend checkMirrorPort "{Mirror port: $monitorPort.* is $status tagged} exist";
+        } else {
+           lappend checkMirrorPort "{Mirror port: $monitorPort.* is $status} exist";
+        }
+     } else {
+        lappend checkMirrorPort "{Mirror port: $monitorPort.* is $status untagged} exist";
+     }
+   } else {
+      lappend checkMirrorPort "{Mirror port: $monitorPort.* is $status} exist";
+   }
+   } else { # Involves one to many mirroring
+   if { [regexp -nocase $gnssPlatform $platform] ==1 | [regexp -nocase $bcmChassis $platform] ==1 } {
+        set chkportlist [makeChassisPortList $monitorPort]
+   } else {
+        set chkportlist [makePortList $monitorPort]
+   }
+        lappend checkMirrorPort "{Mirror to ports: $chkportlist.* loopback port: $loopbackport} exist"
+   }
+   
+   if { $remoteTag != "NULL" } {
+        lappend checkMirrorPort "{Remote tag.*: $remoteTag} exist"
+   }
+
+   set i 0
+   if {$port!="NULL"} {
+   foreach po $port {
+      set vl [lindex $vlan $i]
+      if {$vl==""} {set vl "NULL"}
+      if {$po!="NULL" && $vl=="NULL"} { 
+         lappend checkMirrorPort "{Port $po,.*all vlans,} exist";
+      }
+      
+      if {$vl!="NULL" && $po=="NULL"} {
+         lappend checkMirrorPort "{All ports,.*vlan $vl} exist";
+      } elseif {$vl!="NULL" && $po!="NULL"} {
+         lappend checkMirrorPort "{Port $po,.*vlan $vl} exist";
+      }
+      incr i
+   }
+   } elseif {$vlan!="NULL"} {
+   foreach vl $vlan {
+      set po [lindex $port $i]
+      if {$po==""} {set po "NULL"}
+      if {$po!="NULL" && $vl=="NULL"} {
+         lappend checkMirrorPort "{Port $po,.*all vlans,} exist";
+      }
+
+      if {$vl!="NULL" && $po=="NULL"} {
+         lappend checkMirrorPort "{All ports,.*vlan $vl} exist";
+      } elseif {$vl!="NULL" && $po!="NULL"} {
+         lappend checkMirrorPort "{Port $po,.*vlan $vl} exist";
+      }
+      incr i
+   }
+   }
+
+   #added because of the change in the cli show mirror from 15.3
+   if {$ver >= 15.3}  {
+    	CheckKeyValue "show mirror" $checkMirrorPort;
+
+   } else {
+   	CheckKeyValue "show mirror" $checkMirrorPort;
+   }
+   return "OK"
+}
+
+
+################################################################
+#  [RemoteMirroringInter]
+#
+#  Proc configure vlan with remote tag on intermediate switch
+#  Input Variables:
+#     -<remoteTag>- required param
+#  Output Variables:
+#      - none
+#
+#  Return Value:
+#      - returns OK on success
+#      - returns error as returned by cli on failure
+#
+# ################################################################
+proc RemoteMirroringInter {remoteTag}  {
+    set retVal ""
+    set tagParam ""
+    global whichDutNow
+    set platform [GetPlatform DUT${whichDutNow}]
+    global gnssPlatform
+    global bcmPlatform
+    global pioneerPlatform
+    if {[regexp -nocase $gnssPlatform $platform] || \
+      [regexp -nocase $pioneerPlatform $platform]} {
+
+    if {($remoteTag =="NULL") } { 
+    result_debug "Error: remote Tag parameter missing"
+set retVal "Invalid Parameter" 
+} else {
+set tagParam "$remoteTag remote"
+}
+}
+if {[regexp -nocase $bcmPlatform $platform]} {
+#broadcom
+  if {($remoteTag =="NULL") } {
+    result_debug "Error: remote Tag parameter missing"
+set retVal "Invalid Parameter"
+} else {
+set tagParam "$remoteTag remote"
+}
+}
+ if {![regexp -nocase "Invalid Parameter" $retVal]} {
+SendACmd "create vlan v1"
+  set retString [SendACmd "configure v1 tag $tagParam"]
+  if {[regexp -nocase "invalid" $retString] || [regexp -nocase "Error" $retString]} {
+                        set retVal $retString
+                         result_debug "Error in RemoteMirroringInter  $retString";
+                         result_debug "configure v1 tag with $remoteTag";
+                         # clean up because command failed
+                          SendACmd "delete vlan v1"
+                        } else {
+                        set retVal "OK"
+                      }
+}
+return $retVal
+}
+
+
+################################################################
+#  [CheckBcmPlatformSupport]
+#  
+#  Proc to check if the list of ports belong to New Gen broadcom platforms
+#  Input Variables:
+#     - list of ports
+#  Output Variables:
+#     - none      
+#  Return Value:
+#      - returns "oldgen" or "newgen" based on platform type/slot type  
+#
+# ################################################################
+
+proc CheckBcmPlatformSupport {args} {
+   parse_args CheckBcmPlatformSupport $args {
+    dutNo 1
+    portList ""
+   }
+global bcmChassis
+global bcmPlatform
+global DUTs_info
+CheckNextGenSlotType $dutNo 
+set plat "newgen"
+
+if [regexp -nocase $bcmChassis $DUTs_info(DUT$dutNo,platform)] {
+   foreach port $portList {
+      set portSlot1 [lindex [split $port :] 0];
+      set portDigit1 [lindex [split $port :] 1];
+      if {[regexp -nocase "oldgen" $DUTs_info(DUT$dutNo,BcomGen_slot${portSlot1})]} {
+         set plat "oldgen"
+      }
+   }
+} else {
+   set plat $DUTs_info(DUT$dutNo,BcomGen)
+}
+
+
+if [regexp -nocase "old" $plat] {
+   report_start_test "Unsupported platform - Testcase not run"
+   result_ok " Feature not supported in this platform"
+   report_end_test
+   return 1 
+} else {
+   report_start_test "Platform support for the feature"
+   result_ok "DUT$dutNo supports the feature. Proceeding with the testcase"
+   report_end_test
+   return 0
+}
+
+}
+
+
+
+
+
+################################################################
+#  [enableOnetoManyMirroring]
+#
+#  Proc to enable One-to-many mirroring in all platforms
+#
+#  Input Variables:
+#      - monitorPorts - List of monitor ports
+#      - loopbackport - loopback port
+#      - <args> - optional params
+#
+#   Output Variables:
+#      - none
+#
+#  Return Value:
+#      - Ports range
+#
+#  [Examples]
+#  enableOnetoManyMirroring [MapDUTPortId 1],[MapDUTPortId 3] -loopbackport [MapDUTPortId 5] -tagged no -vlan v1
+###############################################################
+
+proc enableOnetoManyMirroring {monitorPorts args} {
+
+   parse_args enableOnetoManyMirroring  $args {
+      loopbackport "NULL"
+      tagged "no"
+      port "NULL"
+      vlan "NULL"
+      direction "ingress-and-egress"
+      }
+
+    set retVal ""
+    set monitorParam ""
+    set loopbackParam ""
+    set tagParam ""
+    global whichDutNow
+    set platform [GetPlatform DUT${whichDutNow}]
+    set ver [GetVersion DUT${whichDutNow}]
+    global i386Platform
+    global gnssPlatform pioneerPlatform 
+    global bcmPlatform
+
+    if {[regexp -nocase $i386Platform $platform]} {
+       return "Platform not supported"
+    }
+       if {($vlan == "NULL") && ($port == "NULL")} {
+          set retVal "Invalid Parameter: Can not have both vlan and port not set."
+          result_debug "Invalid Parameter: Can not have both vlan and port not set."
+    } else {
+             # check if vlan is set
+         if {$vlan != "NULL"} {
+         set vlanParam "vlan $vlan"
+         set direction ""
+    } else {
+          set vlanParam ""
+    }
+            # check if port list is set
+    if {$port != "NULL"} {
+         set portParam "port $port"
+    } else {
+         set portParam ""
+         }
+   }
+
+    if {[regexp -nocase "$gnssPlatform|$pioneerPlatform" $platform]} {
+       if {[regexp -nocase "$gnssPlatform" $platform]} {
+          if {$loopbackport != "NULL"} {
+                 set loopbackParam "loopback-port $loopbackport"
+          } else {
+                 result_debug "Error: Loopback port parameter missing"
+                 set retVal "Invalid Parameter"
+          }
+         }
+          if {$tagged == "no"} {
+                  set tagParam "untagged"
+          } elseif {$tagged == "yes"} {
+                  set tagParam "tagged"
+          } else {
+                 # error reached
+                 result_debug "Error: tagged parameter needs to be either yes or no"
+                 set retVal "Invalid Parameter"
+          }
+          set direction ""
+          set monitorParam "port-list $monitorPorts"
+         }
+
+          set doSleep 0
+          if {[regexp -nocase $bcmPlatform $platform]} {
+             set doSleep 1
+             if {$loopbackport != "NULL"} {
+                   set loopbackParam "loopback-port $loopbackport"
+                   set monitorParam "port-list $monitorPorts"
+                } else {
+                       set loopbackParam ""
+                       if {[regexp "," $monitorPorts]} {
+                          result_debug "Error: No loopback port, but multiple ports in port-list"
+                          set retVal "Invalid Parameter"
+                       } else {
+                          set monitorParam "port $monitorPorts"
+                       }
+          }
+          set tagParam ""
+     }
+
+     if {![regexp -nocase "Invalid Parameter" $retVal]} {
+             set retString [SendACmd "enable mirror to $monitorParam $loopbackParam $tagParam"]
+               if {[regexp -nocase "invalid" $retString] || [regexp -nocase "Error" $retString]} {
+                 set retVal $retString
+                    result_debug "Error in enableOnetoManyMirroring  $retString";
+                    result_debug "enable mirror to $monitorParam $loopbackParam $tagParam";
+                    # clean up because command failed
+                    SendACmd "disable mirror"
+SendACmd "delete mirror all"
+
+        } else {
+                    if { $doSleep == 1} {
+                         set doSleep 0
+                         exSleep 3
+                       }
+
+                        set retString [SendACmd "configure mirror add $portParam $vlanParam $direction"]
+                        if {[regexp -nocase "invalid" $retString] || [regexp -nocase "Error" $retString]} {
+                        set retVal $retString
+                        result_debug "Error in enableOnetoManyMirroring  $retString";
+                        result_debug "configure mirror add $portParam $vlanParam $direction";
+                        # clean up because command failed
+                        SendACmd "disable mirror"
+SendACmd "delete mirror all"
+                       } else {
+                        set retVal "OK"
+                     }
+
+       }
+    }
+return $retVal
+}
+
+
+
+proc CfgMirrModStdOldGen {} {
+        global whichDutNow
+        global DUTs_info
+        global numDUT
+        global bcmChassis
+
+        if {!$DUTs_info(DUT${whichDutNow},BcomNewGen)} {
+        SendACmd "configure mirror mode standard"
+        CheckSaveConfig
+        } else {
+set notSuppSlotList1 "G48P G48T G24X 10G4X G8X X450-24x X450-24t SummitX450-24x SummitX450-24 SummitX450-24t"
+        set platform1 [GetPlatform DUT${whichDutNow}]
+        result_debug "platform : $platform1"
+ if {[regexp -nocase $bcmChassis $platform1]} {
+   set allslotsinfo $DUTs_info(DUT${whichDutNow},hwList)
+   result_debug "Following are the slots in dut : $allslotsinfo"
+        foreach slot $allslotsinfo {
+       if {$slot != "Empty"} {
+           if {([lsearch -exact $notSuppSlotList1 $slot] != -1) } {
+          result_debug "OldGen Slot present in the chassis : $slot"
+          SendACmd "configure mirror mode standard"
+          CheckSaveConfig
+          break
+        }
+      }
+     }
+  }
+  }
+ }
+

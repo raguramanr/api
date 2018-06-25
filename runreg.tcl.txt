@@ -1,0 +1,343 @@
+###################################################################################
+#  GetModList rtr $myRegType $platformType
+#      $stdMods($regtype,$plat)
+#      $cfgType = feature_sub_type inf feature table - cit2node|standard|routing
+#      $regType = feature_type in the feature table - functional|fit|robotunit
+#
+###################################################################################      
+proc _getCfgModuleList {args} {
+    global MAIN DEVREG mysqlstatus mysql_handler stdMods rtrMods cit2nodeMods
+    parse_args _getCfgModuleList $args {
+        cfgType        "null"
+        swplat         "null"
+        regType        "null"
+    }
+    switch $cfgType {
+        "standard" {
+            if {[info exists stdMods($regType,$swplat)]} {
+                return $stdMods($regType,$swplat)
+            } else {
+                return $stdMods($regType,All)
+            }
+        }
+        "routing" {
+            if {[info exists rtrMods($regType,$swplat)]} {
+                return $rtrMods($regType,$swplat)
+            } else {
+                return $rtrMods($regType,All)
+            }
+        }
+        "cit2node" {
+            if {[info exists cit2nodeMods($regType,$swplat)]} {
+                return $cit2nodeMods($regType,$swplat)
+            } else {
+                return $cit2nodeMods($regType,All)
+            }
+        }
+    }
+
+}
+####################################################################################
+#
+#      $stdMods($regtype,$plat)
+#      $cfgType = feature_sub_type inf feature table - cit2node|standard|routing
+#      $regType = feature_type in the feature table - functional|fit|robotunit
+####################################################################################
+proc _getCfgModuleListAll { args } {
+    global MAIN DEVREG stdMods rtrMods cit2nodeMods
+    global mysqlIP my_db mysqlstatus mysql_handler 
+    parse_args _getCfgModuleListALL $args {
+        majrel   "21.1"
+    }
+
+    set connection [conn_to_db $mysqlIP $my_db]
+
+    #set sel_clause "SELECT feature_type,feature_sub_type,feature_directory FROM feature_table \
+    #               WHERE status = 'Active' AND (end_release_id IS NULL OR end_release_id = '' \
+    #               OR end_release_id >= '$majrel') AND (start_release_id = '' OR \
+    #               start_release_id IS NULL OR start_release_id <= '$majrel')"
+    set sel_clause "SELECT feature_type,feature_sub_type,feature_directory FROM feature_table \
+                    WHERE status = 'Active'"
+    set modList [mysqlsel $mysql_handler $sel_clause -list]
+
+    foreach rt $DEVREG(server,regressionTypes) {
+        switch $rt {
+            "standard" {
+                foreach rft $DEVREG(server,regFeatureTypes) {
+                    set stdMods($rft,All) ""
+                }
+            }
+            "routing" {
+                foreach rft $DEVREG(server,regFeatureTypes) {
+                    set rtrMods($rft,All) ""
+                }
+            }
+            "cit2node" {
+                foreach rft $DEVREG(server,regFeatureTypes) {
+                    set cit2nodeMods($rft,All) ""
+                }
+            }
+        }
+    }
+
+    set r 0
+    foreach m $modList {
+        incr r
+        set cfgType [lindex $m 1]
+        set regType [lindex $m 0]
+        set mod [lindex $m 2]
+        switch $cfgType {
+            "standard" {
+                lappend stdMods($regType,All) $mod
+            }
+            "routing" {
+                lappend rtrMods($regType,All) $mod
+            }
+            "cit2node" {
+                lappend cit2nodeMods($regType,All) $mod
+            }
+        }
+    }
+    return $r
+}
+#####################################################################################
+# MoveRobotResults
+#
+#
+#
+#####################################################################################
+##################################################################
+proc MoveRobotToQueueFinished {queueId userIp index moduleUpdateStr} {
+    global DEVREG
+    global routingModules
+    global env
+    array set uInput $userIp
+    global mainRetReRun
+    global cfg
+    global cfgFileTail env
+
+    set moduleName [lindex $uInput(moduleNames:) $index]
+    if {[info exists uInput(moduleTypes:)]} {
+        set moduleType [lindex $uInput(moduleTypes:) $index]
+        WriteToQueueDebug "MoveRobotToQueueFinished" \
+            "Found moduleTypes index for $moduleName index $index moduleType $moduleType"
+    } else {
+        set moduleType robotunit
+        WriteToQueueDebug "MoveRobotToQueueFinished" \
+        "Found moduleTypes index for $moduleName index $index moduleType $moduleType"
+    }
+    # There is a lock
+    if {[info exists uInput(lockFile:)] && ![info exists uInput(platformToRunOn:)]} {
+        # lock dir found. move it to finished
+        if {[file isdirectory $DEVREG(server,imagesRunningDir)/$queueId]} {
+            if {[catch {exec $env(BASE_PATH)/mvProc $DEVREG(server,imagesRunningDir)/$queueId \
+                $DEVREG(server,imagesFinishedDir)} reason]} {
+                WriteToQueueDebug "MoveRobotToQueueFinished" \
+                "Could not move $DEVREG(server,imagesRunningDir)/$queueId, $reason";
+                result_error "Could not move $DEVREG(server,imagesRunningDir)/$queueId, $reason"
+                return -1
+            } else {
+                WriteToQueueDebug "MoveRobotToQueueFinished" "No plattoRunOn is set -- Return";
+                return 1
+            }
+        } else {
+            WriteToQueueDebug "MoveRobotToQueueFinished" \
+            "Could not find $DEVREG(server,imagesRunningDir)/$queueId";
+            result_error "Could not find $DEVREG(server,imagesRunningDir)/$queueId"
+            return -1
+        }
+    } else {
+        WriteToQueueDebug "MoveRobotToQueueFinished" \
+            "Not a user lock. set platformType $uInput(platformToRunOn:)";
+        set platformType $uInput(platformToRunOn:)
+    }
+    set cfgFileName [lindex $uInput(runStatus:) $index]
+    set cfgFile [string range $cfgFileName 9 end]  ;# get the cfg filename from runningOn$cfgFile
+    set targetDir ""
+
+    result_debug "the moduleUpdateStr $moduleUpdateStr and cfgFile $cfgFile"
+    WriteToQueueDebug "MoveRobotToQueueFinished CONFIG FILE CHECK:" \
+           "cfgFile $cfgFile - cfgFileTail $cfgFileTail - cfg $cfg"
+
+    switch -regexp $moduleUpdateStr {
+        "^PASS" {
+            #10.69.6.252:/raid/data/robot_results  /auto/automation/Autoweb/devreg/Report_Data
+            #  QueueId directory is the robot results directory
+            WriteToQueueDebug "MoveRobotToQueueFinished plat: $platformType $queueId " \
+                "$DEVREG(robot,mount)/$queueId";
+            set targetDir $DEVREG(robot,mount)/$queueId
+        } "^DownloadPassed" {
+            ;# Not sure if we should move the report/result dir (if any) in case of downloadFailed
+            # Since in case of download failed, location to loadimage.txt is sent for tracing purposes
+            # For download passed, the report is moved to moduleName/downloadImage/Report dir
+            set dirList [recursive_glob "$env(BASE_PATH)/Report/" loadimage.txt]
+            WriteToQueueDebug "MoveRobotToQueueFinished DownloadPassed" "DirList: $dirList";
+            for {set i [expr [llength $dirList]-1]} {$i>=0} {incr i -1} {
+                set dirName [lindex $dirList $i]
+                if {[set fd_in [FileOpen "$dirName" r]]==-1} {
+                    return $fd_in
+                }
+                set targetDir ""
+                while {[gets $fd_in readLine]!=-1} {
+                    if {[regexp -nocase "^Using config file: .*$cfgFile" $readLine]} {
+                        set targetDir [file dirname $dirName]
+                        WriteToQueueDebug "MoveRobotToQueueFinished DownloadPassed" \
+                    }
+                }
+                funlock $fd_in
+                close $fd_in
+                if {$targetDir!=""} {
+                    break
+                }
+            }
+        } "^DownloadFailed" {
+            WriteToQueueDebug "MoveRobotToQueueFinished DownloadFail MainFail" \
+                 "set targetDir /tmp/Tmp/$queueId[pid]";
+            set targetDir "/tmp/Tmp/$queueId[pid]"
+        } "^DownloadKilled" -
+        "^MainKilled" {
+            WriteToQueueDebug "MoveRobotToQueueFinished DownloadKilled MainKilled" \
+            "set targetDir empty string";
+            set targetDir ""
+        } default {
+            WriteToQueueDebug "MoveRobotToQueueFinished UNKNOWN STATE" "return a negative 1";
+            result_debug "Unknown update str"
+            return -1
+        }
+    }
+    result_debug "\n ============================================\n\
+    ============================================\n\
+    targetDir = $targetDir\n \
+    Platform  = $PLATFORM\n \
+    ============================================\n\
+    ============================================"
+    WriteToQueueDebug "MoveRobotToQueueFinished Target should be set" \
+        "the targetDir $targetDir";
+    if {$targetDir!=""} {
+        if {![file isdirectory $DEVREG(server,imagesFinishedDir)]} {
+            if {[catch {file mkdir $DEVREG(server,imagesFinishedDir)} reason]} {
+                WriteToQueueDebug "MoveRobotToQueueFinished - make images finished dir " \
+                    "Error: Can not create imagesFinishedDir dir...$reason";
+                result_error "Error: Can not create imagesFinishedDir dir...$reason"
+                return -1
+            }
+        }
+        WriteToQueueDebug "MoveRobotToQueueFinished Images finished" \
+            "mkdir $DEVREG(server,imagesFinishedDir)";
+        if {![file isdirectory $DEVREG(server,imagesFinishedDir)/$queueId]} {
+            if {[catch {file mkdir "$DEVREG(server,imagesFinishedDir)/$queueId"} reason]} {
+                WriteToQueueDebug "MoveRobotToQueueFinished - make images finished dir " \
+                    "Error: Cannot create dir $DEVREG(server,imagesFinishedDir)/$queueId...$reason";
+                result_error "Error: Cannot create dir $DEVREG(server,imagesFinishedDir)/$queueId...$reason";
+                return -1
+            }
+        }
+        WriteToQueueDebug "MoveRobotToQueueFinished Images finished" \
+            "mkdir $DEVREG(server,imagesFinishedDir)/$queueId";
+        if {[catch {file mkdir "$DEVREG(server,imagesFinishedDir)/$queueId/$moduleName"} reason]} {
+            WriteToQueueDebug "MoveRobotToQueueFinished - make images finished dir " \
+                "Error: Cannot create dir $DEVREG(server,imagesFinishedDir)/$queueId/$moduleName...$reason";
+            result_error "Error: Cannot create dir \
+                $DEVREG(server,imagesFinishedDir)/$queueId/$moduleName...$reason";
+            return -1
+        }
+        WriteToQueueDebug "MoveRobotToQueueFinished Images finished" \
+            "mkdir $DEVREG(server,imagesFinishedDir)/$queueId/$moduleName";
+        if {[regexp -nocase "download" $moduleUpdateStr] && \
+            ([regexp -nocase "killed" $moduleUpdateStr]!=1)} {
+            if {[catch {file mkdir \
+                "$DEVREG(server,imagesFinishedDir)/$queueId/$moduleName/downloadImage"} reason]} {
+                WriteToQueueDebug "MoveRobotToQueueFinished - download" \
+                "Error: Cannot create dir \
+                $DEVREG(server,imagesFinishedDir)/$queueId/$moduleName/downloadImage...$reason";
+                result_error "Error: Cannot create dir \
+                $DEVREG(server,imagesFinishedDir)/$queueId/$moduleName/downloadImage...$reason";
+                return -1
+            }
+            WriteToQueueDebug "MoveRobotToQueueFinished Images Download" \
+                "mkdir $DEVREG(server,imagesFinishedDir)/$queueId/$moduleName/downloadImage";
+            if {[regexp -nocase "downloadPassed" $moduleUpdateStr]} {
+                catch {file rename -force $targetDir \
+                    $DEVREG(server,imagesFinishedDir)/$queueId/$moduleName/downloadImage/Report} myR
+                if {$PLATFORM=="not_found"} {
+                     WriteToQueueDebug "MoveRobotToQueueFinished - downloadPassed" \
+                         "return neg 1";
+                     return -1
+                } else {
+                    WriteToQueueDebug "MoveRobotToQueueFinished - downloadPassed" \
+                        "return $DEVREG(server,imagesFinishedDir)/$queueId/$moduleName/downloadImage/Report";
+                    return "$DEVREG(server,imagesFinishedDir)/$queueId/$moduleName/downloadImage/Report"
+                }
+            } else {
+                catch {file rename -force $targetDir \
+                     $DEVREG(server,imagesFinishedDir)/$queueId/$moduleName/downloadImage/loadimage.txt} reason
+                if {$PLATFORM=="not_found"} {WriteToQueueDebug "MoveRobotToQueueFinished - make images \
+                finished dir " ""; return -1} else {
+                    WriteToQueueDebug "MoveRobotToQueueFinished - not downloadPassed " \
+                    "return $DEVREG(server,imagesFinishedDir)/$queueId/$moduleName/downloadImage/";
+                    return "$DEVREG(server,imagesFinishedDir)/$queueId/$moduleName/downloadImage/"
+                }
+            }
+        } else {
+            if {[regexp -nocase "mainfailed" $moduleUpdateStr]} {
+                if {[catch {file mkdir "$DEVREG(server,imagesFinishedDir)/$queueId/$moduleName/Result"} reason]} {
+                    WriteToQueueDebug "MoveRobotToQueueFinished - Mainfailed " \
+                        "Error: Cannot create dir \
+                        $DEVREG(server,imagesFinishedDir)/$queueId/$moduleName/Result...$reason";
+                    result_error "Error: Cannot create dir \
+                        $DEVREG(server,imagesFinishedDir)/$queueId/$moduleName/Result...$reason";
+                    return -1
+                }
+                catch {file rename -force $targetDir \
+                        $DEVREG(server,imagesFinishedDir)/$queueId/$moduleName/Result/report.txt} reason
+                if {$PLATFORM=="not_found"} {
+                    WriteToQueueDebug "MoveRobotToQueueFinished - mainfaild" \
+                        "rename $targetDir \
+                        $DEVREG(server,imagesFinishedDir)/$queueId/$moduleName/Result/report.txt";
+                    return -1
+                } else {
+                    WriteToQueueDebug "MoveRobotToQueueFinished - make images finished dir " \
+                        "rename $targetDir \
+                        $DEVREG(server,imagesFinishedDir)/$queueId/$moduleName/Result/report.txt";
+                    return "$DEVREG(server,imagesFinishedDir)/$queueId/$moduleName/Result/"
+                }
+            } else {
+                if {[file isdirectory $DEVREG(server,imagesFinishedDir)/$queueId/$moduleName/Report]} {
+                    ;# reRun case
+                    catch {file rename -force $targetDir \
+                          $DEVREG(server,imagesFinishedDir)/$queueId/$moduleName/Report1} reason
+                    if {$PLATFORM=="not_found"} {
+                        WriteToQueueDebug "MoveRobotToQueueFinished - Not mainfail \
+                        $PLATFORM not found" "";
+                        return -1
+                    } else {
+                        WriteToQueueDebug "MoveRobotToQueueFinished - make images finished dir " "rename \
+                        $targetDir $DEVREG(server,imagesFinishedDir)/$queueId/$moduleName/Report1";
+                        return "$DEVREG(server,imagesFinishedDir)/$queueId/$moduleName/Report1"
+                    }
+                } else {   ;# first run case
+                    catch {file rename -force $targetDir \
+                           $DEVREG(server,imagesFinishedDir)/$queueId/$moduleName/Report} reason
+                    if {$PLATFORM=="not_found"} {
+                        WriteToQueueDebug "MoveRobotToQueueFinished - NOT a dir \
+                            $DEVREG(server,imagesFinishedDir)/$queueId/$moduleName/Report]" \
+                            "return 1";
+                        return -1
+                    } else {
+                        WriteToQueueDebug "MoveRobotToQueueFinished - not mainfailed" "rename $targetDir \
+                        $DEVREG(server,imagesFinishedDir)/$queueId/$moduleName/Report";
+                        return "$DEVREG(server,imagesFinishedDir)/$queueId/$moduleName/Report"
+                    }
+                }
+            }
+        }
+    } else {
+        if {[regexp -nocase "killed" $moduleUpdateStr]} {
+            WriteToQueueDebug "MoveRobotToQueueFinished - TargetDir = null Killed" \
+            "Return [ProcessSrvrQueueKill $queueId]";
+            return [ProcessSrvrQueueKill $queueId]   ;# always returns -1 as this is killed signal
+        }
+        WriteToQueueDebug "MoveRobotToQueueFinished - TargetDir = null" "Return neg 1";
+        return -1
+    }
+}

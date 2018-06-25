@@ -1,0 +1,447 @@
+
+##################################################################
+# Porcedure Name : EnableProtocolServerV6
+# Description:
+#     This proc can be used to enable protocol server for V6 on
+#     a number of given ixia ports. This proc accepts a portIdList and
+#     ipAddressList. Make sure number of elements are same in 2 lists.
+#     It does not perform any other tasks.
+#     Caller should separately call DisableProtocolServer after done.
+# Input args: portIdList, ipAddressList
+# Output args: None.
+# returns : 1 (success), 0 (failure)
+# Typical usage:
+# if [EnableProtocolServerV6 portIdList ipAddressList] {
+#    puts "Success"
+# } else {
+#    puts "failure"
+# }
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: SetupTestTool
+##################################################################
+proc EnableProtocolServerV6 {portIdList ipAddressList {tag "none"} {pingEnable "false"} \
+              {gwIpList "0.0.0.0"} {clearinter "clear"} } {
+	global TrafficGen
+    switch -exact -- $TrafficGen {
+		stc {
+			return 1
+		}
+		ixia -
+                ixvm {
+   if {[llength $portIdList] != [llength $ipAddressList]} {
+      result_error "Number of list elements do not match."
+      return 0
+   }
+   
+   for {set i 0} {$i < [llength $portIdList]} {incr i} {
+      set portId [lindex $portIdList $i]
+      set ipAddress [lindex $ipAddressList $i]
+      set gwIp [lindex $gwIpList $i]
+      if {$gwIp == ""} {set gwIp "0.0.0.0"} 
+##############      
+set ResetInter 1
+   if {$clearinter == "noclear"} {
+      set ResetInter 0
+   } else {
+      set ResetInter 1
+   } 
+###############
+      MapIxiaPortId $portId chas card port
+if {[ipAddressTable get $chas $card $port]} {
+          error "EnableProtocolServer: ipAddressTable get $chas $card $port failed."
+      }
+
+      ipAddressTableItem setDefault
+
+
+
+#nly add the IP address if it isn't already there.
+      if {[ipAddressTable getItem $ipAddress]} {
+          ipAddressTableItem config -fromIpAddress $ipAddress
+          ipAddressTableItem config -overrideDefaultGateway true
+          ipAddressTableItem config -gatewayIpAddress $gwIp
+          if {[port get $chas $card $port]} {
+              error "EnableProtocolServer: port get $chas $card $port failed."
+          }
+          ipAddressTableItem config -fromMacAddress [port cget -MacAddress]
+          ipAddressTableItem config -enableUseNetwork true
+          if {$tag != "none"} {
+              # Tag is only available in 3.65
+              if {![regexp -nocase "3.50" [version cget -installVersion]]} {
+                 ipAddressTableItem config -enableVlan true
+                 ipAddressTableItem config -vlanId $tag
+              }
+          }
+          ipAddressTableItem set
+
+          if {[ipAddressTable set $chas $card $port]} {
+              error "EnableProtocolServer: ipAddressTable set $chas $card $port failed."
+          }
+      }
+
+ipAddressTable               setDefault        
+ipAddressTable               config            -defaultGateway                     "0.0.0.0"
+ipAddressTable               set               $chas $card $port
+interfaceTable               select            $chas $card $port
+if {$ResetInter == 1} {
+interfaceTable               clearAllInterfaces 
+}
+interfaceIpV6                setDefault        
+interfaceIpV6                config            -maskWidth                          64
+interfaceIpV6                config            -ipAddress                          "$ipAddress"
+interfaceEntry               addItem           addressTypeIpV6
+
+interfaceEntry               setDefault        
+interfaceEntry               config            -enable                             true
+interfaceEntry               config            -description                        "$ipAddress/64 - $card:$port"
+interfaceEntry               config            -macAddress                          "[port cget -MacAddress]"
+interfaceEntry               config            -eui64Id                            ""
+interfaceEntry               config            -atmEncapsulation                   atmEncapsulationLLCBridgedEthernetFCS
+interfaceEntry               config            -atmMode                            -1
+interfaceEntry               config            -atmVpi                             0
+interfaceEntry               config            -atmVci                             32
+interfaceEntry               config            -vlanPriority                       0
+
+if {$tag != "none"} {
+
+interfaceEntry               config            -enableVlan                         true
+interfaceEntry               config            -vlanId                             $tag
+
+} else {
+
+interfaceEntry               config            -enableVlan                         false
+interfaceEntry               config            -vlanId                             0
+
+}
+
+
+
+interfaceTable               addInterface      
+
+interfaceEntry               clearAllItems     addressTypeIpV6
+interfaceEntry               clearAllItems     addressTypeIpV4
+
+if {[protocolServer get $chas $card $port]} {
+          error "EnableProtocolServer: protocolServer get $chas $card $port failed."
+      }
+      protocolServer config -enableArpResponse true
+      if {$pingEnable != "false"} {
+         protocolServer config -enablePingResponse true
+      }
+      if {[protocolServer set $chas $card $port]} {
+          error "EnableProtocolServer: protocolServer set $chas $card $port failed."
+      }
+      if {[protocolServer write $chas $card $port]} {
+          error "EnableProtocolServer: protocolServer write $chas $card $port failed."
+      }
+
+
+}
+
+   return 1
+		}
+	}
+} ;# EnableProtocolServer
+
+
+##################################################################
+# Porcedure Name : CheckSTXS4Card
+# Description:
+#        This procedure checks for STXS cards.  If not present it
+#          returns a testSkipped.  It is designed to be placed in
+#          an init file so a whole feature can be skipped
+#     
+# Input args: None.
+# Output args: None.
+# returns : testSkipped or ""
+# Typical usage:
+# CheckSTXS4Card
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: Utility
+##################################################################
+proc CheckSTXS4Card {} {
+global portMappingList
+
+   foreach port $portMappingList {
+      set portId [lindex $port 0]
+      MapIxiaPortId $portId chid c p
+      if {[info exists phyMode]} {
+         result_ok "STXS4 cards for this testbed, running the tests"
+      } else {
+         result_ok "NO STXS4 SET UP DEFINED . not running the tests"
+         close_result_file
+         return "testSkipped"
+      }
+   }
+}
+
+##################################################################
+# Porcedure Name : CheckSTXS4CardTrue
+# Description:
+#        This procedure checks for STXS cards.  If present it
+#          returns a 1.  If not present it returns a 0.  
+#          It is designed to be placed at the top of a test case
+#          so a test case can be skipped in STXS4 is not present
+#     
+# Input args: None.
+# Output args: None.
+# returns : 1 or 0
+# Typical usage:
+# CheckSTXS4CardTrue
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: Utility
+##################################################################
+proc CheckSTXS4CardTrue {} {
+global portMappingList
+
+   foreach port $portMappingList {
+      set portId [lindex $port 0]
+      MapIxiaPortId $portId chid c p
+      if {[info exists phyMode]} {
+         result_ok "STXS4 cards for this testbed, running the tests"
+         return 1;
+      } else {
+         result_ok "NO STXS4 SET UP DEFINED . Not running this test"
+         return 0
+      }
+   }
+}
+
+##################################################################
+# Porcedure Name : checkIxiaCardAndExecTest
+# Description:
+#        This procedure checks for STXS cards.  If present it
+#          continues with the test.  If not the test will be skipped
+#
+# optional Input args: ixiaport - Port no of ixia for which card type has to find out.
+# Output args: None.
+# returns : 1 or 0
+# Typical usage:
+# checkIxiaCardAndExecTest $testNo $time1 $ixiaport
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: Utility
+##################################################################
+proc checkIxiaCardAndExecTest {testNo time1 {ixiaport "1"}} {
+  global perPortCPUIxiaCards
+  set ixiaCardType [getIxiaCardType $ixiaport]
+  result_debug "port $ixiaport IXIA CARD IS $ixiaCardType"
+   if { [regexp -nocase $perPortCPUIxiaCards $ixiaCardType] == 0 } {
+       result_skip " This test case requires TXS4 or TXS8 IXIA card"
+       result_skip " Unable to execute this test case"
+       set time2 [clock seconds]
+       result_p "*** Time for $testNo = [expr $time2-$time1] secs\n\n"
+       close_result_file
+       report_end_test
+       return -code return
+   }
+   return 
+}
+
+
+##################################################################
+# Porcedure Name : EnableProtocolServerMultipleV6
+# Description:
+#     This proc can be used to enable protocol server for V6 on
+#     a number of given ixia ports. This proc accepts a portIdList and
+#     ipAddressList. Make sure number of elements are same in 2 lists.
+#     It does not perform any other tasks.
+#     Caller should separately call DisableProtocolServer after done.
+# Input args: portIdList, ipAddressList
+# Output args: None.
+# returns : 1 (success), 0 (failure)
+# Typical usage:
+# if [EnableProtocolServerMultipleV6 portIdList ipAddressList] {
+#
+#   puts "Success"
+# } else {
+#    puts "failure"
+# }
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: SetupTestTool
+##################################################################
+proc EnableProtocolServerMultipleV6 {portIdList ipAddressList {tagList "none"} {pingEnable "false"} \
+              {gwIpList "0.0.0.0"}} {
+   if {[llength $portIdList] != [llength $ipAddressList]} {
+      result_error "Number of list elements do not match."
+      return 0
+   }
+   set ipaddLength [llength $ipAddressList]
+   result_debug "creating $ipaddLength ipaddresses in port $portIdList"
+
+   for {set i 0} {$i < [llength $portIdList]} {incr i} {
+      set portId [lindex $portIdList $i]
+      set ipAddress [lindex $ipAddressList $i]
+      set gwIp [lindex $gwIpList $i]
+      set tag [lindex $tagList $i]
+      if {$gwIp == ""} {set gwIp "0.0.0.0"}
+
+      MapIxiaPortId $portId chas card port
+if {[ipAddressTable get $chas $card $port]} {
+          error "EnableProtocolServer: ipAddressTable get $chas $card $port failed."
+      }
+
+      ipAddressTableItem setDefault
+
+
+#nly add the IP address if it isn't already there.
+      if {[ipAddressTable getItem $ipAddress]} {
+          ipAddressTableItem config -fromIpAddress $ipAddress
+          ipAddressTableItem config -overrideDefaultGateway true
+          ipAddressTableItem config -gatewayIpAddress $gwIp
+          if {[port get $chas $card $port]} {
+              error "EnableProtocolServer: port get $chas $card $port failed."
+          }
+          ipAddressTableItem config -fromMacAddress [port cget -MacAddress]
+          ipAddressTableItem config -enableUseNetwork true
+          if {$tag != "none"} {
+              # Tag is only available in 3.65
+             if {![regexp -nocase "3.50" [version cget -installVersion]]} {
+                 ipAddressTableItem config -enableVlan true
+                 ipAddressTableItem config -vlanId $tag
+              }
+          }
+          ipAddressTableItem set
+
+          if {[ipAddressTable set $chas $card $port]} {
+              error "EnableProtocolServer: ipAddressTable set $chas $card $port failed."
+          }
+      }
+
+
+
+ipAddressTable               setDefault
+ipAddressTable               config            -defaultGateway                     "0.0.0.0"
+ipAddressTable               set               $chas $card $port
+interfaceTable               select            $chas $card $port
+interfaceTable               clearAllInterfaces
+
+#result_debug "[port cget -MacAddress]"
+set fdbadd 1
+set x 0
+
+
+foreach ipAdd $ipAddress {
+
+set tagValue [lindex $tagList $x]
+#result_debug "tag value is $tagValue"
+incr x
+
+##setting up the mac address
+set t1 [format "%02X" [expr $fdbadd & 0xFF]]
+set t2 [format "%02X" [expr ($fdbadd >> 8) & 0xFF]]
+set macentry "00:01:00:01:$t2:$t1"
+
+
+interfaceIpV6                setDefault
+interfaceIpV6                config            -maskWidth                          64
+interfaceIpV6                config            -ipAddress                          "$ipAdd"
+interfaceEntry               addItem           addressTypeIpV6
+
+interfaceEntry               setDefault
+interfaceEntry               config            -enable                             true
+interfaceEntry               config            -description                        "$ipAdd/64 - $card:$port"
+interfaceEntry               config            -macAddress                         "$macentry"
+interfaceEntry               config            -eui64Id                            ""
+interfaceEntry               config            -atmEncapsulation                   atmEncapsulationLLCBridgedEthernetFCS
+interfaceEntry               config            -atmMode                            -1
+interfaceEntry               config            -atmVpi                             0
+interfaceEntry               config            -atmVci                             32
+interfaceEntry               config            -vlanPriority                       0
+
+if {$tag != "none"} {
+interfaceEntry               config            -enableVlan                         true
+interfaceEntry               config            -vlanId                             $tagValue
+
+} else {
+
+interfaceEntry               config            -enableVlan                         false
+interfaceEntry               config            -vlanId                             0
+
+}
+
+
+
+interfaceTable               addInterface
+interfaceEntry               clearAllItems     addressTypeIpV6
+interfaceEntry               clearAllItems     addressTypeIpV4
+interfaceEntry               setDefault
+
+incr fdbadd
+
+}
+
+if {[protocolServer get $chas $card $port]} {
+          error "EnableProtocolServer: protocolServer get $chas $card $port failed."
+      }
+      protocolServer config -enableArpResponse true
+      if {$pingEnable != "false"} {
+         protocolServer config -enablePingResponse true
+      }
+      if {[protocolServer set $chas $card $port]} {
+          error "EnableProtocolServer: protocolServer set $chas $card $port failed."
+      }
+      if {[protocolServer write $chas $card $port]} {
+          error "EnableProtocolServer: protocolServer write $chas $card $port failed."
+      }
+
+}
+
+   return 1
+}
+
+
+
+##################################################################
+# Description: DisableProtocolServerMultipleV6
+#     This proc can be used to disable arp protocol server for IpV6
+#     for a single ixia port. This proc accepts a IpaddressList and port id
+# Input args: portId, IpaddressList
+# Output args: None.
+# returns : 1 (success), 0 (failure)
+# Typical usage:
+# if [DisableProtocolServerMultipleV6 $portId, IpAddressList] {
+#    puts "Success"
+# } else {
+#    puts "failure"
+# }
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: SetupTestTool
+##################################################################
+
+proc DisableProtocolServerMultipleV6 {portId ipAddressList} {
+   MapIxiaPortId $portId chas card port
+
+   set ipaddLength [llength $ipAddressList]
+   result_debug "Deleting $ipaddLength ipaddresses in port $portId"
+
+   # Clean up the IP address table.
+   if {[llength $ipAddressList] > 0} {
+      foreach ipadd $ipAddressList {
+         set ipAddress $ipadd
+         ipAddressTable setDefault
+         ipAddressTableItem setDefault
+         set mask 64
+       #-----This will delete the interface table
+        interfaceTable select $chas $card $port
+        interfaceTable getInterface "$ipAddress/$mask - $card:$port"
+        interfaceTable delInterface "$ipAddress/$mask - $card:$port"
+        interfaceTable write
+   }
+   } else {
+      result_debug "ipaddress list is empty"
+      return 0
+   }
+return 1
+}

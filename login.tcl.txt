@@ -1,0 +1,2367 @@
+
+#load {expect52.dll}
+set auto_path [linsert $auto_path 0 . ]
+################################################################## 
+# Procedure Name: Login
+#   
+# Description: proc that used to login to a switch through console IP
+#              or serial com
+#
+#
+# Input args: 
+#       device: ip address of the switch, or the ip address 
+#                     of the terminal server or the serial port from
+#		      com1 to com4 where switch serial connection is made
+#             fd: a file descriptor for log/debug purpose
+# Output args: none
+# Typical usage:
+#             Login $DUT1_CONNECT
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc Login {{device "0.0.0.0"} args } {
+ 
+    global MAIN
+    global whichDutNow whichMsmNow
+    global MGMT_REG
+    global FAILCOUNT
+
+    parse_args Login $args {
+    	fd "NULL"
+    	userid "admin"
+    	passwd ""
+    	CheckOperational "1"
+    	masterCheck "1"
+    	loginType "telnet"
+    }
+
+    set whichMsmNow ""
+    set msmList "B C D E F G H"
+    # Save the original login attempt.  This will be used for a second login attempt later
+    set MGMT_REG(actualLoginString) "\"$device\""
+    set localString $MGMT_REG(actualLoginString);# if Login gets called below the global gets corrupted
+    if {![info exists MAIN(NODECOUNT)]} {_getTestBedNumNodes;}
+    if {![info exists MAIN(STDBYLIST)]} {_getTestBedStandbyNodes;}
+
+    for {set i 1} {$i <= $MAIN(NODECOUNT)} {incr i} {
+	    global DUT${i}_CONNECT DUT${i}_CONNECTB DUT${i}_IP
+	    foreach m $msmList {
+            global DUT${i}_CONNECT${m}
+            if {![info exists DUT${i}_CONNECT${m}]} {
+                continue;
+            }
+            if { [info exists DUT${i}_CONNECT${m}] } {
+                if {$device==[set DUT${i}_CONNECT${m}]} {
+                    set whichMsmNow $m
+                    set whichDutNow $i
+                    set MGMT_REG(connType) "console"
+                    break;
+                }
+            }
+        }
+        if { $device==[set DUT${i}_CONNECT] } {
+            set whichDutNow $i
+            set MGMT_REG(connType) "console"
+            break
+        }
+        if { $device==[set DUT${i}_IP] } {
+            set whichDutNow $i
+            set MGMT_REG(connType) "mgmt"
+            break
+        }
+    }
+    foreach s $MAIN(STDBYLIST) {
+        global STDBY${s}_CONNECT
+        if { $device==[set STDBY${s}_CONNECT] } {
+            set whichDutNow [expr 100 + $s]
+            set whichStandBy $s
+            set MGMT_REG(connType) "console"
+            break
+        }        
+    }
+    global stacking
+    global pioneerPlatform
+    global everestChassis
+    if { [info exists whichDutNow] && $whichDutNow < 100} {
+    	global DUT${whichDutNow}_CONNECTB DUT${whichDutNow}_Stacking_msmb_slot DUT${whichDutNow}_Stacking_msma_slot
+    	if { [info exists DUT${whichDutNow}_CONNECTB ] } {
+    	    if { $device == [set DUT${whichDutNow}_CONNECTB] } {
+        		if { [regexp -nocase "$stacking" [GetPlatform DUT${whichDutNow}]] } {
+        		    set loginString "DUT$whichDutNow Slot [set DUT${whichDutNow}_Stacking_msmb_slot]"
+        		} elseif {[regexp -nocase $pioneerPlatform [GetPlatform DUT${whichDutNow}]] || \
+                                  [regexp -nocase $everestChassis [GetPlatform DUT${whichDutNow}]]} {
+                    set loginString "DUT$whichDutNow MM-B"
+        		} else {
+        		    set loginString "DUT$whichDutNow MSM-B"
+        		}
+    	    } else {
+        		if { [regexp -nocase "$stacking" [GetPlatform DUT${whichDutNow}]] } {
+        		    set loginString "DUT$whichDutNow Slot [set DUT${whichDutNow}_Stacking_msma_slot]"
+        		} elseif {[regexp -nocase $pioneerPlatform [GetPlatform DUT${whichDutNow}]] || \
+                                  [regexp -nocase $everestChassis [GetPlatform DUT${whichDutNow}]]} {
+                    set loginString "DUT$whichDutNow MM-A"
+        		} else {
+        		    set loginString "DUT$whichDutNow MSM-A"
+        		}
+    	    }
+    	} else {
+    	    set loginString "DUT$whichDutNow"
+    	}
+    } elseif {[info exists whichStandBy]} {
+        set loginString "STDBY$whichStandBy"
+    } else {
+    	set loginString "$device"
+    }
+    # If a recent test has removed the mgmt ipa this section will put a mgmt ip back on
+    #   via the console, then relogin using the mgmt ip
+    if {$MGMT_REG(telnetNeedsConfig) == 1 && !$MGMT_REG(forceConsole)} {
+        puts "\n@@@ !!!!!\n In reconfig \n@@@ !!!"
+        _ConfigMgmtNetworkAll; #Login will be called during this function
+        set MGMT_REG(currentConnectionType) telnet
+        set MGMT_REG(telnetNeedsConfig) 0
+        set MGMT_REG(useTelnetLocalFlag) 1
+        set MGMT_REG(actualLoginString) $localString
+    }
+    # If the global MGMT_REG(useTelnet) flag is enabled, login to the DUTs_IP of the test bed.
+    if {$whichMsmNow != ""} {
+        set viaType ""
+    } elseif {$MGMT_REG(currentConnectionType) == "telnet" && \
+           $MGMT_REG(useTelnetGlobalFlag)==1 && $MGMT_REG(useTelnetLocalFlag)==1 && \
+           !$MGMT_REG(forceConsole)} {
+        set device [set DUT${whichDutNow}_IP]
+        set MGMT_REG(currentConnectionType) telnet
+        set MGMT_REG(connType) "mgmt"
+        set viaType via_mgmt
+    } else {
+        set viaType ""
+    }
+    result_debug "\n\[\[\[\[\[\[\[\[ Login on device $device: $loginString $viaType\]\]\]\]\]\]\]\]"
+
+    switch -glob -- $device \
+	    "com?" {
+        login_comm $device $fd $userid $passwd $masterCheck
+    } default {
+        return [login_telnet $device $fd $userid $passwd $CheckOperational $masterCheck $loginType]
+    }
+}
+
+################################################################## 
+# Procedure Name: login_telnet
+#   
+# Description: internal proc that used to login to a switch through telnet ip address
+#
+#
+#
+# Input args: 
+#       ipaddr: ip address of the switch
+#       fd: a file descriptor for log/debug purpose
+# Output args: none
+# Typical usage:
+#         login_telnet $device $fd
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc login_telnet {ipAddr {fd "NULL"} {userid "admin"} {passwd ""} \
+	{CheckOperational "1"} {masterCheck "1"} {loginType "telnet"} } {
+    global spawn_id
+    global hostname 
+    global spawn_ids
+    global ReportLoginError
+    global MGMT_REG
+    global whichDutNow whichMsmNow
+    global FAILCOUNT connectionTimeout
+
+    #exp_internal 1
+    set newConnection 1
+    #check for existing connection
+    if { [ info exists hostname ] == "1" } {
+        foreach name $hostname {
+            if { $name == $ipAddr } {
+                set spawn_id $spawn_ids($name)
+                if { $spawn_id != "INVALID" } {
+                    # --- use it for delay without using sleep
+                    if {[info exists whichDutNow]} {
+                        set whichStr "$whichDutNow"
+                    } else {
+                        set whichStr ""
+                    }
+                    puts "Login $ipAddr $whichStr - Connection already exists pid=$spawn_id"
+                    set newConnection 0
+                }
+            }
+        }
+        #if brand new connection, add to host name list
+        if { [lsearch $hostname $ipAddr] == -1 } {
+            lappend hostname $ipAddr
+        }
+    } else {
+        lappend hostname $ipAddr
+    }
+
+    if {![info exists FAILCOUNT(${whichDutNow}${whichMsmNow},$MGMT_REG(connType))]} {
+        set FAILCOUNT(${whichDutNow}${whichMsmNow},$MGMT_REG(connType)) 0
+    } elseif {$FAILCOUNT(${whichDutNow}${whichMsmNow},$MGMT_REG(connType)) > 3} {
+        error "ERROR - CONSOLE IS HUNG OR IN USE BY SOMEONE - CANNOT CONTINUE!!\n\n"
+    }
+    #spawn new connection if not exists
+    if { $newConnection == 1 } {
+        if { [regexp -nocase "ssh" $loginType] } {
+            set cmd "spawn $loginType admin@$ipAddr"
+        } else {
+            set cmd "spawn $loginType $ipAddr"
+        }
+        if [catch "$cmd" reason] {
+            result_debug "failed to spawn program: $reason\n"
+            error "failed to spawn program: $reason\n"
+        }
+
+        set spawn_ids($ipAddr) $spawn_id
+        set timeout 10
+        result_debug "Login $loginType $ipAddr,  pid=$spawn_id"
+        #wait for connection
+        expect {
+            "continue connecting"  {
+                if { [regexp -nocase "ssh" $loginType] } {
+                    result_debug_expect
+                    exp_send "yes\r"
+                }
+            }	
+            "?nable to ?onnect" {
+                if {$FAILCOUNT(${whichDutNow}${whichMsmNow},$MGMT_REG(connType)) < 3} {
+                    incr FAILCOUNT(${whichDutNow}${whichMsmNow},$MGMT_REG(connType))
+                    result_debug "EXECUTING ClearConsoleDUT $ipAddr"
+                    ClearConsoleDUT "$ipAddr"
+                    set spawn_ids($ipAddr) "INVALID"
+                    set rValue [Login "$ipAddr" -fd "$fd" -userid "$userid" -passwd "$passwd" \
+                        -CheckOperational "$CheckOperational" -masterCheck "$masterCheck" -loginType "$loginType"]
+                    return $rValue
+                } else {
+                    error "Unable to connect - Hit No Connection refused on DUT $whichDutNow"
+                }
+                if {[info exists ReportLoginError] && $ReportLoginError == "no"} {
+                    result_debug $expect_out(buffer)
+                } else {
+                    result_error $expect_out(buffer)
+                }
+                expect *
+                result_error $expect_out(buffer)
+                if {$MGMT_REG(currentConnectionType) == "console"} {
+                    error "Unable to connect"
+                }
+
+                if {[info exists ReportLoginError] && $ReportLoginError == "no"} {
+                    result_debug $expect_out(buffer)
+                    result_debug "Unable to connect"
+                } else {
+                    result_error $expect_out(buffer)
+                    if {$MGMT_REG(currentConnectionType) == "console"} {
+                        error "Unable to connect"
+                    }
+                }
+                if {$MGMT_REG(currentConnectionType) == "telnet"} {
+                    result_debug "@@@\nLogin through the mgmt vlan failed. Try the console\n@@@"
+                    WriteToMainLog "Login through the mgmt vlan failed DUT $whichDutNow. Try the console"
+                    set MGMT_REG(currentConnectionType) console
+                    set MGMT_REG(useTelnetLocalFlag) 0
+                    _clearDutConnectionVars $whichDutNow
+                    set rValue [Login $MGMT_REG(actualLoginString)]
+                    return $rValue 
+                }
+            }
+            "?o route to ?ost" {
+                if {[info exists ReportLoginError] && $ReportLoginError == "no"} {
+                    result_debug "Hit No route to host on DUT $whichDutNow"
+                    result_debug $expect_out(buffer)
+                } else {
+                    result_debug "Hit No route to host on DUT $whichDutNow"
+                    result_error $expect_out(buffer)
+                }
+                expect *
+                result_error $expect_out(buffer)
+                if {$MGMT_REG(currentConnectionType) == "console"} {
+                    error "Unable to connect - Hit No route to host on DUT $whichDutNow"
+                }
+                if {$MGMT_REG(currentConnectionType) == "telnet"} {
+                    result_debug "@@@\nLogin through the mgmt vlan failed. Try the console\n@@@"
+                    WriteToMainLog "Login through the mgmt vlan failed. Try the console DUT$whichDutNow"
+                    set MGMT_REG(currentConnectionType) console
+                    set MGMT_REG(useTelnetLocalFlag) 0
+                    _clearDutConnectionVars $whichDutNow
+                    result_debug "Set to use console:  Login via original console call $MGMT_REG(actualLoginString)"
+                    set rValue [Login $MGMT_REG(actualLoginString)]
+                    return $rValue 
+                }
+            }
+            "?onnection refused" {
+                result_debug "HIT CONNECTION REFUSED"
+                if {$FAILCOUNT(${whichDutNow}${whichMsmNow},$MGMT_REG(connType)) < 3} {
+                    incr FAILCOUNT(${whichDutNow}${whichMsmNow},$MGMT_REG(connType))
+                    result_debug "EXECUTING ClearConsoleDUT $ipAddr"
+                    ClearConsoleDUT "$ipAddr"
+                    set spawn_ids($ipAddr) "INVALID"
+                    set rValue [Login "$ipAddr" -fd "$fd" -userid "$userid" -passwd "$passwd" \
+                    -CheckOperational "$CheckOperational" -masterCheck "$masterCheck" -loginType "$loginType"]
+                    return $rValue
+                } else {
+                    error "Unable to connect - Hit No Connection refused on DUT $whichDutNow"
+                }            
+                if {[info exists ReportLoginError] && $ReportLoginError == "no"} {
+                    result_debug "Hit Connection Refused on DUT $whichDutNow"
+                    result_debug $expect_out(buffer)
+                } else {
+                    result_debug "Hit Connection Refused ERROR on DUT $whichDutNow"
+                    result_debug $expect_out(buffer)
+                }
+                expect *
+                result_debug $expect_out(buffer)
+                if {$MGMT_REG(currentConnectionType) == "console"} {
+                    error "Unable to connect - Hit No Connection refused on DUT $whichDutNow"
+                }
+                if {$MGMT_REG(currentConnectionType) == "telnet"} {
+                    result_debug "@@@\nLogin through the mgmt vlan failed, Connection Refused. Try the console\n@@@"
+                    WriteToMainLog "Login through the mgmt vlan failed, Connection Refused. Try the console DUT$whichDutNow"
+                    _clearDutConnectionVars $whichDutNow
+                    incr FAILCOUNT(${whichDutNow}${whichMsmNow},$MGMT_REG(connType))
+                    set MGMT_REG(currentConnectionType) console
+                    set MGMT_REG(useTelnetLocalFlag) 0
+                    result_debug "Set to use console:  Login via original console call $MGMT_REG(actualLoginString)"
+                    set rValue [Login $MGMT_REG(actualLoginString)]
+                    return $rValue
+                }
+            }
+            "?onnected to" {
+                result_debug "Successful Connection"
+                set FAILCOUNT(${whichDutNow}${whichMsmNow},$MGMT_REG(connType)) 0
+                #wait for all remaining characters to come
+                #puts "Connection established"
+            }
+            timeout {
+                result_debug "Timeout on first login attempt"
+            }
+        }
+
+    }
+
+    set timeout $connectionTimeout
+
+    set loginStatus [try_login_on_switch  $ipAddr $userid $passwd $masterCheck $loginType]
+    if { $loginStatus == 0 } {
+        if {$MGMT_REG(currentConnectionType) == "telnet"} {
+            result_debug "@@@\nLogin through the mgmt vlan failed. Try the console\n@@@"
+            WriteToMainLog "Login through the mgmt vlan failed. Try the console DUT$whichDutNow"
+            set MGMT_REG(currentConnectionType) console
+            set MGMT_REG(useTelnetLocalFlag) 0
+            set rValue [Login $MGMT_REG(actualLoginString)]
+            return $rValue
+        }
+        # The expect_out array won't be set if expect times out, so
+        # check to make sure it exists before using it.
+        if {[info exists expect_out(buffer)]} {
+            result_error $expect_out(buffer);
+        }
+        if {[info exists ReportLoginError] && $ReportLoginError == "no"} {
+            result_debug "Unable to login";
+        } else {
+            error "Unable to login";
+        }
+        return $loginStatus;
+    }
+
+    if { $newConnection == 1 && $CheckOperational } {
+        #make sure slots are operational
+        set output [CheckOperational]
+        if { $output == 0 } {
+            result_error "Some slots not operational"
+            error "Some slots not operational"
+        }
+    }
+    puts "Successfully completed login DUT $whichDutNow"
+    return $loginStatus
+}
+################################################################## 
+# Procedure Name: LoginFast
+#   
+# Description: Tries to login via telnet.  If this connection fails
+#              it will login via console, clean up all of the telnet
+#              config and continue on with the test
+#
+# Input args: 
+#       DUT Number to log in to
+#       multi args common to previous Login and login_telnet
+# Output args: none
+# Typical usage:
+#         LoginFast 1
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc LoginFast {DUTNum args} {
+
+   parse_args LoginFast $args {
+      fd "NULL"
+      userid "admin"
+      passwd ""
+      CheckOperational "0"
+      masterCheck "1"
+      noTelnet "0"
+   }
+
+global DUTs_info
+global numDUT
+
+for {set dut 1} {$dut <= $numDUT} {incr dut} {
+   global DUT${dut}_IP
+}
+
+# There purpose of the NoLoginTelnet Global option allows the LoginFast
+#  proc to be called throughout different procedures with nested LoginFast
+#  and disable telnet at a single point.  See the VPLS test cases for an
+#  example.  A setup script creates a network and multiple procs verify
+#  the network.  The logins are all internal to the procs, so it is 
+#  necessary to be able to turn off telnet and use the console if
+#  the login and out via telnet is not beneficial 
+if {![info exist DUTs_info(DUT${DUTNum},NoLoginTelnet)]} {
+   result_debug "SET INITIAL NoLoginTelnet 0"
+   set DUTs_info(DUT${DUTNum},NoLoginTelnet) 0;
+}
+if {$noTelnet == 1} {
+   set DUTs_info(DUT${DUTNum},NoLoginTelnet) 1;
+   result_debug "SET NoLoginTelnet 1"
+}
+
+if {![info exist DUTs_info(DUT${DUTNum},regRouterNet)]} {
+   set DUTs_info(DUT${DUTNum},regRouterNet) 1;
+   result_debug "SET regRouterNet 1"
+}
+set loginTelnetStatus 1
+
+   Login $DUTs_info(DUT${DUTNum},connect)
+   if {$DUTs_info(DUT${DUTNum},regRouterNet) && \
+      ($DUTs_info(DUT${DUTNum},NoLoginTelnet)==0)} {
+      #This condition will make it so the code will not try to log in via
+      #  telnet if it fails once due to network issues.
+      ConfigGatewayNetwork
+      set loginTelnetStatus [login_telnet_graceful [set DUT${DUTNum}_IP] "$fd" \
+                    "$userid" "$passwd" "$CheckOperational" "$masterCheck"]
+   
+      if {$loginTelnetStatus} {
+         set DUTs_info(DUT${DUTNum},regRouterNet) 1;
+         return 1;
+      } else {
+         Login $DUTs_info(DUT${DUTNum},connect)
+         UnconfigGatewayNetwork
+         set DUTs_info(DUT${DUTNum},regRouterNet) 0;
+         return 0;
+      }
+   }
+}
+################################################################## 
+# Procedure Name: LogoutFast
+#   
+# Description: Logout of a switch.  If the initial connection via
+#              telnet did not work there shoud be nothing to clean
+#              if it did work, the regRouter network will have to
+#              be cleaned up
+#
+# Input args: 
+#       DUT Number list
+# Output args: none
+# Typical usage:
+#         LogoutFast "1 2"
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc LogoutFast {{DUTNumList "1"} {NoTelnetOff "null"} {UnconfigNetwork "yes"} } {
+
+global DUTs_info
+global numDUT
+
+   for {set dut 1} {$dut <= $numDUT} {incr dut} {
+      global DUT${dut}_IP
+   }
+
+   foreach num $DUTNumList {
+      if {$DUTs_info(DUT${num},NoLoginTelnet)==0} {
+         set regNet $DUTs_info(DUT${num},regRouterNet)
+         if {$regNet} {
+            login_telnet_graceful [set DUT${num}_IP]
+            logout
+            if {$UnconfigNetwork == "yes"} {
+                Login $DUTs_info(DUT${num},connect)
+                UnconfigGatewayNetwork      
+            }
+         }
+      }
+      if {$NoTelnetOff==1} {
+         unset DUTs_info(DUT${num},NoLoginTelnet)
+      }
+   }
+}
+################################################################## 
+# Procedure Name: login_telnet_graceful
+#   
+# Description: internal proc that used to login to a switch 
+#              through telnet ip address. Called by LoginFast
+#
+#
+#
+# Input args: 
+#       ipaddr: ip address of the switch
+#       fd: a file descriptor for log/debug purpose
+# Output args: none
+# Typical usage:
+#         login_telnet_graceful $device $fd
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc login_telnet_graceful {ipAddr {fd "NULL"} {userid "admin"} {passwd ""} \
+	{CheckOperational "1"} {masterCheck "1"} } {
+  global spawn_id
+  global hostname 
+  global spawn_ids
+  global ReportLoginError connectionTimeout
+ 
+#exp_internal 1
+  set newConnection 1
+  set spawnGood 1
+  #check for existing connection
+  if { [ info exists hostname ] == "1" } {
+    foreach name $hostname {
+      if { $name == $ipAddr } {
+        set spawn_id $spawn_ids($name)
+        if { $spawn_id != "INVALID" } {
+          # --- use it for delay without using sleep
+          puts "Login $ipAddr - Connection already exists pid=$spawn_id"
+          set newConnection 0
+        }
+      }
+    }
+    #if brand new connection, add to host name list
+    if { [lsearch $hostname $ipAddr] == -1 } {
+       lappend hostname $ipAddr
+    }
+  } else {
+       lappend hostname $ipAddr
+  }
+    
+    
+    #spawn new connection if not exists
+   if { $newConnection == 1 } {
+      set time1 [clock seconds];
+      if [catch "spawn telnet $ipAddr" reason] {
+         result_debug "failed to spawn program: $reason\n"
+         #error "failed to spawn program: $reason\n"
+         result_debug "Error failed to spawn program: $reason\n"
+         return 0;
+      }
+      set spawn_ids($ipAddr) $spawn_id
+      set timeout 15
+      result_debug "Login telnet $ipAddr,  pid=$spawn_id"
+      send "\n"
+      #wait for connection
+      expect {
+         -nocase -re "unable.*connect" {
+            if {[info exists ReportLoginError] && $ReportLoginError == "no"} {
+               result_debug $expect_out(buffer)
+            } else {
+               result_error $expect_out(buffer)
+            }
+            expect *
+            result_error $expect_out(buffer)
+            #error "Unable to connect"
+            result_debug "Error Unable to connect"
+            set spawn_ids($ipAddr) "INVALID";
+            return 0;
+            if {[info exists ReportLoginError] && $ReportLoginError == "no"} {
+               result_debug $expect_out(buffer)
+               result_debug "Unable to connect"
+            } else {
+               result_error $expect_out(buffer)
+               #error "Unable to connect"
+               result_debug "Error Unable to connect"
+               set spawn_ids($ipAddr) "INVALID";
+               return 0;
+            }
+         }
+         -nocase -re ".*onnected" {
+            #wait for all remaining characters to come
+            #		puts "Connection established"
+         }
+         timeout {
+            after 15
+            result_debug "Slow Connection Time: 15 secs. Possible Network Issues. Use Console"
+            set spawn_ids($ipAddr) "INVALID";
+            return 0;
+         }
+      }
+   }
+   set loginStatus [try_login_on_switch  $ipAddr $userid $passwd $masterCheck]
+   if { $loginStatus == 0 } {
+      # The expect_out array won't be set if expect times out, so
+      # check to make sure it exists before using it.
+      if {[info exists expect_out(buffer)]} {
+         result_error $expect_out(buffer);
+      }
+      if {[info exists ReportLoginError] && $ReportLoginError == "no"} {
+         result_debug "Unable to login";
+      } else {
+         #error "Unable to login";
+         result_debug "Error Unable to Connect"
+         return 0;
+      }
+      return $loginStatus;
+   }
+
+   if { $newConnection == 1 && $CheckOperational } {
+      #make sure slots are operational
+      set output [CheckOperational]
+      if { $output == 0 } {
+         result_error "Some slots not operational"
+         #error "Some slots not operational"
+         result_debug "Error Some slots not operational";
+         return 0;
+      }
+   }
+   return $loginStatus
+
+}
+################################################################## 
+# Procedure Name: CheckOperational
+#   
+# Description: check that all slots are in operational state
+#
+# Input args: none
+#       
+# Output args: return 1 if all slots are operational
+#              return 0 if some slot is not operational
+# Typical usage:
+#         CheckOperational
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+################################################################## 
+proc CheckOperational { args } {
+    parse_args CheckOperational $args {
+        waitforloadcfg "no"  ; # used for scalability test cases that have to reboot with huge cfg
+    }
+
+    global chassis
+    global whichDutNow
+    global spawn_id
+    global spawn_ids
+    global pioneerPlatform
+    global everestChassis
+    global DUTs_info
+    global CFG_PLATFORM
+
+
+    # Check the cfg file platform name override
+    if {[info exists CFG_PLATFORM($whichDutNow)] && $CFG_PLATFORM($whichDutNow) != "null"} {
+        set DUTs_info(DUT${whichDutNow},platform) $CFG_PLATFORM($whichDutNow)
+    }
+    if {![info exists whichDutNow]} {
+        set whichDutNow 1;
+    }
+    if {![info exists DUTs_info(DUT$whichDutNow,SHOWPROCESSES)]} {
+        set DUTs_info(DUT$whichDutNow,SHOWPROCESSES) 1;
+        set procReady 0
+    } elseif {$DUTs_info(DUT$whichDutNow,SHOWPROCESSES) == 0} {
+        set procReady 1
+    } else {
+        set procReady 0
+    }
+    set procList ""
+    lappend procList {{^Slot-|^msm} 5}
+    set timeDuration 0
+
+    if { $waitforloadcfg == "no" } {
+        set processreadytime 60
+        set SlotOperationalWait  45
+    } else {
+        set processreadytime 250
+        set SlotOperationalWait 150
+    }
+
+    # Check for MSM Operational
+    global DUT${whichDutNow}_CONNECTB
+    if {[regexp -nocase $chassis [GetSystemType $whichDutNow]] && \
+                                     [info exists DUT${whichDutNow}_CONNECTB]} {
+
+        #find out the ipAddr of this session if it is MSM-A or MSM-B
+        global hostname
+        foreach name $hostname {
+            if { $spawn_id == $spawn_ids($name) } {
+                set ipAddr $name
+            }
+        }
+        if { $ipAddr == [set DUT${whichDutNow}_CONNECTB] } {
+            # Current slot is b, check operational on slot a
+            set slot a
+        } else {
+            # Current slot is a, check operational on slot b
+            set slot b
+        }
+        set bStat ""
+        lappend bStat "State: 1"
+        set slotBState [GetKeyValue "show slot $slot" $bStat]
+        if {[regexp -nocase $slotBState "empty"]} {
+            result_debug "Slot $slot not present"
+        } elseif {[regexp -nocase $slotBState "operational"]!=1} {
+            result_debug "Verifying slot $slot operational"
+            set slotBState ""
+            lappend slotBState "{State:} {Operational} inLine exists"
+            if { $waitforloadcfg == "no" } {
+                ## Increased sleep to 300 for pioneer originally it was 120
+                if { [CheckKeyValue "show slot $slot" \
+                      $slotBState -time {s: 1 i: 30 d: 420 f: 600 r}] != "ok" } {
+                    return 0
+                }
+                set showSwitchOutput ""
+                lappend showSwitchOutput "{Current State:} {In *Sync} inLine exists"
+                if {[CheckKeyValue "show switch" $showSwitchOutput -time {s: 1 i: 5 d: 150 f: 400 r} \
+                                   -comment "check both MSMs up in sh switch output"]=="error"} {
+                    return 0
+                }
+
+            } else {
+                if { [CheckKeyValue "show slot $slot" \
+                    $slotBState -time {s: 1 i: 20 d: 200 f: 200  r}] != "ok" } {
+                    return 0
+                }
+                set showSwitchOutput ""
+                lappend showSwitchOutput "{Current State:} {In *Sync} inLine exists"
+                if {[CheckKeyValue "show switch" $showSwitchOutput -time {s: 1 i: 5 d: 150 f: 400 r} \
+                                      -comment "check both MSMs up in sh switch output"]=="error"} {
+                    return 0
+                }
+            }
+        }
+        global bcmChassis
+        if {[regexp -nocase $bcmChassis [GetSystemType $whichDutNow]]} {
+            #set SlotOperationalMaxWait 120
+            if { $waitforloadcfg == "no" } {
+                if {[regexp -nocase $everestChassis [GetSystemType $whichDutNow]]} {
+                    set SlotOperationalMaxWait 600
+                } else {
+                    set SlotOperationalMaxWait 250
+                }
+            } else {
+                set SlotOperationalMaxWait 300
+            }
+        } else {
+            if { $waitforloadcfg == "no" } {
+                set SlotOperationalMaxWait 500
+            } else {
+                set SlotOperationalMaxWait 250 
+            }
+        }
+    } else {
+        if { $waitforloadcfg == "no" } {
+            set SlotOperationalMaxWait 500
+        } else {
+            set SlotOperationalMaxWait 250 
+
+        }
+    }
+    while {$procReady!=1} {
+        set result [ldelete [GetKeyValue "show process" $procList] ""]
+        foreach res $result {
+            if {![regexp -nocase "ready|unknown|0|no|stopped|loadcfg" $res]} {
+                # 0 for "Not supported" bgp
+                exSleep 3
+                set procReady 0
+                break
+            } else {
+                set procReady 1
+            }
+        }
+        incr timeDuration 3
+        if {$waitforloadcfg == "no" } {
+            set processreadytime 60
+        } else {
+            set processreadytime 150
+        }
+
+        if {$timeDuration>=$processreadytime} {
+            break
+        }
+    }
+    # Tmp set column
+    SendACmd "configure cli column 255"
+
+    if {$procReady==0} {
+        result_error "All processes not ready even after $processreadytime secs  wait"
+        return 0
+    }
+
+    if {[regexp -nocase $chassis [GetSystemType $whichDutNow]] || \
+                      [regexp -nocase "vpex" [GetSystemType $whichDutNow]]} {
+        set slotStatusList ""
+        set slotOperational 0
+        set timeDuration 0
+        lappend slotStatusList "slot Operational inLine"
+        set listElem ""
+        set SlotStatusLength 33 
+        set startCol 30 
+        set endCol [expr $startCol+$SlotStatusLength]
+        lappend listElem "$startCol $endCol"
+        set spankTheSlot 0
+        while {$slotOperational!=1} {
+            # EY-08-15-2008: Added check for blank line to endKey parameter.
+            set slotStatusString [GetColumnValues "show slot" $listElem "----" "MSM-A|MM-A|Flags|^$"]
+            result_debug "The slotStatusString $slotStatusString"
+            foreach res [lindex $slotStatusString 0] {
+                if {![regexp -nocase "Operational|^ *empty" $res]&&$res!=""} {
+                    #exSleep 3
+                    exSleep 6
+                    set slotOperational 0
+                    break
+                } else {
+                    set slotOperational 1
+                }
+            }
+            if { ![regexp -nocase "Operational" $slotStatusString] } {
+                set slotOperational 0
+            }
+            incr timeDuration 3
+            result_debug "Total of $timeDuration out of $SlotOperationalMaxWait"
+            if {$timeDuration>=$SlotOperationalMaxWait} {
+                break
+            }
+        }
+        if {$slotOperational==0} {
+            result_error "All slots not Operational even after $SlotOperationalMaxWait wait"
+            return 0
+        }
+        if {[regexp -nocase "vpex" [GetSystemType $whichDutNow]] && ![VerifyBpeSlotsOperational]} {
+            result_error "All VPEX slots are not Operational"
+            return 0
+
+            # For port extender (BPE), card state machine is not currently aware of 
+            # extended port (E-channel) states.  This means there can be a long delay 
+            # (up to 75 secs) between BPE slots going operational and extended ports 
+            # showing link up on controlling bridge side  Temporarily need to verify 
+            # ports are up on controlling bridge side before returning as operational.
+            # Extended port mapping must also be explicitly defined in cfg file, not Auto.
+            global bpePortWait
+            if {0||[info exists bpePortWait]} {
+                # _verifyPortMappingPortsActive is set to 60s time limit; 
+                #       convert bpePortWait value to number of iterations
+                set count [expr ($bpePortWait / 60) + 1]
+                for {set i 0} {$i < $count} {incr i} {
+                    set result [_verifyPortMappingPortsActive]
+                    if {$result == 1} {
+                        break
+                    }
+                }
+                if {$result != 1} {
+                    result_error "All BPE ports are not up after waiting; bpePortWait = $bpePortWait"
+                    return 0
+                }
+            }
+        }
+    }
+    return 1
+}
+
+
+
+
+################################################################## 
+# Procedure Name: login_comm
+#   
+# Description: internal proc that used to login to a switch through serial com
+#
+#
+#
+# Input args: 
+#       comm_port: come1 or com2
+#       fd: a file descriptor for log/debug purpose
+# Output args: none
+# Typical usage:
+#         login_comm $device $fd
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc login_comm {comm_port {fd "NULL"} {userid "admin"} {passwd ""} {masterCheck 1}} {
+   global spawn_id
+   global hostname
+   global spawn_ids   
+   
+  set newConnection 1
+  #check for existing connection
+  if { [ info exists hostname ] == "1" } {
+    foreach name $hostname {
+      if { $name == $comm_port } {
+        set spawn_id $spawn_ids($name)
+        if { $spawn_id != "INVALID" } {
+          puts "Login $comm_port - Connection already exists pid=$spawn_id"
+          set newConnection 0
+        }
+      }
+    }
+    #if brand new connection, add to host name list
+    if { [lsearch $hostname $comm_port] == -1 } {
+       lappend hostname $comm_port
+    }
+  } else {
+       lappend hostname $comm_port
+  }
+   #spawn new connection if not exists
+   if { $newConnection == 1 } {    
+     # s. comm initialization
+     set con [open $comm_port RDWR]
+     fconfigure $con -buffering none -mode 9600,n,8,1  -blocking 0 \
+        -buffersize 8192 -eofchar {} -translation auto
+     if [catch "spawn -open $con" reason] {
+        send_user "failed to spawn program: $reason\n"
+        error "failed to spawn program: $reason\n"
+     }
+    set spawn_ids($comm_port) $spawn_id
+     result_debug "Login serial $comm_port,  pid=$spawn_id"
+   }
+   #initial talking with the switch
+   try_login_on_switch  $comm_port $userid $passwd $masterCheck
+
+   #expect "#"  
+   expect {
+       "#" { 
+           return
+       }
+       ">" {
+           return
+       }
+   }    
+}
+
+;# Determine which boot image to use
+proc _whichBootImage {{DUTNum 1}} {
+
+    global DUTs_info
+   
+    set bootNum 2
+    if [info exists DUTs_info(DUT$DUTNum,imageBooted)] {
+
+        if [regexp -nocase "primary" $DUTs_info(DUT$DUTNum,imageBooted)] {
+            set bootNum 1
+        }
+    }
+   
+    return $bootNum
+}
+
+################################################################## 
+# Procedure Name: try_login_on_switch
+#   
+# Description: internal proc that sends login prompt and password slower each char at a time
+#              returns error in case got the connection but can not successfully login
+#
+#
+# Input args: string : ip address of the DUT
+# Output args: none
+# Typical usage:
+#         try_login_on_switch  $ipAddr
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup	
+##################################################################
+proc try_login_on_switch {string {userid "admin"} {passwd ""} {masterCheck "1"} {loginType "telnet"} } {
+
+    global DUTs_info connectionTimeout
+    global powerCyclerRetry POWERCYCLE_DUT SKIPPCTOBOOTROMFLAG
+    global tempNumberLoginLoops
+    global waitBetweenLoginLoops
+    global TryToPowerCycle
+    global whichDutNow whichMsmNow
+    global spawn_id
+    global MGMT_REG
+    global FAILCOUNT
+    global stacking
+    global in
+    global bcmx430
+    global MAIN
+
+
+    if {![info exists FAILCOUNT(${whichDutNow}${whichMsmNow},$MGMT_REG(connType))]} {
+        set FAILCOUNT(${whichDutNow}${whichMsmNow},$MGMT_REG(connType)) 0
+    }
+    if {![info exists MAIN(initAdminCheck)]} {
+        set MAIN(initAdminCheck) 0
+    }
+    if {![info exists DUTs_info(DUT$whichDutNow,loginQuick)]} {
+        set DUTs_info(DUT$whichDutNow,loginQuick) 0
+    }
+    if {![info exists DUTs_info(DUT$whichDutNow,qloadInitLogin)]} {
+        set DUTs_info(DUT$whichDutNow,qloadInitLogin) 0
+    }
+    if {![info exists connectionTimeout]} {
+        set connectionTimeout 90
+    }
+    #log_user 2;
+    if {[info exist waitBetweenLoginLoops ]} {
+        set timeout $waitBetweenLoginLoops
+    } elseif {$DUTs_info(DUT$whichDutNow,loginQuick) > 0} {
+        set timeout $DUTs_info(DUT$whichDutNow,loginQuick)
+    } else {
+        set timeout 20
+    }
+    #  -- Figure out the details of the device being logged into
+    set dut 1
+    for { set numDUT 1; global DUT${numDUT}_CONNECT DUT${numDUT}_IP } \
+      { [info exists DUT${numDUT}_CONNECT] } \
+      { incr numDUT ; global DUT${numDUT}_CONNECT DUT${numDUT}_IP} {
+
+        set connect [set DUT${numDUT}_CONNECT]
+        set connect_mgmt [set DUT${numDUT}_IP]
+        global DUT${numDUT}_CONNECTB
+        if {[info exists DUT${numDUT}_CONNECTB]} {
+            set connectb [set DUT${numDUT}_CONNECTB]
+            if {([string compare $string $connect] == 0) || \
+                ([string compare $string $connectb] == 0) || \
+                ([string compare $string $connect_mgmt] == 0)} {
+            set dut $numDUT
+            break
+            }
+        } else {
+            if {[string compare $string $connect]==0 || \
+                 [string compare $string $connect_mgmt]==0} {
+                set dut $numDUT
+                break
+            }
+        }
+    }
+
+    result_debug "Try to login to DUT $whichDutNow $whichMsmNow timeout $timeout"
+
+    after 50
+    ;# need it to be 10 or else Mariner goes into BOOTLOADER if \r supplied at the wait
+    #exp_send "\r"   ;# Initial \r to get enter after terminal server connected
+    if {[catch {exp_send "\r"} reason]} {
+        if {  [regexp -nocase "not open" $reason] } {
+            result_print "\n~~~~~\nexpec send found spawn id not open \
+                : reconnect\n~~~~~";
+            # # The connection has been dropped so we have to clean up the spawnId and hostname entries
+            _clearDutConnectionVars $whichDutNow
+            global DUT${whichDutNow}_CONNECT
+            if {$MGMT_REG(currentConnectionType) == "telnet" && $MGMT_REG(useTelnetLocalFlag)} {
+                WriteToMainLog "MGMT_REG Telnet Spawn ID not open"
+                # Login of the console
+                set MGMT_REG(currentConnectionType) console
+                set MGMT_REG(telnetNeedsConfig) 0;# don't set yet or Login will reconfig mgmt ip
+                set MGMT_REG(useTelnetLocalFlag) 0;# not yet or Login will use telnet ip
+                if {[Login [set DUT${whichDutNow}_CONNECT] -CheckOperational 0 -masterCheck 0]<=0} {
+                    result_error "Login is not successful on retry after foreign host closed"
+                    set timeout $connectionTimeout
+                    return ""
+                }
+                set MGMT_REG(telnetNeedsConfig) 1;# set so next login setup mgmt ip over consonle then telnet over mgmt
+                set MGMT_REG(useTelnetLocalFlag) 1;# set so next login will use telnet ip
+            } else {
+                WriteToMainLog "Telnet Spawn ID not open in try_login_on_switch"
+                if {[Login [set string] -CheckOperational "0" -masterCheck "0"]<=0} {
+                    result_error "Login is not successful on [set string] retry after spawn id not open"
+                    set timeout $connectionTimeout
+                    return ""
+                }
+            }
+        }
+    }
+    set newLoginSession 0
+    set loginLoop 0
+    set syncLoop 0
+    set tOCounter 0
+    set maxReachedCount 1
+    if {[info exist tempNumberLoginLoops ]} {
+        set numberLoops $tempNumberLoginLoops
+    } else {
+        set numberLoops 40
+    }
+
+    for {set i 0} {$i <= $numberLoops} {incr i} {
+        if {[info exists DUTs_info(DUT$whichDutNow,loginQuick)] && $DUTs_info(DUT$whichDutNow,loginQuick) \
+                  && $i>1 && $tOCounter>1} {
+            if {$DUTs_info(DUT$whichDutNow,qloadInitLogin) && !$SKIPPCTOBOOTROMFLAG && \
+                               [info exists POWERCYCLE_DUT($whichDutNow)]} {
+                if {[pcToBootRom $dut]=="ok"} {
+                    result_debug "Wait for 90 secs for rebooted DUT $dut to come up..."
+                    exSleep 90
+                }                
+            } else {
+                if {[info exists POWERCYCLE_DUT($whichDutNow)]} {
+                    PowerCycleDUT $whichDutNow YES false
+                }
+            }
+            set DUTs_info(DUT$whichDutNow,loginQuick) 0
+            if {[Login [set DUT${whichDutNow}_CONNECT] -CheckOperational 0 -masterCheck 0]<=0} {
+                    result_error "Login is not successful on retry after foreign host closed"
+                    set timeout $connectionTimeout
+                    return ""
+            }
+            set DUTs_info(DUT$whichDutNow,qloadInitLogin) 0;# Hail mary to recover switch has ended.
+        }
+        expect {
+            timeout {
+                incr tOCounter
+                set loginLoop 0
+                if {$DUTs_info(DUT$whichDutNow,loginQuick) > 0} {
+                    result_debug "Try login timeout hit $loginLoop"
+                }
+                exp_send "\r"
+                if { [regexp -nocase "ssh" $loginType] } {
+                    result_error "SSH login Failed to the DUT $dut"
+                    result_debug "Telnet to DUT $dut via console"
+                    Login [set DUT${dut}_CONNECT]
+                    set timeout $connectionTimeout
+                    return 1
+                }
+            }
+            "firmware update in progress" { ;#SK3/9/07: POE firmware install 12.0.0.3
+                set tOCounter 0
+                exSleep 90
+            }
+            -nocase -re "Maximum.*reached" {
+                set tOCounter 0
+                if {[info exists expect_out(buffer)] && \
+                       [regexp -nocase "ending" $expect_out(buffer)]} {
+                    puts "--- Pending hit"
+                }
+                result_debug "DUT$dut Maximun login attempts - $maxReachedCount"
+                global TRYFAILSAFE
+                if {[info exists TRYFAILSAFE] && $TRYFAILSAFE == "true" && \
+                         $maxReachedCount > 2 && $maxReachedCount <= 4 } {
+                    if {![regexp -nocase "$stacking" [GetPlatform DUT${whichDutNow}]] && \
+                                    ![regexp -nocase "$bcmx430" [GetPlatform DUT${whichDutNow}]]} {
+                        result_debug "NOT Stacking - Send ALL Failsafe password"
+                        exSleep 5
+                        LoginWithFailSafe -dut ${whichDutNow}
+                    } else {
+                        result_debug "Stacking or x430 platform - DON'T send failsafe"
+                    }
+                }
+                exSleep 20
+                exp_send "\r"
+                incr loginLoop
+                incr maxReachedCount
+                continue
+            }
+            "login:" {
+                set tOCounter 0
+                if {[regexp -nocase "Maximum.*reached" $expect_out(buffer)]} {
+                    result_debug "Hit DUT$dut maximum login attempts"
+                    exSleep 10
+                    exp_send "\r"
+                } else {
+                    result_debug "Slow Send Admin"
+                    slow_send "$userid\r"
+                }
+                if {[regexp -nocase "telnet session t" $expect_out(buffer)]} {   
+                    ;# potential issue with DUTX_IP login
+                    ;# which may setup the connectType for DUTX_CONNECT
+                    ;# to be telnet inadvertently
+                    set DUTs_info(DUT$dut,connectType) "telnet"
+                } else {
+                    set DUTs_info(DUT$dut,connectType) "console"
+                }
+                set newLoginSession 1
+            }
+            "Failed to connect to authentication service" {
+                set tOCounter 0
+                exSleep $timeout 
+            }
+            "password:" {
+                set tOCounter 0
+                exp_send "$passwd\r"
+                set newLoginSession 1
+                incr loginLoop 
+                continue
+            }
+            "password for $userid" {
+                set tOCounter 0
+                exp_send "$passwd\r"
+                set newLoginSession 1
+                incr loginLoop
+                continue
+            }
+            -nocase -re {\[y\/n\]:} {
+                set tOCounter 0
+                exp_send "\r"
+                continue
+            }
+            -nocase -re {\[y\/n\/q\]:} {
+                set tOCounter 0
+                exp_send "\r"
+                continue
+            }
+            " # " {
+                set tOCounter 0
+                set loginLoop 0
+                # A new login session needs to have clipaging disabled
+                if {![info exists DUTs_info(DUT$dut,connectType)]} {
+                    set DUTs_info(DUT$dut,connectType) "console"
+                }
+                if { $newLoginSession == 1 } {
+                    after 200
+                    SendACmd "dis clipa"
+                    SendACmd "disable idle"
+                    set FAILCOUNT(${whichDutNow}${whichMsmNow},$MGMT_REG(connType)) 0 
+                   # SendACmd "show log messages nvram"
+                    #         EnableDebugMode
+                    #        SendACmd "!echo dump_stack > /sys/module/watchdog/parameters/watchdog_warn_behavior"
+                    # Code Added to enable Ctrl+v+x+b reboot
+                    #EnableDebugMode
+                    #SendACmd "debug hal configure sysrq 1"
+                    exSleep 2
+                    #DisableDebugMode
+                    #_verifyCFCorruptionStatusOnLogin
+                }
+                puts "Try login successful"
+                set timeout $connectionTimeout
+                return 1
+            }
+            "msmA>" {
+                if { $newLoginSession == 1} {
+                    SendACmd "\r"
+                }
+                exp_send "\r"
+                set newLoginSession 1
+                set loginLoop 0
+                set timeout $connectionTimeout
+                return 1
+            }
+            "msmB>" {
+                if { $newLoginSession == 1} {
+                    SendACmd "\r"
+                }
+                exp_send "\r"
+                set newLoginSession 1
+                set loginLoop 0
+                set timeout $connectionTimeout
+                return 1
+            }
+            "BOOTLOADER>" {
+                ;# Mariner boot prompt
+                set loginLoop 0
+                set timeout 60
+                result_warning "Attempting to login while in BOOTLOADER prompt"
+                result_warning "Send boot command and retry ($i)"
+                exp_send "boot [_whichBootImage $dut]\r"
+                continue
+            }
+            "BootRom >" {
+                ;# Aspen/Cougar boot prompt
+                set tOCounter 0
+                set loginLoop 0
+                set timeout 60
+                result_warning "Attempting to login while in BootRom prompt"
+                result_warning "Send boot command and retry ($i) - boot [_whichBootImage $dut]"
+                exp_send "boot [_whichBootImage $dut]\r"
+                continue
+            }
+            "BootStrap >" {
+                ;# Cougar goes here first before BootRom prompt
+                set tOCounter 0
+                set loginLoop 0
+                set timeout 60
+                result_warning "Attempting to login while in BootStrap prompt"
+                result_warning "Sending boot command and retry ($i)"
+                exp_send "boot\r"
+                continue
+            }
+            "~>" {
+                ;# Pacman prompt
+                set tOCounter 0
+                set loginLoop 0
+                set timeout 60
+                result_warning "Attempting to login while in Pacman prompt"
+                result_warning "Send continue command and retry ($i)"
+                exp_send "8a\r"
+                    expect {
+                       "pacman_autostart=" {
+                            exp_send "true\r"
+                            expect -re "\~>*"
+                            exp_send "s\r"
+                            expect -re "\~>*"
+                       }
+                       timeout {
+                            result_debug "Could not set autostart"
+                       }
+                    }
+                exp_send "c\r"
+                continue
+            }
+            " > " {
+                set tOCounter 0
+                set loginLoop 0
+                set FAILCOUNT(${whichDutNow}${whichMsmNow},$MGMT_REG(connType)) 0
+                ;# Non-admin user or backup
+                ;# Check we're not BootRom or BootStrap prompt
+                ;# A new login session needs to have clipaging disabled
+                if {![info exists DUTs_info(DUT$dut,connectType)]} {
+                    set DUTs_info(DUT$dut,connectType) "console"
+                }
+                if { $newLoginSession == 1 } {
+                    SendACmd "dis clipa" 
+                    #         EnableDebugMode
+                    #         SendACmd "!echo dump_stack > /sys/module/watchdog/parameters/watchdog_warn_behavior"
+                    #_verifyCFCorruptionStatusOnLogin 
+                }
+                if {$MAIN(initAdminCheck)} {
+                    set MAIN(initAdminCheck) 0
+                    result_debug "\n\nEvaluate Admin Account Check"
+                    set ubuf [SendACmd "unconfig default ipa"]
+                    set userStr "user does not have permissions"
+                    if {[regexp -nocase $userStr $ubuf]} {
+                        result_debug "Non-Admin account login is not allowed when useing the -masterCheck option with Login"
+                        logout
+                        Login [set DUT${dut}_CONNECT${whichMsmNow}]
+                    }
+                }
+                if {$masterCheck} {
+                    set backupMsm 0
+                    result_debug "\n\nEvaluate Master Check"
+                    set buf [SendACmd "unconfig default ipa"]
+                    set backupStr "Error: This command can only be executed on Master|This command cannot be executed during configuration load|This command cannot be executed on a standby node"
+                    global DUT${dut}_CONNECTB
+                    if {[info exist DUT${dut}_CONNECTB] && [regexp -nocase $backupStr $buf]} {
+                        set backupMsm 1
+                    }
+                    
+                    ;# By default, we try to switch to Master if we are on Backup MSM
+                    if {$backupMsm} {
+                        set buf $expect_out(buffer)
+                        set verList ""
+                        lappend verList "{XOS version} 1"
+                        set xos_version [GetKeyValue "show version" $verList]
+                        global DUT${dut}_CONNECTB
+                        if {$xos_version < "11.2.0"} {
+                            if { $xos_version >= "10.2.0" } {
+                                set virtualRouter VR-Control
+                            } else {
+                                set virtualRouter VR-1
+                            }
+                            ;# Check for backup prompt...if backup we need to failover
+                            EnableDebugMode  ;# needed as 11.1.1.3 requires debug-mode
+                            global bcmChassis
+                            if {[regexp -nocase $bcmChassis $buf]} {
+                                ;# 10.0.<slot>.2  MSMA-slot 11, MSMB-slot 12
+                                if {[string compare [set DUT${dut}_CONNECTB] $string]==0} {
+                                    SendACmd "telnet vr $virtualRouter 10.0.11.2"
+                                } else {
+                                    SendACmd "telnet vr $virtualRouter 10.0.12.2"
+                                }
+                            } else {
+                                ;# 10.0.<slot>.2  MSMA-slot 9, MSMB-slot 10
+                                if {[string compare [set DUT${dut}_CONNECTB] $string]==0} {
+                                    SendACmd "telnet vr $virtualRouter 10.0.9.2"
+                                } else {
+                                    SendACmd "telnet vr $virtualRouter 10.0.10.2"
+                                }
+                            }
+                        } else {
+                            if {[info exists DUT${dut}_CONNECTB]} {
+                                if {[string compare [set DUT${dut}_CONNECTB] $string]==0} {
+                                    # SendACmd "telnet msm a"
+                                    Login [set DUT${dut}_CONNECT] -CheckOperational 0
+                                } else {
+                                    #SendACmd "telnet msm b"
+                                    Login [set DUT${dut}_CONNECTB] -CheckOperational 0
+                                }
+                            }
+                        }
+                        ;# Check that we're In Sync before switchover
+                        set msmState ""
+                        lappend msmState "{State:} {BACKUP.*In Sync} inLine exists"
+                        incr syncLoop
+                        if { [CheckKeyValue "show switch" \
+                                $msmState -time {s: 1 i: 30 d: 90 f: 250 r}] == "ok" } {
+                            SendACmd "run msm-failover"
+                            result_debug "Sleeping 50 seconds to give time for MSM to reboot after an msm failover..."
+                            exSleep 50
+                            global DUT1_Stacking_msma_slot
+                            if { [info exists DUT1_Stacking_msma_slot] } {
+                                result_debug "Sleeping additional 60 seconds to give time for stacking reboot"
+                                exSleep 60
+                            }
+                        } else {
+                            SendACmd "reboot"
+                        }
+                        if {[string compare [set DUT${dut}_CONNECTB] $string]==0} {
+                            Login [set DUT${dut}_CONNECTB]
+                        } else {
+                            Login [set DUT${dut}_CONNECT]
+                        }
+                    }
+                }
+                set timeout $connectionTimeout
+                return 1
+            }
+            "BCM\.*> " {  
+                ;# BCM prompt for Broadcom
+                set loginLoop 0
+                set timeout $connectionTimeout
+                return 1
+            }
+            "closed" {
+                set loginLoop 0
+                incr FAILCOUNT(${whichDutNow}${whichMsmNow},$MGMT_REG(connType))
+                result_print "\n~~~~~\ntry_login_on_switch detects telnet to DUT$whichDutNow Closed Foreign Host\n~~~~~";
+                # # The connection has been dropped so we have to clean up the spawnId and hostname entries
+                _clearDutConnectionVars $whichDutNow
+                global DUT${whichDutNow}_CONNECT
+                if {[Login [set string] -CheckOperational "0" -masterCheck "0"]<=0} {
+                    result_error "Login is not successful on retry on [set string] after foreign host closed"
+                    set timeout $connectionTimeout
+                    return -1
+                }
+            }
+            -nocase {\[y/N]:} {
+                #to response to questions after a "unconfig sw all" is done.
+                set loginLoop 0
+                exp_send "\r"
+            }
+            -re -nocase "\[a-z0-9]+ " {
+                puts "Cosole active"
+                sleep $timeout
+                continue;
+            }
+            -nocase -re "(\\* )?\[a-z0-9._-]+(:|\\.)\[0-9]+ (#|>) " {
+                # ExtremeWare and ExtremeWare XOS prompt.
+                #
+                # The pattern breaks down as follows:
+                #
+                # (\\* )?        Unsaved config marker
+                # \[a-z0-9._-]+  Platform type or SNMP system name
+                # (:|\\.)        Name and command ID separator
+                # \[0-9]+        Command ID
+                # (#|>)          System or user prompt marker
+                #
+                set FAILCOUNT(${whichDutNow}${whichMsmNow},$MGMT_REG(connType)) 0
+                result_print "\n~~~~~\nReconnect DUT$whichDutNow : Got a known switch prompt\n~~~~~";
+                set timeout $connectionTimeout
+                return 1
+            }
+            eof {
+                result_print "\n~~~~~\ntry_login_on_switch detects telnet to DUT$whichDutNow dropped! Reconnect\n~~~~~";
+                # # The connection has been dropped so we have to clean up the spawnId and hostname entries
+                global whichDutNow
+                incr FAILCOUNT(${whichDutNow}${whichMsmNow},$MGMT_REG(connType))
+                _clearDutConnectionVars $whichDutNow
+                ClearConsoleDUT $whichDutNow
+                global DUT${whichDutNow}_CONNECT
+                if {[Login [set string] -CheckOperational "0" -masterCheck "0"]<=0} {
+                    result_error "Login is not successful on [set string] retry after foreign host closed"
+                    set timeout $connectionTimeout
+                    return -1
+                }
+            }
+        }
+    }
+    if { $loginLoop > 0} {
+        set loginLoop 0
+        if {[info exists in] && $in == "download"} {
+            result_debug "DUT${whichDutNow} - The Supplied USERID and PASSWORD:\n\
+                Combination is not correct - You are in Download - It may recover!"
+        } else {
+            result_error "DUT${whichDutNow} - The Supplied USERID and PASSWORD combination is not correct"
+        }
+        set timeout $connectionTimeout
+        return 0
+    }
+    
+    if { $syncLoop > 0} {
+        set syncLoop 0
+        global pioneerPlatform
+        global DUTs_info
+        global whichDutNow
+        result_error "MSM|MM-A and MSM|MM-B are not in sync"
+        set timeout $connectionTimeout
+        return 0
+    }
+
+    #if we get here that means we didn't get the prompt
+    # check if we should skip the power cycling phase
+    if {[info exists TryToPowerCycle] && $TryToPowerCycle == "no"} {
+        result_debug "SKIPPING POWER CYCLING"
+        result_debug "We didn't get the prompt..."
+        set timeout $connectionTimeout
+        return 0
+    }
+
+    # Reboot the DUT to find if powercycle helps
+    # Currently 8/19/02 nofeep prompt "->" at login would also power cycle the DUT.
+    global DUT${dut}_TYPE
+    incr powerCyclerRetry
+    if { $powerCyclerRetry > 3 } {
+        result_debug "Max power cycler retry reached ...$powerCyclerRetry"
+        set  powerCyclerRetry 0
+        result_debug "Could not power cycle DUT $dut..."
+        puts "@@@ Could not power cycle DUT @@@"
+        return 0
+    }
+    result_debug "Power Cycler retry... $powerCyclerRetry"
+    if {[info exists in] && $in != "main"} {
+        if {$in=="download"} {
+            if {![info exists DUT${dut}_TYPE]} {
+                if {[powerCycleToBootRom $dut]=="ok"} {
+                    result_debug "Wait for 30 secs for rebooted DUT to come up..."
+                    exSleep 30
+                } else {
+                    result_debug "Could not power cycle DUT $dut..."
+                    puts "@@@ Could not power cycle DUT @@@"
+                    return 0
+                }
+            } elseif {[info exists DUT${dut}_TYPE] && [set DUT${dut}_TYPE]=="PC"} {
+                PowerCycleDUT $dut
+            }
+            result_debug "login_telnet string -- $string"
+            login_telnet $string 
+            set output [CheckOperational]
+            if { $output == 0 } {
+                result_error "Some slots not operational"
+                error "Some slots not operational"
+            }
+            SendACmd "dis clipa"
+            SendACmd "con default del port all"
+            #         EnableDebugMode
+            #         SendACmd "!echo dump_stack > /sys/module/watchdog/parameters/watchdog_warn_behavior"
+            return 1
+        }
+    } elseif {[PowerCycleDUT $dut]==1} {
+        result_ok "Successfully power cycled DUT $dut..."
+        result_debug "Wait for 30 secs for rebooted DUT to come up..."
+        exSleep 30
+        login_telnet $string 
+        SendACmd "dis clipa"
+        SendACmd "con default del port all"
+        #        EnableDebugMode
+        #        SendACmd "!echo dump_stack > /sys/module/watchdog/parameters/watchdog_warn_behavior"
+        return 1
+    } else {
+        if {[info exists in] && $in == "download"} {
+            result_debug "Could not power cycle DUT $dut..."
+            puts "@@@ Could not power cycle DUT @@@"
+        } else {
+            result_error "Could not power cycle DUT $dut..."
+            puts "@@@ Could not power cycle DUT @@@"
+        }
+        return 0
+    }
+}
+
+
+proc _verifyCFCorruptionStatusOnLogin { } {
+
+    global whichDutNow
+    global DUTs_info
+    global DUT1_IP
+    global regressionAbortReason
+    set cf_state "ok"
+    EnableDebugMode 
+#Check if Tool jffs2dump exist on switch else download it from tftp server
+    lappend paramList "{jffs2dump} exist"
+    if {[CheckKeyValue "ls /usr/local/tmp" $paramList -reportResults 0] != "ok"} {
+        ConfigGatewayNetwork
+        SendACmd "ping vr [GetVrString $whichDutNow] 10.210.1.200"
+        SendACmd "tftp 10.210.1.200 -v [GetVrString $whichDutNow] \
+                -g -l jffs2dump -r jffs2dump"
+        UnconfigGatewayNetwork
+        exSleep 2
+        SendACmd "!cp /config/jffs2dump /scratch/intern/jffs2dump"
+    }
+    unset paramList
+
+#LK various type of CF corruption detection :1
+    lappend loginParamList "{Compact Flash exhibiting signs of internal filesystem corruption} notExist"
+    lappend loginParamList "{Failed to obtain compact flash status} notExist"
+    if {[CheckKeyValue "debug hal show compact-flash" $loginParamList -reportResults 0] != "ok"} {
+          set cf_state "corrupted"
+    }
+    unset loginParamList
+
+#LK various type of CF corruption detection :2
+    if {[CompareRelease [GetVersion DUT${whichDutNow}] "12.0.3.1"] >= 0} {
+         lappend cfbuff "{^1} notExist"
+         if {[CheckKeyValue "!cat /proc/jffs2_corruption" $cfbuff -reportResults 0] != "ok"} {
+           set cf_state "corrupted"
+         }
+         unset cfbuff 
+    }
+
+#LK various type of CF corruption detection :3
+    lappend cfbuff "{Wrong data_crc} notExist"
+    lappend cfbuff "{Wrong bitmask} notExist"
+    if {[CheckKeyValue "!/scratch/intern/jffs2dump -b -c /dev/hda7 | grep Wrong" $cfbuff -reportResults 0] != "ok"} {
+       set cf_state "corrupted"
+    }
+    unset cfbuff 
+
+#LK various type of CF corruption detection :4
+    lappend cfbuff "{output error} notExist"
+    if {[CheckKeyValue "ls" $cfbuff -reportResults 0] != "ok"} {
+       set cf_state "corrupted"
+    }
+    unset cfbuff 
+
+#LK if CF is corrupted collect the debug data
+    if { $cf_state == "corrupted" } {
+           SendACmd "!hdparm -i /dev/hda"
+           SendACmd "dmesg"
+           SendACmd "!/scratch/intern/jffs2dump -c -b /dev/hda7 | grep Dirent"
+           result_error "CF is corrupted on DUT${whichDutNow} dump CF image for post analysis"
+           SendACmd "!rm /scratch/intern/config.img*"
+           exSleep 2;
+           SendACmd "!dd if=/dev/hda7 of=/scratch/intern/config.img_DUT${whichDutNow}_$DUT1_IP bs=1024 count=16384"
+           exSleep 2;
+           SendACmd "!gzip /scratch/intern/config.img*"
+           ConfigGatewayNetwork
+           SendACmd "ping vr [GetVrString $whichDutNow] 10.210.1.200"
+           SendACmd "tftp put 10.210.1.200 vr [GetVrString $whichDutNow] /usr/local/tmp/config.img_DUT${whichDutNow}_$DUT1_IP.gz"
+           SendACmd "!rm /scratch/intern/config.img*"
+           UnconfigGatewayNetwork
+           if { [info exist regressionAbortReason] } {
+                lappend regressionAbortReason "{fatal} {BAD CF:DUT${whichDutNow}} {CF is corrupted on DUT${whichDutNow}}"
+           }
+           return "error"
+    } else {
+           result_ok "CF is Good on DUT${whichDutNow}"
+           return "ok"
+    }
+    DisableDebugMode 
+}
+
+proc login_exos_mariner { userid } {
+    global spawn_id
+    
+        set timeout 60
+    	send "\r"
+#        expect -re "CM.\\\[PRIMARY\\\].\\\[READY\\\]"
+    	expect {
+    	    "login:" {
+        	    send "$userid\r"
+        	    expect "password:"
+        	    send "\r"
+            	expect " #"
+        	}
+        	"#"
+    	}
+	return 1
+}
+
+proc login_exos_shell { userid } {
+    global spawn_id
+    
+    sleep 2
+    puts "login_exos_shell"
+    for {set i 0} {$i < 10} {incr i} {
+	send "$userid\r"
+	expect {
+            "Password:" {
+	       send "\r"
+            }
+            "password:" {
+	       send "\r"
+            }
+        }
+	expect {
+	    " # " {
+	     return 1
+	   }
+	    " > " {
+	     return 1
+	   }
+	}
+   }
+   return 0
+}
+
+proc login_exos_i386 { mode } {
+    global spawn_id
+    global downloadFile
+    global env
+    global PC_Platform_Type    ;# Defined in cfg file
+    
+    set pcPlatform 2
+    if [info exists env(PC_PLATFORM_TYPE)] {
+	;# Environment variable takes precedence
+	set pcPlatform $env(PC_PLATFORM_TYPE)
+    } elseif [info exists PC_Platform_Type] {
+	set pcPlatform $PC_Platform_Type
+    }
+
+    send "\r"   ;# send a \r to get the login prompt again
+    expect "login:"
+	foreach letter {e x o s t e s t} {
+	    send $letter
+	    expect {
+		"$letter" {
+		    after 10
+		}
+		timeout {
+		    for {set c 0} {$c<10} {incr c} {
+			send $letter
+			expect {
+			    "$letter" {
+				break
+			    }
+			    timeout {
+				after 10
+			    }
+			}
+		    }
+		}
+	    }
+	}
+	send "\r"
+	expect "password:"
+	send "exos1234\r"
+	expect "\$ " 
+	send "su\r"
+	expect "password:"
+	send "genesis1\r"
+	expect "#"
+	send "\r"
+	expect "#"
+
+	send "mkdir -p /root/hda1/exos\r"
+	expect "#"
+
+	send "cd /root/hda1/exos\r"
+	expect "#"
+	send "pwd\r"
+	expect "#"
+
+	sleep 3
+	send "cd bin ; touch regression ; rm -f msm.cfg\r"
+	expect "#"
+	send "./exos stopall\r"
+	expect "#"
+	sleep 3
+	send "cp -f ../config/reg$pcPlatform.cfg msm.cfg\r"
+	expect "#"
+	send "./exos mknod\r"
+	expect "#"
+	send "./exos startall\r"
+        set timeout 60
+        expect -re "CM.\\\[PRIMARY\\\].\\\[READY\\\]"
+    	send "\r"
+    	expect {
+    	    "login:" {
+        	    send "admin\r"
+        	    expect "password:"
+        	    send "\r"
+            	expect " #"
+        	}
+        	"#"
+    	}
+        set slotUp [SendACmd "show slot"]
+        set totalCount 1
+        while {![regexp -nocase "Operational" $slotUp]&&$totalCount<11} {
+            puts "Slot is not up in $totalCount retries. Wait 2 more seconds"
+            sleep 2
+            set slotUp [SendACmd "show slot"]
+            incr totalCount
+        }
+        if {$totalCount>10} {
+           return -1
+        }
+puts "--------------------------a1 ---------"
+	send "config default del port all\r"
+puts "--------------------------a2 ---------"
+	expect {
+	    " #" {
+	     return 1
+	   }
+	}
+puts "--------------------------a3 ---------"
+	return 0
+
+puts "--------------------------a4 ---------"
+}
+
+######################################################################
+# Login a switch through serial comm. port 1 
+# Parameters: fd: a file descriptor for log/debug purpose
+######################################################################
+
+proc login_nt_scom1 {{fd "NULL"}} {
+    global spawn_id
+    # s. comm initialization
+    set con [open com1 RDWR]
+    fconfigure $con -buffering none -mode 9600,n,8,1  -blocking 0 \
+	-buffersize 8192 -eofchar {} -translation auto
+    if [catch "spawn -open $con" reason] {
+	send_user "failed to spawn program: $reason\n"
+	exit 1
+    }
+
+    #initial talking with the switch
+    send "\r"
+    expect {
+	timeout {
+	    result_error "Trouble talking with the switch;Check the hardware"
+	    exit
+	}
+	"login:" {
+	    send "admin\r"                                    
+	    expect "password:"
+	    send "\r"
+	} "password:" {
+	    send "\r"
+	    expect "login:"
+	    send "admin\r"
+	    expect "password:"
+	    send "\r"
+	} "#" {
+	    send "\r"
+	}
+    }   
+    expect "#"
+}
+
+######################################################################
+# Login a switch through serial comm. port 2 
+# Parameters: fd: a file descriptor for log/debug purpose
+######################################################################
+
+proc login_nt_scom2 {{fd "NULL"}} {
+    global spawn_id
+    # s. comm initialization
+    set con [open com2 RDWR]
+    fconfigure $con -buffering none -mode 9600,n,8,1  -blocking 0 \
+	-buffersize 8192 -eofchar {} -translation auto
+    if [catch "spawn -open $con" reason] {
+	send_user "failed to spawn program: $reason\n"
+	exit 1
+    }
+
+    #initial talking with the switch
+    send "\r"
+    expect {
+	timeout {
+	    result_error "Trouble talking with the switch; Check the hardware"
+	    exit
+	}
+	"login:" {
+	    send "admin\r"                                    
+	    expect "password:"
+	    send "\r"
+	} "password:" {
+	    send "\r"
+	    expect "login:"
+	    send "admin\r"
+	    expect "password:"
+	    send "\r"
+	} "#" {
+	    send "\r"
+	}
+    }   
+    expect "#"
+}
+
+######################################################################
+# Login a switch through serial comm. port 3 
+# Parameters: fd: a file descriptor for log/debug purpose
+######################################################################
+
+proc login_nt_scom3 {{fd "NULL"}} {
+    global spawn_id
+    # s. comm initialization
+    set con [open com3 RDWR]
+    fconfigure $con -buffering none -mode 9600,n,8,1  -blocking 0 \
+	-buffersize 8192 -eofchar {} -translation auto
+    if [catch "spawn -open $con" reason] {
+	send_user "failed to spawn program: $reason\n"
+	exit 1
+    }
+
+    #initial talking with the switch
+    send "\r"
+    expect {
+	timeout {
+	    result_error "Trouble talking with the switch; Check the hardware"
+	    exit
+	}
+	"login:" {
+	    send "admin\r"                                    
+	    expect "password:"
+	    send "\r"
+	} "password:" {
+	    send "\r"
+	    expect "login:"
+	    send "admin\r"
+	    expect "password:"
+	    send "\r"
+	} "#" {
+	    send "\r"
+	}
+    }   
+    expect "#"
+}
+
+######################################################################
+# Login a switch through serial comm. port 4 
+# Parameters: fd: a file descriptor for log/debug purpose
+######################################################################
+
+proc login_nt_scom4 {{fd "NULL"}} {
+    global spawn_id
+    # s. comm initialization
+    set con [open com4 RDWR]
+    fconfigure $con -buffering none -mode 9600,n,8,1  -blocking 0 \
+	-buffersize 8192 -eofchar {} -translation auto
+    if [catch "spawn -open $con" reason] {
+	send_user "failed to spawn program: $reason\n"
+	exit 1
+    }
+
+    #initial talking with the switch
+    send "\r"
+    expect {
+	timeout {
+	    result_error "Trouble talking with the switch; Check the hardware"
+	    exit
+	}
+	"login:" {
+	    send "admin\r"                                    
+	    expect "password:"
+	    send "\r"
+	} "password:" {
+	    send "\r"
+	    expect "login:"
+	    send "admin\r"
+	    expect "password:"
+	    send "\r"
+	} "#" {
+	    send "\r"
+	}
+    }   
+    expect "#"
+}
+##################################################################
+# Procedure Name: _clearDutConnectionVars
+#
+# Description: internal proc that sends clears spawn_ids array entry
+#      and removes console ip from hostname list
+#
+#
+# Input args: string : dut number
+# Output args: none
+# Typical usage:
+#         _clearDutConnectionVars $whichDutNow
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Utility
+##################################################################
+proc _clearDutConnectionVars {myDUT} {
+    global spawn_id spawn_ids
+    global hostname
+    global DUT${myDUT}_CONNECT
+    global DUT${myDUT}_IP
+    global MGMT_REG
+
+    if {[info exists hostname]} {
+        puts "Pre Clear Hostnames: $hostname"
+    }
+    result_debug "Clear All Sessions and reset global variables to DUT $myDUT"
+    # Clear all other spawn_ids for this DUT.
+    set sCloseList ""
+    set console [set DUT${myDUT}_CONNECT];# console IP for this DUT
+    if {[info exists spawn_ids($console)] && $spawn_ids($console) != "INVALID"} {
+        lappend sCloseList $spawn_ids($console)
+        catch {close -i $spawn_ids($console)} myr
+        catch {wait} myr
+        set hostname [ldelete $hostname $console]
+        set spawn_ids($console) "INVALID"
+    }
+    set console_mgmt [set DUT${myDUT}_IP];# mgmt IP for this DUT
+    if {[info exists spawn_ids($console_mgmt)] && $spawn_ids($console_mgmt) != "INVALID"} {
+        lappend sCloseList $spawn_ids($console_mgmt)
+        catch {close -i $spawn_ids($console_mgmt)} myr
+        catch {wait} myr
+        set hostname [ldelete $hostname $console_mgmt]
+        set spawn_ids($console_mgmt) "INVALID"
+    }
+    set msmList "B C D E F G H"
+    foreach m $msmList {
+        global DUT${myDUT}_CONNECT${m}
+        if {[info exists DUT${myDUT}_CONNECT${m}]} {
+            set mmconsole [set DUT${myDUT}_CONNECT${m}]
+            if {[info exists spawn_ids($mmconsole)] && $spawn_ids($mmconsole) != "INVALID"} {
+                lappend sCloseList $spawn_ids($mmconsole)
+                catch {close -i $spawn_ids($mmconsole)} myr
+                catch {wait} myr
+                set hostname [ldelete $hostname $mmconsole]
+                set spawn_ids($mmconsole) "INVALID"
+            }
+        }
+    }
+    if {[lsearch $sCloseList $spawn_id] < 0} {
+        foreach hn $hostname {
+            if {[info exists spawn_ids($hn)] && $spawn_ids($hn) == $spawn_id} {
+                puts "Found host $hn missed spawn_id clear"
+                set hostname [ldelete $hostname $hn]
+                set spawn_ids($hn) "INVALID"
+            }
+        }
+        puts "Missed the current open spawn_id. Close it."
+        catch {close -i $spawn_id} myr
+    }
+    # -----------------------------------------------------------
+    #  Build a regexp to get the telnet proc id
+    #        need to match telnet / console ip / console tcp port
+    # -----------------------------------------------------------
+    set consoleList [split $console " "]
+    set newConsoleList ""
+    foreach cPart $consoleList {
+        if {[string trim $cPart] != ""} {
+            # Avoid white space
+            lappend newConsoleList [string trim $cPart]
+        }
+    }
+    set consoleRegexp [join $newConsoleList "\.\*"]
+    # this should equal to telnet.*consoleIp.*consoleTCPPort or
+    #                      telnet.*consoleIp
+    set telnetRegexp "telnet\.\*$consoleRegexp"
+    #result_debug "\n@@@@@ G E T  C O N S O L E   T E L N E T   S T A T E: $telnetRegexp @@@@@"
+    # Get the ps line
+    set psLine [catch {exec ps -eafwww | egrep -e "$telnetRegexp" | grep -v grep} psout]
+    #result_debug "@@@@@ PS: $psout"
+    # If a valid line was returned, there is still a telnet opened that must die.
+    if {[regexp -nocase {[0-9]+} [lindex $psout 1]]} {
+        result_debug "Active telnet still open to ${console} !  PID:[lindex $psout 1]  Kill it!"
+        catch {exec kill -9 [lindex $psout 1]} retValue
+        if {$retValue==1} {
+            result_debug "Failed to kill the telnet process.  There may be an issue."
+        }
+    } else {
+        result_debug "No active telnet detected"
+        #ClearConsoleDUT $myDUT
+    }
+    # -----------------------------------------------------------
+    #  Build a regexp to get the telnet proc id
+    #        need to match telnet / console ip / console tcp port
+    # -----------------------------------------------------------
+    set consoleList [split $console_mgmt " "]
+    set newConsoleList ""
+    foreach cPart $consoleList {
+        if {[string trim $cPart] != ""} {
+            # Avoid white space
+            lappend newConsoleList [string trim $cPart]
+        }
+    }
+    set consoleRegexp [join $newConsoleList "\.\*"]
+    # this should equal to telnet.*consoleIp.*consoleTCPPort or
+    #                      telnet.*consoleIp
+    set telnetRegexp "telnet\.\*$consoleRegexp"
+    #result_debug "\n@@@@@ G E T   MGMT  T E L N E T   S T A T E: $telnetRegexp @@@@@"
+    # Get the ps line
+    set psLine [catch {exec ps -eafwww | egrep -e "$telnetRegexp" | grep -v grep} psout]
+    #result_debug "@@@@@ PS: $psout"
+    # If a valid line was returned, there is still a telnet opened that must die.
+    if {[regexp -nocase {[0-9]+} [lindex $psout 1]]} {
+        result_debug "Active telnet still open to ${console} !  PID:[lindex $psout 1]  Kill it!"
+        catch {exec kill -9 [lindex $psout 1]} retValue
+        if {$retValue==1} {
+            result_debug "Failed to kill the telnet process.  There may be an issue."
+        }
+    } else {
+        result_debug "No active telnet detected"
+    }
+    puts "Post Clear hostname $hostname"
+    result_debug "Sleeping for 2 seconds before re-trying login"
+    exSleep 2
+}
+
+##################################################################
+# Procedure Name: _printModuleNameOnIOBConsole 
+#
+# Description: utility proc that sends a user defined message to IO console 
+#
+# Input args: string : DUTNum "DUT number"
+#                    : reasonString "message user want to send to IO"
+#                    : moduleName "currenly running module name" 
+# Output args: none
+# Typical usage:
+#  _printModuleNameOnIOBConsole 1 "Starting" "AnycastRp"
+#  _printModuleNameOnIOBConsole 1 "ending" "AnycastRp"
+#  _printModuleNameOnIOBConsole 1 "vlanCreate" "AnycastRp"
+#                          VerifyTraffic)
+# Category: Utility
+##################################################################
+
+proc _printModuleNameOnIOBConsole {DUTNum {reasonString "Starting"} {moduleName ""} } {
+    global DUTs_info MAIN
+    global currentTestNumber
+    if { ![info exists currentTestNumber] } {
+        set tempCurrentTestNumber "main"
+    } else {
+        set currentTestNumber [string trim $currentTestNumber]
+        if {[regexp {(.*) *;.*} $currentTestNumber match match1]} {
+            set tempCurrentTestNumber $match1
+        } else {
+            set tempCurrentTestNumber $currentTestNumber
+        }
+        set tempCurrentTestNumber [string trim $tempCurrentTestNumber]
+    }
+    if {$moduleName == "NULL" } {
+        set moduleName MAIN(feature_directory);
+    }
+    global DUT${DUTNum}_CONNECT
+    Login [set DUT${DUTNum}_CONNECT]
+    set slotNumber 1
+    foreach slot $DUTs_info(DUT${DUTNum},hwList) {
+        if {[regexp -nocase "Empty" $slot]} {
+           incr slotNumber;
+           continue;
+        }
+	EnableDebugMode
+        SendACmd "!telnet -v 1 10.0.${slotNumber}.2"
+        SendACmd "echo \"$reasonString\" > /tmp/testRunningReason.txt"
+        exSleep 1
+        SendACmd "echo \"$moduleName\" >/tmp/testRunningModule.txt"
+        exSleep 1
+        SendACmd "echo \"$tempCurrentTestNumber\" >/tmp/testRunningTestNumber.txt"
+        exSleep 1
+        SendACmd "echo \"$DUTs_info(DUT${DUTNum},version)\" >/tmp/releaseVersion.txt"
+         exSleep 1
+         SendACmd "viohaldbg < /tmp/testRunningReason.txt"
+         exSleep 1
+         SendACmd "viohaldbg < /tmp/testRunningModule.txt"
+         exSleep 1
+         SendACmd "viohaldbg < /tmp/testRunningTestNumber.txt"
+         exSleep 1
+         SendACmd "viohaldbg < /tmp/releaseVersion.txt"
+         exSleep 1
+         send "exit\r"
+         exSleep 2 
+         send "\r"
+         SendACmd ""
+         incr slotNumber;
+    }
+
+}
+##################################################################
+# Procedure Name: showModuleNameOnAll_DUTs_IOBConsole 
+#
+# Description:  utility function 
+#
+# Its purpose is to show module name on all DUTs IOB console 
+#
+# Input args: At present no input argument
+#
+# Output args: At present no output argument
+##################################################################
+proc showModuleNameOnAll_DUTs_IOBConsole { {reasonString "Starting"} {moduleName ""} } {
+global numDUT
+global pioneerPlatform
+    for {set dut 1} {$dut <= $numDUT} {incr dut} {
+    set platform [GetPlatform DUT$dut]
+	if {[regexp -nocase $pioneerPlatform [GetPlatform DUT$dut]]} {
+           _printModuleNameOnIOBConsole $dut $reasonString $moduleName
+        }
+    }
+}
+##################################################################
+# Procedure Name: LoginWithFailSafe
+#
+# Description:  Clear previous telnet, spawn a telnet session
+#               and send failsafe login info
+#
+# Input args: dut number
+#
+# Output args: 
+##################################################################
+proc LoginWithFailSafe {args} {
+    global TRYFAILSAFE MGMT_REG whichDutNow connectionTimeout
+    global spawn_id whichDutNow whichMsmNow FAILCOUNT
+
+    parse_args Login $args {
+        dut "1"
+    }
+
+    if {![info exists FAILCOUNT(${whichDutNow}${whichMsmNow},$MGMT_REG(connType))]} {
+        set FAILCOUNT(${whichDutNow}${whichMsmNow},$MGMT_REG(connType)) 0
+    }
+    incr FAILCOUNT(${whichDutNow}${whichMsmNow},$MGMT_REG(connType))
+
+    global DUT${dut}_CONNECT  DUT${dut}_CONNECTB DUT${dut}_CONNECTC
+    global DUT${dut}_CONNECTD DUT${dut}_CONNECTE DUT${dut}_CONNECTF
+
+    if {[info exists whichMsmNow] && ($whichMsmNow == "B" || \
+        $whichMsmNow == "C" || $whichMsmNow == "D" || $whichMsmNow == "E" || \
+        $whichMsmNow == "F")} {
+        result_debug "Clear the consoles on MSM $whichMsmNow"
+        _clearDutConnectionVars ${dut}_${whichMsmNow}
+    } else {
+        result_debug "Clear the consoles on MSM-A"
+        _clearDutConnectionVars $dut
+    }
+    #exSleep 2
+
+    if {[info exists DUT${dut}_CONNECT${whichMsmNow}]} {
+        set cmd "spawn telnet [set DUT${dut}_CONNECT${whichMsmNow}]"
+        if [catch "$cmd" reason] {
+            result_debug "failed to spawn program: $reason\n"
+            result_error "failed to spawn program: $reason\n"
+            return;
+        }
+        result_debug "Logged in with spawnid $spawn_id"
+        set timeout 3
+        #wait for connection
+        expect {
+            "?onnection refused" {
+                result_debug "refused"
+                exp_continue;
+            }
+            "?nable to ?onnect" {
+                result_debug "unable to connect"
+                exp_continue;
+            }
+            "?onnected to" {
+                result_debug "Successful Connection"
+            }
+        }
+        #run the failsafe
+        FailSafeForceful
+        close -i $spawn_id
+        wait
+        exSleep 4
+    }
+
+    if [info exists connectionTimeout] {
+        set timeout $connectionTimeout
+    }
+    Login [set DUT${dut}_CONNECT${whichMsmNow}] -CheckOperational 0 -masterCheck 1
+}
+####################################################################################
+# Procedure: CLIConnectMode
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#################################################################################### 
+proc CLIConnectMode  {args} {
+    global MGMT_REG MAIN RemoveMgmtNetwork whichDutNow whichMsmNow
+    global hostname 
+    global spawn_id
+    global spawn_ids
+
+    parse_args CLIConnectMode $args {
+        mode    "console"
+        action  "setup"
+        a       "null"
+        loseCfg "no"
+        l       "null"
+        dut     "null"
+        msm     ""
+    }
+    # set short args
+    if {$l != "null"} {
+        set loseCfg $l
+    }
+    if {$a != "null"} {
+        set action $a
+    }
+    if {$dut == "null"} {
+        global DUT${whichDutNow}_IP
+        global DUT${whichDutNow}_CONNECT DUT${whichDutNow}_CONNECTB
+        set initconn [set DUT${whichDutNow}_CONNECT${whichMsmNow}]
+        set initip   [set DUT${whichDutNow}_IP]
+    } else {
+        global DUT${dut}_IP
+        global DUT${dut}_CONNECT DUT${dut}_CONNECTB
+        set initconn [set DUT${dut}_CONNECT${msm}]
+        set initip   [set DUT${dut}_IP]
+    }
+    if {$action == "setup"} {
+        set ll [ProcEvalTree]
+        if {[regexp -nocase "executetests" [lindex $ll 0]]} {
+            puts "This is a test case level setting."
+            set MGMT_REG(cliConnectLevel) "testcase";
+        } else {
+            set MGMT_REG(cliConnectLevel) "harness";
+        }
+
+        if {[regexp -nocase "tel" $mode]} {
+            set RemoveMgmtNetwork 0
+            if {$MGMT_REG(telnetNeedsConfig) > 0} {
+                _ConfigMgmtNetworkAll
+            }
+            set MGMT_REG(useTelnetGlobalFlag) 1; # << Switch on telnet of mgmt vs console
+            set MGMT_REG(useTelnetLocalFlag) 1; #just initializing var
+            set MGMT_REG(currentConnectionType) "telnet"
+            set MGMT_REG(forceConsole) 0
+            puts "Telnet execution mode is selected"
+        } else {
+            set MGMT_REG(useTelnetGlobalFlag) 0; # << Switch on telnet of mgmt vs console
+            set MGMT_REG(useTelnetLocalFlag) 0; #just initializing var
+            set MGMT_REG(forceConsole) 1;
+            set MGMT_REG(currentConnectionType) "console"
+            puts "Terminal server execution mode is selected"
+        }
+    } elseif {$action == "disable"} {
+        if {$MGMT_REG(useTelnetGlobalFlag) && $MGMT_REG(useTelnetLocalFlag) && \
+             $MGMT_REG(currentConnectionType) == "telnet" && \
+             $MGMT_REG(cliConnectLevel) == "testcase"} {
+            set MGMT_REG(useTelnetGlobalFlag) 0; # << Switch on telnet of mgmt vs console
+            set MGMT_REG(useTelnetLocalFlag) 0; #just initializing var
+            set MGMT_REG(forceConsole) 1;
+            set MGMT_REG(currentConnectionType) "console"
+            puts "Terminal server execution mode is selected"
+            Login $initconn  -masterCheck 0 -CheckOperational 0
+        }
+    } elseif {[regexp -nocase "force" $action]} {
+        if {$MGMT_REG(useTelnetGlobalFlag) && $MGMT_REG(useTelnetLocalFlag) && \
+             $MGMT_REG(currentConnectionType) == "telnet"} {
+            set MGMT_REG(useTelnetLocalFlag) 1; #just initializing var
+            set MGMT_REG(forceConsole) 1;
+            if {[regexp -nocase "y" $loseCfg]} {
+                #find out the ipAddr of this session in case this is not a console connection
+                #this is the address to use if we need to spawn telnet again after
+                #unconfig sw
+                set ipAddr NULL
+                foreach name $hostname {
+                    if { $spawn_id == $spawn_ids($name) } {
+                        set ipAddr $name
+                    }
+                }
+                puts "matchy $ipAddr == $initip"
+                if {$ipAddr == $initip} {
+                    puts "The IP connection is vunerable to clearing with cfg"
+                }
+                set MGMT_REG(telnetNeedsConfig) 1
+                set hostname [ldelete "$hostname" "$initip"];
+            }
+            puts "Use Terminal server temporarily"
+            Login $initconn  -masterCheck 0 -CheckOperational 0
+        }
+    } elseif {[regexp -nocase "reconf" $action]} {
+        if {$MGMT_REG(useTelnetGlobalFlag) && $MGMT_REG(useTelnetLocalFlag) && \
+             $MGMT_REG(currentConnectionType) == "telnet" && $MGMT_REG(forceConsole)} {
+            set MGMT_REG(telnetNeedsConfig) 1
+            set hostname [ldelete "$hostname" "$initip"];
+            set MGMT_REG(forceConsole) 0
+            Login $initconn -masterCheck 0 -CheckOperational 0
+        }
+    }
+}

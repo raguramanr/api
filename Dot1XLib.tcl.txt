@@ -1,0 +1,4771 @@
+
+set DEBUG_DOT1X_CRASH 0
+
+############################ IXIA SPECIFIC FUNCTIONS #######################
+#
+# Procedures that issue commands only to IXIA
+#
+# proc dot1x_ixInit
+# proc dot1x_ixGetLogs
+# proc dot1x_ixGetIfMacs
+# proc dot1x_ixGetPortIdMacs
+# proc dot1x_ixCreatePortIfs
+# proc dot1x_ixConfigDot1xPorts 
+# proc dot1x_ixConfigDot1xPortOnly
+# proc dot1x_ixAddSupplicantToPort
+# proc dot1x_ixStartSupAuth
+# proc dot1x_ixStopSupAuth
+# proc dot1x_ixDestroyDot1xPorts
+# proc dot1x_ixCheckPortGroupStats 
+# proc dot1x_ixStartAuth
+# proc dot1x_ixStopAuth
+# proc dot1x_ixDumpInterfaceInfo
+# proc dot1x_ixVerifySupplicantAccess
+# proc dot1x_ixVerifyMultiSupplicantAccess
+# proc dot1x_ixSendIpTraffic
+# proc dot1x_ixStartEapolFlood 
+# proc dot1x_ixStopTx
+# proc dot1x_ixStopEapolFlood
+# proc dot1x_ixDumpSupplicantStats
+# proc dot1x_ixCheckPing
+# proc dot1x_ixSendPing
+# proc dot1x_ixCheckDHCPBroadcastBlocked
+# proc dot1x_ixDelSupMac
+
+# ########################## EXTREME SPECIFIC SWITCH FUNCTIONS #######################
+#
+# Procedures that issue commands only to DUT
+#
+# proc dot1x_exEnableNetloginPort
+# proc dot1x_exGetNetloginVal
+# proc dot1x_exVerifyPortAuth
+# proc dot1x_exVerifyMacAuth
+# proc dot1x_exVerifyShowNetlogin
+# proc dot1x_exVerifyShowNetloginPorts
+# proc dot1x_exVerifyShowSession
+# proc dot1x_exStandardVlanConfig 
+#
+# ########################## EXTREME + IXIA ############################
+#
+# Procedures that issue commands to DUT and IXIA
+#
+# proc dot1x_CheckARPBroadcastBlocked
+# proc dot1x_VerifyProtocol
+# proc dot1x_VerifyDHCPBootPRelay
+
+
+# ########################## GENERAL FUNCTIONS ############################
+#
+# General purpose procedures that do not issue commands to either DUT or Ixia
+#
+# proc dot1x_stripMac
+# proc dot1x_VerifySupplicantPackets
+# proc dot1x_VerifySupplicantEAPPackets
+# proc dot1x_VerifyTaggedPackets
+# proc dot1x_SkipTestBasedOnPlatform
+# proc dot1x_CheckDot1xTaskCrash
+
+# ############################## INTERNAL LIBRARY FUNCTIONS ###########################
+#
+# Procedures internal to Dot1xLib that should not be called by the user 
+#
+# proc _ixStreamConfig
+# proc _ixSeedFdbTable
+# proc _ixCreateMultiSupplicantStreams
+# proc _ixVerifyMultiSupplicantAccess
+# proc _ixVerifySupplicantAccess
+# proc _ixWaitForAuth
+# proc _ixWaitForDeauth
+# proc _ixWaitForSupAuth
+# proc _reportVerifyProtocolResult
+# proc _verifyEDP
+# proc _verifySTP
+# proc _verifyRIP
+# proc _verifyOSPF
+# proc _verifyIGMP
+# proc _exCheckMatch
+# proc _exMacMatchDot1x
+# proc _exVerifyShowNetlogin
+# proc dot1x_exVerifyShowNetloginPorts
+
+
+#                           TYPICAL TOPOLOGY
+#                           ----------------
+#
+# We verify traffic by sending IP frames from supplicants to
+# target and back.
+#
+#        IXIA
+#   supMac1/supIp1                                    DUT1
+#   supMac2/supIp2                       +--------------------------+  
+#   supMac3/supIp3 -----------supPortId--| gwIp           (vlan_1)  |
+#   supMacX/supIpX                       |                          |
+#                                        |                          |
+# targetMac/targetIp ------targetPortId--| targetPortGwIp (vlan_2)  |
+#                                        |   t1  t2                 |  
+#                                        +----+--+-----+------------+
+#                                             |  |     |       
+#                                             |  |     |
+#                                             |  |     +--commvlan------> RADIUS
+#                                             |  |           |
+#                                             |  |     DUT2  |
+#                                        +----+--+-----------+------+
+#                                        |   t1  t2                 |
+#                                        |                          |
+#                                        |                          |
+#                                        |                          |
+#                                        |                          |
+#                                        +--------------------------+
+#
+# NOTES: Writing Port Configuration to Ixia causes port to go down, and
+#        thus Deauthenticate port. Writing Stream Config does not 
+#        bring port down.
+
+################################################################## 
+# Procedure Name: dot1x_ixInit
+#   
+# Description: Connects to IXIA chassis and defaults the ports.
+#              Chassis must be running IxOS 3.65 or higher
+# 
+# Input args: chassis: IP Address of Ixia chassis to connect to
+#
+# Output args: none
+##################################################################
+proc dot1x_ixInit { chassis } {
+	global TrafficGen
+	
+	if {$TrafficGen == "stc"} {
+		return
+	}
+	
+    result_debug "\nIxTclHAL version   :[version cget -ixTclHALVersion]"
+    result_debug "Product version    :[version cget -productVersion]"
+    result_debug "Installed version  :[version cget -installVersion]"
+
+    if {[ isUNIX ]} {
+        set errMsg ""
+        dot1xUtil::connectToTclServer  $chassis errMsg
+    }
+}
+
+
+################################################################## 
+# Procedure Name: dot1x_ixGetLogs
+#   
+# Description: Retreives DOT1x Logs for a set of ports.
+# 
+# Input args: portIdList: ID of ports to retrieve logs from
+#             filename:   Filename to store logs in
+#
+# Output args: none
+#
+# NOTES: 02/03/04: This does NOT work when running script outside
+#                  of Ixia chassis.  Ixia to fix.
+##################################################################
+proc dot1x_ixGetLogs { portIdList filename } {
+    
+    set portList [list]
+
+    foreach portId $portIdList {
+	MapIxiaPortId $portId chassis card port
+	lappend portList "$chassis $card $port"
+    }
+
+    result_debug "Retrieving logs for $portList and putting in [pwd]/$filename"
+
+    dot1xGetLogs portList $filename
+    
+    result_debug "Exiting dot1x_ixGetLogs"
+}
+
+
+
+################################################################## 
+# Procedure Name: dot1x_ixGetIfMacs
+#   
+# Description: Retreives all the Macs on a ch/ca/po
+# 
+# Input args: ch(assis) ca(rd) po(rt)
+#
+# Output args: List of MAC interfaces created on this port.
+#
+##################################################################
+proc dot1x_ixGetIfMacs { ch ca po } {
+
+    set macList [list]
+
+    interfaceTable select $ch $ca $po
+
+    ;# Walk through interfaceTable!
+    for {set curIf [interfaceTable getFirstInterface]} \
+	    {$curIf == 0 } {set curIf [interfaceTable getNextInterface]} {
+	set mac [interfaceEntry cget -macAddress]
+	lappend macList $mac
+    }
+    return $macList
+}
+
+################################################################## 
+# Procedure Name: dot1x_ixGetPortIdMacs
+#   
+# Description: Retreives all the Macs on a given portID
+# 
+# Input args: portId: Which port Id to retreive
+#
+# Output args: List of MAC interfaces created on this port.
+#
+##################################################################
+proc dot1x_ixGetPortIdMacs { portId } {
+
+    MapIxiaPortId $portId ch ca po
+
+    return [dot1x_ixGetIfMacs $ch $ca $po]
+}
+
+
+
+################################################################## 
+# Procedure Name: dot1x_ixCreatePortIfs
+#   
+# Description: Configure port interfaces.  Each interface (or supplicant)
+#              has a MAC and IP address. Before you can configure supplicants
+#              and supTable, you need to create the "virtual" interfaces
+#              representing these supplicants.
+# 
+# Input args: -portInfoList: List of ports to create interfaces on
+#                 <portId> <startIp> <gw> <vlanId*>
+#                    *vlanId is optional 
+#             -startMacAddr: First 3 octets of MAC.  Last three are 
+#                            generated as card:port:count  
+#
+# Output args: None
+#
+#  Typical Usage:
+#    lappend portInfoList "1 10.1.1.1 10.1.1.254 8"
+#    lappend portInfoList "2 10.1.1.1 10.1.1.254 1"
+#    dot1x_ixCreatePortIfs -portInfoList $portInfoList -startMacAddr "00 00 01"
+#
+##################################################################
+proc dot1x_ixCreatePortIfs {args} {
+   global TrafficGen
+    parse_args dot1x_setupPortInterfaces $args {
+	portInfoList "1  10.1.1.1  10.1.1.254  1"
+	startMacAddr "00 00 01"    ;# Last 3 octets are CARD:PORT:COUNT 
+	protocolServer "disable"
+    }
+
+   switch -exact -- $TrafficGen
+   stc {
+      if { [catch {
+         
+         foreach port $portInfoList {
+            
+            set portId [lindex $port 0]
+            set hPort [hMapPortIdToSpirentPort $portId]
+            set portStartIpAddr [lindex $port 1]
+            set portGwIpAddr [lindex $port 2]
+            set numSupplicants [lindex $port 3]
+            set vlanId [lindex $port 4]
+            set incrOctet 4
+            set ipAddressForThisInterface $portStartIpAddr
+            set gCount 1
+            for {set count 1} {$count <= $numSupplicants} {incr count} {
+               if {$vlanId == ""} {
+                  array set cmdResults [logcmd stc::perform DeviceCreateCommand \
+                      -ParentList [logcmd stc::get system1 -children-project] -port $hPort -IfStack "Ipv4If EthIIIf" -IfCount "1 1"]
+                  set deviceHndl $cmdResults(-ReturnList)
+               } else {
+                  array set cmdResults [logcmd stc::perform DeviceCreateCommand \
+                      -ParentList [logcmd stc::get system1 -children-project] -port $hPort -IfStack "Ipv4If VlanIf EthIIIf" -IfCount "1 1 1"]
+                  set deviceHndl $cmdResults(-ReturnList)
+                  logcmd stc::config [logcmd stc::get $deviceHndl -children-VlanIf] -VlanId $vlanId 
+               }
+               logcmd stc::config [logcmd stc::get $deviceHndl -children-Ipv4If] -Address $ipAddressForThisInterface -Gateway $portGwIpAddr
+               set suffixMacAddr [format "%02x %02x %02x" 10 94 $gCount]
+               set curMac [join "$startMacAddr $suffixMacAddr" :]
+               set ifInfoEntry [list $portId $ipAddressForThisInterface $curMac]
+               lappend ifInfoList $ifInfoEntry
+               incr gCount
+               set ipAddressForThisInterface [incrIpField $ipAddressForThisInterface $incrOctet]
+            }					
+         }
+      } msg ] } {
+         result_error "dot1x_ixStartAuth : Failed to start 802.1X authentication  $msg"
+         return 0
+      }			
+      
+   }
+   ixia -
+   ixvm {
+      
+    set portList [list]
+
+    ;# List of port intf {{<port> <IP> <MAC>} ... }
+    set ifInfoList [list]
+
+    ;# Configure interfaces for each port
+    foreach port $portInfoList {
+
+	set portId [lindex $port 0]
+	MapIxiaPortId [lindex $portId 0] ch ca po
+
+	set portStartIpAddr [lindex $port 1]
+	set portGwIpAddr [lindex $port 2]
+	set numSupplicants [lindex $port 3]
+	set vlanId [lindex $port 4]
+
+	;# Create a portList
+	lappend portList "$ch $ca $po"
+
+	result_debug "portStartIpAddr:$portStartIpAddr  \
+		portGwIpAddr:$portGwIpAddr numSupplicants:$numSupplicants" 
+
+	;# Default each port before configuring
+        if [port setFactoryDefaults $ch $ca $po] {
+            result_debug "WARNING: port setFactoryDefaults $ch $ca $po failed"
+	    continue
+        }
+
+	set incrOctet 4
+	interfaceTable  select  $ch $ca $po
+	
+	interfaceTable clearAllInterfaces
+	interfaceEntry clearAllItems addressTypeIpV6
+	interfaceEntry clearAllItems addressTypeIpV4
+	
+	set ipAddressForThisInterface $portStartIpAddr
+
+	set gCount 1
+	for {set count 1} {$count <= $numSupplicants} {incr count} {
+
+	    set curMac "$startMacAddr [format "%02x %02x %02x" $ca $po $gCount]"
+
+	    set ifInfoEntry [list $portId $ipAddressForThisInterface $curMac]
+	    lappend ifInfoList $ifInfoEntry
+
+	    result_debug "ipAddressForThisInterface: $ipAddressForThisInterface MAC: $curMac"
+	    
+	    interfaceIpV4   setDefault
+	    interfaceIpV4   config      -gatewayIpAddress  $portGwIpAddr
+	    interfaceIpV4   config      -maskWidth         24
+	    interfaceIpV4   config      -ipAddress         $ipAddressForThisInterface
+
+	    interfaceEntry  addItem     addressTypeIpV4	    
+	    interfaceEntry  setDefault
+	    interfaceEntry  config      -enable            $::true
+	    interfaceEntry  config      -description       [format "%02d:%02d - $count" $ca $po]
+	    interfaceEntry  config      -macAddress        $curMac
+
+	    if {$vlanId != "" } {
+		interfaceEntry  config      -enableVlan         $::true
+		interfaceEntry  config      -vlanId             $vlanId
+	    } else {
+		interfaceEntry  config      -enableVlan         $::false
+		interfaceEntry  config      -vlanId             0
+	    }
+	    interfaceTable  addInterface
+
+	    if {$protocolServer == "enable"} {
+		protocolServer  config      -enableArpResponse  $::true
+		protocolServer  config      -enablePingResponse $::true
+		if [protocolServer  set $ch $ca $po] {
+		    result_debug "ERROR : protocolServer  set $ch $ca $po"
+		}
+	    }
+	    
+	    set ipAddressForThisInterface [incrIpField $ipAddressForThisInterface $incrOctet]
+	    incr gCount
+	}
+    }
+    result_debug "Writing portList $portList to hardware."
+
+    ixWritePortsToHardware portList
+
+    ;# Dump some info for debugging.
+    ;# dot1x_ixDumpInterfaceInfo
+   }
+
+    return $ifInfoList
+}
+
+
+
+################################################################## 
+# Procedure Name: dot1x_ixConfigDot1xPorts
+#   
+# Description: Configures Ports for Dot1X.  Uses interfaces created on each 
+#              port to configure supplicants.  All supplicants for a particular 
+#              port group will have the same parameters. 
+#
+# Input args: 
+#	portGroupId        ;# Dot1x port group
+#	portIdList         ;# Port mapping ID
+#	authPeriod         ;# Secs to wait for DUT response 1-3600
+#	heldPeriod         ;# Secs after timeout before sending next auth 1-3600
+#	startPeriod        ;# Secs between successive EAPOL-Start msgs 1-3600
+#	maxStart           ;# Number of EAPOL-Starts before deeming failure 1-10000
+# 	fragmentSize       ;# Max frag for EAP TLS packet 500-1400
+#	maxSessions        ;# Number sessions for this port
+#	setupDelay         ;# Millsec between start of 1 auth to next. 0-4,294,967,295
+#	establishDelay     ;# Millsec between completed/failed auth to next multiauth
+#	logoffDelay        ;# Millsec delay between successive logoff msgs at teardown
+#	dutTestMode        ;# 0 => Single-Host, 1 => Multi-Host, 2=> Multi Auth
+#	enableSessionOnly  ;# 0 => Only session, no stream.  We can manually gen stream
+#	holdTime           ;# Secs between auth and logoff 0-1,000,000
+#	enableRandomHold   ;# 1-Set holdTime to random values
+#	enableOnlyMulticastDestMac  ;# 1-Use multicast MAC instead of auth MAC 
+#	enableAuthOnNoResponse      ;# 1-Supplicant consider itself auth if no response
+#	enableStateMachineDebug     ;# 1- Generate DEBUG LOG
+#	enableConfigurationDebug    ;# 1- Generate DEBUG LOG
+#	enableEapolFramesDebug      ;# 1- Generate DEBUG LOG  
+#	testDuration            ;# Duration of entire test
+#	authPass                ;# Password sent for auth	
+#	authUser                ;# Username sent for auth
+#	dot1xAuth      ;# dot1xAuthMD5,1  dot1xAuthTLS,0
+#	dot1xUser      ;# dot1xUserNormal,0 dot1xUserFailing,1 Expect failure.
+#	supHoldTime               ;# -1 use port holdTime
+#	supNumNoIdResponse        ;# Number of times to suppress EAP-ID msgs 0-100
+#	supNumNoAuthResponse      ;# Number of times to suppress EAP-Auth msgs 0-100
+#	supEnableWaitIdRequest    ;# "true"-Wait for DUT initiate EAP, rather than sending EAP-start
+#       certificateDir            ;# Directory where certificates are located
+#	maxSupplicants "          ;# max number of suplicants to add, otherwise 1 per port MAC
+#	destroy  "no"             ;# Destroy old port group first
+#
+# Output args:  None
+#
+#  Typical Usage:
+#    dot1x_ixConfigDot1xPorts -portIdList "1" -portGroupId "1" \
+#	   -authUser $uname -authPass $upass
+#
+##################################################################
+proc dot1x_ixConfigDot1xPorts {args} {
+	global TrafficGen
+    parse_args dot1x_ixConfigDot1x $args {
+        portGroupId "1"        
+        portIdList "1"         
+        authPeriod "15"        
+        heldPeriod "10"        
+        startPeriod "10"       
+        maxStart "3"           
+        fragmentSize "640"     
+        maxSessions  "64"      
+        setupDelay   "0"       
+        establishDelay "1000"  
+        logoffDelay "120"       
+        dutTestMode  "2"       
+        enableSessionOnly "0"
+        holdTime "0"
+        enableRandomHold "0"
+        enableOnlyMulticastDestMac "1"
+        enableAuthOnNoResponse "0"
+        enableStateMachineDebug "1"
+        enableConfigurationDebug "1"
+        enableEapolFramesDebug "1"
+        testDuration "240"
+        authUser  "md5_isp_1"
+        authPass  "md5_isp_1"
+        dot1xAuth "dot1xAuthMD5"     
+        dot1xUser "dot1xUserNormal"  
+        supHoldTime "-1"             
+        supNumNoIdResponse "0"       
+        supNumNoAuthResponse "0"     
+        supEnableWaitIdRequest "0"   
+        certificateDir "./certfiles" 
+        maxSupplicants "0"           
+        destroy  "no"                
+    }
+    
+	switch -exact -- $TrafficGen {
+		
+		stc {
+			if { [catch {
+				foreach portId $portIdList {
+					set hPort [hMapPortIdToSpirentPort $portId]
+					foreach emulatedDevice [logcmd stc::get $hPort -affiliationport-Sources] {
+						logcmd stc::config [lindex [logcmd stc::get $emulatedDevice -children-Ipv4If] 0] -ResolveGatewayMac true
+					    logcmd stc::perform ArpNdStartCommand -HandleList $emulatedDevice
+						set dutMac [logcmd stc::get [lindex [logcmd stc::get $emulatedDevice -children-Ipv4If] 0] -GatewayMac]
+						if {$dot1xAuth == "dot1xAuthMD5"} {
+							set hDot1xConfig [logcmd stc::create Dot1xSupplicantBlockConfig -under $emulatedDevice -AuthenticatorMac $dutMac -EapAuthMethod "MD5"]
+							logcmd stc::config [lindex [logcmd stc::get $hDot1xConfig -children-Dot1xEapMd5Config] 0] -UserId $authUser -Password $authPass
+							
+						} elseif {$dot1xAuth == "dot1xAuthTLS"} {							
+							set hDot1xConfig [logcmd stc::create Dot1xSupplicantBlockConfig -under $emulatedDevice -AuthenticatorMac $dutMac -EapAuthMethod "TLS"]
+							logcmd stc::create Dot1xEapTlsConfig -under $hDot1xConfig -UserId $authUser -Password $authPass
+							logcmd stc::perform Dot1xDownloadCertificateCommand -CertificateDir $certificateDir -ObjectList $hPort
+						} else {
+							result_error "dot1x_ixConfigDot1xPorts : Authentication type $dot1xAuth  not supported"
+						}
+						
+					}					
+				}
+			} msg ] } {
+				result_error "dot1x_ixConfigDot1xPorts : Failed to configure 802.1X authentication  $msg"
+				return 0
+			}			
+			
+		}
+		
+		ixia -
+        ixvm {
+            ;# Generate Ixia portList from IDs
+            foreach portId $portIdList {
+                MapIxiaPortId $portId chassis card port
+                lappend portList "$chassis $card $port"
+            }
+            result_debug "Establishing communication with port CPUs $portList "
+
+            set status [dot1xSetup $portList]
+            if {$status} {
+                result_debug "ERROR: Could not set up ports for dot1x status $status"
+                return 0
+            }
+
+            if {$destroy  == "yes"} {
+                ;# Destroy old port group
+                dot1xPortGroup destroy $portGroupId
+            }
+
+
+            # Create a port Group
+            #--------------------
+            dot1xPortGroup setDefault
+            dot1xPortGroup create $portGroupId
+            
+            # Setup generic port properties
+            #------------------------------
+            dot1xPort setDefault
+            dot1xPort config -authPeriod        $authPeriod
+            dot1xPort config -heldPeriod        $heldPeriod
+            dot1xPort config -startPeriod       $startPeriod
+            dot1xPort config -maxStart          $maxStart
+            dot1xPort config -fragmentSize      $fragmentSize
+            dot1xPort config -maxSessions       $maxSessions
+            dot1xPort config -setupDelay        $setupDelay
+            dot1xPort config -establishDelay    $establishDelay
+            dot1xPort config -logoffDelay       $logoffDelay
+            dot1xPort config -dutTestMode       $dutTestMode
+            dot1xPort config -enableSessionOnly $enableSessionOnly
+            dot1xPort config -holdTime          $holdTime
+            dot1xPort config -enableRandomHold           $enableRandomHold
+            dot1xPort config -enableOnlyMulticastDestMac $enableOnlyMulticastDestMac
+            dot1xPort config -enableAuthOnNoResponse     $enableAuthOnNoResponse
+            dot1xPort config -enableStateMachineDebug    $enableStateMachineDebug
+            dot1xPort config -enableConfigurationDebug   $enableConfigurationDebug
+            dot1xPort config -enableEapolFramesDebug     $enableEapolFramesDebug
+            dot1xPort config -testDuration               $testDuration
+            
+            # Create configuration for each port we are interested in
+            #--------------------------------------------------------
+            foreach testPort $portList {
+                
+                result_debug "Creating dot1x configuration for the port $testPort"
+                
+                # Setup individual port
+                #----------------------
+                scan $testPort "%d %d %d" ch ca po
+                dot1xPort set  $ch $ca $po
+                dot1xPortGroup add $portGroupId $ch $ca $po
+                
+                # Cleanup the supplicant table for this port
+                #-------------------------------------------
+                dot1xSupplicantTable select $ch $ca $po
+                dot1xSupplicantTable delAll
+                
+                # Add supplicants to this port
+                #-----------------------------
+                set supplicantMacList [dot1x_ixGetIfMacs $ch $ca $po]
+                if {$maxSupplicants > 0} {
+                    ;# Only add max count
+                    set supplicantMacList [lrange $supplicantMacList 0 [expr $maxSupplicants - 1]]
+                }
+                
+                foreach suppMac $supplicantMacList {
+                    dot1xSupplicant setDefault
+                    dot1xSupplicant config -macAddr $suppMac
+                    dot1xSupplicant config -userType $dot1xUser
+                    dot1xSupplicant config -authType $dot1xAuth
+                    dot1xSupplicant config -userName $authUser
+                    dot1xSupplicant config -passWord $authPass
+                    dot1xSupplicant config -holdTime $supHoldTime
+                    dot1xSupplicant config -numNoIdResponse $supNumNoIdResponse
+                    dot1xSupplicant config -numNoAuthResponse $supNumNoAuthResponse
+                    dot1xSupplicant config -enableWaitIdRequest $supEnableWaitIdRequest
+                    dot1xSupplicantTable add
+                    result_debug "($ch:$ca:$po) Adding MAC:$suppMac u:$authUser p:$authPass authType:$dot1xAuth userType:$dot1xUser"
+                    result_debug "($ch:$ca:$po)     numNoIdResponse:$supNumNoIdResponse numNoAuthResponse:$supNumNoAuthResponse"
+                    result_debug "($ch:$ca:$po)     enableWaitIdRequest:$supEnableWaitIdRequest"
+                }
+                    
+                # Setup maxsessions
+                #------------------
+                set aSupplicantCnt [llength $supplicantMacList]
+                dot1xPort config -maxSessions $aSupplicantCnt
+                dot1xPort set  $ch $ca $po
+            }
+            
+
+            # All ports have been added to a port group. Now write the entire group
+            #----------------------------------------------------------------------
+            dot1xPortGroup setCommand $portGroupId writeConfig
+            
+            # Initialize the stat information for this group
+            #-----------------------------------------------
+            dot1xPortGroup setCommand $portGroupId resetStats
+
+            result_debug "AuthType is $dot1xAuth"
+
+            if {$dot1xAuth == "dot1xAuthTLS"} {    
+
+            result_debug "Downloading certificates from $certificateDir to ports $portList"
+
+            # Download Certificate files on the port for TLS authentication
+            
+            # Use this command for downloading all the cert in dir to all ports	
+            dot1xDownloadCertificates $portList $certificateDir
+            
+            # set usernamelist {}
+            # lappend usernamelist $authUser
+            # Use the command below for individual certificates
+            # dot1xDownloadUserSpecificCertificates $ch $ca $po \
+                #    "C:\\Program Files\\Ixia\\authfiles" \
+                #    "C:\\Program Files\\Ixia\\authfiles" \
+                #    $usernamelist
+            }
+		}
+	}	
+    return 1
+}
+
+
+################################################################## 
+# Procedure Name: dot1x_ixConfigDot1xPortOnly
+#   
+# Description: Configures Ports for Dot1X.  DOES NOT configure
+#              supplicants.  Allows us to configure the ports,
+#              THEN configure "custom" supplicants.
+#
+# Input args:
+#	portGroupId         ;# Dot1x port group
+#	portIdList          ;# Port mapping ID
+#	authPeriod          ;# Secs to wait for DUT response 1-3600
+#	heldPeriod          ;# Secs after timeout before sending next auth 1-3600
+#	startPeriod         ;# Secs between successive EAPOL-Start msgs 1-3600
+#	maxStart            ;# Number of EAPOL-Starts before deeming failure 1-10000
+# 	fragmentSize        ;# Max frag for EAP TLS packet 500-1400
+#	maxSessions         ;# Number sessions for this port
+#	setupDelay          ;# Millsec between start of 1 auth to next. 0-4,294,967,295
+#	establishDelay      ;# Millsec between completed/failed auth to next multiauth
+#	logoffDelay         ;# Millsec delay between successive logoff msgs at teardown
+#	dutTestMode         ;# 0 => Single-Host, 1 => Multi-Host, 2=> Multi Auth
+#	enableSessionOnly   ;# 0 => Only session, no stream.  We can manually gen stream
+#	holdTime            ;# Secs between auth and logoff 0-1,000,000
+#	enableRandomHold    ;# 1-Set holdTime to random values
+#	enableOnlyMulticastDestMac   ;# 1-Use multicast MAC instead of auth MAC 
+#	enableAuthOnNoResponse    ;# 1-Supplicant consider itself auth if no response
+#	enableStateMachineDebug   ;# 1- Generate DEBUG LOG
+#	enableConfigurationDebug  ;# 1- Generate DEBUG LOG
+#	enableEapolFramesDebug    ;# 1- Generate DEBUG LOG  
+#	testDuration              ;# Duration of entire test
+#       certificateDir            ;# Directory where certificates are located
+#
+#
+# Output args:  None
+#
+#  Typical Usage:
+#    dot1x_ixConfigDot1xPortOnly -portIdList "1" -portGroupId "1" \
+#	   -authUser $uname -authPass $upass
+#
+##################################################################
+proc dot1x_ixConfigDot1xPortOnly {args} {
+    parse_args dot1x_ixConfigDot1x $args {
+	portGroupId "1"
+	portIdList "1"
+	authPeriod "15"
+	heldPeriod "10"
+	startPeriod "10"
+	maxStart "3"
+ 	fragmentSize "640"
+	maxSessions  "64"
+	setupDelay   "0"
+	establishDelay "1000"
+	logoffDelay "20"
+	dutTestMode  "2"
+	enableSessionOnly "0"
+	holdTime "0"
+	enableRandomHold "0"
+	enableOnlyMulticastDestMac "1"
+	enableAuthOnNoResponse "0"
+	enableStateMachineDebug "1"
+	enableConfigurationDebug "1"
+	enableEapolFramesDebug "1"
+	testDuration "3600"
+        certificateDir "./certfiles"
+    }
+    
+    ;# Generate Ixia portList from IDs
+    foreach portId $portIdList {
+        MapIxiaPortId $portId chassis card port
+        lappend portList "$chassis $card $port"
+    }
+    result_debug "Establishing communication with port CPUs $portList "
+
+    set status [dot1xSetup $portList]
+    if {$status} {
+        result_debug "ERROR: Could not set up ports for dot1x status $status"
+        return 0
+    }
+
+    # Create a port Group
+    #--------------------
+    dot1xPortGroup setDefault
+    dot1xPortGroup create $portGroupId
+    
+    # Setup generic port properties
+    #------------------------------
+    dot1xPort setDefault
+    dot1xPort config -authPeriod        $authPeriod
+    dot1xPort config -heldPeriod        $heldPeriod
+    dot1xPort config -startPeriod       $startPeriod
+    dot1xPort config -maxStart          $maxStart
+    dot1xPort config -fragmentSize      $fragmentSize
+    dot1xPort config -maxSessions       $maxSessions
+    dot1xPort config -setupDelay        $setupDelay
+    dot1xPort config -establishDelay    $establishDelay
+    dot1xPort config -logoffDelay       $logoffDelay
+    dot1xPort config -dutTestMode       $dutTestMode
+    dot1xPort config -enableSessionOnly $enableSessionOnly
+    dot1xPort config -holdTime          $holdTime
+    dot1xPort config -enableRandomHold           $enableRandomHold
+    dot1xPort config -enableOnlyMulticastDestMac $enableOnlyMulticastDestMac
+    dot1xPort config -enableAuthOnNoResponse     $enableAuthOnNoResponse
+    dot1xPort config -enableStateMachineDebug    $enableStateMachineDebug
+    dot1xPort config -enableConfigurationDebug   $enableConfigurationDebug
+    dot1xPort config -enableEapolFramesDebug     $enableEapolFramesDebug
+    dot1xPort config -testDuration               $testDuration
+    
+    # Create configuration for each port we are interested in
+    #--------------------------------------------------------
+    foreach testPort $portList {
+        
+        result_debug "Creating dot1x configuration for the port $testPort"
+        
+        # Setup individual port
+        #----------------------
+        scan $testPort "%d %d %d" ch ca po
+        dot1xPort set  $ch $ca $po
+        dot1xPortGroup add $portGroupId $ch $ca $po	
+    }
+	
+    # Cleanup the supplicant table for this port
+    #-------------------------------------------
+    dot1xSupplicantTable select $ch $ca $po
+    dot1xSupplicantTable delAll
+
+    # All ports have been added to a port group. Now write the entire group
+    #----------------------------------------------------------------------
+    dot1xPortGroup setCommand $portGroupId writeConfig
+    
+    # Initialize the stat information for this group
+    #-----------------------------------------------
+    dot1xPortGroup setCommand $portGroupId resetStats
+
+}
+
+
+
+
+################################################################## 
+# Procedure Name: dot1x_ixAddSupplicantToPort
+#   
+# Description: Once dot1xPort is configured, this procedure can be
+#              used to add 1 or more supplicants to that port.
+#              Each supplicant can be configured with different
+#              parameters
+#
+# Input args:
+#	portId                  ;# Port mapping ID
+#	suppMac                 ;# Supplicant MAC
+#	authUser                ;# Username
+#	authPass                ;# Password
+#	dot1xAuth               ;# dot1xAuthMD5,1  dot1xAuthTLS,0
+#	dot1xUser               ;# dot1xUserNormal,0 dot1xUserFailing,1 Expect failure.
+#	supHoldTime             ;# -1 use port holdTime
+#	supNumNoIdResponse      ;# Number of times to suppress EAP-ID msgs (0-100)
+#	supNumNoAuthResponse    ;# Number of times to suppress EAP-Auth msgs (0-100)
+#	supEnableWaitIdRequest  ;# 1-Wait for DUT initiate EAP, rather than sending EAP-start
+#	doWriteHw               ;# Option to write to to Ixia hw now.  Gives user
+#                               ;# to do several adds then a single write.
+#
+# Output args:  None
+#
+##################################################################
+proc dot1x_ixAddSupplicantToPort {args} {
+    parse_args dot1x_ixAddSupplicantToPort $args {
+	portId    1
+	suppMac   "00 00 00 00 00 01"
+	authUser  "md5_isp_1"
+	authPass  "md5_isp_1"
+	dot1xAuth "dot1xAuthMD5"
+	dot1xUser "dot1xUserNormal"
+	supHoldTime "-1"
+	supNumNoIdResponse "0"
+	supNumNoAuthResponse "0"
+	supEnableWaitIdRequest "0"
+	doWriteHw  "1"
+    }
+
+    MapIxiaPortId $portId ch ca po
+    result_debug "Adding Supplicant to $ch $ca $po"
+
+    dot1xSupplicantTable select $ch $ca $po
+	
+    # Add supplicant to this port
+    #-----------------------------
+    dot1xSupplicant setDefault
+    dot1xSupplicant config -macAddr $suppMac
+    dot1xSupplicant config -userType $dot1xUser
+    dot1xSupplicant config -authType $dot1xAuth
+    dot1xSupplicant config -userName $authUser
+    dot1xSupplicant config -passWord $authPass
+    dot1xSupplicant config -holdTime $supHoldTime
+    dot1xSupplicant config -numNoIdResponse $supNumNoIdResponse
+    dot1xSupplicant config -numNoAuthResponse $supNumNoAuthResponse
+    dot1xSupplicant config -enableWaitIdRequest $supEnableWaitIdRequest
+    dot1xSupplicantTable add
+    result_debug "($ch:$ca:$po) Adding MAC:$suppMac u:$authUser p:$authPass authType:$dot1xAuth userType:$dot1xUser"
+    result_debug "($ch:$ca:$po)     numNoIdResponse:$supNumNoIdResponse numNoAuthResponse:$supNumNoAuthResponse"
+    result_debug "($ch:$ca:$po)     enableWaitIdRequest:$supEnableWaitIdRequest"
+    
+    if { $doWriteHw == "1" } {
+        dot1xSupplicantTable write
+    }
+
+}
+
+
+################################################################## 
+# Procedure Name: _ixWaitForSupAuth
+#   
+# Description: Internal procedure that loops waiting  for a particular 
+#              supplicant to authenticate.
+#
+# Input args: portId: Port ID of supplicants
+#             mac: Specific MAC of supplicant to wait for
+#             maxAuthWait: Max time to wait
+#
+# Output args: 0 - Failed to authenticate
+#              1 - Authenticate successful
+#
+##################################################################
+proc _ixWaitForSupAuth { portId mac maxAuthWait } {
+
+    MapIxiaPortId $portId ch ca po
+
+    set curDuration 0
+    
+    while {$curDuration < $maxAuthWait} {
+        puts "Waiting for mac $mac to Auth (max:$maxAuthWait)... $curDuration"
+        after 1000
+
+        dot1xSupplicantStats get $ch $ca $po $mac
+        if { [dot1xSupplicantStats cget -totalSuccess] >= 1 } {
+            break
+        }
+        incr curDuration 1
+    }
+
+    if {$curDuration == $maxAuthWait} {
+        result_debug "===== Authentication could not be completed for $mac ====="
+        return 0
+    }
+
+    dot1x_ixDumpSupplicantStats $portId $mac 
+    return 1
+
+}
+
+
+
+################################################################## 
+# Procedure Name: dot1x_ixStartSupAuth
+#   
+# Description: Wait for a particular supplicant to authenticate.
+#              This assumes we reset counters prior to starting since 
+#              we check that totalSuccess is greater than 1.
+#
+# Input args: portId: Port ID of supplicants
+#             mac: Specific MAC of supplicant to wait for
+#             maxAuthWait: Max time to wait
+#
+# Output args: 0 - Failed to authenticate
+#              1 - Authenticate successful
+#
+##################################################################
+proc dot1x_ixStartSupAuth { portId mac {maxAuthWait 10} } {
+
+    MapIxiaPortId $portId ch ca po
+
+    ;# Reset stats before starting.
+    dot1xSupplicantStats reset $ch $ca $po $mac
+
+    dot1xSupplicantTable select $ch $ca $po
+    dot1xSupplicantTable start $mac
+    result_debug "Starting sup $mac"
+
+    if { $maxAuthWait != 0 } {
+        if { [_ixWaitForSupAuth $portId $mac $maxAuthWait] == 0 } { 
+            result_debug "Authentication failed for mac $mac...test exiting."
+            return 0
+        }
+    } else {
+        result_debug "Not waiting for authentication of mac $mac..."
+    }
+
+    return 1
+}
+
+
+################################################################## 
+# Procedure Name: dot1x_ixStopSupAuth
+#   
+# Description: Stop a particular supplicant's authenticated session.
+#
+# Input args: portId: Port ID of supplicants
+#             mac: Specific MAC of supplicant to wait for
+#             maxAuthWait: Max time to wait
+#
+##################################################################
+proc dot1x_ixStopSupAuth { portId mac {maxAuthWait 4} } {
+
+    MapIxiaPortId $portId ch ca po
+
+    ;# Reset stats before starting.
+    dot1xSupplicantStats reset $ch $ca $po $mac
+
+    dot1xSupplicantTable select $ch $ca $po
+    dot1xSupplicantTable stop $mac
+    result_debug "Stopping sup $mac"
+
+    exSleep $maxAuthWait
+
+    return 1
+}
+
+################################################################## 
+# Procedure Name: dot1x_ixDelSupMac
+#   
+# Description: Delete a particular supplicant from supplicant table.
+#
+# Input args: portId: Port ID of supplicants
+#             mac: Specific MAC of supplicant to wait for
+#             maxAuthWait: Max time to wait
+#
+##################################################################
+proc dot1x_ixDelSupMac { portId mac {maxAuthWait 4} {doWriteHw 1}} {
+
+    MapIxiaPortId $portId ch ca po
+
+    dot1xSupplicantTable select $ch $ca $po
+    dot1xSupplicantTable del $mac
+    result_debug "Deleting sup $mac"
+
+    if { $doWriteHw == "1" } {
+        dot1xSupplicantTable write
+    }
+
+    exSleep $maxAuthWait
+
+    return 1
+}
+
+################################################################## 
+# Procedure Name: dot1x_ixDestroyDot1xPorts
+#   
+# Description: Wait for a particular supplicant to authenticate.
+#              This assumes we reset counters prior to starting since 
+#              we check that totalSuccess is greater than 1.
+#
+# Input args: -portGroupId: Dot1x port group
+#             -portIdList: Port IDs in group to destroy 
+#
+# Output args: None
+#
+##################################################################
+proc dot1x_ixDestroyDot1xPorts {args} {
+	global TrafficGen
+	global DEBUG_DOT1X_CRASH
+	
+    parse_args dot1x_ixDestroyDot1x $args {
+        portGroupId "1"
+        portIdList "1"
+    }
+    
+	switch -exact -- $TrafficGen {
+		stc {
+			if { [catch {
+				foreach portId $portIdList {
+					set hPort [hMapPortIdToSpirentPort $portId]
+					if {$hPort == ""} {
+						result_error "Error: Port object handle for port $portId not found for STC"
+						return
+					}
+					foreach emulatedDevice [logcmd stc::get $hPort -affiliationport-Sources] {
+						
+						if {[logcmd stc::get $emulatedDevice -children-Dot1xSupplicantBlockConfig] != ""} {
+							logcmd stc::delete $emulatedDevice
+						}
+					}
+				}
+				 
+			} msg ] } {
+				result_error "dot1x_ixDestroyDot1xPorts : $msg"
+				return 0
+			} 
+			
+			logcmd stc::apply
+		}
+		ixia -
+        ixvm {
+            if {$DEBUG_DOT1X_CRASH == 1} { 
+                dot1x_CheckDot1xTaskCrash 
+            }
+
+            ;# Generate Ixia portList from IDs
+            foreach portId $portIdList {
+                MapIxiaPortId $portId chassis card port
+                lappend portList "$chassis $card $port"
+            }
+
+            result_debug "Cleaning up DOT1x $portList "
+
+            dot1xPortGroup destroy $portGroupId
+            dot1xCleanup $portList
+        }
+	}
+}
+
+
+
+
+################################################################## 
+# Procedure Name: dot1x_ixCheckPortGroupStats
+#   
+# Description: Check the dot1x port group stats against a particular 
+#              value.  Posts actual pass/fail.
+#
+# Input args: dot1xPortGroupId: dot1x group ID
+#             stat: Which stat to compare. See below for values
+#             operator: ==, >, <, etc.
+#             value: Value to compare against
+#
+# VALID IXIA stat PARAMETER:
+#   allSessionsEstablished, lastStats, 
+#   eapolStartSent, eapIdResponseSent, eapolLogoffSent, eapNonIdResponseSent, 
+#   eapIdRequestReceived, eapNonIdRequestReceived, eapSuccessReceived, 
+#   eapFailureReceived, eapAlertReceived, eapUnExpFailure, 
+#   md5Sessions, md5Success, md5FailTimeout, md5FailEap, md5MaxLatency
+#   md5MinLatency, md5AvgLatency
+#   tlsSessions, tlsSuccess, tlsFailTimeout, tlsFailEap, tlsMaxLatency
+#   tlsMinLatency, tlsAvgLatency
+#   invSessions, invSuccess, invFailTimeout, invFailEap
+#
+# Output args: None
+#
+##################################################################
+proc dot1x_ixCheckPortGroupStats {dot1xPortGroupId stat operator value} {
+
+    dot1xPortGroup setCommand $dot1xPortGroupId getStats
+    set curStats [dot1xPortStats cget -$stat]
+
+    report_start_test "Check Port GroupStats $stat:$curStats $operator $value"
+
+    if {! [expr $curStats $operator $value]} {
+        result_error "Stats check failed $stat..$curStats $operator $value"
+    }
+    result_debug "Stat:$stat:$curStats     $operator $value"
+    report_end_test
+
+}
+
+
+
+
+################################################################## 
+# Procedure Name: _ixWaitForAuth
+#   
+# Description: Internal procedure to wait for all supplicants in a group
+#              to authenticate.
+#
+# Input args: dot1xPortGroupId: dot1x group ID
+#             maxAuthWait: Max time in sec to wait
+#
+# Output args: 
+#
+##################################################################
+proc _ixWaitForAuth {dot1xPortGroupId maxAuthWait} {
+
+    set curDuration 0
+    set success 0
+
+    while {$curDuration < $maxAuthWait} {
+        puts -nonewline "Waiting(max:$maxAuthWait)... $curDuration                           \r "
+        flush stdout
+        after 1000
+        dot1xPortGroup setCommand $dot1xPortGroupId getStats
+        if {[dot1xPortStats cget -allSessionEstablished]} {
+            result_debug "===== Authentication completed successfully ====="
+            set success 1
+            break
+        }
+        incr curDuration 1
+    }
+
+    if {$curDuration == $maxAuthWait} {
+        result_debug "===== Authentication could not be completed ====="
+        set success 0
+    }
+    
+    ;# Dump out some stats
+    dot1xPortGroup setCommand $dot1xPortGroupId getStats
+    set eapolStartSent [dot1xPortStats cget -eapolStartSent]
+    set eapolLogoffSent [dot1xPortStats cget -eapolLogoffSent]
+    set eapolSuccessReceived [dot1xPortStats cget -eapSuccessReceived]
+    set eapolFailureReceived [dot1xPortStats cget -eapFailureReceived]
+    set eapolAlertReceived [dot1xPortStats cget -eapAlertReceived]
+    
+    result_debug "eapolStartSent:       $eapolStartSent"
+    result_debug "eapolLogoffSent:      $eapolLogoffSent"
+    result_debug "eapolSuccessReceived: $eapolSuccessReceived"
+    result_debug "eapolFailureReceived: $eapolFailureReceived"
+    result_debug "eapolAlertReceived:   $eapolAlertReceived"
+    
+    return $success
+}
+
+
+################################################################## 
+# Procedure Name: _ixWaitForDeauth
+#   
+# Description: Internal procedure to wait for all supplicants in a group
+#              to become unauthenticated.
+#
+# Input args: dot1xPortGroupId: dot1x group ID
+#             maxAuthWait: Max time in sec to wait
+#
+# Output args: 
+#
+##################################################################
+proc _ixWaitForDeauth {dot1xPortGroupId maxDeauthWait} {
+
+    set curDuration 0
+    set success 0
+
+    while {$curDuration < $maxDeauthWait} {
+        puts "Waiting(max:$maxDeauthWait)... $curDuration"
+        after 1000
+        dot1xPortGroup setCommand $dot1xPortGroupId getStats
+        if {[dot1xPortStats cget -lastStats]} {
+            ;# Wait extra 3 seconds for Ixia state machine to shutdown
+            sleep 3
+            result_debug "===== Deauthentication completed normally ====="
+            set success 1
+            break
+        }
+        incr curDuration 1
+    }
+
+    if {$curDuration == $maxDeauthWait} {
+        result_debug "===== Deauthentication timed out ====="
+        set success 0
+    }
+    return $success
+}
+
+
+
+################################################################## 
+# Procedure Name: dot1x_ixStartAuth
+#   
+# Description: Start authentication for a dot1x port group
+#
+# Input args: dot1xPortGroupId: dot1x group ID
+#             maxAuthWait: Max time in sec to wait
+#
+# Output args: 
+#
+##################################################################
+proc dot1x_ixStartAuth { dot1xPortGroupId {maxAuthWait "30"} } {
+
+    result_debug "Started Authentications..Max Wait: $maxAuthWait secs."
+
+		global TrafficGen	
+		switch -exact -- $TrafficGen {
+            stc {
+                if { [catch {
+                    set hPort [hMapPortIdToSpirentPort $dot1xPortGroupId]
+                    logcmd stc::perform Dot1xStartAuthCommand -ObjectList $hPort
+                    if { $maxAuthWait != 0 } {
+                        array set returnList [logcmd stc::perform Dot1xWaitForAuthStateCommand \
+                                -ObjectList $hPort -WaitSupplicantState "AUTH_SUCCESS" -WaitTime $maxAuthWait]
+                        if {$returnList(-PassFailState) == "FAILED"} {
+                            result_debug "Authentication failed...test exiting."
+                            return 0
+                        }
+                    } else {
+                        result_debug "Not waiting for authentication..."
+                    }
+                } msg ] } {
+                    result_error "dot1x_ixStartAuth : Failed to start 802.1X authentication  $msg"
+                    return 0
+                }	
+                
+                
+            }
+            ixia -
+            ixvm {
+                dot1xPortGroup setCommand $dot1xPortGroupId resetStats
+                dot1xPortGroup setCommand $dot1xPortGroupId startTest
+
+                if { $maxAuthWait != 0 } {
+                    if { [_ixWaitForAuth $dot1xPortGroupId $maxAuthWait] == 0 } { 
+                        result_debug "Authentication failed...test exiting."
+                        nl_exDumpDebugInfo		
+                        return 0
+                    }
+                } else {
+                    result_debug "Not waiting for authentication..."
+                }
+            }
+	    }
+    ;# Allow 2 seconds to make sure info show up in "sh netlogin"
+    sleep 2
+
+    return 1
+}
+
+
+################################################################## 
+# Procedure Name: dot1x_ixStopAuth
+#   
+# Description: Deauthenticate a dot1x port group
+#
+# Input args: dot1xPortGroupId: dot1x group ID
+#             maxAuthWait: Max time in sec to wait
+#
+# Output args: 
+#
+##################################################################
+proc dot1x_ixStopAuth { dot1xPortGroupId {maxAuthWait "30"} } {
+	global TrafficGen	
+    switch -exact -- $TrafficGen {
+        stc {
+            if { [catch {
+                set hPort [hMapPortIdToSpirentPort $dot1xPortGroupId]
+                logcmd stc::perform Dot1xLogoutCommand -ObjectList $hPort
+                exSleep $maxAuthWait
+                #array set returnList [logcmd stc::perform Dot1xWaitForAuthStateCommand \
+                #            -ObjectList $hPort -WaitSupplicantState "UNAUTHORIZED" -WaitTime $maxAuthWait]
+                #if {$returnList(-PassFailState) == "FAILED"} {
+                #	result_debug "dot1x_ixStopAuth: 802.1X supplicant logout failed...test exiting."
+                #	return 0
+                #} 
+            } msg ] } {
+                result_error "dot1x_ixStopAuth : Failed to stop 802.1X authentication  $msg"
+                return 0
+            }
+        }
+        ixia -
+        ixvm {
+            result_debug "Stopping Authentications..."
+
+            dot1xPortGroup setCommand $dot1xPortGroupId stopTest
+
+            if {[_ixWaitForDeauth $dot1xPortGroupId $maxAuthWait] == 0} {
+                result_debug "Deauthentication timeout...test exiting."
+                return 0
+            }
+        }
+    }
+    return 1
+}
+################################################################## 
+# Procedure Name: dot1x_ixDumpInterfaceInfo
+#   
+# Description: Debug routine to dump interface info for a port ID
+#
+# Input args: portId: Port ID.  No port ID dumps ALL ports info
+#
+# Output args: 
+#
+##################################################################
+proc dot1x_ixDumpInterfaceInfo {{portId 0}} {
+
+    global portMappingList
+	global TrafficGen	
+	
+    switch -exact -- $TrafficGen {
+		stc {
+			if { [catch {
+				if {$portId == "0"} {
+					set hPortList [logcmd stc::get [logcmd stc::get system1 -children-project] -children-port]
+				} else {
+					set hPortList [hMapPortIdToSpirentPort $portId]
+				}
+				foreach hPort $hPortList {	
+					foreach emulatedDevice [logcmd stc::get $hPort -affiliationport-Sources] {
+						puts "[logcmd stc::get $hPort -Location], [logcmd stc::get $emulatedDevice -Name] InterfaceMac: [logcmd stc::get [logcmd stc::get $emulatedDevice -children-EthIIIf] -SourceMac]"
+						puts "     IP:[logcmd stc::get [logcmd stc::get $emulatedDevice -children-Ipv4If] -Address] GW:[logcmd stc::get [logcmd stc::get $emulatedDevice -children-Ipv4If] -Gateway]"
+					}
+				}
+			} msg ] } {
+				result_error "dot1x_ixDumpInterfaceInfo : $msg"
+				return 0
+			} 
+		}
+		ixia -
+        ixvm {
+            if {$portId == 0} {
+                ;# Get ALL
+                set numIxiaPorts [llength $portMappingList]
+                set ixiaPortId [lindex [lindex $portMappingList 0] 0]
+            } else {
+                set numIxiaPorts 1
+                set ixiaPortId $portId
+            }
+
+            ;# Walk through each port to get interface info
+            set i 1
+            while {$numIxiaPorts} {
+                MapIxiaPortId $ixiaPortId ch ca po
+                interfaceTable select $ch $ca $po
+                ;# Walk through interfaceTable to see what we got!
+                for {set curIf [interfaceTable getFirstInterface]} \
+                   {$curIf == 0 } {set curIf [interfaceTable getNextInterface]} {
+
+                    puts "($ch:$ca:$po) InterfaceMac: [interfaceEntry cget -macAddress]"
+                    ;# Walk through IPv4 entries
+                    for {set curIPv4 [interfaceEntry getFirstItem addressTypeIpV4]} \
+                      {$curIPv4 == 0} {set curIPv4 [interfaceEntry getNextItem addresTypeIpV4] } {
+                        puts "     IP:[interfaceIpV4 cget -ipAddress] GW:[interfaceIpV4 cget -gatewayIpAddress]"
+                    }
+                }
+                set ixiaPortId [lindex [lindex $portMappingList $i] 0]
+                incr i
+                incr numIxiaPorts -1
+            }
+        }
+	}
+}
+################################################################## 
+# Procedure Name: _ixVerifySupplicantAccess
+#   
+# Description: Internal procedure to verify supplicant has access to 
+#              network by sending L2 (ARP) traffic and IP traffic 
+#              in both directions.
+#              This procedure assumes a default topology similiar
+#              to the show at start of file.
+#
+# Input args: 
+#       txPortId - Transmistting port 
+#       supMac   - MAC address of supplicant
+#       supIp    - IP Address of supplicant
+#       gwIp     - Gateway address of supplicant
+#       rxPortId - Receiving port.  This is port we capture packets on.
+#       rxPortIp - IP Address on receiving port to send to.  We assume 
+#                  this is been setup already on the Ixia.
+#       rxPortGwIp - Gateway address of interface on receive side.  Needed 
+#                    to test traffic going in opposite direction.
+#       portFlag - "forwarded" | "notForwarded | egress | ingress"
+#       DUT      - DUT we're talking about.  Need to get MAC of DUT, so 
+#                  we specify which DUT to use here.
+#
+# Output args: None
+#
+##################################################################
+proc _ixVerifySupplicantAccess { txPortId supMac supIp gwIp rxPortId rxPortIp \
+	rxPortGwIp {portFlag "forwarded"} {DUT "1"} {tag "none"}} {
+
+    global DUTs_info
+    global DUT1_CONNECT
+    global DUT2_CONNECT
+
+    set numIpPacketsToSend 15
+    set blockTolerance 3
+
+    if {$DUT == "1"} {
+        Login $DUT1_CONNECT
+        set dutMac $DUTs_info(DUT1,sysMAC)
+    } else {
+        Login $DUT2_CONNECT
+        set dutMac $DUTs_info(DUT2,sysMAC)
+    }
+
+    ;# We allow a tolerance when blocking.  It's okay if up to 3 packets go through
+    if {$portFlag == "notForwarded"} {
+        set portFlag "forwarded $blockTolerance down"
+    }
+
+    ;# This is MAC of the DUT
+    set cookedDutMac [cookMacForIxia $dutMac]
+
+    ;# Only check ARP if we have access
+    if {$portFlag == "forwarded"} {
+        result_debug "Check for ARP..."
+        if {[CheckArpReply -txPortId $txPortId -sIpAddr $supIp -dIpAddr $gwIp \
+            -replySendHwAddr "$cookedDutMac" -sMacAddr $supMac -percentage 0.0672 \
+            -numArpFrames 2 -comment "MAC:$supMac IP:$supIp " -tag $tag] == 0 } {
+            nl_exDumpDebugInfo		
+        }
+    }
+
+    ;# Seed ARP table on other port to minimize dropped packets
+    ;# due to sending initial ARPs in CheckForwarding
+    SendArpFrame -txPortId $rxPortId -sourceIp $rxPortIp -destIp $rxPortGwIp
+
+    ;# Save original value
+    set originalPortFlag $portFlag
+    if {$portFlag == "ingress"} {
+        set portFlag "forwarded"
+    } elseif {$portFlag == "egress"} {
+        set portFlag "notForwarded"
+    }
+    result_debug "Send $numIpPacketsToSend IP Packets MAC:$supMac \
+	    IP:$supIp Tag:$tag ==> IP:$rxPortIp $portFlag"
+    lappend checkPortList "$rxPortId $portFlag"
+    if {[CheckForwarding -txPortId $txPortId -checkPortList $checkPortList \
+	    -numIpFrame $numIpPacketsToSend -protocol "ip" -inSaMac $supMac \
+	    -inDaMac $cookedDutMac -dIpAddr $rxPortIp -generateArpReq 0 \
+	    -gIpAddr $gwIp -sIpAddr $supIp \
+	    -comment "MAC:$supMac IP:$supIp:$tag ==> IP:$rxPortIp $portFlag" \
+            -tag $tag] == 0} {
+
+        nl_exDumpDebugInfo		
+
+    }
+    unset checkPortList
+
+    ;# Restore original value
+    set portFlag $originalPortFlag
+
+    if {$portFlag == "ingress"} {
+        set portFlag "notForwarded"
+    } elseif {$portFlag == "egress"} {
+        set portFlag "forwarded"
+    }
+    result_debug "Send $numIpPacketsToSend IP Packets IP:$rxPortIp ==> \
+	    MAC:$supMac IP:$supIp $portFlag"
+    lappend checkPortList "$txPortId $portFlag"
+    if {[CheckForwarding -txPortId $rxPortId -checkPortList $checkPortList \
+	    -numIpFrame $numIpPacketsToSend -protocol "ip" -dIpAddr $supIp \
+	    -inDaMac $cookedDutMac -generateArpReq 0 \
+	    -gIpAddr $rxPortGwIp -sIpAddr $rxPortIp \
+	    -comment "IP:$rxPortIp ==> MAC:$supMac IP:$supIp $portFlag"] == 0} {
+
+    	nl_exDumpDebugInfo
+    }
+    unset checkPortList
+} 
+################################################################## 
+# Procedure Name: dot1x_ixVerifySupplicantAccess
+#   
+# Description: Procedure to verify supplicants have access to 
+#              network by sending L2 (ARP) traffic and IP traffic 
+#              in both directions.  startSupMac and startSupIp
+#              is incremented and each mac/ip pair is validated
+#              independently.
+#              This procedure assumes a default topology similiar
+#              to the show at start of file.
+#
+# Input args: 
+#       txPortId    - Transmistting port 
+#       startSupMac - MAC address of supplicant in ":" delimited format
+#       startSupIp  - IP Address of supplicant
+#       gwIp     - Gateway address of supplicant
+#       rxPortId - Receiving port.  This is port we capture packets on.
+#       rxPortIp - IP Address on receiving port to send to.  We assume 
+#                  this is been setup already on the Ixia.
+#       rxPortGwIp - Gateway address of interface on receive side.  Needed 
+#                    to test traffic going in opposite direction.
+#       numSupplicants - Number of supplicants
+#       portFlag - "forwarded" | "notForwarded" | "egress" | "ingress"
+#       DUT      - DUT we're talking about.  Need to get MAC of DUT, so 
+#                  we specify which DUT to use here.
+#
+# Output args: None
+#
+##################################################################
+proc dot1x_ixVerifySupplicantAccess {txPortId startSupMac startSupIp \
+	gwIp rxPortId rxPortIp rxPortGwIp {numSupplicants "1"} \
+	{portFlag "forwarded"} {DUT "1"} {tag "none"}} {
+
+    set curIp $startSupIp
+    set curMac [dot1x_stripMac $startSupMac]
+    set i 0 
+    while { $numSupplicants } {
+    incr i
+ 
+	result_debug "($numSupplicants) Verify traffic from \
+		supMac:$curMac supIp:$curIp Tag:$tag <---> target:$rxPortIp \
+                $portFlag"
+
+	_ixVerifySupplicantAccess $txPortId $curMac $curIp $gwIp \
+                          $rxPortId $rxPortIp $rxPortGwIp $portFlag $DUT $tag
+	
+	;# Increment IP and MAC
+	set curIp [IncrIpAddr $curIp]
+	set curMac [IncMacByOne $curMac ":"]
+
+	incr numSupplicants -1
+    }
+
+}
+
+
+
+################################################################## 
+# Procedure Name: _ixStreamConfig
+#   
+# Description: Internal procedure to configure an Ixia stream
+# 
+# Input args: See IXIA doc for explanation of each!
+#
+# Output args: none
+##################################################################
+proc _ixStreamConfig { args } {
+    parse_args _ixStreamConfig $args {
+	chassis       1
+	card          1
+	port          1
+	streamId      1
+	numBursts     1
+	numFrames     10
+	preambleSize  8
+	srcMac        {00 00 00 00 00 01}
+	dstMac        {00 00 00 00 00 00}
+	saStep        1
+	saMaskValue   {00 00 00 00 00 00}
+	saMaskSelect  {00 00 00 00 00 00}
+	saRepeatCnt   "idle"
+	numSA         16
+	daStep        1
+	daMaskValue   {00 00 00 00 00 00}
+	daMaskSelect  {00 00 00 00 00 00}
+	daRepeatCnt   "daArp"
+ 	numDA         16
+	percentRate   100.0
+	frameSize     64
+	frameSizeType "sizeFixed"
+	frameSizeMin  64
+	frameSizeMax  1518
+	frameSizeStep 1
+	frameType     {08 00}
+	patternType   "fixed"
+	dataPattern   x00010203
+	pattern       {00 01 02 03}
+	dma           "advance"   ;# stopStream
+	returnToId    1
+	protocol          "none"
+	protEthernetType  "ethernetII"
+	prot802dot1qTag   "false"
+	protAppName       0
+	arpSrcProtAddr  {10.1.1.2}
+	arpDstProtAddr  {10.1.1.1}
+	arpOp           "arpRequest"
+	arpSrcHwAddr    {00 00 01 02 01 01}
+	arpDstHwAddr    {FF FF FF FF FF FF}
+	arpSrcProtAddrMode       "arpIdle" ;# arpIncrement
+	arpSrcProtAddrRepeatCnt  1 ;# 63 
+	arpDestProtAddrMode      "arpIdle"
+	arpDestProtAddrRepeatCnt 1
+	arpSrcHwAddrMode         "arpIdle"
+	arpSrcHwAddrRepeatCnt    1
+	arpHwAddrMode            "arpIdle"
+	arpHwAddreRepeatCnt      1
+	vlanTagNo         "000"
+	vlanTagCfi        "resetCFI"
+	vlanTagMode       "vIdle"
+	vlanTagRepeat     "1"
+	vlanTagPriority   "0"	  
+	ipProtocol    "tcp"
+	ipSrcAddr     {10.1.1.2}
+	ipSrcMask     {255.255.255.0}
+	ipDstAddr     {172.16.16.2}
+	ipDstMask     {255.255.255.0}
+	tcpOffset     5
+	tcpSrcPort    0
+	tcpDstPort    0
+	writeToHw       "false"
+    }
+
+    set portList [list $chassis,$card,$port]
+
+    stream   setDefault        
+    stream   config            -name                    "S_$streamId"
+    stream   config            -enable                  true
+    stream   config            -numBursts               $numBursts
+    stream   config            -numFrames               $numFrames
+    stream   config            -rateMode                usePercentRate
+    stream   config            -percentPacketRate       $percentRate
+    stream   config            -preambleSize            $preambleSize
+    stream   config            -sa                      $srcMac
+    stream   config            -saRepeatCounter         $saRepeatCnt
+    stream   config            -saStep                  $saStep
+    stream   config            -saMaskValue             $saMaskValue
+    stream   config            -saMaskSelect            $saMaskSelect
+    stream   config            -da                      $dstMac
+    stream   config            -daRepeatCounter         $daRepeatCnt
+    stream   config            -daStep                  $daStep
+    stream   config            -daMaskValue             $daMaskValue
+    stream   config            -daMaskSelect            $daMaskSelect
+    stream   config            -numDA                   $numDA
+    stream   config            -numSA                   $numSA
+    stream   config            -framesize               $frameSize
+    stream   config            -frameSizeType           $frameSizeType
+    stream   config            -frameSizeMIN            $frameSizeMin
+    stream   config            -frameSizeMAX            $frameSizeMax
+    stream   config            -frameSizeStep           $frameSizeStep
+    stream   config            -fir                     false
+    stream   config            -fcs                     good
+    stream   config            -patternType             $patternType
+    stream   config            -dataPattern             $dataPattern
+    stream   config            -pattern                 "$pattern"
+    stream   config            -frameType               "$frameType"
+    stream   config            -dma                     $dma
+    stream   config            -returnToId               $returnToId
+#    stream   config            -rxTriggerEnable         false
+#    stream   config            -asyncIntEnable          true
+#    stream   config            -loopCount               1
+#    stream   config            -enforceMinGap           12
+
+    protocol  setDefault        
+    protocol  config     -name               $protocol
+    protocol  config     -appName            $protAppName
+    protocol  config     -ethernetType       $protEthernetType
+    protocol  config     -enable802dot1qTag  $prot802dot1qTag
+    protocol  config     -enableISLtag       false
+    protocol  config     -dutStripTag        true
+    protocol  config     -enableMPLS         false
+
+    if { $prot802dot1qTag != "false"} {
+        vlan config -cfi            $vlanTagCfi
+        vlan config -mode           $vlanTagMode
+        vlan config -repeat         $vlanTagRepeat
+        vlan config -vlanID         $vlanTagNo
+        vlan config -userPriority   $vlanTagPriority
+        vlan set                    $chassis $card $port
+    }
+
+    if {[regexp -nocase "arp" $protAppName]} {
+	
+        arp  setDefault        
+        arp  config  -sourceProtocolAddr             $arpSrcProtAddr ;# {10.1.1.2}
+        arp  config  -destProtocolAddr               $arpDstProtAddr ;# {10.1.1.1}
+        arp  config  -operation                      $arpOp ;# arpRequest
+        arp  config  -sourceHardwareAddr             $arpSrcHwAddr ;# {00 00 01 02 01 01}
+        arp  config  -destHardwareAddr               $arpDstHwAddr ;# {FF FF FF FF FF FF}
+        arp  config  -sourceProtocolAddrMode         $arpSrcProtAddrMode       ;# arpIncrement
+        arp  config  -sourceProtocolAddrRepeatCount  $arpSrcProtAddrRepeatCnt  ;# 63 
+        arp  config  -destProtocolAddrMode           $arpDestProtAddrMode      ;# arpIdle
+        arp  config  -destProtocolAddrRepeatCount    $arpDestProtAddrRepeatCnt ;# 1
+        arp  config  -sourceHardwareAddrMode         $arpSrcHwAddrMode         ;# arpIncrement
+        arp  config  -sourceHardwareAddrRepeatCount  $arpSrcHwAddrRepeatCnt    ;# 63
+        arp  config  -destHardwareAddrMode           $arpHwAddrMode            ;# arpIdle
+        arp  config  -destHardwareAddrRepeatCount    $arpHwAddreRepeatCnt      ;# 1
+        arp  set     $chassis $card $port
+    }
+    
+    if { ([regexp -nocase "ip" $protocol]) && \
+	    (! [regexp -nocase "Arp" $protAppName]) } {
+        ip setDefault        
+        ip config  -precedence              routine
+        ip config  -delay                   normalDelay
+        ip config  -throughput              normalThruput
+        ip config  -reliability             normalReliability
+        ip config  -identifier              0
+        ip config  -cost                    0
+        ip config  -reserved                0
+        ip config  -totalLength             46
+        ip config  -lengthOverride          false
+        ip config  -fragment                may
+        ip config  -lastFragment            last
+        ip config  -fragmentOffset          0
+        ip config  -ttl                     64
+        ip config  -ipProtocol              $ipProtocol
+        ip config  -sourceIpAddr            $ipSrcAddr
+        ip config  -sourceIpMask            $ipSrcMask
+        ip config  -destIpAddr              $ipDstAddr
+        ip config  -destIpMask              $ipDstMask
+        #    ip config  -useValidChecksum        true
+        #    ip config  -sourceIpAddrMode        ipIdle
+        #    ip config  -sourceIpAddrRepeatCount 10
+        #    ip config  -sourceClass             classA
+        #    ip config  -destIpAddrMode          ipIdle
+        #    ip config  -destIpAddrRepeatCount   10
+        #    ip config  -destClass               classA
+        #    ip config  -destMacAddr             {00 DE BB 00 00 02}
+        #    ip config  -destDutIpAddr           {0.0.0.0}
+        #    ip config  -options                 {}
+        ip set $chassis $card $port
+    }
+
+    if {[regexp -nocase "tcp" $ipProtocol]} {
+        tcp   setDefault        
+        tcp   config            -offset                             $tcpOffset
+        tcp   config            -sourcePort                         $tcpSrcPort
+        tcp   config            -destPort                           $tcpDstPort
+    #	tcp   config            -sequenceNumber                     0
+    #	tcp   config            -acknowledgementNumber              0
+    #	tcp   config            -window                             0
+    #	tcp   config            -urgentPointer                      0
+    #	tcp   config            -options                            {}
+    #	tcp   config            -urgentPointerValid                 false
+    #	tcp   config            -acknowledgeValid                   false
+    #	tcp   config            -pushFunctionValid                  false
+    #	tcp   config            -resetConnection                    false
+    #	tcp   config            -synchronize                        false
+    #	tcp   config            -finished                           false
+    #	tcp   config            -useValidChecksum                   true
+        tcp   set               $chassis $card $port
+    }
+
+    stream  set               $chassis $card $port $streamId
+    
+    protocolServer  config      -enableArpResponse  $::true
+    protocolServer  config      -enablePingResponse $::true
+    protocolServer  set $chassis $card $port
+
+    if {$writeToHw != "false"} {
+        result_debug "Writing config to $portList"
+        writeConfigToHardware portList
+    }
+}
+
+################################################################## 
+# Procedure Name: _ixSeedFdbTable
+#   
+# Description: Seeds the FDB table with set of MAC addresses 
+#              and a single target.  See typical topology below.
+# 
+# Input args: supPortId: PortId that supplicant(s) are connected to
+#             startSupMac, startSupIp: Starting MAC/IP Address of supplicants
+#                    We assume supplicant MAC/IP are created in increasing order
+#	      gwIp: Default GW of supplicants.  Usually IP Address of DUT port to
+#                   which supplicants are connected 
+#             dutMac: Cooked MAC address of DUT. i.e."00 00 01 DE 98 34"
+#	      numSup: Number of supplicants to seed 
+# Output args: none
+##################################################################
+proc _ixSeedFdbTable { supPortId startSupMac startSupIp gwIp \
+	dutMac {numMac "1"} } {
+
+    result_debug "Seeding FDB table with $numMac supplicant MACs"
+
+    MapIxiaPortId $supPortId chassis card port
+    set portList [list "$chassis,$card,$port"]
+
+    ;# ##### Seed the FDB table #####    
+    set streamId       1
+    set curIp          $startSupIp
+    set curMac         $startSupMac
+    ;# create 1 stream to send out ARP_Requests for ALL supplicants
+    _ixStreamConfig -chassis $chassis -card $card -port $port -streamId $streamId \
+	    -numBursts 1 -numFrames $numMac \
+	    -srcMac $startSupMac -saRepeatCnt "increment" -numSA $numMac \
+	    -daRepeatCnt "idle" -dstMac {FF FF FF FF FF FF} \
+	    -percentRate 50.0 -frameSize 64 -dma "stopStream" -protocol "ipV4" -protAppName "Arp" \
+	    -protEthernetType "ethernetII" \
+	    -arpSrcProtAddr  $startSupIp  -arpDstProtAddr $gwIp \
+	    -arpOp "arpRequest" -arpSrcHwAddr $startSupMac \
+	    -arpDstHwAddr  {FF FF FF FF FF FF} \
+	    -arpSrcProtAddrMode "arpIncrement" -arpSrcProtAddrRepeatCnt $numMac \
+	    -arpSrcHwAddrMode  "arpIncrement"  -arpSrcHwAddrRepeatCnt   $numMac \
+	    -writeToHw "true"	
+    
+    result_debug "Transmitting on $portList"
+    ixStartTransmit portList
+    sleep 2
+    result_debug "Checking if Tx done..."
+    if {[ixCheckTransmitDone portList]} {
+	result_debug "Error in transmitting"
+    }   
+}
+
+
+
+################################################################## 
+# Procedure Name: _ixCreateMultiSupplicantStreams
+#   
+# Description: Internal procedure to create IP data streams for
+#              multiple supplicants.  Multiple streams are
+#              created, and all written once to Ixia at the
+#              end.  This speeds up tests that require 64
+#              supplicants.
+#
+#              Traffic flow is usually based on topology indicated
+#              at start of file.  Supplicants send to single 
+#              unprotected target.  Target sends traffic back to
+#              supplicant.
+#
+# Input args: 
+#      supPortId:     Supplicant port Id 
+#      startSupMac:   Starting MAC address
+#      startSupIp:    Starting IP Address
+#      gwIp:          GW IP of the supplicants
+#      unprotPortId:  Target port Id 
+#      unprotPortIp   Target IP
+#      unprotPortGwIp Target GW
+#      dutMac:        MAC of DUT
+#      numSup:        Number of supplicants
+#      numFrames:     Number of frames to send
+#      txDirection:   Direction to send traffic
+#
+# Output args: none
+##################################################################
+proc _ixCreateMultiSupplicantStreams { supPortId startSupMac startSupIp \
+	gwIp unprotPortId unprotPortIp unprotPortGwIp dutMac {numSup "1"} \
+	{numFrames 1} {txDirection "out"} }  {
+
+    if { $txDirection == "out" } {
+	MapIxiaPortId $supPortId chassis card port
+    } else {
+	MapIxiaPortId $unprotPortId chassis card port
+	set unprotMacList [dot1x_ixGetPortIdMacs $unprotPortId]
+	set unprotMac [cookMacForIxia [lindex $unprotMacList 0]]
+	result_debug "unprotMac: $unprotMac"
+    }
+
+    ;# ##### Create the Streams #####
+    set streamId       1
+    set dma            "advance"
+    set writeToHw      "false"
+    set curIp          $startSupIp
+    set curMac         $startSupMac
+    set numSupplicants $numSup
+    while { $numSupplicants } {
+
+	;# Configure last stream to stop and also make sure to write to
+	if {$numSupplicants == 1} {
+	    set dma  "stopStream"
+	    set writeToHw  "true"
+	}
+	if { $txDirection == "out" } {
+
+	    result_debug "($numSupplicants) Setting up stream for \
+		    supMac:$curMac supIp:$curIp ---> target:$unprotPortIp"
+
+	    _ixStreamConfig -chassis $chassis -card $card -port $port -streamId $streamId \
+		    -numBursts 1 -numFrames $numFrames -srcMac $curMac -dstMac $dutMac \
+		    -daRepeatCnt "idle" -percentRate 50.0 \
+		    -frameSize 64 -dma $dma -protocol "ipV4" \
+		    -protEthernetType "ethernetII" -ipProtocol "tcp" \
+		    -ipSrcAddr $curIp -ipSrcMask {255.255.255.0} \
+		    -ipDstAddr $unprotPortIp -ipDstMask {255.255.255.0} \
+		    -writeToHw $writeToHw
+	} else {
+
+	    result_debug "($numSupplicants) Setting up stream for \
+		    target:$unprotPortIp --> supMac:$curMac supIp:$curIp"
+
+	    _ixStreamConfig -chassis $chassis -card $card -port $port -streamId $streamId \
+		    -numBursts 1 -numFrames $numFrames -srcMac $unprotMac -dstMac $dutMac \
+		    -daRepeatCnt "idle" -percentRate 50.0 \
+		    -frameSize 64 -dma $dma -protocol "ipV4" \
+		    -protEthernetType "ethernetII" -ipProtocol "tcp" \
+		    -ipSrcAddr $unprotPortIp  -ipSrcMask {255.255.255.0} \
+		    -ipDstAddr $curIp -ipDstMask {255.255.255.0} \
+		    -writeToHw $writeToHw
+	}
+
+	;# Increment IP and MAC
+	set curIp [IncrIpAddr $curIp]
+	set curMac [IncMacByOne $curMac ":"]
+
+	incr numSupplicants -1
+	incr streamId
+    }
+    result_debug "ALL STREAMS CONFIGURED..."
+    
+}
+
+################################################################## 
+# Procedure Name: _ixVerifyMultiSupplicantAccess
+#   
+# Description: Internal procedure to verify traffic for multi
+#              supplicants.  Proc assumes streams and DUT are
+#              already configured.  This procedure starts and captures
+#              traffic and confirms uni-directional traffic is
+#              sent correctly.
+# Input args: 
+#      supPortId:     Supplicant port Id 
+#      startSupIp:    Starting IP Address
+#      unprotPortId:  Target port Id 
+#      numSup:        Number of supplicants
+#      numFramesThreshold:    Number of frames requ'd to receive for success
+#      txDirection:   Direction to send traffic
+#
+# Output args: none
+##################################################################
+proc  _ixVerifyMultiSupplicantAccess { supPortId unprotPortId numSup startSupIp \
+	numFramesThreshold {txDirection "out"} } {
+    
+    report_start_test "Verify $numSup Supplicant Access $txDirection"
+
+    ;# ##### Send and Capture the traffic #####
+    StopPortsCapture [list $supPortId $unprotPortId]
+    sleep 2
+    
+    if {$txDirection == "out"} {
+        set txPortId $supPortId
+        set rxPortId $unprotPortId
+    } else {
+        set txPortId $unprotPortId
+        set rxPortId $supPortId
+    }
+
+    ;# Start capture
+    StartPortsCapture [list $rxPortId]
+    sleep 1
+
+    ;# Start streams
+    MapIxiaPortId $txPortId chassis card port
+    set portList [list "$chassis,$card,$port"]
+    ixStartTransmit portList
+
+    if {[ixCheckTransmitDone portList]} {
+        result_debug "Error in transmitting"
+        report_end_test
+        return
+    }
+    result_debug "DONE TRANSMITTING ********************************"
+
+    StopPortsCapture [list $rxPortId]
+    sleep 2
+
+    ;# ##### Parse the received data  #####
+    ;# Parse Rx Port Capture Buffer to verify we received packets. 
+    set numSupplicants $numSup
+    set curIp $startSupIp
+
+    ;# ASSUME CAPTURE BUFFER IS IN ORDER OF supIp ADDRESSES!
+    set rawPortDataList [GetCapturedFrames $rxPortId]
+
+    while { $numSupplicants } {
+        set numFramesMatched 0
+        foreach frame $rawPortDataList {
+
+            if {$txDirection == "out"} {
+                set curIpRx [GetSourceIPAddress $frame]
+            } else {
+                set curIpRx [GetDestIPAddress $frame]
+            }
+
+            if {$curIpRx == $curIp} {
+                incr numFramesMatched
+            }
+            if {$numFramesMatched == $numFramesThreshold} {
+                result_debug "Found $numFramesMatched packets from $curIp"
+                break
+            }
+        }
+
+        if {$numFramesMatched != $numFramesThreshold} {
+            result_error "Found only $numFramesMatched packets from $curIp...test failed"
+            report_end_test
+            return
+        }
+
+        ;# Increment IP and MAC
+        set curIp [IncrIpAddr $curIp]
+
+        incr numSupplicants -1
+    }
+    
+    result_ok "Access Okay for $numSup Supplicants"
+    report_end_test
+}
+
+
+################################################################## 
+# Procedure Name: dot1x_ixVerifyMultiSupplicantAccess
+#   
+# Description: Procedure to verify traffic for multi-supplicants.  
+#              Seeds FDB table for both ends, creates streams
+#              sends and verifies traffic flow.  Repeats for
+#              opposite direction.
+#              Assumes topology similiar to the one shown above.
+# Input args: 
+#      supPortId:       Supplicant Port Mapping ID
+#      startSupMac:     Supplicant starting MAC
+#      startSupIp:      Supplicant starting IP
+#      gwIp:            GW IP of supplicants
+#      unprotPortId:    Unprotected target port ID
+#      unprotMac:       Unprotected target MAC
+#      unprotPortIp:    Unprotected target IP
+#      unprotPortGwIp:  Unprotected target port GW 
+#      dutMac:          DUT MAC
+#      numSup:          Number of supplicants to verify
+#      portFlag:        "forwarded" | "notForwarded"
+#
+# Output args: none
+##################################################################
+proc dot1x_ixVerifyMultiSupplicantAccess { supPortId startSupMac startSupIp \
+	gwIp unprotPortId unprotMac unprotPortIp unprotPortGwIp dutMac \
+	{numSup "1"} {portFlag "forwarded"} } {
+
+    set numFrames           10   ;# Send 10
+    set numFramesThreshold  5    ;# As long as other end receives 5, we're okay for this test.
+    
+    ;# Cook MAC
+    set startSupMac [cookMacForIxia $startSupMac]
+    set unprotMac   [cookMacForIxia $unprotMac]
+    set dutMac      [cookMacForIxia $dutMac]
+
+
+    ;# Seed supplicant end
+    _ixSeedFdbTable $supPortId $startSupMac $startSupIp $gwIp \
+	    $dutMac $numSup
+
+    exSleep 5
+
+    ;# Seed target end
+    _ixSeedFdbTable $unprotPortId $unprotMac $unprotPortIp $unprotPortGwIp \
+	    $dutMac 1
+
+    ;# Debug to check FDB is poplulated
+    ;#    SendACmd "show fdb po [MapDUTPortId 1]"
+
+    _ixCreateMultiSupplicantStreams $supPortId $startSupMac $startSupIp $gwIp \
+	    $unprotPortId $unprotPortIp $unprotPortGwIp \
+	    $dutMac $numSup $numFrames "out"
+
+    _ixVerifyMultiSupplicantAccess $supPortId $unprotPortId $numSup $startSupIp \
+	    $numFramesThreshold "out"
+
+    _ixCreateMultiSupplicantStreams $supPortId $startSupMac $startSupIp $gwIp \
+	    $unprotPortId $unprotPortIp $unprotPortGwIp \
+	    $dutMac $numSup $numFrames "in"
+
+    _ixVerifyMultiSupplicantAccess $supPortId $unprotPortId $numSup $startSupIp \
+	    $numFramesThreshold "in"
+
+}
+
+
+
+
+################################################################## 
+# Procedure Name: dot1x_ixSendIpTraffic
+#   
+# Description: Procedure to send IP Traffic to another port.
+#              Each MAC (when more than 1) initiates traffic 
+#              destined to target rxPortIp.  No checking is done.
+#
+# Input args: 
+#      txPortId:    Supplicant Port Mapping ID
+#      startSupMac: Supplicant starting MAC
+#      startSupIp:  Supplicant starting IP
+#      gwIp:        GW IP of supplicants
+#      rxPortId:    Unprotected target port ID
+#      rxPortIp:    Unprotected target IP
+#      rxPortGwIp:  Unprotected target port GW 
+#      numSupplicants:     Number of supplicants
+#      numPacketsToSend:   Number of packets to transmit
+#      DUT:         1 | 2
+#
+# Output args: none
+##################################################################
+proc dot1x_ixSendIpTraffic { txPortId startSupMac startSupIp gwIp rxPortId \
+	rxPortIp rxPortGwIp {numSupplicants 1} {numPacketsToSend 10} \
+	{DUT "1"}} {
+
+    global DUTs_info
+    global DUT1_CONNECT
+    global DUT2_CONNECT
+
+    if {$DUT == "1"} {
+        Login $DUT1_CONNECT
+        set dutMac $DUTs_info(DUT1,sysMAC)
+    } else {
+        Login $DUT2_CONNECT
+        set dutMac $DUTs_info(DUT2,sysMAC)
+    }
+
+    ;# This is MAC of the DUT
+    set cookedDutMac [cookMacForIxia $dutMac]
+
+    set curIp $startSupIp
+    set curMac [dot1x_stripMac $startSupMac]
+
+    while { $numSupplicants } {
+        ;# This should generate entry in table.
+        SendArpFrame -txPortId $txPortId -sourceMac $curMac -sourceIp $curIp \
+            -destIp $gwIp -numFrames 2 
+        
+        ;# Send some IP traffic
+        SendIpFrame -txPortId $txPortId -sourceIp $curIp \
+            -destMac $cookedDutMac -gatewayIp $gwIp \
+            -destIp $rxPortIp -numFrames $numPacketsToSend
+
+        ;# Increment IP and MAC
+        if {$curIp != ""} {
+            set curIp [IncrIpAddr $curIp]
+        }
+        if {$curMac != ""} {
+            set curMac [IncMacByOne $curMac ":"]
+        }
+        incr numSupplicants -1
+    }
+}
+
+
+################################################################## 
+# Procedure Name: dot1x_ixStartEapolFlood
+#   
+# Description: Procedure to create an L2 stream of a particular EAPOL 
+#              packet type.  Then start transmitting at that rate.
+#              Used for EAPOL flooding tests
+#
+# Input args: 
+#        txPortId: Supplicant Port Mapping ID 
+#        type:     "start" | "response-identity" | "logoff"  
+#        dstMac:   dstMac to send to...usually DUT 
+#        rate:     % rate to send traffic.
+#
+# Output args: none
+#
+##################################################################
+proc dot1x_ixStartEapolFlood {txPortId type dstMac {rate 100.0}} {
+
+    set eapolType {88 8E}
+    set srcMac {00 00 01 AB CD EF}
+
+
+    if {$type == "start"} {
+	    set pattern {01 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00}
+    } elseif { $type == "response-identity" } {
+	    set pattern {01 00 00 0C 02 03 00 0C 01 64 6F 74 31 78 31 32 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00}
+    } elseif { $type == "logoff" } {
+	    set pattern {01 02 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00}
+    } else {
+        result_debug "Unsupported EAPOL type $type" 
+        return 0
+    }
+
+    MapIxiaPortId $txPortId chassis card port
+    set portList [list "$chassis,$card,$port"]
+
+    set streamId       1
+    set dma            "contPacket"
+    set srcMac         {00 00 01 BE EF BA}
+
+    puts "EAPOL stream type $type $chassis:$card:$port"
+
+    _ixStreamConfig -chassis $chassis -card $card -port $port -streamId $streamId \
+	    -srcMac $srcMac -dstMac $dstMac \
+	    -daRepeatCnt "idle" -percentRate "$rate" \
+	    -pattern $pattern -patternType "nonRepeat" -dataPattern "userpattern" \
+	    -frameSize 64 -frameType $eapolType -dma $dma -protocol "mac" \
+	    -protEthernetType "ethernetII"  -writeToHw "true"
+
+    ixStartTransmit portList
+
+    return 1
+}
+################################################################## 
+# Procedure Name: dot1x_ixStopTx
+#   
+# Description: Procedure to stop transmitting on a Ixia port
+#
+# Input args: 
+#        txPortId: Port Mapping ID 
+#
+# Output args: none
+#
+##################################################################
+proc dot1x_ixStopTx {txPortId} {
+
+    MapIxiaPortId $txPortId chassis card port
+    set portList [list "$chassis,$card,$port"]
+
+    ixStopTransmit portList
+
+}
+
+################################################################## 
+# Procedure Name: dot1x_ixStopEapolFlood
+#   
+# Description: Procedure to stop transmitting on an Ixia port
+#
+# Input args: 
+#        txPortId: Port Mapping ID 
+#
+# Output args: none
+#
+##################################################################
+proc dot1x_ixStopEapolFlood {txPortId} {
+    dot1x_ixStopTx $txPortId
+}
+
+
+
+################################################################## 
+# Procedure Name: dot1x_ixDumpSupplicantStats
+#   
+# Description: Dump supplicant statistics to STDOUT
+#
+# Input args: 
+#        portId: Port Mapping ID 
+#        mac:    Supplicant mac to dump
+#
+# Output args: none
+#
+##################################################################
+proc dot1x_ixDumpSupplicantStats { portId mac } {
+
+    MapIxiaPortId $portId ch ca po
+
+    dot1xSupplicantStats get $ch $ca $po $mac
+
+    set totalSuccess [dot1xSupplicantStats cget -totalSuccess]
+    set totalSessions [dot1xSupplicantStats cget -totalSessions]
+    set avgLatency [dot1xSupplicantStats cget -avgLatency]
+    set minLatency [dot1xSupplicantStats cget -minLatency]
+    set totalFailEap [dot1xSupplicantStats cget -totalFailEap]
+    set totalFailTimeout [dot1xSupplicantStats cget -totalFailTimeout]
+    
+    result_debug "Stats for Supplicant $mac"
+    result_debug "  totalSuccess:     $totalSuccess"
+    result_debug "  totalSessions:    $totalSessions"
+    result_debug "  avgLatency:       $avgLatency"
+    result_debug "  minLatency:       $minLatency"
+    result_debug "  totalFailEap:     $totalFailEap"
+    result_debug "  totalFailTimeout: $totalFailTimeout"
+    
+}
+
+
+################################################################## 
+# Procedure Name: dot1x_ixCheckPing
+#  
+# Description: Check that we can ping from supplicant to target. Reports
+#              pass of fail.
+#
+# Input args: dstIp 
+#             srcIp 
+#             gwIp 
+#             txPortId 
+#             status 
+#             srcMac 
+#             dstMac
+#
+# Output args: cooked MAC with no : seperators
+#
+##################################################################
+proc dot1x_ixCheckPing {dstIp srcIp gwIp txPortId status srcMac dstMac} {
+
+    _ixSeedFdbTable $txPortId $srcMac $srcIp $gwIp $dstMac 1
+    check_ping $dstIp $srcIp $txPortId $status "NULL" $srcMac $dstMac
+}
+
+
+################################################################## 
+# Procedure Name: dot1x_ixSendPing
+#  
+# Description: Proc that sends a PING frame from Ixia.  Does NOT report
+#              success or failure.  
+#              Sent to start EAP exchange from DUT.
+#
+# Input args:  dstIp 
+#              srcIp 
+#              gwIp 
+#              txPortId 
+#              srcMac 
+#              dstMac
+#
+# Output args: none
+#
+##################################################################
+proc dot1x_ixSendPing {dstIp srcIp gwIp txPortId srcMac dstMac {seedFdb 1}} {
+
+    if {$seedFdb == 1} {
+        result_debug "Seeding fdb table"
+        _ixSeedFdbTable $txPortId $srcMac $srcIp $gwIp $dstMac 1
+    }
+
+    set pPattern  "feedbeef"
+    set frameSize 64
+
+    result_debug "Sending ICMP frame"
+    set frameSent [SendIpFrame -txPortId $txPortId -protocol "icmp" \
+                  -dataPattern $pPattern -frameSize $frameSize \
+                  -sourceMac $srcMac -destMac $dstMac -sourceIp $srcIp -destIp $dstIp \
+                  -type 8 -code 0 -id 1234 -sequence 5678 ]
+
+    result_debug "(802.1x) Frame (icmp) sent on portId $txPortId:"
+    result_debug "$frameSent"
+}
+
+#
+# ############################## EXTREME SWITCH FUNCTIONS ###########################
+# 
+
+################################################################## 
+# Procedure Name: dot1x_exConfigStandardVlan
+#   
+# Description: Standard 2 port vlan configuration for dot1x tests
+# 
+# Output args: NULL
+##################################################################
+proc dot1x_exConfigStandardVlan {protectedPort unprotectedPort \
+	protectedIP unprotectedIP \
+	{protectedVlanName "vlan_1"} {unprotectedVlanName "vlan_2"}} {
+
+    SendACmd    "create vlan $protectedVlanName"
+    SendACmd    "conf $protectedVlanName add port $protectedPort"
+    SendACmd    "conf $protectedVlanName ipaddress $protectedIP/24"
+    
+    ;# vlan_2 contains the normal port which we send to and from.
+    SendACmd    "create vlan $unprotectedVlanName"
+    SendACmd    "conf $unprotectedVlanName add port $unprotectedPort"
+    SendACmd    "conf $unprotectedVlanName ipaddress $unprotectedIP/24"
+    
+    SendACmd    "enable ipforwarding"
+    
+}
+
+proc dot1x_exUnconfigStandardVlan {{protectedVlanName "vlan_1"} \
+	{unprotectedVlanName "vlan_2"}} {
+
+    SendACmd    "delete $protectedVlanName"
+    SendACmd    "delete $unprotectedVlanName"
+    SendACmd    "disable ipforwarding"
+}
+
+################################################################## 
+# Procedure Name: dot1x_exEnableDebugLogFilter
+#   
+# Description: Turn on debug logs.
+# 
+# Output args: NULL
+##################################################################
+proc dot1x_exEnableDebugLogFilter {} {
+
+    SendACmd "configure log filter \"DefaultFilter\" add events nl.dot1x severity debug-verbose"
+}
+
+################################################################## 
+# Procedure Name: dot1x_exDisableDebugLogFilter
+#   
+# Description: Turn off debug logs.
+# 
+# Output args: NULL
+##################################################################
+proc dot1x_exDisableDebugLogFilter {} {
+
+    SendACmd "configure log filter \"DefaultFilter\" add events nl.dot1x severity notice"
+}
+
+################################################################## 
+# Procedure Name: dot1x_exConfigNetlogin
+#   
+# Description: Configure and enable netlogin
+# 
+# Sample Usage:
+#  dot1x_exConfigRadius $priRadiusServer $priRadiusPort $clientIP $sharedSecret
+#
+# Output args: NULL
+##################################################################
+proc dot1x_exConfigNetlogin {{vlan "defNetloginVlan"} }  {
+
+    SendACmd    "create vlan $vlan"
+    SendACmd    "config netlogin vlan $vlan"
+    SendACmd    "enable netlogin dot1x"    
+}
+
+proc dot1x_exUnconfigNetlogin { {vlan "defNetloginVlan"} }  {
+
+    SendACmd "disable netlogin dot1x"
+    SendACmd "unconfig netlogin vlan"
+    SendACmd "delete $vlan"
+
+}
+
+################################################################## 
+# Procedure Name: dot1x_exConfigRadius
+#   
+# Description: Configure and enable radius server
+# 
+# Sample Usage:
+#  dot1x_exConfigRadius $priRadiusServer $priRadiusPort $clientIP $sharedSecret
+#
+# Output args: NULL
+##################################################################
+proc dot1x_exConfigRadius {serverIP serverPort clientIP {sharedSecret "extreme"} \
+	{which "primary"}} {
+
+    SendACmd    "disable radius"
+
+    set vr [GetVrString 1]
+    
+    SendACmd    "config radius $which server $serverIP $serverPort \
+	    client-ip $clientIP vr $vr"
+    SendACmd    "config radius $which shared-secret $sharedSecret"
+    SendACmd    "enable radius"
+
+
+}
+
+proc dot1x_exUnconfigRadius {} {
+
+    SendACmd "unconfig radius"
+    SendACmd "disable radius"
+
+}
+
+################################################################## 
+# Procedure Name: dot1x_exEnableNetloginPort
+#   
+# Description: Enable netlogin on a port.  We wrap it because of we've seen
+#              lots of command truncation after executing this command.  To 
+#              deal with this we added a delay after executing.
+# 
+# Input args:  port:  Port to activate
+#              type: dot1x/mac/web-based
+#              delay: Seconds to wait before returning
+#
+# Output args: NULL
+#
+# Typical Usage:
+#  dot1x_exEnableNetloginPort [MaptDUTPortId 1] "dot1x" 5
+##################################################################
+proc dot1x_exEnableNetloginPort {port {type "dot1x"} {delay 3}} {
+    
+    SendACmd "enable netlogin port $port $type"
+    exSleep $delay
+
+}
+
+################################################################## 
+# Procedure Name: dot1x_exDisableNetloginPort
+#   
+# Description: Disable netlogin on a port.  We wrap it because of we've seen
+#              lots of command truncation after executing this command.  To 
+#              deal with this we added a delay after executing.
+# 
+# Input args:  port:  Port to deactivate
+#              type: /mac/web/dot1x
+#              delay: Seconds to wait before returning
+#
+# Output args: NULL
+#
+# Typical Usage:
+#  dot1x_exDisableNetloginPort [MaptDUTPortId 1] "ispVlan" 5
+##################################################################
+proc dot1x_exDisableNetloginPort {port {type "dot1x"} {delay 3}} {
+    
+    SendACmd    "disable netlogin port $port $type"
+    exSleep $delay
+}
+
+
+################################################################## 
+# Procedure Name: dot1x_exVerifyNetloginOnPort
+#   
+# Description: Verify netlogin on a port. 
+#
+# Input args:  port:  Port to verify
+#              status: enabled/disabled
+#              type: dot1x/mac/web
+#
+# Output args: NULL
+#
+# Typical Usage:
+#  dot1x_exVerifyNetloginOnPort [MaptDUTPortId 1] "ispVlan" 5
+##################################################################
+proc dot1x_exVerifyNetloginOnPort { port status type {typeStatus "enabled"}} {
+    
+    nl_exVerifyNetloginOnPort $port $status $type $typeStatus
+    
+}
+
+################################################################## 
+# Procedure Name: dot1x_exGetNetloginVal
+#   
+# Description: Retrieve the value for a particular MAC Address.
+# 
+# Input args:  mac:   Mac address to look for
+#              param: Parameter to retrieve
+#
+# Output args: paramter or NULL
+#
+# VALID param VALUES: IP address, Auth, Type, ReAuth-Timer User
+#  i.e.
+#  Port: 21,   Vlan: vlan_1,  State: Unauthenticated
+#  MAC                IP address      Auth   Type      ReAuth-Timer User    
+#  00:00:01:02:01:01  0.0.0.0         No     802.1x    0            Unknown 
+#
+# Typical Usage:
+#  set reauth [dot1x_exGetNetloginVal "00:00:01:02:01:01" ReAuth-Timer]
+##################################################################
+proc dot1x_exGetNetloginVal { port vlan supMac param } {
+
+   global tmpPath
+   set tmp "Tmp"
+   if [info exists tmpPath] {
+       set tmp $tmpPath
+   } 
+
+    set pid _[pid]
+    
+    set tempFile "$tmp/tmp_Dot1X$pid"
+
+    set _mac NULL
+    set _ip NULL 
+    set _auth NULL
+    set _type NULL
+    set _reauth NULL
+    set _user NULL
+
+    ;# Execute show netlogin and put output into a file
+    set fd_in [open $tempFile "w"]
+    SendACmd "show netlogin" NULL $fd_in
+
+    close $fd_in
+
+    ;# Open for reading
+    set fd_in [open $tempFile "r"]
+    
+    set portVlanMatchLine  ""
+    set macMatchLine       ""
+    ;# Find correct port/vlan and MAC lines 
+    while {[gets $fd_in line] != -1} {
+
+	;# Look for Port/Vlan Match.
+	if {[regexp -nocase -indices -- Port:.*$port.*Vlan:.*$vlan $line matchedRange] == 1} {
+	    set portVlanMatchLine $line
+	    result_debug "FOUND Port:$port Vlan:$vlan on line:$line"
+
+	    ;# Now look for MAC Match
+	    while {[gets $fd_in line] != -1} {
+		
+		if {[regexp -nocase "/-/-/-/-/-/-" $line] == 1} {
+		    ;# Found end of port section delimiter...MAC not found in the section.
+		    result_debug "Hit delimiter without finding MAC"
+		    break;
+		}
+		
+		if {[regexp -nocase -indices -- $supMac $line matchedRange] == 1} {
+		    result_debug "FOUND MAC:$supMac on line:$line"
+		    set macMatchLine $line
+		    break
+		}
+	    }
+	    break;
+	}
+    }
+    close $fd_in
+    file delete $tempFile
+    
+    
+    if {$portVlanMatchLine == ""} {
+	result_debug "Port:$port Vlan:$vlan NOT FOUND"
+	return NULL
+    }
+
+    if { [string length $macMatchLine] > 0 } {
+
+	scan $macMatchLine {%s %s %s %s %s %s} _mac _ip _auth _type _reauth _user
+	if { [GetVersion "DUT1" majmin] >= 11.7 } {
+	    if { [regexp "," $macMatchLine] } {
+		scan $macMatchLine {%s %s %s %s %s %s %s} _mac _ip _auth1 _auth2 _type _reauth _user
+		set _auth [string trim $_auth1 ","]
+	    }
+	}
+	
+	result_debug "mac: $_mac"
+	result_debug "ip: $_ip"
+	result_debug "auth: $_auth"
+	result_debug "type: $_type"
+	result_debug "reauth: $_reauth"
+	result_debug "user: $_user"
+    }
+    
+    ;# Default _reauth to 0 if not found or not an int
+    if {! [string is integer -strict $_reauth] } {
+	set _reauth 0
+    }
+    switch -exact -- $param \
+	    "mac"    {return $_mac} \
+	    "ip"     {return $_ip} \
+	    "auth"   {return $_auth} \
+	    "type"   {return $_type} \
+	    "reauth" {return $_reauth} \
+	    "user"   {return $_user} \
+	    default  {return NULL} \
+}
+
+
+################################################################## 
+# Procedure Name: dot1x_exVerifyPortAuth
+#   
+# Description: Verify that a port is authenticated/unauthenticated
+# 
+# Input args:  port: DUT port
+#              vlan: DUT vlan
+#              authStatus: "Auth" | "Unauth"
+#
+# Output args: none
+#
+##################################################################
+proc dot1x_exVerifyPortAuth {port vlan authStatus} {    
+
+    set parameterList [list]
+ 
+    lappend parameterList "{Port:.* $port.*Vlan:.*$vlan.* State: $authStatus} exist"
+    set returnCode [CheckKeyValue "show netlogin" $parameterList  \
+	    -comment "Checking if Port:$port Vlan:$vlan is $authStatus"]
+
+    return $returnCode
+
+}
+
+################################################################## 
+# Procedure Name: dot1x_exVerifyMacAuth
+#   
+# Description: Verify that a particular MAC is authenticated/unauthenticated
+# 
+# Input args:  port: DUT port
+#              vlan: DUT vlan
+#              mac:  MAC address of supplicant
+#              authStatus: "Auth" | "Unauth" | "none"
+#                 *authStatus of "none" means MAC is NOT listed at all
+#
+# Output args: none
+#
+##################################################################
+proc dot1x_exVerifyMacAuth { port vlan mac authStatus } { 
+
+    set parameterList [list]
+    
+    if {$authStatus == "none"} {
+	lappend parameterList "$mac.* notExist"
+	set returnCode [CheckKeyValue "show netlogin" $parameterList \
+		-comment "Checking $mac is NOT present"]
+    } else {
+	lappend parameterList "$mac.*$authStatus exist"
+	set returnCode [CheckKeyValue "show netlogin" $parameterList \
+		-comment "Checking $mac IS present"]
+    }
+
+    return $returnCode
+}
+
+################################################################## 
+# Procedure Name: _exCheckMatch
+#   
+# Description: Verify that a port is authenticated/unauthenticated
+# 
+# Input args:  actual:
+#              expected:
+#                 *If expected is "", we're NOT interested in it, so just return 1.
+#              matchType: "greater" | "less" | "equal" | "ge" | "le" | "string
+#              nocase: "true" | "false" Case sensitive
+#
+# Output args: 1-match 0-no match
+#
+##################################################################
+proc _exCheckMatch { actual expected {matchType "string"} {nocase "true"} } {
+    
+    set nc ""
+
+    if {$nocase == "true"} {
+	set nc "-nocase"
+    }
+	
+    if [string length $expected] {
+	if {$matchType == "string"} {
+	    if [regexp $nc $expected $actual] {
+		result_debug "string match of $actual vs. $expected OK"
+		return 1
+	    } else {
+		result_debug "string match of $actual vs. $expected FAIL"
+		return 0
+	    }
+	    
+	} elseif {$matchType == "greater"} {
+	    if {$actual > $expected} {
+		result_debug "greater match of $actual > $expected OK"
+		return 1
+	    }
+	    result_debug "greater match of $actual > $expected FAIL"
+	} elseif {$matchType == "less"} {
+	    if {$actual < $expected} {
+		return 1
+	    }
+	    result_debug "less match of $actual < $expected FAIL"
+	} elseif {$matchType == "equal"} {
+	    if {$actual == $expected} {
+		result_debug "equal match of $actual ==  $expected OK"
+		return 1
+	    }
+	    result_debug "equal match of $actual ==  $expected FAIL"
+	} elseif {$matchType == "ge"} {
+	    if {$actual >= $expected} {
+		result_debug "greater or equal match of $actual >= $expected OK"
+		return 1
+	    }
+	    result_debug "greater or equal match of $actual >= $expected FAIL"
+	} elseif {$matchType == "le"} {
+	    if {$actual <= $expected} {
+		result_debug "less or equal match of $actual <= $expected OK"
+		return 1
+	    }
+	    result_debug "less or equal match of $actual <= $expected FAIL"
+	}
+
+    } else {
+	result_debug "NOT Interested in $expected vs $actual"
+	;# We're not interested in this parameter, so just return 1.
+	return 1
+    }
+    
+    return 0
+}
+
+
+
+################################################################## 
+# Procedure Name: _exMacMatchDot1x
+#   
+# Description: Find a matching MAC in the line looking for supMac,supIp,
+#              authVal, authType, user, and reauthTimer values
+# 
+# Input args:  macMatchLine: Line to do comparison against
+#              supMac: MAC of sup.
+#              supIp: IP Addr of sup.  Only checked for WEB BASED!
+#              authVal: "No" | "Yes"
+#              authType: "802.1x" | "Http"
+#              reauthTimer: "0" | "-1" | <value>
+#                 -1 : ignore
+#                  0 : Looking for timer == 0
+#               <val>: Looking for GREATER <val> 
+#              user: Username used to login with.
+#
+# Output args: 1-match 0-no match
+#
+# Expected output of show netlogin. 
+#
+# * Summit48i:94 # show netlogin 
+# Port: 21,   Vlan: vlan_1,  State: Authenticated
+# MAC                IP address      Auth   Type      ReAuth-Timer User    
+# 00:DE:BB:00:00:01  0.0.0.0         No     802.1x    0            Unknown 
+# 00:00:01:02:01:01  0.0.0.0         Yes    802.1x    3383         ixia1md5
+# ------------------------------------------------
+#
+##################################################################
+proc _exMacMatchDot1x {macMatchLine supMac supIp authVal authType reauthTimer user} {
+
+    result_debug "Examining macMatchLine $macMatchLine"
+
+    set _supMac ""
+    set _supIp "" 
+    set _authVal "" 
+    set _authType "" 
+    set _reauthTimer "" 
+    set _user ""
+    
+    ;# MAC - IP - Auth - Type - ReAuth - User
+    scan $macMatchLine {%s %s %s %s %s %s} _supMac _supIp _authVal _authType _reauthTimer _user
+    if { [GetVersion "DUT1" majmin] >= 11.7 } {
+	if { [regexp "," $macMatchLine] } {
+	    scan $macMatchLine {%s %s %s %s %s %s %s} _supMac _supIp _authVal1 _authVal2 _authType _reauthTimer _user
+	    set _authVal [string trim $_authVal1 ","]
+	}
+    }
+
+    ;# Hack for empty IP Address.  Check if _supIp field picks up Yes/No from _authVal field
+    if {($_supIp == "Yes") || ($_supIp == "No")} {
+	scan $macMatchLine {%s %s %s %s %s} _supMac _authVal _authType _reauthTimer _user
+	set _supIp ""
+    }
+    result_debug "EXPECTED: $supMac $supIp $authVal $authType $reauthTimer $user"	
+    result_debug "ACTUAL    $_supMac $_supIp $_authVal $_authType $_reauthTimer $_user"
+    
+    ;# IP Address is only valid for WEB Based.  Make sure we don't check it if
+    ;# we expect auth type of 802.1x
+    if [regexp -nocase "802.1x" $authType] {
+	set supIp ""
+    }
+    
+    set macMatch 1
+    set macMatch [expr $macMatch & [_exCheckMatch $_supIp $supIp]]
+    set macMatch [expr $macMatch & [_exCheckMatch $_authVal $authVal]]
+    set macMatch [expr $macMatch & [_exCheckMatch $_authType $authType]]
+    set macMatch [expr $macMatch & [_exCheckMatch $_user $user "string" "false"]]
+    if {$reauthTimer == "0"} {
+	set macMatch [expr $macMatch & [_exCheckMatch $_reauthTimer $reauthTimer "equal"]]
+    } elseif {$reauthTimer == "-1"} {
+	set macMatch 1
+    } else {
+	set macMatch [expr $macMatch & [_exCheckMatch $_reauthTimer $reauthTimer "greater"]]
+    }
+    return $macMatch
+}
+
+################################################################## 
+# Procedure Name: _exVerifyShowNetlogin
+#   
+# Description: Internal procedure that verifies show netlogin params.  Must pass
+#              tempfile which contains output of sh netlogin.  This proc
+#              just does the checking
+# 
+# Input args: 
+#       port:   DUT port
+#	vlan:   DUT vlan
+#	portState: "Auth" | "Unauth"
+#	supMac: supplicant MAC
+#	supIp:  supplicant IP
+#	authVal: "Yes" | "No"
+#	authType: "802.1x" | "Http"
+#       reauthTimer: "0" | "-1" | <value>
+#          -1 : ignore
+#           0 : Looking for timer == 0
+#        <val>: Looking for GREATER <val> 
+#	user: username logged in as
+#	tempFile: File containing "show netlogin" output
+#
+# Output args: 1-match 0-no match
+#
+# Expected output of show netlogin. 
+#
+# * Summit48i:94 # show netlogin 
+# Port: 21,   Vlan: vlan_1,  State: Authenticated
+# MAC                IP address      Auth   Type      ReAuth-Timer User    
+# 00:DE:BB:00:00:01  0.0.0.0         No     802.1x    0            Unknown 
+# 00:00:01:02:01:01  0.0.0.0         Yes    802.1x    3383         ixia1md5
+# ------------------------------------------------
+#
+# NOTE: Did NOT use CheckKeyValue because it couldn't handle multi layer output of 
+#       Port, then MAC list
+##################################################################
+proc _exVerifyShowNetlogin {args} {
+    parse_args _exVerifyShowNetlogin $args {
+	port        ""
+	vlan        ""
+	portState   ""
+	supMac      ""
+	supIp       ""
+	authVal     ""
+	authType    ""
+	reauthTimer ""
+	user        ""
+	tempFile    ""
+    }
+
+    ;# Open for reading
+    set fd_in [open $tempFile "r"]
+    
+    set portVlanMatchLine  ""
+    set macMatchLine       ""
+    ;# Find correct port/vlan and MAC lines 
+    while {[gets $fd_in line] != -1} {
+	;# Look for Port/Vlan Match.
+	if {[regexp -nocase -indices -- Port:.*$port.*Vlan:.*$vlan $line matchedRange] == 1} {
+	    set portVlanMatchLine $line
+	    result_debug "FOUND Port:$port Vlan:$vlan on line:$line"
+	    
+	    if {[string length $supMac] == 0} {
+		;# Only looking for port/vlan state
+		result_debug "No MAC given.  Only needed port/vlan state."
+		break
+	    }
+	    
+	    ;# Now look for MAC Match
+	    while {[gets $fd_in line] != -1} {
+		
+		result_debug "Looking for a MAC Match...$line"
+		if {[regexp -nocase "/-/-/-/-/-/-" $line] == 1} {
+		    ;# Found end of port section delimiter...MAC not found in the section.
+		    result_debug "Hit delimiter without finding MAC"
+		    break;
+		}
+		    
+		if {[regexp -nocase -indices -- $supMac $line matchedRange] == 1} {
+		    result_debug "FOUND MAC:$supMac on line:$line"
+		    set macMatchLine $line
+		    break
+		}
+	    }
+	    break;
+	}
+    }
+    close $fd_in
+    
+    
+    if {$portVlanMatchLine == ""} {
+	result_debug "Port:$port Vlan:$vlan NOT FOUND"
+	return 0
+    }
+
+    set portVlanMatch 0
+
+    ;# Apply required key info matches
+    if { [string length $portVlanMatchLine] > 0 } {
+	if {$portState != ""} {
+	    set portVlanMatch [regexp -nocase "\ $portState" $portVlanMatchLine]
+	    if {$portVlanMatch} {
+		result_debug "portState $portState OK"
+	    } else {
+		result_debug "string match of $portState vs "
+		result_debug "                $portVlanMatchLine FAILED"
+	    }
+
+	} else {
+	    set portVlanMatch 1
+	    result_debug "Ignoring portState $portState portVlanMatch: $portVlanMatch"
+	}
+    }
+    
+    ;# We don't care about supplicant MAC entry
+    if {[string length $supMac] == 0} {
+	result_debug "SupMac $supMac was not given.  Returning portVlanMatch: $portVlanMatch"
+	return $portVlanMatch
+    }
+    
+
+    set macMatch 0
+
+    if { [string length $macMatchLine] > 0 } {
+	result_debug "Matching supMac $supMac with $macMatchLine"
+	set macMatch [_exMacMatchDot1x $macMatchLine $supMac $supIp $authVal $authType \
+		$reauthTimer $user]
+    } else {
+	result_debug "$supMac not found"
+    }
+
+    result_debug "RETURNING port: $portVlanMatch  mac: $macMatch"
+
+    return [expr $portVlanMatch & $macMatch]
+    
+}
+
+
+
+################################################################## 
+# Procedure Name: dot1x_exVerifyShowNetlogin
+#   
+# Description: Verifies "show netlogin" parameters for 1 or more 
+#              supplicants.  Writes output to a temp file for which
+#              is parsed by an internal proc.  Temp file is deleted
+#              before exiting.
+# 
+# Input args: 
+#       port:   DUT port
+#	vlan:   DUT vlan
+#	portState: "Auth" | "Unauth"
+#	supMac: supplicant MAC
+#	supIp:  supplicant IP
+#	authVal: "Yes" | "No"
+#	authType: "802.1x" | "Http"
+#       reauthTimer: "0" | "-1" | <value>
+#          -1 : ignore
+#           0 : Looking for timer == 0
+#        <val>: Looking for GREATER <val> 
+#	user: username logged in as
+#	numSupplicants: 1 or more
+#
+# Output args: none
+#
+# Expected output of show netlogin. 
+#
+# * Summit48i:94 # show netlogin 
+# Port: 21,   Vlan: vlan_1,  State: Authenticated
+# MAC                IP address      Auth   Type      ReAuth-Timer User    
+# 00:DE:BB:00:00:01  0.0.0.0         No     802.1x    0            Unknown 
+# 00:00:01:02:01:01  0.0.0.0         Yes    802.1x    3383         ixia1md5
+# ------------------------------------------------
+#
+# NOTE: Did NOT use CheckKeyValue because it couldn't handle multi layer output of 
+#       Port, then MAC list
+##################################################################
+proc dot1x_exVerifyShowNetlogin {args} {
+    parse_args dot1x_exVerifyShowNetlogin $args {
+	port        ""
+	vlan        ""
+	portState   ""
+	supMac ""
+	supIp  ""
+	authVal     ""
+	authType    ""
+	reauthTimer ""
+	user        ""
+	numSupplicants "1"
+    }
+
+    set curIp $supIp
+    set curMac $supMac
+    set numSup $numSupplicants
+
+    report_start_test "Verify show netlogin for $numSup supplicant(s) $portState"
+
+   global tmpPath
+   set tmp "Tmp"
+   if [info exists tmpPath] {
+       set tmp $tmpPath
+   } 
+
+    set pid _[pid]
+    
+    set tempFile "$tmp/tmp_Dot1X$pid"
+
+    ;# Execute show netlogin and put output into a file
+    set fd_in [open $tempFile "w"]
+    SendACmd "show netlogin" NULL $fd_in
+
+    close $fd_in
+    set numFail 0
+    while { $numSup } {
+	result_debug "($numSup) Verify show netlogin supMac:$curMac supIp:$curIp"
+    
+	if {! [_exVerifyShowNetlogin -port $port \
+		-vlan $vlan -portState $portState -supMac $curMac \
+		-supIp $curIp -authVal $authVal -authType $authType \
+		-reauthTimer $reauthTimer -user $user -tempFile $tempFile]} {
+	    result_error "Verification of show netlogin parameters failed."
+	    incr numFail
+	}
+	;# Increment IP and MAC
+	if {$curIp != ""} {
+	    set curIp [IncrIpAddr $curIp]
+	}
+	if {$curMac != ""} {
+	    set curMac [IncMacByOne $curMac ":"]
+	}
+	incr numSup -1
+    }
+    if {$numFail > 0} {
+	result_error "$numFail of $numSupplicants supplicants failed to Authenticate"
+    }
+    report_end_test
+
+    if {$numFail == 0} {
+	file delete $tempFile
+    } else {
+	result_debug "FAILURES! Preserving $tempFile for review"
+	result_debug "********** EXPECTED FILE CONTENTS ***********"
+	SendACmd "show netlogin"
+    }
+    return $numFail
+}
+
+
+
+################################################################## 
+# Procedure Name: _exVerifyShowNetloginPorts
+#   
+# Description: Internal procedure that checks "show netlogin ports <x> <vlan>" 
+#              parameters for an individual port/vlan combination
+# 
+# Input args: 
+#       port:   DUT port
+#	vlan:   DUT vlan
+#	authState: "Auth" | "Unauth"
+#	portState: "Enabled" | "Disabled"
+#	supIp:  supplicant IP
+#	authVal: "Yes" | "No"
+#	authType: "802.1x" | "Http"
+#       reauthTimer: "0" | "-1" | <value>
+#          -1 : ignore
+#           0 : Looking for timer == 0
+#        <val>: Looking for GREATER <val> 
+#	user: username logged in as
+#
+# Output args: none
+#
+# Expected output of show netlogin ports 
+#
+# * Summit48i:95 # show netlogin ports 21
+# Port          : 21        
+# Vlan          : vlan_1
+# Authentication: Unauthenticated
+# Port State    : Enabled
+#
+# MAC                IP address      Auth   Type      ReAuth-Timer User    
+# 00:00:01:02:01:01  0.0.0.0         No     802.1x    2            Unknown         
+# ------------------------------------------------------------------
+#
+##################################################################
+proc dot1x_exVerifyShowNetloginPorts {args} {
+    parse_args dot1x_exVerifyShowNetloginPorts $args {
+	port        ""
+	vlan        ""
+	portState   ""
+	authState   ""
+	supMac      ""
+	supIp       ""
+	authVal     ""
+	authType    ""
+	reauthTimer ""
+	user        ""
+	showMode    "port_vlan"
+    }
+
+    ;# Not enough parameters
+    if {$port == "" && $vlan == ""} {
+	result_debug "_exVerifyShowNetloginPorts{} Not enough parameters"
+	return 0
+    }
+
+   global tmpPath
+   set tmp "Tmp"
+   if [info exists tmpPath] {
+       set tmp $tmpPath
+   } 
+
+    set pid _[pid]
+    
+    set tempFile "$tmp/tmp_Dot1X$pid"
+
+    ;# Execute show netlogin po and put output into a file
+    set fd_in [open $tempFile "w"]
+   if {$showMode == "port"} {
+       SendACmd "show netlogin port $port" NULL $fd_in
+   } elseif {$showMode == "vlan"} {
+       SendACmd "show netlogin vlan $vlan" NULL $fd_in
+   } else {
+       SendACmd "show netlogin port $port vlan $vlan" NULL $fd_in
+   }
+    close $fd_in
+
+    ;# Open for reading
+    set fd_in [open $tempFile "r"]
+    
+    set portMatchLine  ""
+    set vlanMatchLine  ""
+    set portStateMatchLine ""
+    set authStateMatchLine  ""
+    set macMatchLine       ""
+    ;# Find correct port/vlan and MAC lines 
+    while {[gets $fd_in line] != -1} {
+
+	;# Look for Port/Vlan Match.
+      if {$portMatchLine == ""} {
+	if {[regexp -nocase -indices -- Port\ *:\ *$port $line matchedRange] == 1} {
+
+	    set portMatchLine $line
+            break
+         }
+       }
+      }
+
+          if {$vlanMatchLine == ""} {
+	    ;# Get next line for Vlan
+	    while {[gets $fd_in line] != -1} {
+		set vlanMatchLine $line
+		if {[regexp -nocase -indices -- Vlan\ *:\ *$vlan $line matchedRange] != 1} {
+		    ;# No port/vlan match...get next line
+		    set vlanMatchLine ""
+		    continue
+		} else {
+                  break
+                }
+	    }
+          }
+
+	    result_debug "FOUND Port:$port Vlan:$vlan\n$portMatchLine\n$vlanMatchLine"
+	    
+	    ;# Get Auth State
+	    if {[gets $fd_in line] != -1} {
+		set authStateMatchLine $line
+	    }
+
+	    ;# Get Port State
+	    if {[gets $fd_in line] != -1} {
+		set portStateMatchLine $line
+	    }    
+	    
+	    if {[string length $supMac] != 0} {
+
+	    ;# Now look for MAC Match
+	    while {[gets $fd_in line] != -1} {
+               result_debug "Line here is $line"
+		
+		if {[regexp -nocase -indices -- $supMac $line matchedRange] == 1} {
+		    result_debug "FOUND MAC:$supMac on line:$line"
+		    set macMatchLine $line
+		    break
+		}
+	    }
+           }
+	    #if {$macMatchLine == ""} { result_debug "MAC:$supMac NOT FOUND"}
+	    #break;
+
+    close $fd_in
+    file delete $tempFile
+    
+    if {$portMatchLine == ""} {
+	result_debug "Port:$port NOT FOUND"
+	return 0
+    }
+
+    set portVlanMatch 0
+
+    ;# Apply required key info matches
+    if {$portState != ""} {
+	set portMatch [regexp -nocase "Port State:.*$portState" $portStateMatchLine]
+	result_debug "Looking at portState $portState portVlanMatch: $portVlanMatch"
+    } else {
+	set portVlanMatch 1
+	result_debug "Ignoring portState $portState port:$port vlan:$vlan"
+    }
+    
+    if {$authState != ""} {
+	set authMatch [regexp -nocase "Auth.*:\ *$auth" $portDHCPMatchLine]
+	result_debug "Looking at Authentication State $authState portMatch: $portMatch"
+    } else {
+	set portVlanMatch 1
+	result_debug "Ignoring Authentication State $authState port:$port vlan:$vlan"
+    }
+           
+    ;# We don't care about supplicant MAC entry
+    if {[string length $supMac] == 0} {
+	result_debug "SupMac $supMac was not given.  Returning portVlanMatch: $portVlanMatch"
+	return $portVlanMatch
+    }
+    
+
+    set macMatch 0
+    if { [string length $macMatchLine] > 0 } {
+
+	set macMatch [_exMacMatchDot1x $macMatchLine $supMac $supIp $authVal $authType \
+		$reauthTimer $user]
+    }
+
+    result_debug "RETURNING port: $portVlanMatch  mac: $macMatch"
+    return [expr $portVlanMatch & $macMatch]
+}
+
+
+
+################################################################## 
+# Procedure Name: dot1x_exVerifyShowNetloginPorts
+#   
+# Description: Proc that checks "show netlogin ports <x> <vlan>" 
+#              parameters for 1 or more supplicants.  We, of course,
+#              assume all supplicants have the same values when 
+#              checking multiple supplicants.
+# 
+# Input args: 
+#       port:   DUT port
+#	vlan:   DUT vlan
+#	portState: "Auth" | "Unauth"
+#       DHCP:   "Not" | "Enabled"
+#	supMac: supplicant MAC
+#	supIp:  supplicant IP
+#	authVal: "Yes" | "No"
+#	authType: "802.1x" | "Http"
+#       reauthTimer: "0" | "-1" | <value>
+#          -1 : ignore
+#           0 : Looking for timer == 0
+#        <val>: Looking for GREATER <val> 
+#	user: username logged in as
+#       numSupplicants: Number of supplicants to check.
+#
+# Output args: none
+#
+# Expected output of show netlogin ports 
+#
+# * Summit48i:95 # show netlogin ports 21 vlan_1
+# Port: 21        Vlan: vlan_1
+# Port State:     Unauthenticated
+# DHCP:           Not Enabled
+#
+# MAC                IP address      Auth   Type      ReAuth-Timer User    
+# ------------------------------------------------------------------
+# 00:00:01:02:01:01  0.0.0.0         No     802.1x    2            Unknown         
+# Quiet Period Timer    :  0      Num. Authentication Attempt Failed    :  1
+# ------------------------------------------------------------------
+#
+##################################################################
+proc dot1x_exVerifyShowNetloginPorts {args} {
+    parse_args dot1x_exVerifyShowNetloginPorts $args {
+	port        ""
+	vlan        ""
+	portState   ""
+	DHCP        ""
+	supMac      ""
+	supIp       ""
+	authVal     ""
+	authType    ""
+	reauthTimer ""
+	user        ""
+	numSupplicants "1"
+	showMode    "port_vlan"
+    }
+
+    set rc 1
+    set curIp $supIp
+    set curMac $supMac
+
+    report_start_test "Verify show netlogin ports for $numSupplicants supplicant(s) $portState"
+
+    while { $numSupplicants } {
+	result_debug "($numSupplicants) Verify show netlogin ports supMac:$curMac supIp:$curIp"
+	
+	if {! [_exVerifyShowNetloginPorts -port $port \
+		-vlan $vlan -portState $portState -supMac $curMac \
+		-supIp $curIp -authVal $authVal -authType $authType \
+		-reauthTimer $reauthTimer -user $user -showMode $showMode]} {
+	    result_error "Verification of show netlogin ports parameters failed."
+	    set rc 0
+	}
+	;# Increment IP and MAC
+	if {$curIp != ""} {
+	    set curIp [IncrIpAddr $curIp]
+	}
+	if {$curMac != ""} {
+	    set curMac [IncMacByOne $curMac ":"]
+	}
+
+	incr numSupplicants -1
+    }
+
+    report_end_test
+
+    return $rc
+}
+
+    
+
+
+################################################################## 
+# Procedure Name: dot1x_exVerifyShowSession
+#   
+# Description: Proc that checks "show session"
+#              This actually just wraps CheckKeyValue so parameters
+#              are checked based on min regexp.  For example, loginTime
+#              can be entered as "Dec" or "Thu Dec 16" to yield a
+#              good match.
+# 
+# Input args: 
+#	id:        Login id. 0-n
+#	loginTime: Date/Time of login
+#	user:      Username of login
+#	type:      "console" | "netlogin" | "radius"
+#	auth:      "local" | "radius"
+#	cliAuth:   "enabled" | "disabled"
+#	location:  "serial" | <ip>
+#
+# Output args: none
+#
+# Expected output of show session
+#
+# * Summit48i:12 # show session
+#    # Login Time                 User     Type     Auth     CLI Auth Location
+# ==============================================================================
+#      0 Wed Dec 15 12:23:20 1999 admin    console  local    disabled serial
+#      4 Thu Dec 16 16:20:27 1999 ixia1md5 netlogin radius   disabled 0.0.0.0
+#      5 Thu Dec 16 16:20:28 1999 ixia1md5 netlogin radius   disabled 0.0.0.0
+#      6 Thu Dec 16 16:20:29 1999 ixia1md5 netlogin radius   disabled 0.0.0.0
+#      7 Thu Dec 16 16:20:30 1999 ixia1md5 netlogin radius   disabled 0.0.0.0
+#      8 Thu Dec 16 16:20:32 1999 ixia1md5 netlogin radius   disabled 0.0.0.0
+# * 1028 Thu Dec 16 16:20:56 1999 admin    telnet   radius   disabled 10.212.9.4
+#
+##################################################################
+proc dot1x_exVerifyShowSession {args} {
+    parse_args dot1x_exVerifyShowSession $args {
+	id        ""
+	loginTime ""
+	user      ""
+	type      ""
+	auth      ""
+	cliAuth   ""
+	location  ""
+    }
+    report_start_test "Verify show session"
+
+    lappend parameterList "$id.*$loginTime.*$user.*$type.*$auth.*cliAuth.*$location"
+    set rc [CheckKeyValue "show session" $parameterList \
+	    -comment "Verify Show Session Params"]
+
+    report_end_test
+    if {$rc == "ok"} {
+	return 1
+    } else {
+	return 0
+    }
+}
+
+
+################################################################## 
+# Procedure Name: _reportVerifyProtocolResult
+#   
+# Description: Internal procedure that merely prints error or ok on
+#              whether desired traffic was received.
+# 
+# Input args: 
+#      traffic:    "exist" | "notExist"
+#      matchCnt:   Number of frames found that match
+#      portId:     Logging purposes only
+#      typeWanted: Logging purposes only
+#
+# Output args: none
+#
+#
+##################################################################
+proc _reportVerifyProtocolResult { traffic matchCnt portId typeWanted } {
+    
+    if {$traffic == "exist"} {
+	if {$matchCnt <= 0} {
+	    result_error "PortId:$portId: Wanted $typeWanted but received $matchCnt"
+	    return ERROR
+	}
+    } elseif {$traffic == "notExist"} {
+	if {$matchCnt > 0} {
+	    result_error "PortId:$portId: DID NOT want $typeWanted but received $matchCnt"
+	    return ERROR
+	}
+    } else {
+	result_debug "PortId:$portId: Unknown state traffic $traffic specified"
+	return ERROR
+    }
+
+    result_ok "SUCCESS: PortId:$portId: Wanted $traffic. $matchCnt \
+	    $typeWanted received as expected"
+    return OK
+
+}
+
+################################################################## 
+# Procedure Name: _verifyEDP
+#   
+# Description:  Verify the presence of EDP Traffic.  We enable EDP
+#               on a DUT then wait to see traffic on a ports(s) by
+#               capturing traffic on Ixia.
+#
+# 
+# Input args: portIdList: Port IDs of ports to examine traffic on
+#             edpTraffic:  "exist" | "notExist"
+#             command:  "enable" | "disable" protocol on DUT
+#
+# Output args: none
+#
+# Decode EDP Packet
+# EDP Packet is SNAP Encapsulated Frame.  EDP Header should start after
+# SNAP header at location 0x0016 bytes from start of frame.
+# EDP Header is followed by 1+ TLV blocks
+#
+# EDP Header (14 octets)
+# ----------
+#  1 Version
+#  1 reserved
+#  2 checksum
+#  2 sequence#
+#  8 device id (00 00 [mac address])
+#
+# TLV (Type - Length - Value) 
+# ---
+#  1 Marker (0x99)
+#  1 Type 
+#      0 NULL - End Signal
+#      1 Display - (MIBII Display String)
+#      2 Info - (Basic system info)
+#      5 VLAN Info 
+#      8 ESRP
+#  2 Length
+#  n DATA
+#
+# INFO TLV
+# --------
+#   2  originating slot
+#   2  originating port
+#   2  Virtual Chassis ID (If connected to virtual chassis)
+#   6  RESERVED
+#   4  SW Version
+#   16 Virtual Chassis ID Connections
+#
+# VLAN TLV
+# --------
+#   1  Flags (bit 8 - 1 means this vlan has IP interface) 
+#   3  RESERVED
+#   2  VLAN ID (0 if untagged)
+#   2  RESERVED
+#   4  VLAN IP Addr
+#   n  VLAN Name
+#
+##################################################################
+proc _verifyEDP {portIdList {edpTraffic "exist"} {command "enable"} } {
+
+    ;# Start port capture
+    StartPortsCapture $portIdList
+
+    sleep 2
+    
+    ;# Enable protocol
+    foreach portId $portIdList {
+	SendACmd "$command edp ports [MapDUTPortId $portId]"
+    }
+
+
+    ;# Wait 65 seconds for an EDP Packet (Should arrive every minute)
+    result_debug "Sleeping 65 seconds"
+    exSleep 65
+
+    ;# Stop Capture
+    StopPortsCapture $portIdList
+
+    foreach portId $portIdList {
+	report_start_test "Verify PortId:$portId EDP $command EDP Traffic $edpTraffic"
+	;# Parse output for packets
+	set frameList [GetCapturedFrames $portId]
+	set matchCnt 0
+	foreach frame $frameList {
+	    ;# Look for Device ID MAC followed by TLV Marker.	
+	    if {[GetMessageType $frame] == "EDP"} {
+		incr matchCnt
+	    }
+	}
+	
+	_reportVerifyProtocolResult $edpTraffic $matchCnt $portId "EDP Packets"
+	report_end_test
+    }
+}
+
+
+
+################################################################## 
+# Procedure Name: _verifySTP
+#   
+# Description:  Verify the presence of STP Traffic.  We enable STP
+#               on a DUT then wait to see traffic on a ports(s) by
+#               capturing traffic on Ixia.
+#
+# 
+# Input args: portIdList: Port IDs of ports to examine traffic on
+#             vlanList: List of vlans to enable STP on.
+#             stpTraffic:  "exist" | "notExist"
+#             command:  "enable" | "disable" protocol on DUT
+#
+# Output args: none
+#
+# Called from dot1x_VerifyProtocol
+#
+##################################################################
+proc _verifySTP {portIdList vlanList {stpTraffic "exist"} {command "enable"} } {
+    
+    ;# Make sure we configure one vlan at a time
+    SendACmd "unconfig stpd s0"
+
+    foreach myVlan $vlanList {
+	
+	;# Add vlan to default vlan domain s0
+	SendACmd "config stpd s0 add vlan $myVlan port all"
+    }
+    
+    ;# Start port capture
+    StartPortsCapture $portIdList
+
+    ;# Enable/Disable STP
+    SendACmd "$command stpd s0"
+
+    ;# Wait for some BPDUs to get sent
+    result_debug "Waiting 5 seconds for some BPDUs to get sent"
+    exSleep 5
+
+    ;# Stop Capture
+    StopPortsCapture $portIdList
+    
+    ;# Parse Buffer
+    foreach portId $portIdList {
+	report_start_test "Verify PortId:$portId STP $command BPDUs $stpTraffic"
+	;# Parse output for packets
+	set frameList [GetCapturedFrames $portId]
+	set matchCnt 0
+	foreach frame $frameList {
+	    if { [regexp -nocase "BPDU" [GetMessageType $frame]] } {
+		incr matchCnt
+	    }
+	}
+	
+	_reportVerifyProtocolResult $stpTraffic $matchCnt $portId "STP BPDUs"
+	report_end_test
+    }
+    
+    ;# Clean up
+    SendACmd "unconfig stpd"
+}
+
+
+
+################################################################## 
+# Procedure Name: _verifyRIP
+#   
+# Description:  Verify the presence of RIP Traffic.  We enable RIP
+#               on a DUT then wait to see traffic on a ports(s) by
+#               capturing traffic on Ixia.
+#
+# 
+# Input args: portIdList: Port IDs of ports to examine traffic on
+#             ripTraffic:  "exist" | "notExist"
+#             command:  "enable" | "disable" protocol on DUT
+#
+# Output args: none
+#
+# Called from dot1x_VerifyProtocol
+#
+##################################################################
+proc _verifyRIP {portIdList {ripTraffic "exist"} {command "enable"} } {
+
+
+    SendACmd "enable ipforwarding"      
+    SendACmd "config rip add vlan all"
+    SendACmd "config rip updatetime 10"
+
+    ;# Start port capture
+    StartPortsCapture $portIdList
+
+    ;# Enable/Disable RIP
+    SendACmd "$command rip"      
+
+    ;# Wait for some RIP packets to get sent
+    result_debug "Waiting 13 seconds for some RIP packets to get sent"
+    exSleep 13
+
+    ;# Stop Capture
+    StopPortsCapture $portIdList
+    
+    ;# Parse Buffer
+    foreach portId $portIdList {
+	report_start_test "Verify PortId:$portId RIP $command RIP Packets $ripTraffic"
+	;# Parse output for packets
+	set frameList [GetCapturedFrames $portId]
+	set matchCnt 0
+	foreach frame $frameList {
+	    if { [regexp -nocase "RIP" [GetMessageType $frame]] } {
+		incr matchCnt
+	    }
+	}
+	
+	_reportVerifyProtocolResult $ripTraffic $matchCnt $portId "RIP Packets"
+	report_end_test
+    }
+    
+    ;# Clean up
+    SendACmd "config rip delete vlan all"
+    SendACmd "disable rip"
+
+}
+
+################################################################## 
+# Procedure Name: _verifyOSPF
+#   
+# Description:  Verify the presence of OSPF Traffic.  We enable OSPF
+#               on a DUT then wait to see traffic on a ports(s) by
+#               capturing traffic on Ixia.
+#
+# 
+# Input args: portIdList: Port IDs of ports to examine traffic on
+#             ospfTraffic:  "exist" | "notExist"
+#             command:  "enable" | "disable" protocol on DUT
+#
+# Output args: none
+#
+# Called from dot1x_VerifyProtocol
+#
+##################################################################
+proc _verifyOSPF {portIdList {ospfTraffic "exist"} {command "enable"} } {
+
+    SendACmd "create ospf area 0.0.0.5"
+    SendACmd "enable ipforwarding"      
+    SendACmd "config ospf add vlan all area 0.0.0.5"
+
+    ;# Start port capture
+    StartPortsCapture $portIdList
+
+    ;# Enable/Disable OSPF
+    SendACmd "$command ospf"      
+
+    ;# Wait for some OSPF packets to get sent
+    result_debug "Waiting 5 seconds for some OSPF packets to get sent"
+    exSleep 5
+
+    ;# Stop Capture
+    StopPortsCapture $portIdList
+    
+    ;# Parse Buffer
+    foreach portId $portIdList {
+	report_start_test "Verify PortId:$portId OSPF $command OSPF Packets $ospfTraffic"
+	;# Parse output for packets
+	set frameList [GetCapturedFrames $portId]
+	set matchCnt 0
+	foreach frame $frameList {
+	    if { [regexp -nocase "OSPF" [GetMessageType $frame]] } {
+		incr matchCnt
+	    }
+	}
+	
+	_reportVerifyProtocolResult $ospfTraffic $matchCnt $portId "OSPF Packets"
+	report_end_test
+    }
+    
+    ;# Clean up
+    SendACmd "unconfig ospf"
+    SendACmd "disable ospf"
+}
+
+################################################################## 
+# Procedure Name: _verifyIGMP
+#   
+# Description:  Verify the presence of IGMP Traffic.  We enable IGMP
+#               on a DUT then wait to see traffic on a ports(s) by
+#               capturing traffic on Ixia.
+#
+# 
+# Input args: portIdList: Port IDs of ports to examine traffic on
+#             igmpTraffic:  "exist" | "notExist"
+#             command:  "enable" | "disable" protocol on DUT
+#
+# Output args: none
+#
+# Called from dot1x_VerifyProtocol
+##################################################################
+proc _verifyIGMP {portIdList {igmpTraffic "exist"} {command "enable"} } {
+
+    ;# Start port capture
+    StartPortsCapture $portIdList
+
+    ;# Enable/Disable IGMP
+    SendACmd "disable igmp"
+    SendACmd "config igmp 1 1 1"  ;# Shorten interval so we don't wait long for
+    SendACmd "$command igmp"      ;# a packet to arrive
+
+    ;# Wait for some IGMP Packets to get sent
+    result_debug "Waiting 30 seconds for some IGMP packets to get sent"
+    exSleep 30
+
+    ;# Stop Capture
+    StopPortsCapture $portIdList
+    
+    ;# Parse Buffer
+    foreach portId $portIdList {
+	report_start_test "Verify PortId:$portId IGMP $command IGMP Packets $igmpTraffic"
+	;# Parse output for packets
+	set frameList [GetCapturedFrames $portId]
+	set matchCnt 0
+	foreach frame $frameList {
+	    if { [regexp -nocase "IGMP" [GetMessageType $frame]] } {
+		incr matchCnt
+	    }
+	}
+	
+	_reportVerifyProtocolResult $igmpTraffic $matchCnt $portId "IGMP Packets"
+	report_end_test
+    }
+
+
+    ;# Clean up IGMP is enabled by default
+    SendACmd "unconfig igmp"
+    SendACmd "enable igmp"
+}
+
+
+################################################################## 
+# Procedure Name: dot1x_VerifyProtocol
+#   
+# Description: Verify that a particular protocol is blocked or unblocked
+# 
+# Input args: 
+#    portIdList:   Port IDs to check traffic on
+#    command:      "enable" | "disable"
+#    protocol:     "edp" | "rip" | "ospf" | "stp" | "igmp"
+#    traffic:      "exist" | "notExist"
+#    optionalList: Currently used by "stp" for list of vlans
+#
+# Output args: none
+#
+# Typical Usage:
+#    Login $DUT1_CONNECT
+#    dot1x_VerifyProtocol [list 1 2] "enable" "edp" "exist"
+#    dot1x_VerifyProtocol [list 1 2] "disable" "edp" "notExist"
+#
+##################################################################
+proc dot1x_VerifyProtocol { portIdList command protocol traffic {optionalList [list]} } {
+    
+    switch -- $protocol \
+      "edp" {
+        _verifyEDP $portIdList $traffic $command
+    } "rip" { 
+	_verifyRIP $portIdList $traffic $command
+    } "ospf" {
+        _verifyOSPF $portIdList $traffic $command
+    } "stp" {
+	_verifySTP $portIdList $optionalList $traffic $command
+    } "igmp" {
+	_verifyIGMP $portIdList $traffic $command
+    } default {
+	result_error "Unsupported protocol $protocol"
+    }
+}
+
+
+################################################################## 
+# Procedure Name: dot1x_ixCheckDHCPBroadcastBlocked
+#   
+# Description: Verify that DHCP broadcasts don't go out protected port
+#
+# Input args: 
+#    protectedPortId: Port which should NOT receive broadcasts
+#    dhcpPortId:      Informational only. Used for message. 
+#    srcMac:          Source MAC of DHCP request.  Usually supplicant.     
+#    dhcpServer:      DHCP Server to send request to. Usually DUT 
+#    reqIP:           IP Address being requested.  This really doesn't matter.
+#
+# Output args: none
+#
+# Typical Usage:
+#   dot1x_CheckDHCPBroadcastBlocked $protectedPortId $dhcpPortId \
+#	  $supMacCampus "10.1.1.1" "10.1.1.3" 
+#
+##################################################################
+proc dot1x_ixCheckDHCPBroadcastBlocked { protectedPortId dhcpPortId \
+	srcMac dhcpServer reqIP} {
+
+    set broadcastMac "FF FF FF FF FF FF"
+
+    StartPortsCapture [list $protectedPortId]
+    set rawframe [SendDHCPRequest $srcMac 2 $dhcpServer $reqIP 0]
+
+    StopPortsCapture [list $protectedPortId]
+    
+    report_start_test "Check DHCP Broadcast from port:[MapDUTPortId $dhcpPortId] does \
+	    not reach protected port:[MapDUTPortId $protectedPortId]"
+
+    set rawPortDataList [GetCapturedFrames 1]
+    set fCnt 0
+    foreach frame $rawPortDataList {
+	;# Check if we received any broadcast traffic.
+	set targetMac [GetTargetMacAddress $frame]
+	if {$targetMac == $broadcastMac} {
+	    incr fCnt
+	    result_debug "Protected port [MapDUTPortId $protectedPortId] received illegal broadcast $frame"
+	}
+    }
+
+    if {$fCnt == 0} {
+	result_ok "DHCP Broadcasts blocked on protected port [MapDUTPortId $protectedPortId]"
+    } else {
+	result_error "Protected port [MapDUTPortId $protectedPortId] received $fCnt broadcast packets"
+    }
+    report_end_test
+}
+
+################################################################## 
+# Procedure Name: dot1x_CheckARPBroadcastBlocked
+#   
+# Description: Ping from DUT out unprotected port.  Verify that ARP 
+#              Broadcast is sent out unprotected port and protected 
+#              port.   
+#              We assume protected and unprotected ports ARE 
+#              ON THE SAME VLAN!  
+# Input args: 
+#     protectedPortId    Port ID of netlogin port.
+#     unprotectedPortId: Port ID of non-netlogin port.
+#     destIp:            IP Address in ARP.  We use this to clear
+#                        the entry to make sure we get a new ARP.
+#
+# Output args: none
+#
+# Typical Usage:
+#     Login $DUT1_CONNECT
+#     dot1x_CheckARPBroadcast $protectedPortId $pingPortId "10.1.1.100"
+#
+##################################################################
+proc dot1x_CheckARPBroadcastBlocked { protectedPortId unprotectedPortId destIp } {
+    
+    set portIdList [list $protectedPortId $unprotectedPortId]
+    
+    ;# Delete destIp entry from ARP table to make sure we generate ARP.
+    SendACmd "clear iparp $destIp"
+
+    report_start_test "Sending ping from DUT to $destIp to generate ARP"
+
+    StartPortsCapture $portIdList
+
+    SendACmd "ping $destIp"
+
+    StopPortsCapture $portIdList
+    
+    set rawPortDataProtected [GetCapturedFrames $protectedPortId]
+    set rawPortDataUnprotected [GetCapturedFrames $unprotectedPortId]
+    
+    result_debug "******************** PROTECTED PORT DATA ************************"
+    set protectedStatus   0
+    set unprotectedStatus 0
+    foreach frame $rawPortDataProtected {
+	
+	set msgType [GetMessageType $frame]
+	result_debug "($msgType) Raw: $frame"
+	if [regexp "ARP_REQUEST" $msgType ] {
+	    set protectedStatus 1
+	}
+
+    }
+
+    result_debug "******************** UNPROTECTED PORT DATA ************************"
+    foreach frame $rawPortDataUnprotected {
+	
+	set msgType [GetMessageType $frame]
+	result_debug "($msgType) Raw: $frame"
+	if [regexp "ARP_REQUEST" $msgType] {
+	    set unprotectedStatus 1  
+	}
+
+    }
+    if {$protectedStatus && $unprotectedStatus} {
+	result_ok "Broadcast ARP_REQUEST seen on Protected AND Unprotected Port"
+    } else {
+	result_error "No ARP_REQUEST seen on Protected($protectedStatus) and/or Unprotected Port($unprotectedStatus)"
+    }
+    report_end_test
+}
+
+
+################################################################## 
+# Procedure Name: dot1x_VerifyDHCPBootPRelay
+#   
+# Description: Verify we can reach external DHCP server.  We send DHCP 
+#              request from supplicant on txPortId with MAC srcMac
+#              to external DHCP server after authenticating.
+#
+# NOTE: We only check that packet is forwarded by looking at 
+#       BootPRelay Stats.  We don't actually check for response.
+#       That's left for a future exercise.  This actually only
+#       an interim check.  Ideally, Ixia IxAuth should support
+#       DHCP, to really validate.  Until then, this is good enough
+#  
+# Input args: 
+#     txPortId: Port to transmit out of
+#     srcMac:   Source address of supplicant MAC.
+#
+# Output args: none
+#
+# Typical Usage:
+#    Login $DUT1_CONNECT
+#    .....802.1x Authenticated $cookedSupMac.....     
+#    dot1x_VerifyDHCPBootPRelay 1 $cookedSupMac
+#
+##################################################################
+proc dot1x_VerifyDHCPBootPRelay { txPortId srcMac } {
+  
+    global switchPort2DefaultRouter
+
+    SendACmd "clear counters"
+
+    set frame [SendDhcpFrame -txPortId $txPortId -destMac "FF FF FF FF FF FF" \
+	    -sourceMac $srcMac -sourceIp "0.0.0.0" \
+	    -destIp "255.255.255.255" -opCode "dhcpBootRequest" \
+	    -optionCodeList [list dhcpMessageType dhcpDiscover] \
+	    -clientHwAddr $srcMac];     	
+    
+    result_debug "(802.1x) DHCP Discover frame: $frame"
+    
+    ;# Verify bootprelay stats increasing with show ipstats
+;# DHCP/BOOTP relay statistics for virtual router "VR-Default"               
+;#     Received to server =          1  Received to client =          0
+;#     Requests relayed   =          1  Responses relayed  =          0
+;#     DHCP Discover      =          1  DHCP Offer         =          0
+;#     DHCP Request       =          0  DHCP Decline       =          0
+;#     DHCP Ack           =          0  DHCP NAck          =          0
+;#     DHCP Release       =          0  DHCP Inform        =          0
+
+
+    set parameterList [list]
+    if {[CompareRelease [GetVersion "DUT1"] "12.2.0.4"]>=0} {
+       lappend parameterList "{Received from client\ *=\ *1} exist";
+    } else {
+       lappend parameterList "{Received to server\ *=\ *1} exist";
+    }
+    if {$switchPort2DefaultRouter != "mgmt"} {
+       lappend parameterList "{Requests relayed\ *=\ *1} exist";  
+    }
+    CheckKeyValue "show bootprelay" $parameterList -comment "DHCP relay stats";
+    unset parameterList;
+}
+
+
+################################################################## 
+# Procedure Name: dot1x_VerifySupplicantPackets
+#   
+# Description: 
+#     rawPortData: Raw frames data
+#     srcMac:      Source MAC that we're looking for
+#     dstMac       Dest MAC that we're looking for
+#     packetExpr:  Type of packet to look for. This should match msgTypes returned
+#                  from MessageDecoding.tcl.  If MessageDecoding.tcl does not support
+#                  a particular packet type, this procedure will not work.
+#                  Use alternation "|" symbol (i.e. "stringA|stringB") to match multiple strings
+#     rx:          "yes" | "no"   yes-we should receive, no-we should NOT receive any
+# 
+# Input args: 
+#
+# Output args: none
+#
+# Typical Usage:
+#    dot1x_VerifySupplicantPackets $rawPortData $cookedDutMac $cookedSupMac "EAP.*REQ"
+#    dot1x_VerifySupplicantPackets $rawPortData $cookedDutMac $cookedSupMac "EAP.*FAIL"
+#    dot1x_VerifySupplicantPackets $rawPortData $srcMac $dstMac "EAP.*REQUEST_IDENTITY|EAP.*SUCC"
+#
+##################################################################
+proc dot1x_VerifySupplicantPackets { rawPortData srcMac dstMac packetExpr {rx "yes"} } {
+
+    report_start_test "Verify we receive correct packets"
+
+    set statusCnt 0
+
+    foreach frame $rawPortData {
+	set msgType [GetMessageType $frame]
+	set frameDstMac [GetDestMacAddress $frame]
+	set frameSrcMac [GetSourceMacAddress $frame]
+
+	result_debug "FRAME TYPE: $msgType src:$frameSrcMac dst:$frameDstMac"
+	result_debug "LOOKING FOR src:$srcMac dst:$dstMac"
+	
+	;# Verify supplicant received Success/Fail Frame.
+	if {[regexp -nocase "$packetExpr" $msgType]} {
+	    result_debug "---> Got $packetExpr Packet <---"
+	    if { ($srcMac == $frameSrcMac) && ($dstMac == $frameDstMac) } {
+		incr statusCnt 
+	    }
+	}
+    }
+    
+    if { ($statusCnt == 0) && ($rx == "no") } {
+	result_ok "Supplicant received $statusCnt messages as expected ($packetExpr)"
+    } elseif { ($statusCnt == 0) && ($rx == "yes") } {
+	result_error "Supplicant received NO messages, but expected to. ($packetExpr)"
+    } elseif { ($statusCnt > 0) && ($rx == "no") } {
+	result_error "Supplicant received $statusCnt messages, but expected NONE. ($packetExpr)"
+    } elseif { ($statusCnt > 0) && ($rx == "yes") } {
+	result_ok "Supplicant received $statusCnt message as expected ($packetExpr)"
+    }
+
+    report_end_test
+
+}
+
+################################################################## 
+# Procedure Name: dot1x_VerifySupplicantEAPPackets
+#   
+# Description: Looks at raw frame data from capture and verifies that 
+#              supplicant received the EAP REQUEST_IDENTITY and SUCCESS 
+#              packets.
+# 
+# Input args: 
+#     rawPortData: Raw port data from a packet capture 
+#     srcMac:      Src MAC to search for
+#     dstMac:      Dst MAC to search for
+#     status:      "SUCCESS" | "FAIL"
+#
+# Output args: none
+#
+# Typical Usage:
+#       dot1x_VerifySupplicantEAPPackets $rawPortData $cookedDutMac $cookedSupMac
+#
+##################################################################
+proc dot1x_VerifySupplicantEAPPackets { rawPortData srcMac dstMac {status "SUCCESS"}} {
+
+
+    dot1x_VerifySupplicantPackets $rawPortData $srcMac $dstMac \
+	    "EAP.*$status"
+
+#	    "EAP.*REQUEST_IDENTITY|EAP.*$status"
+
+    return
+}
+
+
+################################################################## 
+# Procedure Name: dot1x_VerifyTaggedPackets
+#   
+# Description: Verify whether we find any tagged frames in a raw
+#              frame capture.
+#
+# Input args: 
+#     rawFrameData:   Ixia packet capture frames
+#     tag:            Tag number. No tag means we should NOT receive any
+#     comment:        Normal comment to output to test
+#
+# Output args: none
+#
+# Typical Usage:
+#    dot1x_VerifyTaggedPackets $rawData_1 "" "Dot1x port [MapDUTPortId 1]"    ;# No tag
+#    dot1x_VerifyTaggedPackets $rawData_2 "$tag"  "Tagged port [MapDUTPortId 2]"  
+#
+##################################################################
+proc dot1x_VerifyTaggedPackets { rawFrameData {tag ""} {comment ""}} {
+
+    if {$tag == ""} {
+	report_start_test "Verify packets are NOT tagged ($comment)"
+
+	;# Stop as soon as we find a tagged packet
+	set curTag -1
+	foreach frame $rawFrameData {
+	    set curTag [GetTagId $frame]
+	    if { $curTag > -1 } {
+		result_error "Expected no tagged packets. Got packet $frame with VLAN ID $curTag"
+		break;
+	    }
+	}
+	if { $curTag == -1 } {
+	    result_ok "No tagged packets found"
+	}
+	
+    } else {
+	report_start_test "Verify packets are tagged. VLAN ID $tag ($comment)"
+
+	;# Check that NO PACKETS are tagged
+	foreach frame $rawFrameData {
+	    set curTag [GetTagId $frame]
+	    if {$curTag == $tag} {
+		result_ok "Got a matching tagged packet with id $tag"
+		break;
+	    }
+	}
+	if { $curTag != $tag } {
+	    result_error "No tagged packets found.  Expected packets with VLAN ID $tag"
+	}
+    }
+
+    report_end_test
+}
+
+################################################################## 
+# Procedure Name: dot1x_stripMac
+#  
+# Description: Proc that strips MAC of ":" seperators
+#
+# Input args:  mac: MAC address with ":" to strip
+#
+# Output args: cooked MAC with no : seperators
+#
+##################################################################
+proc dot1x_stripMac { mac } {
+
+    set cookedMac ""
+    regsub -all ":" $mac " " cookedMac
+
+    return $cookedMac
+}
+
+################################################################## 
+# Procedure Name: dot1x_delimitMac
+#  
+# Description: Proc that replaces MAC " " with ":" seperators
+#
+# Input args:  mac: MAC address
+#
+# Output args: uncooked MAC with : seperators
+#
+##################################################################
+proc dot1x_delimitMac { mac } {
+
+    set uncookedMac ""
+    regsub -all " " $mac ":" uncookedMac
+
+    return $uncookedMac
+}
+
+################################################################## 
+# Procedure Name: dot1x_getMacForIP 
+#  
+# Description: Retrieves MAC for a given IP from a list returned
+#              by dot1x_ixCreatePortIfs.  Format is {port ip mac}
+#
+# Input args:  ip, macList, cooked
+#
+# Output args: MAC with : seperators, unless cooked != 0
+#
+##################################################################
+proc dot1x_getMacForIP { ip macList {cooked 0}} {
+
+    set mac ""
+
+    result_debug "dot1x_getMacForIP{} macList: $macList"
+
+
+    foreach entry $macList {
+	;# entry: <port> <IP> <{MAC}>
+	result_debug "entry: $entry"
+	
+	set ipAddr [lindex $entry 1]
+
+	if {$ipAddr == $ip} {
+	    set mac [lindex $entry 2]
+	    break
+	}
+    }
+
+    if {$cooked} {
+	return $mac   ;# Space delimited MAC
+    } else {
+	return [dot1x_delimitMac $mac]    ;# : delimited MAC
+    }
+}
+
+
+################################################################## 
+# Procedure Name: dot1x_SkipTestBasedOnPlatform 
+#  
+# Description: Skip a test because not supported for a platform
+#
+# Input args:  platformList as defined in..
+#                 DUTs_info(DUT1,platform) "Summit200-24"
+#              DUT
+#
+# Output args: 1 skip - 0 don't skip
+#
+##################################################################
+proc dot1x_SkipTestBasedOnPlatform { platformList {DUTName "DUT1"}} {
+
+    set platform [GetPlatform $DUTName]
+
+    result_debug "dot1x_SkipTestBasedOnPlatform $platform  list:$platformList"
+    foreach platformToSkip $platformList {
+	result_debug "$platformToSkip"
+	if [regexp -nocase $platformToSkip $platform] {
+	    result_debug "dot1x_SkipTestBasedOnPlatform $platform  $platformToSkip returning 1"
+	    
+	    return 1
+	}
+    }
+    return 0
+}
+
+
+################################################################## 
+# Procedure Name: dot1x_CheckTaskCrash
+#  
+# Description: Check logs for a task crash.  You must know the name
+#              of the task.
+#
+# We look for a log entry similiar to ...
+# 04/02/2004 21:45.58 <CRIT:SYST> Task tDot1xTask (a783d331) failed
+#
+# Input args:  taskName  vxWorks Task Name
+#
+# Output args: ok    - no crash
+#              error - found task failure
+#
+##################################################################
+proc dot1x_CheckTaskCrash { taskName {DUTName "DUT1"} {exitOnFailure 1}} {
+    
+    global DUT1_CONNECT
+    global DUT2_CONNECT
+    global DUT3_CONNECT
+    global DUT4_CONNECT
+    global DUT5_CONNECT
+
+    Login [set [set DUTName]_CONNECT]
+
+    set paramList [list]
+
+    lappend paramList "{Task $taskName .* failed} notExist"
+    set returnVal [CheckKeyValue "show log" $paramList]
+    
+    if {([regexp -nocase "error" $returnVal]) && ($exitOnFailure)} {
+	error "ERROR: Task $taskName crashed...script terminating"	
+    } else {
+	return $returnVal
+    }
+}
+
+
+proc dot1x_CheckDot1xTaskCrash {} {
+    
+    dot1x_CheckTaskCrash "tDot1xTask"
+}
+
+proc ixiaPortLpReboot {} {
+
+global portMappingList
+set ixiaPortList ""
+
+foreach portList $portMappingList {
+  set portId [lindex $portList 0]
+  result_debug "port is $portId"
+  MapIxiaPortId $portId cha card port
+  portCpu reset $cha $card $port
+  lappend ixiaPortList "$cha $card $port"
+  }
+  result_debug "ixia list is $ixiaPortList"
+  ixWritePortsToHardware ixiaPortList
+  exSleep 15
+
+}
+
+################################################################## 
+# Procedure Name: dot1x_ConnectRadiusMysql
+#  
+# Description: Procedure to connect to mysql radius database
+#
+#
+# Input args:  hostIp userName password db 
+#
+# Output args: ok    - Connection ok
+#              error - Connection failed
+#
+##################################################################
+
+proc dot1x_ConnectRadiusMysql {hostIp userName password db} {
+
+global radius_handler
+global mysqlstatus
+
+set radius_handler [mysqlconnect -host $hostIp -user $userName -password $password]
+
+mysqluse $radius_handler $db
+
+if {$mysqlstatus(code) != 0} {
+  puts "$mysqlstatus(message)"
+  return "error"
+}
+
+return "ok"
+}
+
+
+################################################################## 
+# Procedure Name: dot1x_CloseRadiusMysql
+#  
+# Description: Procedure to close to mysql handler radius database
+#
+#
+# Input args:  
+#
+# Output args: 
+#
+##################################################################
+
+proc dot1x_CloseRadiusMysql {} {
+
+global radius_handler
+
+mysqlclose $radius_handler
+
+}
+
+
+################################################################## 
+# Procedure Name: dot1x_GetUserAttribute
+#  
+# Description: Procedure to get value for a given attribute from radius 
+#              database from radcheck table
+#
+# Input args: username and attribue (sample dot1x_GetUserAttribute abcd Password)
+#             returns password of the username abcd 
+#
+# Output args: value for the given attribute
+#
+##################################################################
+
+proc dot1x_GetUserAttribute {username attribute} {
+
+global radius_handler
+ set ret_attribute [mysqlsel $radius_handler "SELECT value FROM radcheck where username = '$username' && attribute = '$attribute'" -flatlist]
+
+  return $ret_attribute
+
+}
+
+################################################################## 
+# Procedure Name: dot1x_ChgUserAttribute
+#  
+# Description: Procedure to change value for a given attribute from radius 
+#              database radcheck
+#
+# Input args: username, attribue and value 
+#
+# Output args: error = unsuccess set; ok - successful set
+#
+##################################################################
+proc dot1x_ChgUserAttribute {username attribute value} {
+
+global radius_handler
+mysqlexec $radius_handler "UPDATE radcheck SET value = '$value' where username = '$username' && attribute = '$attribute'"
+
+if {[dot1x_GetUserAttribute $username $attribute] != $value} {
+  return "error"
+}
+
+return "ok"
+}
+
+################################################################## 
+# Procedure Name: dot1x_GetReplyAttribute
+#  
+# Description: Procedure to get value for a given attribute from radius 
+#              database from radreply table
+#
+# Input args: username, attribue and value 
+#
+# Output args: error = unsuccess set; ok - successful set
+#
+##################################################################
+proc dot1x_GetReplyAttribute {username attribute} {
+
+global radius_handler
+ set ret_attribute [mysqlsel $radius_handler "SELECT value FROM radreply where username = '$username' && attribute = '$attribute'" -flatlist]
+
+  return $ret_attribute
+
+}
+
+################################################################## 
+# Procedure Name: dot1x_GetReplyAttribute
+#  
+# Description: Procedure to get value for a given attribute from radius 
+#              database from radreply table
+#
+# Input args: username, attribue and value 
+#
+# Output args: error = unsuccess set; ok - successful set
+#
+##################################################################
+proc dot1x_SetReplyAttribute {username attribute value} {
+
+ global radius_handler
+# set present [mysqlexec $radius_handler "select * from radreply where username = '$username' && attribute = '$attribute'" -flatlist]
+  set present [mysqlsel $radius_handler "SELECT value FROM radreply where username = '$username' && attribute = '$attribute'" -flatlist]
+
+puts "present value $present"
+if {$present == ""} {
+ if {$attribute == "Termination-Action"} {
+   set op "+="
+ } else {
+   set op ":="
+ }
+ mysqlexec $radius_handler "INSERT into radreply (username, attribute, value, op) VALUES \
+        ('$username','$attribute', '$value','$op')"
+
+} else {
+ mysqlexec $radius_handler "UPDATE radreply SET value = '$value' where username = '$username' && attribute = '$attribute'"
+}
+ if {[dot1x_GetReplyAttribute $username $attribute] != $value} {
+   return "error"
+ }
+
+ return "ok"
+
+}
+
+################################################################## 
+# Procedure Name: dot1x_radiusChgVlanAttribute
+#  
+# Description: dot1x_radiusChgVlanAttribute - changes value for the attribute
+#              Extreme-Netlogin-Extended-Vlan in radreply table
+#              if no entry is found for the username, this procedure creates
+#              a new entry
+#              database from radreply table
+#
+# Input args: username,  value 
+#
+# Output args: error = unsuccess set; ok - successful set
+#
+##################################################################
+
+proc dot1x_radiusChgVlanAttribute {userName value} {
+
+global radius_handler
+global platformRadUsrName
+
+#set username $platformRadUsrName
+
+set present [mysqlsel $radius_handler "select *  from radreply where username = '$userName'"]
+
+if {$present != 0} {
+  mysqlexec $radius_handler "DELETE from radreply where username = '$userName'"
+}
+
+#set attributeType [mysqlsel $radius_handler "SELECT attribute from radreply where username = '$username'\
+#                 && attribute = 'Extreme-Netlogin-Extended-Vlan'" -flatlist]
+  #no rows insert one
+  mysqlexec $radius_handler "INSERT into radreply (username, attribute, value, op) VALUES \
+        ('$userName','Extreme-Netlogin-Extended-Vlan', '$value',':=')"
+  mysqlexec $radius_handler "INSERT into radreply (username, attribute, value, op) VALUES \
+        ('$userName','Termination-Action', '1','+=')"
+  if {[dot1x_GetReplyAttribute $userName Extreme-Netlogin-Extended-Vlan] != $value && \
+      [dot1x_GetReplyAttribute $userName Termination-Action] != 1} {
+    return "error"
+  } else {
+    return "ok"
+  }
+#set attribute "Extreme-Netlogin-Extended-Vlan"
+#set returnValue [dot1x_SetReplyAttribute $useNname $attribute $value]
+return $returnValue
+}
+
+#For Attribute Extreme-Netlogin-Vlan-Tag
+proc dot1x_radiusChgTagAttribute {userName value} {
+
+global radius_handler
+global platformRadUsrName
+
+#set username $platformRadUsrName
+
+set present [mysqlsel $radius_handler "select *  from radreply where username = '$userName'"]
+
+if {$present != 0} {
+  mysqlexec $radius_handler "DELETE from radreply where username = '$userName'"
+}
+
+#set attributeType [mysqlsel $radius_handler "SELECT attribute from radreply where username = '$userName'\
+#                 && attribute = 'Extreme-Netlogin-Extended-Vlan'" -flatlist]
+  #no rows insert one
+  mysqlexec $radius_handler "INSERT into radreply (username, attribute, value, op) VALUES \
+        ('$userName','Extreme-Netlogin-Vlan-Tag', '$value',':=')"
+  mysqlexec $radius_handler "INSERT into radreply (username, attribute, value, op) VALUES \
+        ('$userName','Termination-Action', '1','+=')"
+  if {[dot1x_GetReplyAttribute $userName Extreme-Netlogin-Vlan-Tag] != $value && \
+      [dot1x_GetReplyAttribute $userName Termination-Action] != 1} {
+    return "error"
+  } else {
+    return "ok"
+  }
+#set attribute "Extreme-Netlogin-Extended-Vlan"
+#set returnValue [dot1x_SetReplyAttribute $username $attribute $value]
+return $returnValue
+
+}
+
+#For Attribute Extreme-Netlogin-Vlan
+proc dot1x_radiusChgNtAttribute {userName value} {
+
+global radius_handler
+global platformRadUsrName
+
+#set username $platformRadUsrName
+
+set present [mysqlsel $radius_handler "select *  from radreply where username = '$userName'"]
+
+if {$present != 0} {
+  mysqlexec $radius_handler "DELETE from radreply where username = '$userName'"
+}
+
+#set attributeType [mysqlsel $radius_handler "SELECT attribute from radreply where username = '$userName'\
+#                 && attribute = 'Extreme-Netlogin-Extended-Vlan'" -flatlist]
+  #no rows insert one
+  mysqlexec $radius_handler "INSERT into radreply (username, attribute, value, op) VALUES \
+        ('$userName','Extreme-Netlogin-Vlan', '$value',':=')"
+  mysqlexec $radius_handler "INSERT into radreply (username, attribute, value, op) VALUES \
+        ('$userName','Termination-Action', '1','+=')"
+  if {[dot1x_GetReplyAttribute $userName Extreme-Netlogin-Vlan] != $value && \
+      [dot1x_GetReplyAttribute $userName Termination-Action] != 1} {
+    return "error"
+  } else {
+    return "ok"
+  }
+#set attribute "Extreme-Netlogin-Extended-Vlan"
+#set returnValue [dot1x_SetReplyAttribute $username $attribute $value]
+return $returnValue
+
+}
+
+proc dot1x_ConnectRadiusDatabase {} {
+global Netloginv2RadiusServer
+
+set hostIp "$Netloginv2RadiusServer"
+set userName "autotest"
+set password "autotest"
+set db "radius"
+
+set returnValue [dot1x_ConnectRadiusMysql $hostIp $userName $password $db] 
+
+return $returnValue
+}
+
+################################################################## 
+# Procedure Name: dot1x_CreateRadiusUser
+#  
+# Description: dot1x_CreateRadiusUser - Creates user name in 
+#              the necessary tables if user is not. If no username is 
+#              given then dafault user name md5_isp_$DUT1_IP and for
+#              every user password inserted would be same as the username
+#
+# Input args: username 
+#
+# Output args: error = unsuccess set; ok - successful set
+#
+##################################################################
+proc dot1x_CreateRadiusUser {args} {
+global DUT1_IP
+global radius_handler
+global radVersion
+
+parse_args dot1x_CreateRadiusUser $args {
+      username  ""
+      authType "EAP"
+   }
+
+if {$username == ""} {
+ set username "md5_isp_$DUT1_IP"
+}
+
+if { $radVersion == 0 } {
+    #for radius version < 3.0
+    set PasswdStr "Password"
+} else {
+    set PasswdStr "Cleartext-Password"
+}
+
+set present [mysqlsel $radius_handler "select *  from radusergroup where username = '$username'"]
+if {$present != 0} {
+    dot1x_DeleteRadiusUser -username $username
+    set present 0
+}
+
+if {$present == 0} {
+puts "Adding radius user $username"
+mysqlexec $radius_handler "INSERT into radusergroup (username, groupname) VALUES ('$username', 'sup')"
+
+mysqlexec $radius_handler "INSERT into radcheck (username,attribute,value,op) VALUES ('$username',\
+                           '$PasswdStr', '$username',':=')"
+
+if {$radVersion == 0} {
+mysqlexec $radius_handler "INSERT into radcheck (username,attribute,value,op) VALUES ('$username',\
+                           'Auth-Type', '$authType',':=')"
+}
+set value [dot1x_GetUserAttribute $username "$PasswdStr"]
+
+if {$value != $username} {
+  return "error"
+}
+set value [dot1x_GetUserAttribute $username "Auth-Type"]
+if {$value != $authType} {
+  return "error"
+}
+}
+return "ok"
+
+}
+
+##################################################################
+#
+#
+#
+#
+##################################################################
+proc dot1x_DeleteRadiusUser {args} {
+    global DUT1_IP
+    global radius_handler
+    global radVersion
+
+    parse_args dot1x_DeleteRadiusUser $args {
+          username  ""
+    }
+    puts "Delete radius user $username"
+    if {$username == ""} {
+        set username "md5_isp_$DUT1_IP"
+    }
+
+    set present [mysqlsel $radius_handler "select *  from radusergroup where username = '$username'"]
+
+
+    if {$present != 0} {
+        puts "Radius found and deleting $username"
+        mysqlexec $radius_handler "DELETE FROM radusergroup WHERE username = '$username'"
+        mysqlexec $radius_handler "DELETE FROM radcheck WHERE username = '$username'"
+        mysqlexec $radius_handler "DELETE FROM radreply WHERE username = '$username'";
+    }
+}
+
+
+################################################################## 
+# Procedure Name: dot1x_deleteAllReplyAttribute
+#  
+# Description: dot1x_deleteAllReplyAttribute 
+#
+# Input args: username 
+#
+# Output args: error = unsuccess set; ok - successful set
+#
+##################################################################
+
+proc dot1x_deleteAllReplyAttribute {args} {
+global DUT1_IP
+global radius_handler
+
+parse_args dot1x_deleteAllReplyAttribute $args {
+      username  ""
+   }
+
+if {$username == ""} {
+  return "error"
+}
+
+
+set present [mysqlsel $radius_handler "select *  from radreply where username = '$username'"]
+
+
+if {$present == 0} {
+  return "notPresent"
+}
+
+mysqlexec $radius_handler "delete  from  radreply where username = '$username'";
+
+return "ok"
+
+}
+
+proc Mac_radiusChguserAttribute {userName attr value} {
+
+global radius_handler
+global platformRadUsrName
+
+
+#set username $platformRadUsrName
+
+set present [mysqlsel $radius_handler "select *  from radreply where username = '$userName'"]
+
+if {$present != 0} {
+  mysqlexec $radius_handler "DELETE from radreply where username = '$userName'"
+}
+
+  mysqlexec $radius_handler "INSERT into radreply (username, attribute, value, op) VALUES \
+        ('$userName', '$attr' , '$value',':=')"
+
+  if {[Mac_GetReplyAttribute $userName $attr] != $value } {
+    return "error"
+  } else {
+    return "ok"
+  }
+return $returnValue
+
+}
+proc Mac_GetReplyAttribute {username attribute} {
+
+global radius_handler
+ set ret_attribute [mysqlsel $radius_handler "SELECT value FROM radreply where username = '$username' && attribute = '$attribute'" -flatlist]
+
+  return $ret_attribute
+
+}
+
+proc Mac_radiusSetuserAttribute {userName attr value} {
+
+global radius_handler
+global platformRadUsrName
+
+
+#set username $platformRadUsrName
+  mysqlexec $radius_handler "INSERT into radreply (username, attribute, value, op) VALUES \
+        ('$userName', '$attr' , '$value',':=')"
+
+  if {[Mac_GetReplyAttribute $userName $attr] != $value } {
+    return "error"
+  } else {
+    return "ok"
+  }
+return $returnValue
+
+}

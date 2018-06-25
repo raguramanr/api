@@ -1,0 +1,534 @@
+###############################################################################
+# procedure: ExecuteRobotTRM
+#
+# a procedure to launch robot via the resource manager
+#
+#
+###############################################################################
+proc ExecuteRobotTRM {qId userInput args} {
+    global DEVREG tftpServerList ROBOT
+
+    parse_args ExecuteRobotTRM $args {
+        help      "null"
+    }
+
+
+    # to be moved to common.cfg
+    set tftp [lindex $tftpServerList 0]
+
+    set ROBOT(branch) "CIT_PROD_AUTOMATION"
+    set ROBOT(TRMIP) "10.52.15.99"
+    set ROBOT(TRM_CLI) "java -jar TRMClient.jar -c START_AND_EXIT "
+    set ROBOT(BASEDIR) "/robot/SQA_ROBOT_AUTOMATION/"
+    set ROBOT(YAMLRELDIR) "ExtremeAutomation/Resources/TestEnvironments/Swdev/Rdu/"
+    set ROBOT(SUITERELDIR) "ExtremeAutomation/Tests/Unit/NetworkElements/"
+    set ROBOT(JARSREL) "ExtremeAutomation/Library/JavaManager/jars"
+    set ROBOT(JARDIR) ${ROBOT(BASEDIR)}${ROBOT(JARSREL)}
+
+
+    #  ----------------   Test Beds   ------------------------------
+    set ROBOT_YAML(x440g2,0) "Physical/Exos/cit_x440g2_2node_1.yaml"
+    set ROBOT_YAML(x450g2,0) "Physical/Exos/cit_x450g2_2node_1.yaml"
+    set ROBOT_YAML(x460g2,0) "Physical/Exos/cit_x460g2_2node_1.yaml"
+    set ROBOT_YAML(x620,0)   "Physical/Exos/cit_x620_2node_1.yaml"
+    set ROBOT_YAML(i386,0)   "Virtual/Exos/exosvm_1node_1.yaml"
+    #  -------------------------------------------------------------
+
+    array set uInput $userInput
+    set familyList ""
+    set sNameList "cougar|summit|jaguar"
+    set oNameList "onie|870|690"
+    set iNameList "386|exosvm"
+    set user "null"
+    set modStat ""
+    set yTail ""
+    foreach n [array names uInput] {
+        if {[regexp "Image:" $n] && [regexp -nocase "$sNameList" $uInput($n)]} {
+            if {[lsearch $familyList "summitX"] < 0} {
+                lappend familyList "summitX"
+                set famFile(summitX) $uInput($n)
+            }
+        } elseif {[regexp "Image:" $n] && [regexp -nocase "$oNameList" $uInput($n)]} {
+            if {[lsearch $familyList "onie"] < 0} {
+                lappend familyList "onie"
+                set famFile(onie) $uInput($n)
+            }
+        } elseif {[regexp "Image:" $n] && [regexp -nocase "$iNameList" $uInput($n)]} {
+            if {[lsearch $familyList "i386"] < 0} {
+                lappend familyList "i386"
+                set famFile(i386) $uInput($n)
+            }
+        } elseif {[regexp "Image:" $n] && $uInput($n) == "NULL"} {
+            # Do nada
+        } elseif {[regexp "Image:" $n]} {
+            puts "call the wrapper proc to check $uInput($n)"
+        } else {
+            #puts "Found name: $n   with value $uInput($n)"
+            if {$n == "platformToRunOn:"} {
+                set plat [string trim $uInput($n)]
+                set yTail [file tail $ROBOT_YAML($plat,0)]
+                set modStat "runningOn$yTail"
+                puts "\n\n\nFound plat $plat \n\n"
+            }
+            if {$n == "moduleNames:"} {
+                set mod [string trim [lindex $uInput($n) 0]]
+            }
+            if {$n == "userid:"} {
+                set user [string trim $uInput($n)]
+            }
+        }
+    }
+    # Put the images on the tftpserver in Robot format = RTP_######_######{family}.xos
+    foreach ifl $familyList {
+        if {[file exists $famFile($ifl)]} {
+            if {[catch {exec cp -L $famFile($ifl) /tftpmount/${qId}${ifl}.xos} reason]} {
+                puts "Copy of $famFile($ifl) to tftp failed"
+            } else {
+                puts "Copy $ifl to tftp: mv $famFile($ifl) /tftpmount/${qId}${ifl}.xos"
+            }
+        } else {
+            puts "Error $ifl file $famFile($ifl) does not exist"
+        }
+    }
+
+    # ---------------   Handle the TRM parts   -------------------------------
+    # Build the -r test bed part
+    set ymlf ${ROBOT(BASEDIR)}${ROBOT(YAMLRELDIR)}$ROBOT_YAML($plat,0);# Everything is 0 index for now
+    if {![file exists $ymlf]} {
+        puts "\n\nError where is the yml $ymlf"
+        return -1;
+    } else {
+        set rFile ${ROBOT(YAMLRELDIR)}$ROBOT_YAML($plat,0);
+        #puts "\nFound $rFile\n"
+    }
+    # Build the -e test plan / suite folder location to run
+    set suiteDir ${ROBOT(BASEDIR)}${ROBOT(SUITERELDIR)}${mod}/TestCases
+    if {![file isdirectory $suiteDir]} {
+        puts "\n\nError where is the suite directory $suiteDir"
+    } else {
+        set eLink ${ROBOT(SUITERELDIR)}${mod}/TestCases
+    }
+    if {![file isdirectory $ROBOT(JARDIR)]} {
+        puts "\n\nError where is the jar directory $ROBOT(JARDIR)"
+        return -1;
+    }
+    # ---------------------------------------------------------------------
+    # TRM CMD Creation
+    # ---------------------------------------------------------------------
+    set trmCmd "-f $mod -r $rFile -e $eLink "
+    if {$user != "null" && $user != "release-manager"} {
+        append trmCmd "-u $user "
+    }
+    if {$ROBOT(branch) != "origin" && $ROBOT(branch) != ""} {
+        append trmCmd "-g $ROBOT(branch) "
+    }
+    append trmCmd "-b {'\"--listener /Report_Data/devRegListener.py  -v MODULE:$mod -v TFTPSERVER:$tftp -v QUEUEID:$qId\"'} "
+    append trmCmd "-z $ROBOT(TRMIP)"
+    append ROBOT(TRM_CLI) $trmCmd
+    puts "catch exec $ROBOT(TRM_CLI)"
+
+    set myD [pwd]
+    puts "Change to the jar dir for execution: $ROBOT(JARDIR)"
+    cd $ROBOT(JARDIR)
+    puts "At pre TRM [pwd]"
+    set trmReturn ""
+    if {[catch {exec {*}$ROBOT(TRM_CLI)} trmReturn]} {
+        puts "TRM CALL FAILED: $ROBOT(TRM_CLI)"
+    }
+    cd $myD
+    puts "post [pwd]"
+
+    puts "TRM returned $trmReturn"
+
+    #Test Started: be99cfa9-c093-4e09-b4e9-5a68bb4fc7e9
+    regexp -nocase {Test Started: ([a-f0-9]+\-[a-f0-9]+\-[a-f0-9]+\-[a-f0-9]+\-[a-f0-9]+)} \
+              $trmReturn a guid
+    if {[info exists guid]} {
+        puts "TRM returned a guid of $guid"
+        set uInput(runStatus:) $modStat
+        _createRobotImagesFinished $qId [array get uInput]
+    } else {
+        puts "Error in guid parser. Exiting"
+        set modStat "MainFailedOn$yTail"
+        set uInput(runStatus:) $modStat
+        _createRobotImagesFinished $qId [array get uInput]
+        return;
+    }
+
+    puts "Assigned regression label $qId .  Robot GUID $guid"
+    if {$DEVREG(mysql,UseDb)} {
+        set bId "0";
+        set bType "Private";
+        set bTag "";
+        set bCom "";
+        set bBranch $uInput(branchAndPD:);
+        catch {regexp -nocase {buildID:([0-9]+)\s+buildType:([a-zA-Z]+)\s+branch:([^ ]+)\s+tag:([a-z0-9\._\-]+)?\s+comment:(.*)\}} \
+        $uInput(branchAndPD:) dummy bId bType bBranch bTag bCom} cout
+        #puts "branchAndPD: $uInput(branchAndPD:)\n\nMatched:\nbId $bId\nbType $bType\nbranch $bBranch\ntag$bTag\ncomment $bCom"
+        set bBranch [string trim $bBranch]
+        set bTag [string trim $bTag]
+        set bComment [string trim $bCom]
+
+        InsertQueueEntry -id_label "$qId" -build_id "$bId" -reg_server "$DEVREG(server,FULLHOST)" \
+            -user "$uInput(userid:)" -platform "$uInput(platformToRunOn:)" -type "$bType" -status "Queued" \
+            -branch "$bBranch" -tag "$bTag" -comment "$bComment" -robot_guid "$guid"
+
+
+        set rId [getRegIdFromQId $qId]
+        puts "The reg_id from the database is: $rId"
+        # --- Now post each module to the test_module table ---
+        set u 0
+        foreach mod $uInput(moduleNames:) {
+            set myLst [lindex $uInput(moduleLists:) $u]
+            InsertQModuleEntry -reg_id $rId -name $mod -list $myLst -status "queued"
+            incr u
+        }
+    }
+}
+##############################################################################
+# procedure: _getUniqueRegQID
+#    Proc to create the unique imagesQueued/RTP_######_##### directory
+#    for a new entry.  Avoid duplicates
+##############################################################################
+proc _getUniqueRegQID {} {
+    global DEVREG
+
+    # --- Code the create the regression dir if it is not present ---
+    if {![file isdirectory $DEVREG(server,regressionDir)]} {
+        if {[catch {file mkdir $DEVREG(server,regressionDir)} reason]} {
+                puts "Error: Can not create regression dir...$reason"
+                exit -1
+        }
+        chmod 0777 $DEVREG(server,regressionDir)
+    }
+    if {![file isdirectory $DEVREG(server,imagesQueuedDir)]} {
+        if {[catch {file mkdir $DEVREG(server,imagesQueuedDir)} reason]} {
+            puts "Error: Can not create imagesQueuedDir dir...$reason"
+            exit -1
+        }
+        chmod 0777 $DEVREG(server,imagesQueuedDir)
+    }
+    set noId 1
+    set fc 0
+    while {$noId} {
+        set qId [format %s_%s $DEVREG(server,location) [clock format [clock seconds] \
+                         -format %y%m%d_%H%M%S]]  ;# for now this is the queueId
+        set queueDir "$DEVREG(server,imagesQueuedDir)/$qId"
+        if {![file isdirectory $queueDir]} {
+            # --- Create the queuedir.  If exists get a new name ---
+            if {[catch {file mkdir $queueDir} reason]} {
+                puts "Error: Can not create queueDir dir...$reason"
+                if {$fc>3} {
+                    return -1
+                }
+                incr fc
+            } else {
+                set noId 0;
+                return $qId
+            }
+        } else {
+            incr fc
+            after 1001;
+        }
+    }
+}
+###################################################################################
+# procedure: _createRobotImagesFinished
+#     A dummy imagesFinished directory with just an info file
+# 
+###################################################################################
+proc _createRobotImagesFinished {qId userInput} {
+    global DEVREG
+
+    array set uInput $userInput
+
+    if {![file isdirectory $DEVREG(server,imagesFinishedDir)]} {
+        if {[catch {file mkdir $DEVREG(server,imagesFinishedDir)} reason]} {
+            puts "Error: Can not create dir...$reason"
+            return;
+        }
+        chmod 0777 $DEVREG(server,imagesFinishedDir)
+    }
+    if {![file isdirectory $DEVREG(server,imagesFinishedDir)/$qId]} {
+        if {[catch {file mkdir $DEVREG(server,imagesFinishedDir)/$qId} reason]} {
+            puts "Error: Can not create dir...$reason"
+            return;
+        }
+        chmod 0777 $DEVREG(server,imagesFinishedDir)/$qId
+    }
+    if {[set fd_out [FileOpen "$DEVREG(server,imagesFinishedDir)/$qId/info" w]]==-1} {
+        puts "could not create $fd_out"
+        return;
+    }
+    foreach varName [array names uInput] {
+        puts $fd_out "[format "%-20s %-20s" "$varName" $uInput($varName)]"
+    }
+    close $fd_out
+    chmod 0777 $DEVREG(server,imagesFinishedDir)/$qId/info
+}
+###################################################################################
+# procedure: _createRobotReportDir
+#
+###################################################################################
+proc _createRobotReportDir {qId mod} {
+    global DEVREG MAIN
+
+    set sub [_getRobotSubFolder $qId];# The year and month of the qId.  "1801"
+    if {![file isdirectory $DEVREG(server,robotResultMnt)/$sub]} {
+        if {[catch {file mkdir $DEVREG(server,robotResultMnt)/$sub} reason]} {
+            puts "Error: Can not create robot subdir...$reason"
+            return;
+        }
+        chmod 0777 $DEVREG(server,robotResultMnt)/$sub
+    }
+    if {![file isdirectory $DEVREG(server,robotResultMnt)/$sub/$qId]} {
+        if {[catch {file mkdir $DEVREG(server,robotResultMnt)/$sub/$qId} reason]} {
+            puts "Error: Can not create dir...$reason"
+            return;
+        }
+        chmod 0777 $DEVREG(server,robotResultMnt)/$sub/$qId
+    }
+    if {![file isdirectory $DEVREG(server,robotResultMnt)/$sub/$qId/$mod]} {
+        if {[catch {file mkdir $DEVREG(server,robotResultMnt)/$sub/$qId/$mod} reason]} {
+            puts "Error: Can not create dir...$reason"
+            return;
+        }
+        chmod 0777 $DEVREG(server,robotResultMnt)/$sub/$qId/$mod
+    }
+    if {![file isdirectory $DEVREG(server,robotResultMnt)/$sub/$qId/$mod/Report]} {
+        if {[catch {file mkdir $DEVREG(server,robotResultMnt)/$sub/$qId/$mod/Report} reason]} {
+            puts "Error: Can not create dir...$reason"
+            return;
+        }
+        chmod 0777 $DEVREG(server,robotResultMnt)/$sub/$qId/$mod/Report
+    }
+    return $DEVREG(server,robotResultMnt)/$sub/$qId/$mod/Report
+}
+###################################################################################
+# Procedure: get_robot_yaml_info
+#
+#    Get cfg location and type from cfg/robot.cfg file
+#
+###################################################################################
+proc get_robot_yaml_info {} {
+    global MAIN DEVREG robplatform
+
+    if {$MAIN(harness) != "robot"} {
+        puts "This is not a robot test bed"
+        return;
+    }
+    if {[array exists robplatform]} {
+        puts "cfg/robot.cfg has not been sourced"
+    }
+    foreach platform_code [array names robplatform] {
+        set pCList $robplatform($platform_code)
+        set pCfg [lindex $pCList 0]   ;# cit_x460g2_2node_1.yaml
+        set pCfgPath [lindex $pCList 1]      ;# TestEnvironments/Swdev/Rdu/Physical/Exos/
+        set pArea [lindex $pCList 2]        ;# robotunit
+        set pType [lindex $pCList 3]    ;# cit2node
+        if {$pCfg == $MAIN(cfg)} {
+            set DEVREG(server,CFG_PATH) $pCfgPath
+            set DEVREG(server,CFG_AREA) $pArea
+            set DEVREG(server,CFG_TYPE) $pType
+            return $platform_code
+        }
+    }
+}
+###################################################################################
+# Procedure: _getRobotSubFolder $qId
+#    On the NAS we are going to store results in a format:
+#    /{nas_mount}/<{year}{month}/queueid/feature
+#
+#    This procedure determins the yearmonth from the given queue_id
+#   
+###################################################################################
+proc _getRobotSubFolder {qId} {
+
+    set eList [split $qId "_"]
+    set ymBig [lindex $eList 1]
+    return [string range $ymBig 0 3]
+
+}
+###################################################################################
+# Procedure: _copyRobotImagesToTftp
+#
+###################################################################################
+proc _copyRobotImagesToTftp {userInput args} {
+    global DEVREG tftpServerList ROBOT
+
+    parse_args _copyRobotImagesToTftp $args {
+        qId       "null"
+        help      "null"
+    }
+
+    array set uInput $userInput
+    set familyList ""
+    foreach n [array names uInput] {
+        if {[regexp -nocase "(\[a-zA-Z0-9_]+)Image:" $n a p] && $uInput($n) != "NULL"} {
+            set lowerPlat [string tolower $p]
+            if {[lsearch $familyList $DEVREG(platImageType,$lowerPlat)] < 0} {
+                lappend familyList $DEVREG(platImageType,$lowerPlat)
+                set famFile($DEVREG(platImageType,$lowerPlat)) "$DEVREG(server,imagesQueuedDir)/$qId/[file tail $uInput($n)]"
+            }
+        } elseif {[regexp "Image:" $n] && $uInput($n) == "NULL"} {
+            # Do nada
+        } elseif {[regexp "Image:" $n]} {
+            puts "call the wrapper proc to check $uInput($n)"
+        } else {
+            #puts "Found name: $n   with value $uInput($n)"
+            if {$n == "platformToRunOn:"} {
+                set fplat [string trim $uInput($n)]
+                #set yTail [file tail $ROBOT_YAML($plat,0)]
+                #set modStat "runningOn$yTail"
+                puts "\n\n\nFound plat $fplat \n\n"
+            }
+        }
+    }
+    # Put the images on the tftpserver in Robot format = RTP_######_######{family}.xos
+    foreach ifl $familyList {
+        if {[file exists $famFile($ifl)]} {
+            if {[catch {exec cp -L $famFile($ifl) /tftpmount/${qId}${ifl}.xos} reason]} {
+                puts "Copy of $famFile($ifl) to tftp failed"
+            } else {
+                puts "Copy $ifl to tftp: mv $famFile($ifl) /tftpmount/${qId}${ifl}.xos"
+            }
+        } else {
+            puts "Error $ifl file $famFile($ifl) does not exist"
+        }
+    }
+}
+#######################################################################################
+#
+#
+#######################################################################################
+proc UpdateRobotImagesDone {qId runIndex rstatus} {
+    global DEVREG MAIN env
+    WriteToQueueDebug "UpdateRobotImagesDone args" "qId $qId\nrunIndex $runIndex\nrstatus: $rstatus";
+
+    set runningQueueFile "$DEVREG(server,imagesRunningDir)/$qId"
+    set skipUpdate 1
+    if {![catch {glob -- $DEVREG(server,imagesRunningDir)/$qId} queues]} { ;# qId is already running
+        #open the current running info file
+        if {[set fd_q [FileOpen $runningQueueFile/info r+]]==-1} {
+            return $fd_q
+        }
+        while {[gets $fd_q infoLine]!=-1} {
+            set userInput([lindex $infoLine 0]) [lrange $infoLine 1 end]
+        }
+        # Make sure this is a robot run
+        if {$userInput(harness:) != "robot"} {
+            puts "How.. this should be a robot run"
+            close $fd_q
+            return -1
+        }
+        #set MAIN(resultList) [getRunRegTestModuleStatus $MAIN(reg_id) $MAIN(module)]
+        set updateStr PASSOn$MAIN(cfg)
+        if {[regexp -nocase "fail" $rstatus]} {
+            set updateStr FAILOn$MAIN(cfg)
+        }
+        set preRunStat $userInput(runStatus:)
+        set userInput(runStatus:) [lreplace $userInput(runStatus:) $runIndex $runIndex "$updateStr"]
+        WriteToQueueDebug "UpdateRobotImagesDone replace runStatus with updateStr" \
+         "Init status: $preRunStat\nupdateStr: $updateStr\n\
+          New userInput(runStatus:): $userInput(runStatus:)"
+        # Everything in the info file is finished running
+        if {[lsearch -regexp $userInput(runStatus:) "queued|running|reRunOn"]==-1} {
+            WriteToQueueDebug "UpdateRobotImagesDone Run Completed" \
+                "userInput(runStatus:): $userInput(runStatus:)"
+            # Jenkins check
+            if {$DEVREG(active,jenkins)} {
+                puts "Jenkins update reg_run rId status $rrStatus"
+                if {[regexp -nocase "fail" $userInput(runStatus:)]} {
+                    updateJenkinsRegIdStatus -q_id $qId -reg_id "$MAIN(reg_id)" -status ${rrStatus}_Fail -url "$DEVREG(active,jenkins_url)"
+                } else {
+                    updateJenkinsRegIdStatus -q_id $qId -reg_id "$MAIN(reg_id)" -status ${rrStatus}_Pass -url "$DEVREG(active,jenkins_url)"
+                }
+            }
+            # UseDb is on. update the runreg table
+            if {$DEVREG(mysql,UseDb)} {
+                puts "Update reg_run rId status Complete"
+                updateRegIdStatus -reg_id "$MAIN(reg_id)" -status "Complete"
+            }
+            if {![file isdirectory $DEVREG(server,imagesFinishedDir)]} {
+                if {[catch {file mkdir $DEVREG(server,imagesFinishedDir)} reason]} {
+                    result_error "Error: Can not create imagesFinishedDir dir...$reason"
+                }
+            }
+            if {![file isdirectory $DEVREG(server,imagesFinishedDir)/$qId]} {
+                if {[catch {file mkdir "$DEVREG(server,imagesFinishedDir)/$qId"} reason]} {
+                    result_error "Error: Cannot create dir $DEVREG(server,imagesFinishedDir)/$qId...$reason";
+                }
+            }
+            if {![file isdirectory $DEVREG(server,imagesFinishedDir)/$qId/$MAIN(module)]} {
+                if {[catch {file mkdir "$DEVREG(server,imagesFinishedDir)/$qId/$MAIN(module)"} reason]} {
+                    result_error "Error: Cannot create dir $DEVREG(server,imagesFinishedDir)/$qId/$MAIN(module)...$reason";
+                }
+            }
+            if {![file isdirectory $DEVREG(server,imagesFinishedDir)/$qId/$MAIN(module)/Report]} {
+                if {[catch {file mkdir "$DEVREG(server,imagesFinishedDir)/$qId/$MAIN(module)/Report"} reason]} {
+                    result_error "Error: Cannot create dir $DEVREG(server,imagesFinishedDir)/$qId/$MAIN(module)/Report...$reason";
+                }
+            }
+            set rfs [glob $MAIN(robotRepDir)/*.*]
+            foreach rf $rfs {
+                if {[catch {file copy $rf $DEVREG(server,imagesFinishedDir)/$qId/$MAIN(module)/Report} reason]} {
+                    WriteToQueueDebug "UpdateRobogtImagesDone FAIL COPY" \
+                     "fail copy to $rf to $DEVREG(server,imagesFinishedDir)/$qId/$MAIN(module)/Report"
+                    result_error "Error: Cannot file copy $rf $DEVREG(server,imagesFinishedDir)/$qId/$MAIN(module)/Report...$reason";
+                }
+            }
+            seek $fd_q 0 start
+            foreach varName [array names userInput] {
+                puts $fd_q "[format "%-20s %-20s" "$varName" $userInput($varName)]"
+            }
+            ftruncate $runningQueueFile/info [tell $fd_q]
+            close $fd_q
+            if {[catch {file rename -force $runningQueueFile/info \
+                   "$DEVREG(server,imagesFinishedDir)/$qId/info"} reason]} {;# Force chosen as first run might create it already
+                result_error "Error: Cannot rename $runningQueueFile/info to $DEVREG(server,imagesFinishedDir)/$qId/info...$reason";
+            } else {
+                file delete $runningQueueFile
+            }
+            # Delete the imagesQueued if it is there. Which it is for robot
+            if {[file isdirectory $DEVREG(server,imagesQueuedDir)/$qId]} {   ;# delete the queuedDir
+                if {[catch {exec $env(BASE_PATH)/rmProc -rf $DEVREG(server,imagesQueuedDir)/$qId} reason]} {
+                    result_error "Could not remove $DEVREG(server,imagesQueuedDir)/$qId, $reason"
+                    return -1
+                }
+            }
+            return 1
+        } else {
+            if {![file isdirectory $DEVREG(server,imagesFinishedDir)/$qId]} {
+                if {[catch {file mkdir "$DEVREG(server,imagesFinishedDir)/$qId"} reason]} {
+                    result_error "Error: Cannot create dir $DEVREG(server,imagesFinishedDir)/$qId...$reason";
+                    return -1
+                }
+            }
+            if {![file isdirectory $DEVREG(server,imagesFinishedDir)/$qId/$MAIN(module)]} {
+                if {[catch {file mkdir "$DEVREG(server,imagesFinishedDir)/$qId/$MAIN(module)"} reason]} {
+                    result_error "Error: Cannot create dir $DEVREG(server,imagesFinishedDir)/$qId/$MAIN(module)...$reason";
+                    return -1
+                }
+            }
+            set rfs [glob $MAIN(robotRepDir)/*.*]
+            foreach rf $rfs {
+                if {[catch {file copy $rf $DEVREG(server,imagesFinishedDir)/$qId/$MAIN(module)/} reason]} {
+                    result_error "Error: Cannot file copy $rf $DEVREG(server,imagesFinishedDir)/$qId/$MAIN(module)...$reason";
+                    return -1
+                }
+            }
+            seek $fd_q 0 start
+            foreach varName [array names userInput] {
+                puts $fd_q "[format "%-20s %-20s" "$varName" $userInput($varName)]"
+            }
+            ftruncate $runningQueueFile/info [tell $fd_q]
+            close $fd_q
+            return 1
+        }
+    } else {  ;# qId not Found, an error
+        WriteToQueueDebug "UpdateRobogtImagesDone" \
+                 "QID NOT FOUND IN imagesRunning $qId...$queues"
+        result_error "Error: Cannot find $DEVREG(server,imagesRunningDir)/$qId...$queues";
+        return -1
+    }
+}

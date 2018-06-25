@@ -1,0 +1,242 @@
+# ----------------------------------------------------------------------------
+# proc _analyzeFailure
+#
+# First level call upon any failure.  This is defined dynamically in result.tcl
+#    fmt_add as part of the result_error proc.
+#    Anytime result_error is called this proc will be executed.
+#
+# In args: none
+#
+#
+# ----------------------------------------------------------------------------
+proc _analyzeFailure {txt} {
+    global MAIN DUTs_info ANALYZE
+
+    set caller [PreProcName]
+    set me [GetCurrentProcName]
+    set callStack [ProcEvalTree]
+    set hitError [_getAnalyzeCaller]
+    #puts "_analyzeFailure I am $me called by $caller. $hitError failed. Tree is $callStack\n";
+
+    set ANALYZE(run) "$hitError"
+    set MAIN(ANALYZESTATE) 1
+
+}
+# ----------------------------------------------------------------------------
+# proc _analyzer
+#
+#   In Args: -run = the procedure to run at any point in a script when
+#                   a preceding error has occurred.
+#
+#
+#
+#
+# ----------------------------------------------------------------------------
+proc _analyzer {args} {
+    global MAIN DUTS_info ANALYZE whichDutNow
+
+    parse_args _analyzer $args {
+        run             "null"
+        allshow         "null"
+        more            "false"
+        dut             "null"
+        title           "null"
+        imain           "null"
+        report_color    "red"
+        head_colors     "default"
+        special_headers "default"
+    }
+
+    set caller [PreProcName]
+    set me [GetCurrentProcName]
+    set callStack [ProcEvalTree]
+    set orig $whichDutNow
+    #puts "_analyzer I am $me called by $caller. Tree is $callStack\n";
+    #puts "I want to run $run"
+
+    if {[info exists ANALYZE(run)] && [string trim $ANALYZE(run)] != ""} {
+        if {[info exists ANALYZE(bypass)] && $ANALYZE(bypass)} {
+            result_debug "Skipping analyzer call to save time in production regression"
+            set ANALYZE(run) "";
+            set MAIN(ANALYZESTATE) 0
+            return;
+        }
+        #---------------------------------------------------------------
+        # head_colors is a list of list, so use lappend when calling.
+        # Setting the defaults here.
+        #---------------------------------------------------------------
+        if {$head_colors == "default"} {
+            lappend hcs "h3 darkcyan"
+            lappend hcs "debug darkred"
+            lappend hcs "ok yellow"
+        } else {
+            set hcs $head_colors
+        }
+        if {$special_headers == "default"} {
+            lappend sphs "h2 analyze darkmagenta";# NOTE special headers are at the bottom of result_format.tcl
+        } else {
+            set sphs $special_headers
+        }
+        _swapAnalyzerColors -report_color $report_color -head_colors $hcs \
+             -special_headers $sphs
+
+        if {$title != "null"} {
+            result_debug "ANALYZER - $title"
+        }
+        puts "FOUND ANALYZE(run) = $ANALYZE(run)"
+        if {$run != "null"} {
+            if {$dut != "null"} {
+                global DUT${dut}_CONNECT
+                Login [set DUT${dut}_CONNECT] -CheckOperational 0 -masterCheck 0;
+            }
+            if {[catch {eval $run} rea]} {
+                if {$more == "false"} {
+                    set ANALYZE(run) "";
+                }
+                result_debug "Could not execute the analysis proc: $rea"
+            }
+            if {$dut != $orig} {
+                global DUT${orig}_CONNECT
+                Login [set DUT${orig}_CONNECT] -CheckOperational 0 -masterCheck 0;
+            }
+        }
+        if {$allshow != "null"} {
+            _setShowOutput -screen off -log off -res_fmt off
+            #Create a proc for each DUT that will send the CLI                
+            for {set nDUT 1; global DUT${nDUT}_CONNECT} { [info exists DUT${nDUT}_CONNECT] } \
+                                                     {incr nDUT ; global DUT${nDUT}_CONNECT} {
+                set DUTs_info(DUT$nDUT,show_output) "empty"
+                lappend mlist "SendCmdList $nDUT \"$allshow\""
+            }
+            MultiTask $mlist
+            _setShowOutput -screen on -log on -res_fmt on
+            _printMultiTaskOutput;
+            global DUT${orig}_CONNECT
+            Login [set DUT${orig}_CONNECT] -CheckOperational 0 -masterCheck 0;
+        }
+        if {$more == "false"} {
+            set ANALYZE(run) "";
+            set MAIN(ANALYZESTATE) 0
+            _swapAnalyzerColors -reset true
+        }
+        if {$imain != "null"} {
+            imain_prompt -id $title
+        }
+    }
+}
+# ----------------------------------------------------------------------------
+#
+#
+#
+#
+#
+# ----------------------------------------------------------------------------
+proc SendCmdList {dut {clist}} {
+    global DUT${dut}_CONNECT;
+    global spawn_id fd_res
+
+
+    set pid [pid]
+    set fd_in [open "/tmp/tmp_sendcmdlist_DUT${dut}$pid" "w"]
+
+    Login [set DUT${dut}_CONNECT] -CheckOperational 0 -masterCheck 0;
+    foreach c $clist {
+        put_ansi_out $fd_in debug $c
+        SendACmd "$c" $fd_res $fd_in
+    }
+    close $fd_in;#
+
+    # -- Read in data for parsing
+    set fp [open "/tmp/tmp_sendcmdlist_DUT${dut}$pid" r]
+    set show_data [read $fp]
+    close $fp
+    # -- Delete the supporting files
+    catch {file delete -force /tmp/tmp_sendcmdlist_DUT${dut}$pid} oops;# fd_in
+    #
+    # End Gathering data section
+    #
+
+    # --------- Save switch output for printing later -----------
+    set fd_so [open "/tmp/${pid}_showout" "w"]
+    puts $fd_so "set DUTs_info(DUT$dut,show_output) \{$show_data\}"
+    close $fd_so
+
+}
+# ----------------------------------------------------------------------------
+# proc _getCallingProc
+#
+# in arg - lvl = number of levels back
+#               1 = who called me
+#               2 = who called the proc that called me
+#               etc.
+#
+#          Returns: the proc name.
+#
+# ----------------------------------------------------------------------------
+proc _getCallingProcLevel {lvl} {
+    set val [expr $lvl + 1]
+    return [lindex [split [info level [expr [info level] - $val]]] 0]
+}
+# ----------------------------------------------------------------------------
+# proc _getAnalyzeCaller
+#
+# Args -    In = none
+#           Out = returns proc one level above report_error that actually
+#           caused the error
+#
+#
+# ----------------------------------------------------------------------------
+proc _getAnalyzeCaller {} {
+    return [lindex [split [info level [expr [info level] - 3]]] 0]
+}
+# ----------------------------------------------------------------------------
+# proc _swapAnalyzerColors
+#
+#
+#
+#
+#
+#
+# ----------------------------------------------------------------------------
+proc _swapAnalyzerColors {args} {
+    global MAIN ANALYZE HEADERFORMAT
+    parse_args _swapAnalyzerColors $args {
+        report_color    "null"
+        head_colors     "null"
+        special_headers "null"
+        reset           "false"
+    }
+
+    if {$reset != "false" && [info exists ANALYZE(ALTEREDHEADERS)] && \
+                                        [llength ANALYZE(ALTEREDHEADERS)] > 0} {
+        foreach h $ANALYZE(ALTEREDHEADERS) {
+            fmt_add $h $HEADERFORMAT($h,default)
+        }
+        if {[info exists MAIN(FA_REPORT_COLOR_ASCII)]} {
+            unset MAIN(FA_REPORT_COLOR_ASCII)
+        }
+        return
+    }
+
+    if {$head_colors != "null"} {
+        foreach elems $head_colors {
+            set h [lindex $elems 0]
+            set val [lindex $elems 1]
+            fmt_add $h $HEADERFORMAT($h,default) $val
+            lappend ANALYZE(ALTEREDHEADERS) $h
+        }
+    }
+    if {$special_headers != "null"} {
+        foreach elems $special_headers {
+            set h [lindex $elems 0]
+            set sname [lindex $elems 1]
+            set val [lindex $elems 2]
+            fmt_add $h $HEADERFORMAT($h,$sname) $val
+            lappend ANALYZE(ALTEREDHEADERS) $h
+        }
+    }
+    if {$report_color != "null"} {
+        set MAIN(FA_REPORT_COLOR_ASCII) "[get_color_from_name $report_color]"
+    }
+
+}

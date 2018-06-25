@@ -1,0 +1,443 @@
+# -----------------------------------------------------------------------------
+# Procedure Name: CheckXmodRequired
+#   
+# Description: Check to see if a DUT requires an xmod
+#
+#  Determine if this platform requires the xmod
+#  The REQUIRED_XMOD variable is set in the common.cfg
+#  REQUIRED_XMOD(8900diags,SysTypes) $manhattanBlade
+#  REQUIRED_XMOD(8900diags,SupportStartRelease) "16.2"
+#  REQUIRED_XMOD(8900diags,SupportEndRelease) "null"
+#  REQUIRED_XMOD(diagnostics,SysTypes) $bcmx480
+#  REQUIRED_XMOD(diagnostics,SupportStartRelease) "15.6"
+#  REQUIRED_XMOD(diagnostics,SupportEndRelease) "null"
+#     
+#
+# Input args:
+#               args
+#               dut           : DUT to check
+#               xmod          : xmod to verify required for the DUT
+#               extVerChkOn   : in qloadimage no assumption can be made about versions
+#               chkVerName    : in you know what the target version is going to be.
+# Output args:
+#              1 = required
+#              0 = not required
+# Typical usage:
+#              if [CheckXmodRequired -dut 1 -xmod "ssh"]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: GetSwitchInfo
+# -----------------------------------------------------------------------------
+proc CheckXmodRequired {args} {
+    global DUTs_info
+    global REQUIRED_XMOD
+    global bd8kChassis
+
+    parse_args CheckXmodRequired $args {
+        dut           "1"           ;# DUT to check
+        xmod          "diagnostics"
+        chkVerName    "null"        ;# Version that Xmod must be supported on
+        extVerChkOn   "0"
+    }
+
+    set xmod [VerifyXmodFileExt -dut $dut -xmod $xmod]
+
+    set startRel $REQUIRED_XMOD($xmod,SupportStartRelease)
+    set endRel $REQUIRED_XMOD($xmod,SupportEndRelease)
+
+    if {$chkVerName == "null"} {
+        set chkVerName [GetVersion DUT$dut]
+    }
+
+    # check the hwList (chassis/stack slots) AND systype to see if xmod should be loaded
+    if {([regexp -nocase $REQUIRED_XMOD($xmod,SysTypes) $DUTs_info(DUT${dut},hwList)] || \
+           [regexp -nocase $REQUIRED_XMOD($xmod,SysTypes) $DUTs_info(DUT${dut},platform)]) && \
+           ![regexp -nocase "vpex" [GetPlatform DUT$dut]]} {
+
+        if {$extVerChkOn == 0} {
+            #  --- Check the versions to make sure xmod is required
+            if {([CompareRelease $chkVerName $startRel] >= 0 || \
+                    $startRel == "null") && ([CompareRelease $chkVerName $endRel] <= 0 || \
+                    $endRel == "null") } {
+                return 1
+            } else {
+                return 0
+            }
+        } else {
+            return 1
+        }
+    } else {
+        return 0
+    }
+}
+
+# -----------------------------------------------------------------------------
+# Procedure Name: VerifyXmodFileExt
+#
+# There will be some confusion in naming for the diagnostics xmods b/c
+# the x480 and the 8900 have very different names for there xmod types. We will
+# sort this out here.
+#
+# Input args:
+#              args
+#              dut   --- DUT to check
+#              xmod  --- xmod to verify required for the DUT
+#
+# Output args:
+#             8900diags || diagnostics 
+#              
+# Typical usage:
+#              set xmod [VerifyXmodFileExt dut $dut xmod $xmod]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+# -----------------------------------------------------------------------------
+proc VerifyXmodFileExt {args} {
+    global DUTs_info
+    global bd8kChassis
+
+    parse_args VerifyXmodFileExt $args {
+        dut     "1"            ;# DUT to check
+        xmod    "diagnostics"  ;#
+    }
+
+    # There will be some confusion in naming for the diagnostics xmods b/c
+    # the x480 and the 8900 have very different names for there xmod types. We will
+    # sort this out here.
+    if {[regexp -nocase "diag" $xmod]} {
+        if {[regexp -nocase "$bd8kChassis" $DUTs_info(DUT${dut},platform)]} {
+            return "8900diags"
+        } else {
+            return "diagnostics"
+        }
+    } else {
+        return $xmod;
+    }
+}
+# -----------------------------------------------------------------------------
+# Procedure Name: CheckXmodInstalled
+#   
+# Description: Check to see if an xmod is installed
+#
+# Input args:
+#              args
+#              dut   --- DUT to check
+#              xmod  --- xmod to verify required for the DUT
+#
+# Output args:
+#              1 = is installed
+#              0 = not installed
+# Typical usage:
+#              if {![CheckXmodInstalled -dut $xmod -xmod $xmod]}
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: GetSwitchInfo
+# -----------------------------------------------------------------------------
+proc CheckXmodInstalled {args} {
+    global DUTs_info
+    global whichDutNow
+    global platform
+    global connectionTimeout
+
+    parse_args CheckXmodInstalled $args {
+        dut    "1"  ;# DUT
+        xmod  "diagnostics" ;# 
+    }
+    global DUT${dut}_CONNECT
+    
+    set xmod [VerifyXmodFileExt -dut $dut -xmod $xmod]
+
+    Login [set DUT${dut}_CONNECT]
+    set partition $DUTs_info(DUT$dut,imageSel)
+    set parameterList ""
+    lappend parameterList "{${xmod}.*xmod} exist"
+    set xmodExists [CheckKeyValue "show version image $partition" $parameterList \
+                    -reportResults 0"]
+    unset parameterList
+    if {[regexp -nocase "error" $xmodExists"]} {
+        result_debug "$xmod is not installed on DUT$dut"
+        return 0
+    } else {
+        result_debug "$xmod image is installed in DUT$dut"
+        return 1
+    }
+}
+# -----------------------------------------------------------------------------
+# Procedure Name: XmodImageDownload  *** TO BOOTED PARTITION ***
+#   
+# Description: Download an xmod to a BOOTED image partition
+#
+# Input args:
+#              args
+#              dut   --- DUT to check
+#              xmod  --- xmod to verify required for the DUT
+#              image --- image passed into proc from moduleArg
+#
+# Output args:
+#              1 = sucessful
+#              0 = not successful
+# Typical usage:
+#              if [XmodImageDownload -dut $dut -xmod $xmod]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: GetSwitchInfo
+# -----------------------------------------------------------------------------
+proc XmodImageDownload {args} {
+    global DUTs_info
+    global whichDutNow whichMsmNow
+    global tftpServerList
+    global connectionTimeout
+    global moduleArg
+    global tftpServerLogin tftpServerPasswd tftpServerTftpboot
+
+    parse_args XmodImageDownload $args {
+        dut    "1"  ;# DUT
+        xmod  "diagnostics" ;# 
+    }
+
+    global DUT${dut}_CONNECT${whichMsmNow}
+    set connect [set DUT${dut}_CONNECT${whichMsmNow}]
+
+    set xmod [VerifyXmodFileExt -dut $dut -xmod $xmod]
+
+    set partition $DUTs_info(DUT$dut,imageBooted)
+    set version $DUTs_info(DUT$dut,version)
+    set platform [string tolower $DUTs_info(DUT$whichDutNow,platform)]
+    set majMin [GetVersion DUT$whichDutNow majmin]
+    
+    set origConnectionTimeout $connectionTimeout
+    set connectionTimeout 200
+
+    UnconfigGatewayNetwork
+    ConfigGatewayNetwork
+
+    set xmodFile [CopyImageToTftp -platform "$platform" -version "$version" \
+        -majMin "$majMin" \
+        -image "$xmod"]
+
+    if {[regexp -nocase "inval" $xmodFile]} {
+        # if it fails with the show switch version, try the show version string
+        set v1 $version
+        catch {set version $DUTs_info(DUT$dut,sVVersion)} oops
+        result_debug "Xmod not found at ${v1}. Trying $version"
+        set xmodFile [CopyImageToTftp -platform "$platform" -version "$version" \
+            -majMin "$majMin" \
+            -image "$xmod"]
+    }
+
+
+    if {[regexp -nocase "inval" $xmodFile]} {
+        result_error "Could not copy the $xmod file to the tftp server"
+        return 0
+    }
+
+    puts "!!\n!!\nDUT = $dut xmodFile = $xmodFile CheckDownloadImage $tftpServerList $xmodFile $partition"
+    set dlXStatus [CheckDownloadImage $tftpServerList $xmodFile $partition]
+    if {$dlXStatus == "error"} {
+        result_debug "Error downloading $xmod xmod to $partition partition"
+        return 0
+    } else {
+        # Remove files from tftp before exit
+        foreach TFTPServerIP $tftpServerList {
+            login_linux $TFTPServerIP $tftpServerLogin $tftpServerPasswd
+            catch {SendACmd "/bin/rm $tftpServerTftpboot/$xmodFile" NULL NULL true 1}
+            _ClearExpectSession
+        }
+    }
+
+    Login $connect -CheckOperational "0" -masterCheck "0"
+
+    set parameterList ""
+    lappend parameterList "{${xmod}\.xmod}"
+    set xmodExists [CheckKeyValue "show version image $partition" $parameterList \
+                    -reportResults 0"]
+    unset parameterList
+    if {[regexp -nocase "error" $xmodExists"]} {
+        set connectionTimeout $origConnectionTimeout
+        return 0
+    } else {
+        result_debug "Diagnostics Image is installed successfully in DUT$dut"
+        set connectionTimeout $origConnectionTimeout        
+        return 1
+    }
+}
+
+proc UninstallXmod {args} {
+    global DUTs_info
+    global whichDutNow
+
+    parse_args UninstallXmod $args {
+        xmodList  "diagnostics" ;# a list of xmods to uninstall
+    }
+
+    set version $DUTs_info(DUT$whichDutNow,version)
+    if {[CompareRelease $version 11.2.0.18]>=0} {
+        SendACmd "terminate process thttpd forceful"
+    } else {
+        SendACmd "terminate process exsshd forceful"
+    }
+    exSleep 5
+    SendACmd ""
+    if {[CompareRelease $version 12.3.0.3]>=0} {
+        SendACmd "terminate process snmpMaster forceful"
+        exSleep 10
+        SendACmd "terminate process xmlc forceful"
+        exSleep 10
+        SendACmd "terminate process techSupport forceful"
+        exSleep 10
+    }
+
+    UnInstallXmodImage  -xmodList "$xmodList" -p "$DUTs_info(DUT$whichDutNow,imageSel)"
+
+    if {[CompareRelease $version 12.3.0.3]>=0} {
+        SendACmd "start process thttpd"
+        SendACmd "start process snmpMaster"
+        SendACmd "start process techSupport"
+        SendACmd "start process xmlc"
+        exSleep 5
+    }
+    SendACmd ""
+}
+
+
+proc UnInstallXmodImage {args} {
+    global DUTs_info
+    global whichDutNow
+    global stackable
+    global stacking
+    global maxSlot
+    global DUT1_CONNECTB
+
+    parse_args UnInstallXmodImage $args {
+        partition   "null"  ;# partition
+        p           "sec"   ;# partition
+        xmodList    "diag"  ;# 
+    }
+
+    if {$partition != "null"} {
+        set p $partition
+    }
+    if {[regexp -nocase "pri" $p]} {
+        set p "primary"
+    } else {
+        set p "secondary"
+    }
+
+    set dut $whichDutNow
+    global DUT${whichDutNow}_CONNECT DUT${whichDutNow}_CONNECTB
+    set maxTry 5
+    set i 3
+
+    set res 1
+    for {set try 0} {$try <= 5 } {incr try } {
+        if {$try == $maxTry} {
+            result_error "Error removing $moduleName module after trying $maxTry times"
+            return 0
+        } else {
+            if {([regexp -nocase $stackable $DUTs_info(DUT$whichDutNow,platform)]) || \
+                     ([GetPlatform] == "BD-12802")} {
+
+                set output [SendACmd "show version image $partition " ]
+
+                foreach xmod $xmodList {
+                    set xmod [VerifyXmodFileExt -dut $dut -xmod $xmod]
+                    set match 0
+#set match [regexp -nocase {(Slot secondary|Switch secondary|MM secondary|MSM secondary).* (.*\-diags\.xmod)} $output line part img
+                    set match [regexp -nocase \
+                    ((Slot.*$p|Switch.*$p|MM.*$p|MSM.*$p).* (\[0-9a-zA-Z\-\.]+-${xmod}\.xmod)) $output line part img]
+                    puts "line $line part $part img $img"
+                    if {$match && [regexp -nocase "${xmod}.*xmod" $img]} {
+                        SendACmd "uninstall image $img $p"
+                        exSleep 10
+                    } else {
+                        result_error "No match for $xmod Xmod on partition $p"
+                        return 0
+                    }
+                }
+            } else {
+                set msmtype "msm A"
+                set output [SendACmd "show version image $partition $msmtype "]
+                foreach xmod $xmodList {
+                    set xmod [VerifyXmodFileExt -dut $dut -xmod $xmod]
+                    set match 0
+                    set match [regexp -nocase \
+                    ((Slot.*$p|Switch.*$p|MM.*$p|MSM.*$p).* (\[0-9a-zA-Z\-\.]+-${xmod}\.xmod)) $output line part img]
+                    puts "line $line part $part img $img"
+                    if {$match && [regexp -nocase "${xmod}.*xmod" $img]} {
+                        SendACmd "uninstall image $img $p"
+                        exSleep 10
+                    } else {
+                        result_error "No match for $xmod Xmod on partition $p"
+                        return 0
+                    }
+                }
+                if {[info exists DUT${whichDutNow}_CONNECTB]!=1} {
+                    return $res
+                }
+                set msmtype "msm B"
+                set output [SendACmd "show version image $partition $msmtype "]
+                foreach xmod $xmodList {
+                    set xmod [VerifyXmodFileExt -dut $dut -xmod $xmod]
+                    set match 0
+                    set match [regexp -nocase \
+                    ((Slot.*$p|Switch.*$p|MM.*$p|MSM.*$p).* (\[0-9a-zA-Z\-\.]+-${xmod}\.xmod)) $output line part img]
+                    puts "line $line part $part img $img"
+
+                    if {$match && [regexp -nocase "${xmod}.*xmod" $img]} {
+                        SendACmd "uninstall image $img $p"
+                        exSleep 10
+                    } else {
+                        result_error "No match for $xmod Xmod on partition $p"
+                        return 0
+                    }
+                }
+                if {[info exists DUT1_CONNECTB]!=1} {
+                    return $res
+                }
+            }
+            set j $i
+            if { [regexp -nocase "$stacking" [GetPlatform]] } {
+                set parameterList ""
+                lappend parameterList "{Factory MAC address} 2"
+                set nodeMac [GetKeyValue "show stacking detail" $parameterList]
+                set maxSlot [llength $nodeMac]
+                if {$maxSlot > 2} {
+                    for {set j $i } {$j <= $maxSlot} {incr j } {
+                        set msmtype "slot $j"
+                        set output [SendACmd "show version image $partition $msmtype "]
+                        foreach xmod $xmodList {
+                            set xmod [VerifyXmodFileExt -dut $dut -xmod $xmod]
+                            set match 0
+                    set match [regexp -nocase \
+                    ((Slot.*$p|Switch.*$p|MM.*$p|MSM.*$p).* (\[0-9a-zA-Z\-\.]+-${xmod}\.xmod)) $output line part img]
+                    puts "line $line part $part img $img"
+
+                            if {$match && [regexp -nocase "${xmod}.*xmod" $img]} {
+                                set result [CheckCmdLegal  "uninstall image $img $p $msmtype"]
+                                exSleep 10
+                                if {$result=="illegal"} {
+                                    return 0
+                                }
+                            } else {
+                                result_error "No match for $xmod Xmod on partition $p"
+                                return 0
+                            }
+                        }
+                    }
+                    incr j -1
+                    if {$j == $maxSlot} {
+                        retun $res
+                    }
+                }
+            } else {
+                return $res
+            }
+        }
+    }
+    # adding delay back - failed on 11.3.1.3 BD-10K
+    exSleep 1
+}

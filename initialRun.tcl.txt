@@ -1,0 +1,316 @@
+#!/usr/bin/expect --
+
+
+
+set rootDir "/auto/automation"
+
+set reportDir "$rootDir/TestReport"
+
+#Regression type list
+set regList [list "Functionaltest" "PerformanceTest" "Benchmarktest" \
+                   "Scalabilitytest" "CLItest" "Stresstest" ]
+
+#Tab spaces for html file 
+set tabSpace "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;\
+             &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"
+
+#To print the usage of the script
+proc printUsage { } {
+     puts "\r"
+     puts "Usage: initialRun.tcl  <buildNumber>"
+     puts "buildNumber: format xxxbzz Ex. 711b36"
+}
+
+#***************************************************************
+# This procedure is used to fetch the number of pass and failed
+# test cases for a particular module i.e. L2,L3 etc. It will 
+# access the 'report.txt' file to get the total number of test
+# cases executed for a particular module.
+#
+# Input : module name
+# Output : number of test cases executed (pass + fail)
+#***************************************************************** 
+
+proc getNumberOfTestCases {module dir } {
+   puts "Getting the number of test cases for : $module"
+   set fname "$dir/report.txt" ; # file name
+   set dname [file tail $dir] ; #directory name
+   set ch " = " ; # search char
+   set pLine ""
+   set fLine ""
+
+   if { [catch { set pLine [exec grep "cases passed" $fname] } ] } {
+       puts "ERROR: Unable to fetch the pass test cases for: $module"
+       return 0
+   }
+   if { [catch { set fLine [exec grep "cases failed" $fname] } ] } {
+       puts "ERROR: Unable to fetch the failed test cases for: $module"
+       return 0
+   }
+
+   set pLength [string length $pLine]
+   set fLength [string length $fLine]
+
+   set pIndex [string first $ch $pLine] 
+   set fIndex [string first $ch $fLine] 
+
+   incr pIndex 2
+   incr fIndex 2
+
+   set pNumber [string range $pLine $pIndex $pLength]
+   set fNumber [string range $fLine $fIndex $fLength]
+
+   set pNumber [string trim $pNumber]
+   set fNumber [string trim $fNumber]
+   
+   if { ![string is integer $pNumber] } {
+       puts "$module $dname: Can't fetch the number of passed test cases."
+       set pNumber 0
+   }
+   if { ![string is integer $fNumber] } {
+       puts "$module $dname: Can't fetch the number of failed test cases."
+       set fNumber 0
+   }
+   set total [ expr $pNumber + $fNumber ]
+   puts "number of test cases = $total"
+   return $total
+}
+
+#**********************************************************
+# This procedure is used to print the header information 
+# into the report file for a specific regression type.
+#
+# Input : regression type
+#         file descriptor 
+# Output : None
+#************************************************************
+
+proc printHeader { ftest fd } {
+    global tabSpace
+    set testType ""
+
+    switch $ftest {
+ 	"Functionaltest"   {
+              set testType "FUNCTIONAL TEST" 
+         } 
+ 	"PerformanceTest"  {
+              set testType "PERFORMANCE TEST" 
+         } 
+	"Benchmarktest"   { 
+              set testType "BENCHMARK TEST" 
+         } 
+ 	"Scalabilitytest" {
+              set testType "SCALABILITY TEST" 
+         } 
+ 	"CLItest"  {
+              set testType "CLI TEST" 
+         } 
+	"Stresstest"  { 
+              set testType "STRESS TEST" 
+         } 
+     }
+    puts $fd "<div style=\"margin-left: 40px;\"><span style=\"font-weight: bold;\
+             font-size:12.0pt;mso-bidi-font-size:14.0pt; font-family:Courier\">"
+    puts $fd "$testType </span><br></div><br>"
+    puts $fd "<div style=\"margin-left:\"><span style=\"font-weight: bold;\
+             font-size:11.0pt;mso-bidi-font-size:13.0pt; font-family:Courier\">"
+    puts $fd "MODULE<span style=\"mso-spacerun: yes\">$tabSpace</span>TEST CASES </span><br>"
+
+}
+
+#**********************************************************
+# This procedure is used to print the number of test cases 
+# for a particular module in the corresponding report file.
+#
+# Input : module type
+#         number of test cases
+#         file descriptor 
+#***********************************************************
+
+proc printModule { module num fd} {
+    set len [string length $module]
+    set sp "&nbsp;"
+    for { set i 0 } { $i < [expr 25 - $len] } { incr i } {
+       append sp "&nbsp;"
+    }
+    puts $fd "<span style='font-size:10.0pt;mso-bidi-font-size:12.0pt;"
+    puts $fd "font-family:Courier'>[string toupper $module]<span style=\"mso-spacerun: \
+             yes\">$sp </span> $num <br>"
+}
+
+#**********************************************************
+# This procedure is used to print the total number of test 
+# cases for a particular regression type in the corresponding 
+# report file.
+#
+# Input : module type
+#         number of test cases
+#         file descriptor 
+#***********************************************************
+
+proc printTotal { ftest total fd} {
+    set testType ""
+    puts $fd "<br>"
+    switch $ftest {
+ 	"Functionaltest"   {
+              set testType "FUNCTIONAL TEST" 
+         } 
+ 	"PerformanceTest"  {
+              set testType "PERFORMANCE TEST" 
+         } 
+	"Benchmarktest"   { 
+              set testType "BENCHMARK TEST" 
+         } 
+ 	"Scalabilitytest" {
+              set testType "SCALABILITY TEST" 
+         } 
+ 	"CLItest"  {
+              set testType "CLI TEST" 
+         } 
+	"Stresstest"  { 
+              set testType "STRESS TEST" 
+         } 
+     }
+    puts $fd "TOTAL NUMBER OF $testType CASES = $total"
+    puts $fd "<br> <br>"
+}
+#**************************************************************
+# This procedure is used to get all the sub-directories under
+# the directory passed as the parameter to this procedure. It
+# returns the list of directories in sorted order.
+#
+# Input : current directory.
+# Output : Sorted list of subdirectories
+#***************************************************************
+
+proc getSubDirs { dir } {
+  set dirList ""
+  cd $dir
+  set tempList [glob -nocomplain *]
+  foreach item $tempList {
+      if [ file isdirectory "$item/Report" ] {
+           lappend dirList $item
+      }
+  }
+  set dirList [lsort $dirList]
+  return $dirList
+}
+
+#****************************************************************
+# Main code segment
+#***************************************************************
+source ../main/mainLib.tcl
+
+gen_index "./../Lib"
+
+set LIB_PATH ../Lib
+lappend auto_path $LIB_PATH
+
+
+if { $argc<1 } {
+      printUsage
+      exit
+}
+
+if { [lsearch $argv "-help"] > -1} {
+      printUsage
+      exit
+}
+
+if { [lsearch $argv "?"] > -1} {
+      printUsage
+      exit
+}
+
+
+if { ![ file isdirectory $reportDir ] } {
+     exec mkdir $reportDir
+} else {
+     cd $reportDir
+     exec rm -rf *
+}
+
+set build [lindex $argv 0] 
+set buildName [getBuildNumber $build]
+if { $buildName == 0 } {
+    puts "ERROR: Wrong build name. Build name Ex.711b16 is required!!"
+    exit
+}
+
+cd $rootDir
+set totalCount 0
+foreach regType $regList {
+    if { ![ file isdirectory $regType ] } {
+       continue
+    }
+    puts "Processing....RegType: $regType"
+    
+    set fd [open "$reportDir/$regType.txt" w]
+
+    printHeader $regType $fd
+
+    set rCount 0; # Count for the regression type
+
+    if { $regType == "CLItest" } {
+        cd "$regType/uploadanddownload"
+    } else {
+       cd $regType
+    }
+
+    set curDir [pwd] 
+    set moduleDirs [ getSubDirs $curDir ]
+    
+    foreach mdir $moduleDirs { 
+           puts "Processing....$mdir"
+           set repDir "$mdir/Report"
+           cd  $repDir 
+           set dirList ""
+           foreach bdir [glob -nocomplain *] {
+               if { [regexp ".* *$buildName *0" $bdir] == 1} {
+                      lappend dirList $bdir
+                 }
+           }
+
+           #Take out the dirs with ABORT case from the list
+	   # in case of ABORT there will be only one file.
+           set targetDirList ""
+           foreach tdir $dirList {
+              cd $tdir
+              set flist [glob -nocomplain *]
+              if { [llength $flist] > 1 } { #This is not ABORT case
+                   lappend targetDirList $tdir
+              }
+              cd ..
+           }
+           set numofDirs [llength $targetDirList]
+           if { $numofDirs == 0 } {
+                   puts "No dir for report.txt found"
+                   cd ../.. 
+                   puts "pwd = [pwd]"
+                   continue
+            }
+           set targetDirList [lsort $targetDirList] ; #sorted list
+           set buildDir [lindex $targetDirList 0]
+           cd $buildDir
+           puts "buildDir for report.txt : $buildDir"
+           set pwd [ pwd ]
+           if [file exists "$pwd/report.txt"] {
+                 set mCount [getNumberOfTestCases $mdir $pwd]  
+                 printModule $mdir $mCount $fd
+                 incr rCount $mCount 
+            }
+            unset dirList 
+            cd ../../..
+    }
+    puts "\nTOTAL NUMBER OF TEST CASES FOR [string toupper $regType]=$rCount"
+    printTotal $regType $rCount $fd
+    incr totalCount $rCount
+    if { $regType == "CLItest" } {
+         cd ../..
+     } else {
+        cd ..
+     }
+    close $fd
+}
+puts "\ninitalRun is DONE. Please run finalRun.tcl to get the final report.\n"
+

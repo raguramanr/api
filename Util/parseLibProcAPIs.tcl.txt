@@ -1,0 +1,77 @@
+
+
+set outFileName "c:/AutoProcApi.txt"
+set libDirectory "c:/automation/Lib"
+
+#Should not need to touch anything below HERE
+#--------------------------------------------
+
+#Open output file
+set outfile [open $outFileName "w"]
+
+#Search through each tcl file in the Lib directory
+foreach file [glob $libDirectory/*.tcl] {
+
+	#ignore the "parse_args.tcl" file
+	if { ! [regexp {parse_args.tcl} $file]} {
+		set infile [open $file "r"]
+	}
+
+	set arging "0"
+	set descriptioning "0"
+	puts $outfile "\n\n"
+	puts $outfile "================ $file ===================="
+
+	while { ! [eof $infile] } {
+		set str [gets $infile]
+
+		#Search for end of Description comments if started
+		if {$descriptioning == "1" } {
+			if { [regexp {^######} $str] } {
+				set descriptioning "0"
+
+				puts $outfile $str
+				#puts $outfile "Description DONE!"
+				#puts $outfile "\n"
+			} else {
+				puts $outfile $str
+			}
+		}
+
+		#Search for end of arguments to proecdure if started
+		if {$arging == "1"  } {
+			if { [regexp {^ *\}$} $str] } {
+				set arging "0"
+				puts $outfile $str
+				#puts $outfile "Args DONE!"
+				puts $outfile "\n"
+			} else {
+				puts $outfile $str
+			}
+		}
+
+		#Search through the file for these patterns that
+		#start with the "relevant" API information such as
+		#the Description comment, the procedure, and its args
+		switch -regexp -- $str {
+		{^proc} {
+			#puts $outfile "\n"
+			#puts $outfile "proc START!"
+			puts $outfile $str  
+			puts $outfile "---------------"
+			}
+		{Description} {
+			puts $outfile "\n"
+			#puts $outfile "Desc START!"
+			puts $outfile $str 
+			set descriptioning "1" 
+			}
+		{parse_args} {
+			#puts $outfile "\n"
+			#puts $outfile "Args START!"
+			puts $outfile $str 
+			set arging "1" 
+			}
+		}
+	}
+}

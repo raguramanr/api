@@ -1,0 +1,538 @@
+#!/usr/bin/tclsh
+
+################################################################
+#  Procedure Name: snmpEnableRIPIf
+#  
+#  Description:
+#  This procedure enables RIP on a vlan with the specified vlan 
+#  ip address in the given DUT.
+#
+#  Input Variables:
+#    session - Session identifier which identifies the connection
+#              with the DUT
+#    ipa  - IP address of the VLAN on which RIP interface 
+#                 needs to be enabled.
+# 
+#  Optional Args:
+#    fd - File descriptor for logging the command outputs   
+# 
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    Logs the error message - On failure 
+#
+#  Possible Usage:
+#    snmpEnableRIPIf -session $sessionid -ipa "10.0.0.1" 
+###############################################################
+
+proc snmpEnableRIPIf { args } {
+    parse_args snmpEnableRIPIf $args {
+       session ""
+       ipa  ""
+       fd "NULL"
+    }
+ 
+    set func "snmpEnableRIPIf:" 
+
+    if { $session == "" || $ipa == "" } {
+       result_error "$func session and ipaddress must be specified"
+       return
+    }   
+
+    snmpDebug DEBUG "$func session-$session ipaddress -$ipa fd-$fd -Start" $fd
+    result_debug "\n-- Enabling RIP on the interface $ipa --"
+
+# ---- Enable rip2IfConfStatus.for this interface
+    set result [snmpSet -session $session -oid rip2IfConfStatus.$ipa -type i -val 1]
+    snmpDebug LOG "$func snmpSet-$result" $fd
+    return $result
+}
+
+################################################################
+#  Procedure Name: snmpDisableRIPIf
+#  
+#  Description:
+#  This procedure disables RIP on a vlan with the specified vlan 
+#  ip address in the given DUT.
+#
+#  Input Variables:
+#    session - Session identifier which identifies the connection
+#              with the DUT
+#    ipa  - IP address of the VLAN on which RIP interface 
+#                 needs to be disabled.
+# 
+#  Optional Args:
+#    fd - File descriptor for logging the command outputs   
+# 
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    Logs the error message - On failure 
+#
+#  Possible Usage:
+#    snmpDisbleRIPIf -session $sessionid -ipa "10.0.0.1"
+###############################################################
+
+proc snmpDisableRIPIf { args } {
+    parse_args snmpDisableRIPIf $args {
+       session ""
+       ipa  ""
+       fd "NULL"
+    }
+ 
+    set func "snmpDisableRIPIf:" 
+
+    if { $session == "" || $ipa == "" } {
+       result_error "$func session and ipaddress must be specified"
+       return
+    }   
+
+    snmpDebug DEBUG "$func session-$session ipaddress -$ipa fd-$fd -Start" $fd
+    result_debug "\n-- Disabling RIP on the interface $ipa --"
+
+# ---- Disable rip2IfConfStatus.for this interface
+    set result [snmpSet -session $session -oid  rip2IfConfStatus.$ipa -type i -val 2]
+
+    snmpDebug LOG "$func snmpSet-$result" $fd
+}
+
+################################################################
+#  Procedure Name:snmpUtilGetRipVer 
+#  
+#  Description:
+#  This procedure extracts RIP version from the string obtained  
+#  by SNMP Get operation.      
+#
+#  Input Variables:
+#    session - Session identifier which identifies the connection
+#              with the DUT
+#    param   - The string which is obtained from SNMP Get operation
+# 
+#  Output Variables: 
+#     res 
+#
+#  Return Variables:
+#     res which contains the value returned from SNMP Get operation 
+#
+#  Possible Usage:
+#    snmpUtilGetRipVer "hklllllrip1ksklsaksk"
+###############################################################
+
+proc snmpUtilGetRipVer { param } {
+ 
+   set func "snmpUtilGetRipVer:"
+
+   set res ""
+   set res1 ""
+   regexp {.*INTEGER.*\(([0-9]+)\)} $param res1 res
+   return "$res"
+}
+
+################################################################
+#  Procedure Name: snmpSetRIPTx
+#  
+#  Description:
+#  This procedure sets the RIP Tx on a vlan with the specified vlan 
+#  ip address in the given DUT. Depending upon the Tx value, RIP 
+#  packet of appropriate version will be sent.
+#
+#  Input Variables:
+#    session - Session identifier which identifies the connection
+#              with the DUT
+#    ipa  - IP address of the VLAN on which RIP interface 
+#                 needs to be disabled.
+#    version - Rip Version number depending on which packets needs 
+#            to be transmitted.
+# 
+#  Optional Args:
+#    fd - File descriptor for logging the command outputs   
+# 
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    Logs the error message - On failure 
+#
+#  Possible Usage:
+#    snmpSetRIPTx -session $sessionid -ipa "10.0.0.1" -version v1only 
+#                 -vlan vlan1
+###############################################################
+
+proc snmpSetRIPTx { args } {
+    parse_args snmpSetRIPTx $args {
+       session ""
+       ipa  ""
+       fd "NULL"
+       version ""
+       vlan ""
+    }
+ 
+    set func "snmpSetRIPTx:" 
+    set val ""
+
+    if { $session == "" || $ipa == ""  || $version == ""} {
+       error "$func session, ipaddress and Version must be specified"
+       return
+    }   
+
+    if {$version == "none"} {
+        set val 1
+    } elseif {$version == "v1only" } {
+        set val 2
+    } elseif {$version == "v1comp" } {
+        set val 3
+    } elseif {$version == "v2only" } {
+        set val 4
+    } elseif {$version == "ripV1Demand" } {
+        set val 5
+    } elseif {$version == "ripV2Demand" } {
+        set val 6
+    }
+
+    snmpDebug DEBUG "$func session-$session ipaddress -$ipa version -$version fd-$fd -Start" $fd
+
+    if { $vlan != "" } {
+      result_debug "\n-- Setting RIP Tx mode to $version in vlan $vlan"
+    } else {
+      result_debug "\n-- Setting RIP Tx mode to $version in Switch"
+    }
+
+    set result [snmpSet -session $session -oid  rip2IfConfSend.$ipa -type i \
+                        -val $val]
+    snmpDebug LOG "$func snmpSet-$result" $fd
+    set result [snmpGet -session $session -oid  rip2IfConfSend.$ipa]
+    snmpDebug LOG "$func snmpGet-$result" $fd
+    set getVal [snmpUtilGetRipVer $result]
+    snmpDebug LOG "$func The Value received is $getVal" $fd
+
+# ---- If SNMP Get operation matches with the Set value, SNMP Set works. 
+#      Otherwise Set using CLI. CLI operation will be removed once the 
+#      related PD is fixed.
+
+    if {$getVal != $val} {
+        snmpDebug "$func snmpSet is done for $val but snmpGet fetched value $getVal" $fd
+# ---- If vlan name is mentioned, configure RIPTx mode for the specifi vlan.
+#      Or else set the RIPTx mode globally for the switch 
+      if {$vlan == ""} {
+        SendACmd "config rip vlan all txmode $version"
+      } else {
+        SendACmd "config rip vlan $vlan txmode $version"
+      }
+    } else {
+        result_ok "$func snmpSet is done for $val and snmpGet \
+                        fetched value $getVal"
+    }
+}
+
+################################################################
+#  Procedure Name: snmpSetRIPRx
+#  
+#  Description:
+#  This procedure sets the RIP Rx on a vlan with the specified vlan 
+#  ip address in the given DUT. Depending upon the Rx value, RIP 
+#  packet of appropriate version will be received.
+#
+#  Input Variables:
+#    session - Session identifier which identifies the connection
+#              with the DUT
+#    ipa  - IP address of the VLAN on which RIP interface 
+#                 needs to be disabled.
+#    version - Rip Version number depending on which packets needs 
+#    vlan    - vlan name for which RIP Tx mode is Set. 
+#              used incase CLI configuration is used.
+# 
+#  Optional Args:
+#    fd - File descriptor for logging the command outputs   
+# 
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    Logs the error message - On failure 
+#
+#  Possible Usage:
+#    snmpSetRIPRx -session $sessionid -ipa "10.0.0.1" -version v1only 
+#                 -vlan vlan1
+###############################################################
+
+proc snmpSetRIPRx { args } {
+    parse_args snmpSetRIPRx $args {
+       session ""
+       ipa  ""
+       fd "NULL"
+       version ""
+       vlan ""
+    }
+ 
+    set func "snmpSetRIPRx:" 
+
+    if { $session == "" || $ipa == ""  || $version == ""} {
+       result_error "$func session, ipaddress and Version must be specified"
+       return
+    }   
+
+    if {$version == "v1only" } {
+        set val 1
+    } elseif {$version == "v2only" } {
+        set val 2
+    } elseif {$version == "any" } {
+        set val 3
+    } elseif {$version == "none"} {
+        set val 4
+    } else {
+       error "$func Version must be specified one of v1only v2only any none"
+       return
+    }   
+    snmpDebug DEBUG "$func session-$session ipaddress -$ipa version -$version fd-$fd -Start" $fd
+
+    if { $vlan != "" } {
+      result_debug "\n-- Setting RIP Rx mode to $version in vlan $vlan --"
+    } else {
+      result_debug "\n-- Setting RIP Rx mode to $version in Switch --"
+    }
+
+    set result [snmpSet -session $session -oid  rip2IfConfReceive.$ipa -type i -val $version]
+    snmpDebug LOG "$func snmpSet-$result" $fd
+    set result [snmpGet -session $session -oid  rip2IfConfReceive.$ipa]
+    snmpDebug LOG "$func snmpGet-$result" $fd
+    set getVal [snmpUtilGetRipVer $result]
+    snmpDebug LOG "$func The Value received is $getVal" $fd
+
+# ---- If SNMP Get operation matches with the Set value, SNMP Set works. 
+#      Otherwise Set using CLI. CLI operation will be removed once the 
+#      related PD is fixed.
+    if {$getVal != $val} {
+        snmpDebug "$func snmpSet is done for $val but snmpGet fetched value $getVal" $fd
+# ---- If vlan name is mentioned, configure RIPRx mode for the specifi vlan.
+#      Or else set the RIPRx mode globally for the switch
+        if { $vlan == ""} {
+           SendACmd "config rip vlan all rxmode $version"
+        } else {
+           SendACmd "config rip vlan $vlan rxmode $version"
+        }
+    } else {
+        result_ok "$func snmpSet is done for $val and snmpGet \
+                        fetched value $getVal"
+    }
+}
+
+################################################################
+#  Procedure Name: snmpVerifyRIPconfig
+#  
+#  Description:
+#  This procedure verifies various configured value of RIP. 
+#
+#  Input Variables:
+#    session - Session identifier which identifies the connection
+#              with the DUT
+#    vlanid  - vlan id for which vlan verification is done
+#    ipa  - IP address of the VLAN on which RIP interface 
+#    forwarding  - Ip Forwarding for this interface 
+#    ripStatus   - Whether RIP is enabled or disabled
+# 
+#  Optional Args:
+#    fd - File descriptor for logging the command outputs   
+# 
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    Logs the error message - On failure 
+#
+#  Possible Usage:
+#    snmpVerifyRIPconfig -session $sessionid -ipa "10.0.0.1"
+#                        -vlanid 79 -forwarding enable -ripStatus enable
+#                        -fd $fd_res
+###############################################################
+
+proc snmpVerifyRIPconfig { args } {
+    parse_args snmpVerifyRIPconfig $args {
+       session ""
+       vlanid ""
+       ipa  ""
+       forwarding ""
+       ripStatus ""
+       fd "NULL"
+       comment "Verification for RIP Status and IP Forwarding status on \
+                interface $ipa"
+    }
+ 
+    set func "snmpVerifyRIPconfig:" 
+
+    result_debug "$func verifying the RIP status and IP Forwarding status on \
+                  interface $ipa"
+
+    set forwarding [string tolower $forwarding]
+    set ripStatus [string tolower $ripStatus]
+
+    set status(1) "enable"
+    set status(2) "disable"
+
+    if { $session == "" || $vlanid == "" } {
+       result_error "$func session and vlanid must be specified"
+       return
+    } elseif {$forwarding != "" && $forwarding != "enable" && 
+              $forwarding != "disable"} {
+       result_error "$func forwarding is expected either enable or disable but \
+               got $forwarding"
+       return
+    } elseif {$ripStatus != "" && $ripStatus != "enable" && 
+              $ripStatus != "disable"} {
+       result_error "ripStatus  is expected either enable or disable but \
+               got $forwarding"
+       return
+    }
+
+    snmpDebug DEBUG "$func session-$session vlanid -$vlanid fd-$fd -Start" $fd
+
+    report_start_test "Verification for RIP Status and IP Forwarding status on \
+                       interface $ipa"
+
+# ---- verify forwarding status for the given vlan
+    if {$forwarding != ""} {
+      set result [snmpGet -session $session -oid \
+                          extremeVlanIpForwardingState.$vlanid]
+      snmpDebug LOG "$func snmpGet-$result" $fd
+      set val [snmpUtilGetVal boolean $result]
+      snmpDebug LOG "$func snmpGetVal-$val" $fd
+
+# ---- If The return value is true, RIP is enabled, or it is disabled. set 
+#      val accordingly required for comparison later
+      if {$val == "true"} {
+        set val "enable"
+      } elseif {$val == "false"} {
+        set val "disable"
+      }
+
+# ---- If forwarding status of the vlan does not match with the expected 
+#      value, log Error
+      if {$forwarding == $val } {
+         result_ok "Check status for IP Forwarding for interface $ipa passed \
+                    status is $forwarding as expected"
+      } else {
+         result_error "Check forwarding status failed for interface $ipa \
+                       expected $forwarding but got $status($val)"
+      }
+    } 
+
+# ---- verify rip status for the given vlan
+    if { $ripStatus != ""} {
+      set result [snmpGet -session $session -oid  rip2IfConfStatus.$ipa ]
+      snmpDebug LOG "$func snmpGet-$result" $fd
+      set val [snmpUtilGetVal inttext $result]
+      snmpDebug LOG "$func snmpGetVal-$val" $fd
+
+# ---- If RIP status of the vlan does not match with the expected 
+#      value, log Error
+      if {$ripStatus == "enable" && $val == "active"} {
+         result_ok "Check status for ripStatus for interface $ipa passed \
+                    status is $ripStatus as expected"
+      } elseif {$ripStatus == "disable" && $val != "active"} {
+         result_ok "Check status for ripStatus for interface $ipa passed \
+                    status is $ripStatus as expected"
+      } else {
+         result_error "Check ripStatus failed for vlan $vlanid. \
+                       expected $ripStatus but got $val"
+      }
+    }
+   report_end_test
+}
+
+################################################################## 
+# Procedure Name: SendRipErrorFrame   
+# Description: 
+#	Send RIP packet(request or response) from an ixia port.  This Proc
+#	mainly simulates a neighbor to advertise RIP routes to DUT. 
+# Input args: args
+# Output args: none
+# Return value: Frame sent
+# Typical usage: 
+#	set frame [SendRipFrame -txPortId 1  -destMac $destMac -frameSize 130 \
+#         -sourceIp 192.207.39.2  -destIp $destIP \
+#         -command $ripCommand  -version $ver  -numRoute 4 \
+#         -routeFamilyId {2 2 2 2}  -routeTag {00 00 00 00}\
+#         -routeIp "$oldRoute(1) $oldRoute(2) $newRoute(1) $newRoute(2)"  \
+#         -routeMask "$routeMask $routeMask $routeMask $routeMask" \
+#         -routeNextHop {0.0.0.0  0.0.0.0 0.0.0.0 0.0.0.0} \
+#         -routeMetric {2 5 1 3} ]     
+#         -udfEnable "true"
+#         -udfInitval "03"
+#         -udfOffset  "43"
+#         -udfCountertype "c1"
+# Category: SendTraffic
+##################################################################
+proc SendRipErrorFrame {args} {
+   parse_args SendRipErrorFrame $args {
+     txPortId "1"
+     sourceMac "default"
+     destMac "01 00 5e 00 00 09"
+     sourceIp "127.0.0.1"
+     destIp "224.0.0.9"
+     gatewayIp "127.0.0.1"
+     sourcePort "520"
+     destPort "520"
+     goodChecksum "true"
+     numFrames "1"
+     frameSize "70"
+     ipOptions ""
+     frameRate "default"
+     dataPattern "0000"
+     streamType "stopStream"
+     fcsError "good"
+     tag "none"
+     TOS "0x00"
+     userPriority "0"
+     percentage "100"
+     priority "0"
+     saMode "idle"
+     daMode "idle"
+     ipSaMode "ipIdle"
+     ipDaMode "ipIdle"
+     id "0"
+     command "ripRequest"
+     version "2"
+     authen ""
+     authenType "2"
+     numRoute "1"
+     routeFamilyId {2}
+     routeTag {00}
+     routeIp {0.0.0.0}
+     routeMask {0.0.0.0} 
+     routeNextHop {0.0.0.0}
+     routeMetric {16}
+     udfEnable "false"
+     udfInitval "00"
+     udfOffset "0"
+     udfCountertype "c8"
+   }
+
+   set numIxiaCd [GetNumIxiaCd $txPortId]
+   set rxPo [MapIxiaPortId $txPortId chasisId card port]
+   if {$tag != "none" } { set wTag "true" } else {set wTag "false" }
+   global startCardNum
+   set frameSent [ixiaConf_2Ports_ip -numIxiaCd $numIxiaCd  \
+              -txChas $chasisId -txCard $card -txPort $port \
+              -rxChas $chasisId -rxCard $card -rxPort $rxPo \
+              -ipProtocol "udp" -sMacAddr $sourceMac -dMacAddr $destMac \
+              -sIpAddr $sourceIp -dIpAddr $destIp -dDutIpAddr $gatewayIp \
+              -pSrcPort $sourcePort -pDstPort $destPort -ttl 1 \
+	      -goodChecksum $goodChecksum -numFrames $numFrames -frameSize $frameSize \
+	      -frameRate $frameRate -dataPattern $dataPattern -streamType $streamType \
+	      -fcsError $fcsError -wTag $wTag -tagNo $tag -TOS $TOS -userPriority $userPriority \
+	      -percentage $percentage -priority $priority -ipOptions $ipOptions \
+              -saMode $saMode -daMode $daMode -ipSaMode $ipSaMode -ipDaMode $ipDaMode \
+              -id $id -ipApplication "rip" -ripCommand $command  -ripVersion $version \
+              -ripAuthen $authen  -ripAuthenType $authenType  -ripNumRoute $numRoute \
+              -ripRouteFamilyId $routeFamilyId  -ripRouteIp $routeIp  \
+              -ripRouteMetric $routeMetric  -ripRouteNextHop $routeNextHop  \
+              -ripRouteTag $routeTag  -ripRouteMask $routeMask \
+              -udfEnable $udfEnable -udfInitval $udfInitval -udfOffset $udfOffset -udfCountertype $udfCountertype ]
+                                  
+  if {$streamType != "contPacket" && $numFrames > 100} {
+    ixiaCheckTxDone $chasisId $card $port $numFrames
+  }  
+  return $frameSent           
+}
+

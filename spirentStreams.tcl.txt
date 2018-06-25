@@ -1,0 +1,420 @@
+global CURRENT_STREAM_ARRAY
+global MAX_STREAMS
+
+set MAX_STREAMS 255
+set CURRENT_STREAM_ARRAY(1) 1
+set CURRENT_STREAM_ARRAY(2) 1
+set CURRENT_STREAM_ARRAY(3) 1
+set CURRENT_STREAM_ARRAY(4) 1
+set CURRENT_STREAM_ARRAY(5) 1
+set CURRENT_STREAM_ARRAY(6) 1
+set CURRENT_STREAM_ARRAY(7) 1
+set CURRENT_STREAM_ARRAY(8) 1
+
+
+###########################################################################################
+# Name : saveExisitingStreams { portlist}
+# Description : retrieves the exisiting streams on the port and changes there state to disable
+#              portn: on the given port portn, 
+#              CURRENT_STREAM_ARRAY : global variable which saves current stream for each port
+#              The calling proc will add the new stream at CURRENT_STREAM_ARRAY
+# return value : -1 there is problems in configuring the stream
+#              :  1 the streams are successfully configured
+# typical usage: saveExisitingStreams [list "1 2 3"]
+###########################################################################################
+proc saveExisitngStreams { portlist} {
+   foreach port [hMapPortIdToSpirentPort $portlist] {
+      logcmd stc::perform GeneratorStop -GeneratorList $port
+      set ids [logcmd stc::get StreamBlock -under $port]
+      logcmd stc::perform StreamBlockActivateCommand -activate FALSE -StreamBlockList $ids
+   }
+}
+
+
+proc createStreams { args} {
+   puts "[lindex [info level 0] 0] : $args"
+   global MAX_STREAMS
+   parse_args createStreams $args {
+      portn ""
+      startId "1"
+      endId "1"
+      name  "TestStream"
+      type ""
+      writeToHw "1"
+   }
+   set txPort [hMapPortIdToSpirentPort $portn]
+   for {set i $startId} {$i <= $endId} {incr i} {
+      # remove the sb if it already exists
+      if {![catch {set sb [getStreamBlockFromName $txPort sb_${txPort}_${i}]}]} {
+         logcmd stc::delete $sb
+      }
+      set stream_args {-frameLengthMode FIXED -FixedFrameLength 128 -filltype Constant\
+                          -ConstantFillPattern 0x1234 -frameconfig {} -insertSig FALSE }
+      set hStreamBlock [eval logcmd stc::create streamBlock -under $txPort $stream_args -name sb_${txPort}_${i}]
+      #set hLoadProfile [getStreamLoadProfile $hStreamBlock]
+      #logcmd stc::config $hLoadProfile -loadunit FRAMES_PER_SECOND -Load [getRateFromPct 1]
+      set hEthernet [logcmd stc::create ethernet:EthernetII -under $hStreamBlock -name sb1_eth \
+                        -srcMac [GetDefaultPortIdMAC -portId $txPort] \
+                        -dstMac 00:DE:BB:00:00:02]
+      
+
+      switch -glob -- $type {
+         vlan {
+            addDefaultPDU $hStreamBlock vlan
+         }
+         *_arp {
+            addDefaultPDU $hStreamBlock arp
+         }
+         *_tcp {           
+            set hIpv4 [logcmd stc::create ipv4:IPv4 -under $hStreamBlock -name sb1_ip \
+                          -sourceAddr 0.0.0.0 -destAddr 0.0.0.0 -ttl 64 -identification 0 -protocol 6]    
+            addDefaultPDU $hStreamBlock tcp
+         }
+         *_udp {
+            set hIpv4 [logcmd stc::create ipv4:IPv4 -under $hStreamBlock -name sb1_ip \
+                          -sourceAddr 0.0.0.0 -destAddr 0.0.0.0 -ttl 64 -identification 0 -protocol 17]
+            addDefaultPDU $hStreamBlock udp
+         }
+         *_icmp {
+            set hIpv4 [logcmd stc::create ipv4:IPv4 -under $hStreamBlock -name sb1_ip \
+                          -sourceAddr 0.0.0.0 -destAddr 0.0.0.0 -ttl 64 -identification 0 -protocol 1]
+            addDefaultPDU $hStreamBlock icmp
+         }
+         *_igmp {
+            set hIpv4 [logcmd stc::create ipv4:IPv4 -under $hStreamBlock -name sb1_ip \
+                          -sourceAddr 0.0.0.0 -destAddr 0.0.0.0 -ttl 64 -identification 0 -protocol 2]
+            addDefaultPDU $hStreamBlock igmp
+            set hIgmp [logcmd stc::create igmp:Igmpv2 -under $hStreamBlock -groupAddress 0.0.0.0 \
+                             -maxRespTime 100 -type 0x11 -name sb_igmp]
+         }
+         *_dhcp {
+            set hIpv4 [logcmd stc::create ipv4:IPv4 -under $hStreamBlock -name sb1_ip \
+                          -sourceAddr 0.0.0.0 -destAddr 0.0.0.0 -ttl 64 -identification 0 -protocol 17]
+            set hUdp [logcmd stc::create udp:Udp -under $hStreamBlock -name sb_udp\
+                         -destPort 67 -sourcePort 68]
+            addDefaultPDU $hStreamBlock dhcp
+         }
+         *_rip {
+            set hIpv4 [logcmd stc::create ipv4:IPv4 -under $hStreamBlock -name sb1_ip \
+                          -sourceAddr 0.0.0.0 -destAddr 0.0.0.0 -ttl 64 -identification 0 -protocol 2]
+            logcmd stc::config $hIpv4 -protocol 17
+            addDefaultPDU $hStreamBlock rip
+         }
+      }
+   }
+   logcmd stc::config $txPort.Generator.GeneratorConfig -SchedulingMode PORT_BASED -LoadUnit FRAMES_PER_SECOND
+   logcmd stc::apply
+}
+      
+###########################################################################################
+# Name : setStreamOptions { portn startId endId optionVal}
+# Description : Configures the option of the already configured stream
+#              on the given port portn, 
+#              starting from id=startId to id=endId
+#              optionVal : list of option Value pairs to be set on the stream
+#              { {name newStream} {dma  advance} {percentPacketRate  23.0} {fpsRate 1488.0952381} ...}
+#
+# return value : -1 there is problems in configuring the stream
+#              :  1 the streams are successfully configured
+# typical usage: setStreamOptions -portn 1 -startId 1 -startId 3
+
+###########################################################################################
+proc setStreamOptions { args} {
+#   puts "[lindex [info level 0] 0] : $args"
+   parse_args setStreamOptions $args {
+      portn ""
+      startId "1"
+      endId "1"
+      optionVal {}
+      type "stream"
+      writeToHw "1"
+   }
+   set txPort [hMapPortIdToSpirentPort $portn]
+   
+   for {set i $startId} {$i <= $endId} {incr i} {
+      set sb [getStreamBlockFromName $txPort sb_${txPort}_${i}]
+      foreach optval $optionVal {
+         set opt [lindex $optval 0] ; set val [lindex $optval 1]
+         modifyStream $sb $type $opt $val $txPort
+      }
+   }
+   logcmd stc::apply
+}
+
+proc modifyStream {sb type arg val port} {
+   puts "[lindex [info level 0] 0] : $sb $type $arg $val"
+   set blocks [logcmd stc::get $sb -children]
+   array set x [string tolower [getObjToModify $type $arg $val $sb]]
+   parray x
+   switch [string tolower $x(-objtype)] {
+      streamblock {
+         logcmd stc::config $sb -$x(-item) $x(-value)
+      }
+      generator {
+         if {$x(-item) == "load_perc"} {
+             set size [logcmd stc::get $sb -FixedFrameLength]
+             set v [getRateFromPct $x(-value) $size]
+             setStcGenerator $port fixedload $v
+         } else {
+             setStcGenerator $port $x(-item) $x(-value)
+         }
+      }
+      loadprofile {
+         if {$x(-item) == "load" && $arg != "fpsrate"} {
+            set size [logcmd stc::get $sb -FixedFrameLength]
+            logcmd stc::config [getStreamLoadProfile $sb] -$x(-item) [getRateFromPct $x(-value) $size]
+            logcmd stc::get [getStreamLoadProfile $sb]
+         } else {
+            logcmd stc::config [getStreamLoadProfile $sb] -$x(-item) $x(-value)
+            logcmd stc::get [getStreamLoadProfile $sb]
+         }
+      }
+      vlan {
+         set ethpdu [lindex [logcmd stc::get $sb -children] [lsearch [logcmd stc::get $sb -children] *eth*]]
+         set vlanpdu [lindex [logcmd stc::get [logcmd stc::get $ethpdu -children-vlans] -children-vlan] 0]
+         switch [string tolower $arg] {
+            enable802dot1qtag {
+               if {$vlanpdu == {} & $x(-value) == "true" } {
+                  addDefaultPDU $sb vlan
+               } elseif { $vlanpdu != {} & $x(-value) == "false" } {
+                  logcmd stc::delete $vlanpdu
+               }
+            }
+            default {
+               logcmd stc::config $vlanpdu -$x(-item) $x(-value)
+               logcmd stc::get $vlanpdu
+            }
+         }
+      }
+      {} { # do nothing if empty string }
+      default {
+         set pdus [logcmd stc::get $sb -children]
+         set loc [lsearch $pdus *eth*]
+         lappend pdus [logcmd stc::get [lindex $pdus $loc] -children-vlans]
+         # check to see if the PDU is there if not create it.
+         if {[set loc [lsearch -glob [string tolower $pdus] $x(-objtype)*]] < 0} {
+            addDefaultPDU $sb $x(-objtype)
+            set pdus [logcmd stc::get $sb -children]
+            set loc end
+         }
+         puts "OBJ  $x(-objtype)" 
+         puts "ITEM $x(-item)" 
+         puts "VAL  $x(-value)"
+         if { $x(-objtype) != {} } {
+
+            # handle special case of ethertype 8100 must be applied to vlan NOT ethernet
+            #  the reverse part is handled by the getObjToModify table
+            set ethpdu [lindex [logcmd stc::get $sb -children] [lsearch [logcmd stc::get $sb -children] *eth*]]
+            set vlanpdu [lindex [logcmd stc::get [logcmd stc::get $ethpdu -children-vlans] -children-vlan] 0]
+            if {$x(-objtype) == "ethernet:ethernetii" & $x(-item) == "ethertype" & $x(-value) == "8100" & $vlanpdu != {}} {
+               stc::config $vlanpdu -type 8100
+               return
+            }
+
+            logcmd stc::config [lindex $pdus $loc] -$x(-item) $x(-value)
+         }
+      }
+   }
+}
+
+proc getObjToModify {type arg val sb} {
+   #streamRateModeFps
+   puts "[lindex [info level 0] 0] : $sb $type $arg $val"
+   # Add to this as needed
+   #                  type     item                stcObjType            stcObjOption function
+   set x  [list \
+      [list stream   frametype           ethernet:EthernetII  ethertype       {join $val {}}]\
+      [list stream   sa                  ethernet:EthernetII  srcmac          {join $val :}]\
+      [list stream   numSA               {}                   {}              {modifyMacAddrs -stream $sb -saMode increment -saCount $val -numFrames $val}]\
+      [list stream   saRepeatCounter     {}                   {}              {}]\
+      [list stream   da                  ethernet:EthernetII  dstmac          {join $val :}]\
+      [list stream   numDA               {}                   {}              {modifyMacAddrs -stream $sb -daMode increment -daCount $val -numFrames $val}]\
+      [list stream   daRepeatCounter     {}                   {}              {}]\
+      [list protocol enable802dot1qTag   vlan                 enable          {}]\
+      [list vlan     vlanID              vlan                 id              {expr "0x$val" + 0}]\
+      [list vlan     protocolTagId       ethernet:EthernetII  ethertype       {join $val {}}]\
+      [list stream   enable              streamblock          active          {}]\
+      [list stream   percentPacketRate   generator            load_perc       {}]\
+      [list stream   rateMode            generator            LoadUnit        {}]\
+      [list stream   framesize           streamblock          FixedFrameLength {}]\
+      [list stream   frameSizeType       streamblock          FrameLengthMode {getStcFrameKey $val}]\
+      [list stream   frameSizeMIN        streamblock          MinFrameLength  {}]\
+      [list stream   frameSizeMAX        streamblock          MaxFrameLength  {}]\
+      [list stream   loopCount           {}                   {}              {}]\
+      [list stream   fpsrate             generator            fixedload       {}]\
+      [list stream   dma                 generator            durationmode    {}]\
+      [list ip       sourceIpAddr        ipv4:ipv4            sourceAddr      {}]\
+      [list ip       sourceIpAddrMode    {}                   {}              {}]\
+      [list ip       sourceIpAddrRepeatCount {}               {}              {modifyIpAddrs -stream $sb -ipSaMode increment -ipSaCount $val}]\
+      [list ip       destIpAddr          ipv4:ipv4            destAddr        {}]\
+      [list ip       destIpAddrMode      {}                   {}          {}]\
+      [list ip       destIpAddrRepeatCount {}                 {}          {modifyIpAddrs -stream $sb -ipDaMode increment -ipDaCount $val}]\
+      [list stream   numFrames           loadprofile          burstSize   {}]\
+      [list arp      sourceProtocolAddr  arp:ARP              senderPAddr {}]\
+      [list arp      destProtocolAddr    arp:ARP              targetPAddr {}]\
+      [list arp      sourceHardwareAddr  arp:ARP              senderHwAddr {join $val :}]\
+      [list arp      destHardwareAddr    arp:ARP              targetHwAddr {join $val :}]\
+   ]
+   if {[set loc [lsearch [string tolower $x] "[string tolower [list $type $arg]] *"]] < 0} {
+      error "STC Stream Modify fail: $type $arg $val"
+   }
+   set objtype [lindex [lindex $x $loc] 2]
+   set item    [lindex [lindex $x $loc] 3]
+   set valcalc [lindex [lindex $x $loc] 4]
+   
+   if {$valcalc != {}} {
+      puts "OK DOING THIS : $valcalc"
+      set val [eval $valcalc]
+   } 
+   return "-objtype \{$objtype\} -item \{$item\} -value \{$val\}"
+}
+proc setStcGenerator {txPort opt val} {
+    switch [string tolower $opt] {
+        "durationmode" {
+            switch -glob [string tolower $val] {
+                stop* {
+                    lappend gen_args -DurationMode BURSTS
+                }
+                cont*  {
+                    lappend gen_args -DurationMode CONTINUOUS -duration 30
+                }
+                default { error "Unsupported streamType = $streamType" }
+            }
+        }
+        "loadunit" {
+            lappend gen_args -LoadUnit [getStcRateKey $val]
+        }
+        "fixedload" {
+            lappend gen_args -FixedLoad $val
+        }
+    }
+    set hGeneratorConfig [eval logcmd stc::config $txPort.Generator.GeneratorConfig $gen_args]
+    # Apply changes.
+    logcmd stc::apply
+}
+proc getStcRateKey {val} {
+    switch [string tolower $val] {
+        -re "fps" {
+            return FRAMES_PER_SECOND;
+        }
+        "streamratemodefps" {
+            return FRAMES_PER_SECOND;
+        }
+        -re "perc" {
+            return PERCENT_LINE_RATE;
+        }
+        default {
+            return PERCENT_LINE_RATE;
+        }
+    }
+}
+proc getStcFrameKey {val} {
+    switch [string tolower $val] {
+        -re "fix" {
+            return FIXED;
+        }
+        -re "rand" {
+            return RANDOM;
+        }
+        -re "inc" {
+            return INCR;
+        }
+        -re "dec" {
+            return DECR;
+        }
+        default {
+            return FIXED;
+        }
+    }
+}
+proc getStreamBlockFromName {port name} {
+   set portstreams [logcmd stc::get $port -children-Streamblock]
+   foreach sb $portstreams {
+      if {[logcmd stc::get $sb -name] == $name} {return $sb}
+   }
+   error "Could not find stream name $name on port $port"
+}
+
+proc getStreamLoadProfile {name} {
+   set lps [logcmd stc::get project1 -children-streamblockloadprofile]
+   foreach lp $lps {
+      if {[lsearch [logcmd stc::get $lp -affiliationstreamblockloadprofile-Sources] $name] >= 0} {return $lp}
+   }
+   error "Could not find loadprofile for stream name $name"
+}
+
+proc addDefaultPDU {sb pdutype} {
+   puts "[lindex [info level 0] 0] : $sb $pdutype"
+   switch -glob -- [string tolower $pdutype] {         
+      *vlan* {
+         set hEthernet [lindex [logcmd stc::get $sb -children] 0]
+         set vlanlen [addVlans -stream $sb -ethobj $hEthernet -wTag true -tagNo 1234]
+      }
+      *arp* {
+         set hArp [logcmd stc::create arp:ARP -under $sb -name sb1_arp -operation 1 \
+                      -senderHwAddr 0:0:0:0:0:0 -targetHwAddr 0:0:0:0:0:0 \
+                      -senderPAddr 0.0.0.0 -targetPAddr 0.0.0.0]
+      }
+      *tcp* {
+         set hTcp [eval logcmd stc::create tcp:Tcp -under $sb -name tcp\
+                      -destPort 0 -sourcePort 0]
+      }
+      *udp* {
+         set hUdp [logcmd stc::create udp:Udp -under $sb -name sb_udp\
+                      -destPort 0 -sourcePort 0 -checksum 0]
+      }
+      *icmp* {
+         set hIcmp [logcmd stc::create icmp:IcmpEchoReply -under $sb -name icmp\
+                       -code 0 -type $type -identifier 0 -seqNum 0]
+      }
+      *igmp* {
+         set hIgmp [logcmd stc::create igmp:Igmpv2 -under $sb -groupAddress 0.0.0.0 \
+                       -maxRespTime 100 -type 0x11 -name sb_igmp]
+      }
+      *dhcp* {
+         set hDhcp [logcmd stc::create dhcp:Dhcpclientmsg -under $sb -name sb_dhcp\
+                       -clientAddr $clientIpAddr -clientMac 00:00:00:00:00:00 \
+                       -elapsed 0 -haddrLen 6 -hardwareType 1 \
+                       -hops 0 -messageType 1 -xid 0 -yourAddr 0.0.0.0 ]
+      }
+      *rip* {
+         set riphdr [logcmd stc::create custom:Custom -under $sb -name sb_rip \
+                        -pattern [set riphex [makeRipHeader -ripCommand 1 \
+                                                 -ripVersion 2 - -destPort 0 \
+                                                 -sourcePort 0 -checksum 0xd409]]]
+      }
+      default { error "Could not create default PDU $pdutype" }
+   }
+}
+
+proc getRateFromPct {pct {size 64} {speed 1000}} {
+   if {[lindex [split $pct =] 0] == "rate"} {return [lindex [split $pct =] 1]}
+   set speed [expr $speed * 1000000]
+   set totalLenBits  [expr ($size+12+8)*8]
+   set rate [expr ($speed / $totalLenBits) * ($pct / 100.00)]
+   if {$rate > 1488095} {set rate 1488095}
+   return [expr round($rate)]
+}
+
+##################################################################
+# Procedure Name: decidePercentage
+# Description:
+#       Decide the ixia percentage given portSpeed, FrameSize,
+#       & frameRate
+# Input args: {portSpeed} {frameSize} {frameRate}
+# Output args: none
+# Typical usage:
+#         set percentage [decidePercentage $txSpeed $frameSize $frameRate]
+# Category: Utility
+##################################################################
+proc decidePercentage {{portSpeed 100}
+                       {frameSize 64}
+                       {frameRate default}} {
+   
+   set speed [expr $portSpeed * 1000000.0]
+   set totalLenBits  [expr ($frameSize+8+12)*8]
+   set pct [expr ($totalLenBits * $frameRate * 100)/$speed]
+   if {$pct < .001} { return $frameRate }
+   return $pct
+}
+

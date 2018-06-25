@@ -1,0 +1,802 @@
+#!/usr/bin/tclsh
+
+
+load [lindex [glob "/usr/lib/libexpect*so*"] 0]
+
+source ./runRegAllLocal.tcl
+
+;# We pass regpcList because we need to source the runReg.cfg file before we
+;# can determine this, thus we must get that information at run time.
+proc regPrintUsage {{regpcList ""}} {
+    puts "\r" 
+    puts "usage: runRegAll.tcl  \[-status\] \[-cvsupdate\] \[-cfg <cfgfile>\]"
+    puts "       \[-i386ImagePath <imagePath> \[-marinerImagePath <imagePath> ]" 
+    puts "       \[-aspenImagePath <imagePath> \[-cougarImagePath <imagePath> ]" 
+    puts "       \[-download <yes|no>\] \[-mailTo <emailAddress>\]  \[-include \"module list\"]" 
+    puts "       \[-exclude \"module list\"] \[-platform <platformName,index>] \[-regpcs \"regpc list\"]" 
+    puts "       \[-killxterm <yes>\] \[-obuild <old build version>\]"
+    puts "       \[-force\] \[-help\]"
+    puts "\r"
+    puts "    -cvsupdate:       Execute cvs update on the automation directory of each"
+    puts "                      regression PC"
+    puts "    -status:          Execute ps on remote machines to see status"
+    puts "                      To see status on a subset of regpcs, use"
+    puts "                      i.e. -regpcs \"BD1 Alpine\" -status"
+#    puts "    -image:           Image to download. Format xxxbzz v711b23, v601b9, etc."
+    puts "    -i386ImagePath    image path to i386 image. Format /tftp/bd10Ki386-11.0.0.16.xos"
+    puts "    -marinerImagePath image path to mariner image. Format /tftp/bd10K-11.0.0.16.xos"
+    puts "    -aspenImagePath image path to aspen image. Format /tftp/aspen-11.2.0.6.xos"
+    puts "    -cougarImagePath image path to cougar image. Format /tftp/cougar-11.2.0.6.xos"
+    puts "    -x480ImagePath image path to cougar image. Format /tftp/x480-15.6.1.4.xos"
+    puts "    -x870ImagePath image path to onie image. Format /tftp/onie-15.6.1.4.xos"
+    puts "    -NWIImagePath image path to cougar image. Format /tftp/NWI-15.6.1.4.xos"
+    puts "    -cfg:           Config file to use in place of default runReg.cfg"
+    puts "    -regpcs:        Regressions PC to run.  Predefined platforms in runReg.cfg"
+    puts "                    i.e. $regpcList"
+    puts "    -platform:      Specify a specific platform for a specific regpc."
+    puts "                    i.e. ALPINE,1 or BD1,2  Use -platform ? for valid entries"
+    puts "    -exclude:       Modules to be excluded from testing."
+    puts "    -include:       Modules to be tested. The regression will only\
+	    run those modules you specified"    
+    puts "    -download       yes|no (yes)"
+    puts "    -mailTo         Email address to send notification (sqaauto@extremenetworks.com)"
+    puts "    -prep           yes|no (yes) Perform unconfig and def delete prior to running"
+     puts "    -killxterm     yes|no (no). Kill xterm windows in all the regression PCs. If -regpcs are specified, only xterms running on that pc alone will be killed"
+    puts "    -obuild:        Old build version REQUIRED for Upgrade/Downgrade runs (ie. 10.1.2.16)"
+    puts "   -force           Kills the DUT sessions with terminal server \
+          before staring the regression."
+    puts "    -help:          Prints this screen."
+    puts "\r"
+    puts "NOTE: -regpcs and -platform are mutually exclusive as are -status and -cvsupdate"
+
+}
+
+
+proc regPrintValidPlatforms {} {
+    
+    global regplatform
+
+    set pList [list]
+
+    if [info exists regplatform] {
+	set pList [array names regplatform]
+    }
+    puts "              VALID PLATFORM ENTRIES:"
+    set pList [lsort -ascii $pList]
+
+    set header [format "%-15s {%s}" {PLATFORM ENTRY}  \
+	    {platform blade cfg regType regSubType}]
+
+    set sep [format "%-15s %s" {==============}  \
+	    {=======================================}]
+
+    puts $header
+    puts $sep
+    foreach plat $pList {
+	set entry [format "%-15s {%s}" $plat $regplatform($plat)]
+	puts $entry
+    }
+
+}
+
+
+# Send a mail message to a user
+proc regSendMail {user subject message } {
+
+    set tempMsgFile   "/tmp/runRegMsg.txt"
+
+    system "echo $message > $tempMsgFile"
+    system  "mail -s \"$subject\" $user < $tempMsgFile"
+    system "rm -f $tempMsgFile"
+}
+
+# Get status of main.tcl and runall_monitor.tcl on a given machine.
+proc regGetStatus {} {
+    
+    global regLogin
+
+    set i 0
+
+    # List all processes
+    set cmd "ps -auxww\r"
+    send $cmd
+
+    # Keep matching until we hit the prompt. Put results int lineArray()
+    while 1 {
+	expect {	    
+            -re "\[^\r]*\r\n" {
+		set lineArray($i) $expect_out(0,string)
+		incr i
+	    }
+	    -re "$regLogin@" break
+
+	    timeout break
+	}
+    }
+
+    set i 0
+    set taskKey "runall_monitor"
+    # Look for runall_monitor lines in linkArray()
+    while {$i < [array size lineArray]}  {
+
+	if [regexp "(.*)($taskKey)(.*).tcl(.*)\r\n"\
+		$lineArray($i) ignore xtermCheck taskKeyMatch ignore param] {
+
+	    # Don't display lines spawned by xterm
+	    if { ! [regexp "xterm" $xtermCheck]} {
+		puts "$taskKeyMatch:  $param"
+	    }
+	}
+	incr i 1
+    }
+
+    set i 0
+    set taskKey "main"
+    # Look for main lines in linkArray
+    while {$i < [array size lineArray]}  {
+	
+	if [regexp "(.*)($taskKey)(.*).tcl(.*)\r\n"\
+		$lineArray($i) ignore ignore taskKeyMatch ignore param] {
+
+	    puts "$taskKeyMatch: $param"
+	}
+	incr i 1
+    }
+}
+
+#This is to kill the xterm windows
+proc regKillXtermWindows {} {
+
+   global regLogin
+
+   set i 0
+   send "ps -ef |grep xterm\r"
+   while 1 {
+      expect {
+         -re "\[^\r]*\r\n" {
+            set lineArray($i) $expect_out(0,string)
+            regexp {([0-9]+) *([0-9]+).*\-T.*} $lineArray($i) out out1 out2
+            if { [info exists out2] } {
+               puts "killing xterm with pid $out2"
+               send "kill -9 $out2\r"
+               unset out2
+            }
+            incr i
+         }
+         timeout break
+      }
+   }
+   return 1
+}
+
+
+
+
+proc regCvsUpdateAutomationDir {} {
+    
+    global autoPath
+    global regLogin
+
+    send "cd $autoPath\r"
+    expect "$regLogin@"
+    
+    ;# NOTE: We update twice because CVS flakiness causes updates to sometimes fail.
+    ;#       First update creates new directories and moves out locally modified files.
+    ;# Create new dirs(d)/Remove empty dirs(P)/Overwrite locally modified(C)
+    send "cvs update -dPC\r"
+    expect {
+	-re "authorization failed:.*$regLogin@" {
+	    return 0
+	}
+	-re "Updating.*$regLogin@" {
+	    return 1
+	}
+    }
+    ;# Second update is a regular update.
+    send "cvs update \r"
+    expect {
+	-re "authorization failed:.*$regLogin@" {
+	    return 0
+	}
+	-re "Updating.*$regLogin@" {
+	    return 1
+	}
+    }
+    return 1
+}
+
+
+
+
+proc regValidateReachable { ipaddr } {
+
+    # Validate the machine is reachable
+    spawn ping -q -c 2 $ipaddr
+    expect {
+	-re "0 packets received" {
+	    puts "  !!! 0 packets received"
+	    return 0
+	}
+	timeout {
+	    puts "  !!! Ping timeout"
+	    return 0
+	}
+    }
+    return -1
+}
+
+
+
+proc regTelnetLogin { ipaddr regLogin regPassword } {
+
+    global spawn_id
+
+    set timeout 60
+
+#    puts "About to telnet to $ipaddr"
+    # Telnet into machine and start the specified script.
+    spawn telnet $ipaddr
+
+    expect {
+	-re "\[L|l]ogin:" {}
+	timeout {	    
+	    result_error "!!! Timeout $timeout sec waiting for login prompt."
+	    return 0
+	}
+    }
+    sleep 1
+    send   "$regLogin\r"
+    expect {
+	-re "\[P|p]assword:" {}
+	timeout {	    
+	    result_error "!!! Timeout $timeout sec waiting for password prompt."
+	    return 0
+	}
+    }
+    sleep 1
+    send   "$regPassword\r"
+    expect {
+	-re "Login incorrect" {
+	    result_error "!!! Login incorrect using $regLogin/$regPassword"
+	    return 0
+	}
+	-re "$regLogin@" {
+	    ;# Login successful...
+#	    puts "Successful telnet into $ipaddr"
+	}   
+        -re "\\$ $" {
+	    ;# Login successful...
+#	    puts "Successful telnet into $ipaddr"
+	}   
+    }
+    
+    return 1;
+}
+
+
+# Validates the proper syntax for image name
+# Namely xxxby  i.e. 710b34
+proc regValidateImageName {imageName} {
+
+    result_debug ">>>>>>>>>> imageName: $imageName <<<<<<<<<<<<<<<"
+    return [regexp {^bd10K[i386|]-[0-9]+.[0-9].[0-9].[0-9]+.xos$} $imageName]
+
+}
+
+# This is to find the type of terminal server
+proc getTermServerType { ip } {
+   set termType ""
+   set pid [spawn telnet "$ip"]   
+   send "\r"
+   expect {
+           -re "login:" { set termType "PC"
+                          send "\035" } 
+           -re ".*>"    { set termType "Xyplex"
+                          send "\035"} 
+     }
+    exec kill -9 $pid
+    return $termType
+}
+
+# This is to kill the DUT sessions with terminal server to avoid
+# regression aborts due to test beds being left occupied.
+proc clearDUTSessions { ipaddress  portList} {
+  set termSrvLogin "autotest-sc"
+  set termSrvPasswd "system"
+  set pcTermSrvLogin "root"
+  set pcTermSrvPasswd "extreme"
+  set pcTermSrvIp "10.210.1.223" 
+
+  set termServerType [getTermServerType $ipaddress]
+
+  if { $termServerType != "PC" } {
+        puts "Telnet to terminal server : $ipaddress"
+        puts "Port to be disconneted: $portList"
+        set pid [spawn telnet "$ipaddress"]
+        send "\r"
+        expect -re ".*>" { send "$termSrvLogin\r" }
+        expect -re ".*>" { send "set priv 1\r" }
+        expect -nocase "Password>" { send "$termSrvPasswd\r" }
+        foreach port $portList {
+                puts "disconnecting port# $port"
+                send "kill $port se 1\r"
+                send "\r"
+                expect -re ".*>"
+        }
+        send "logout\r"
+        exec kill $pid
+   } else { 
+        #if it is PC terminal server; the session killing is a different process.
+        set timeout 5
+        set pid [spawn telnet $pcTermSrvIp]
+        expect -re ".*login:" { send "$pcTermSrvLogin\r"}
+        expect -nocase "password:" { send "$pcTermSrvPasswd\r" }
+	expect ".*"
+        foreach port $portList {
+        	send "lsof | grep ttyS$port\r"
+                while { $expect_out(0,string) !="" } {
+               	    expect {
+                        -re "\[^\r]*\r\n" {
+                             set line  $expect_out(0,string)
+                             set key  "(termnetd) *(\[0-9\]+).*(ttyS$port)"
+                             set ret [regexp $key $line out out1 out2]
+                             if { $ret == 1 && [info exists out2] } {
+                                puts "killing ttyS$port with pid $out2"
+                                send "kill -9 $out2\r"
+                                unset out2
+                             }
+                        }
+                        timeout break
+                     }
+                }
+        }
+        send "\r"
+        send "logout\r"
+        exec kill $pid
+   }
+}
+
+
+################################ MAIN SCRIPT ##################################
+
+# Turn off user process display to avoid clutter
+log_user 1
+
+source ./../Lib/mainLib.tcl
+
+gen_index "./../Lib"
+
+source ../Lib/parse_args.tcl
+
+set LIB_PATH ../Lib 
+lappend auto_path $LIB_PATH
+
+
+# ------------------------------------------------------------------------------
+# These 4 calls are REQUIRED for all sublevel libraries that use 
+# result_xxxx functions to work.
+# TODO: Put all this in an resultLogInit{} routine!
+set resultDir "RunRegAll_logs"
+if { ! [file isdirectory $resultDir] } {
+    ;# Create it!
+    file mkdir $resultDir
+}
+set tStartTime [clock seconds]
+set tStartDate [clock format [clock seconds] -format "%Y-%m-%d %I.%M.%S%p"]
+set fd_res [open_result_file "runRegAll-[clock format [clock seconds] -format "%I.%M%p"]-[pid]"]
+# ------------------------------------------------------------------------------
+global staggerDelay
+
+set cvsupdateFlag 0
+set statusFlag    0
+set staggerDelay  5
+
+set fullRegStart 1
+set regpcRegStart 0
+set platformRegStart 0
+set shastaBuild 0
+set forceFlag 0
+
+parse_args runRegAll.tcl $argv {
+    help ""
+    force ""
+    cvsupdate ""
+    status ""
+    i386ImagePath ""
+    marinerImagePath ""
+    aspenImagePath ""
+    cougarImagePath ""
+    x480ImagePath ""
+    x870ImagePath ""
+    NWIImagePath ""
+    cfg ""
+    regpcs ""
+    platform ""
+    include ""
+    exclude ""
+    download "yes"
+    prep "no"
+    killxterm "no"
+    mailTo "sqaauto@extremenetworks.com"
+    obuild ""
+}
+
+# Check for minimum required parameter i.e. image name
+
+if { $i386ImagePath == "" && $marinerImagePath == "" && \
+     $aspenImagePath == "" && $cougarImagePath && $x480ImagePath && $NWIImagePath == "" } {
+
+    result_error "!!! At least one image name should be provided !!!"
+    regPrintUsage [array names regpc]
+    exit
+    
+}
+
+
+#If any of the following is specified, then it is assumed that it's not 
+#initial regression start. The DUT session cleanup should be initiated 
+#only for the initail full regression start.
+
+if { $cfg != "" || $regpcs != "" || $platform != "" || $include != "" \
+   || $exclude != "" || $download != "yes" || $status !="" || $cvsupdate !="" \
+   || $killxterm != "no" || [lsearch $argv "-help"] > -1 } {
+   
+    set fullRegStart 0
+}
+
+if { $platform != "" } {
+   set platformRegStart 1
+}
+
+if { $regpcs != "" } {
+   set regpcRegStart 1
+}
+
+if { [lsearch $argv "-force"]  > -1} {
+        set forceFlag 1
+} else {
+        set forceFlag 0
+}
+
+# Default config file
+set cfgFile ./runReg.cfg
+
+if {$cfg != ""} {
+    # User defined cfg file passed from command line.
+    set cfgFile $cfg
+}
+
+
+# Source config file that has Regression PC information
+if [file exists $cfgFile] {
+    result_debug "Sourcing $cfgFile now"
+    catch {source $cfgFile} reason
+} else {
+    result_error "!!! Configuration file $cfgFile not found !!!"
+    exit
+}
+
+# Display usage if -help is passed
+if {[lsearch $argv "-help"]  > -1} {
+    regPrintUsage [array names regpc]
+    exit
+}
+
+if {$platform == "?"} {
+    regPrintValidPlatforms  ;# Requires cfgFile be sourced before calling
+    exit
+}
+
+if {[lsearch $argv "-status"] > -1} {
+    set statusFlag 1
+    log_user 0
+}
+
+if {[lsearch $argv "-cvsupdate"]  > -1} {
+
+    result_debug "*******  EXECUTING CVS UPDATE ONLY  *******"
+    result_debug "CVS Update Target Dir: $autoPath"
+    set cvsupdateFlag 1
+    log_user 1
+}
+
+if {!$cvsupdateFlag && !$statusFlag} {
+
+    if {$i386ImagePath != ""} {
+        if {![file exists $i386ImagePath]} {
+            puts "ERROR: i386ImagePath: $i386ImagePath, doesn't exist"
+            exit
+        }
+    }
+
+    if {$marinerImagePath != ""} {
+        if {![file exists $marinerImagePath]} {
+            puts "ERROR: marinerImagePath: $marinerImagePath, doesn't exist"
+            exit
+        }
+    }
+
+    if { $aspenImagePath != "" } {
+        if {![file exists $aspenImagePath]} {
+            puts "ERROR: aspenImagePath: $aspenImagePath, doesn't exist"
+            exit
+        }
+    }
+
+    
+    if { $cougarImagePath != "" } {
+        if {![file exists $cougarImagePath]} {
+            puts "ERROR: cougarImagePath: $cougarImagePath, doesn't exist"
+            exit
+        }
+       set shastaBuild 1 
+    }
+
+    if { $x480ImagePath != "" } {
+        if {![file exists $x480ImagePath]} {
+            puts "ERROR: x480ImagePath: $x480ImagePath, doesn't exist"
+            exit
+        }
+    }
+    if { $x870ImagePath != "" } {
+        if {![file exists $x870ImagePath]} {
+            puts "ERROR: x870ImagePath: $x870ImagePath, doesn't exist"
+            exit
+        }
+    }
+    if { $NWIImagePath != "" } {
+        if {![file exists $NWIImagePath]} {
+            puts "ERROR: NWIImagePath: $NWIImagePath, doesn't exist"
+            exit
+        }
+    }
+
+}
+
+;# User specified list of REG-PCs to use
+if {($platform == "") && ($regpcs != "")} {
+    
+    set regpc_list [list]
+    set validRegPcs [array names regpc]
+
+    ;# Make sure all entries are valid
+    foreach pc $regpcs {
+	set pc [string toupper $pc]
+	if {[lsearch -exact $validRegPcs $pc] == -1} {
+	    result_error "regpc: $pc not found.  Valid values are $validRegPcs"
+	    exit
+	}
+	lappend regpc_list regpc($pc)
+    }
+    ;# All entries are valid. Build regpc_list
+    result_debug "NEW list: $regpc_list"
+}
+
+;# User specified platform
+if {$platform != "" } {
+
+    if { $regpcs != ""} {
+	result_debug "WARNING: Platform $platform specified.  Ignoring -regpc $regpcs parameter."
+    }
+
+    if { ![info exists regplatform($platform)]} {
+	result_error "ERROR: Invalid platform specified: $platform"
+	regPrintValidPlatforms
+	exit
+    }
+    ;# Save the specific platform we need
+    set regplatformTemp $regplatform($platform)
+
+    ;# Unset all the platforms
+    unset regplatform
+
+    ;# Create a single entry for the array
+    set regplatform($platform) $regplatformTemp
+    
+    result_debug "Active Platform: $regplatform($platform)"
+
+    ;# Create a single entry in regpc_list for this platform
+    set regplatformIndex [array names regplatform]
+
+    regexp (.*),(.*) $regplatformIndex  ignore regpcName ignore
+    result_debug "Active regpcName: $regpcName"    
+
+    ;# reset list
+    set regpc_list [list]
+    lappend regpc_list regpc($regpcName)
+
+    set staggerDelay 0
+}
+
+set tempList ""
+if { [string tolower $killxterm] == "yes"} {
+   foreach pc $regpc_list {
+       regexp (.*)\\\((.*)\\\) $pc  ignore ignore platformPC
+       if { ! [info exists platformPC] } {
+          result_error "!!! Error could not extract platform PC from $pc...."
+          continue
+       }
+       set name      [lindex [set $pc] 0]
+       set ipaddr    [lindex [set $pc] 1]
+       set display   [lindex [set $pc] 2]
+
+
+       if { ! [regValidateReachable $ipaddr] } {
+          result_error "  !!! $name at $ipaddr is unreachable."
+          continue;
+       }
+
+       if { ! [regTelnetLogin $ipaddr $regLogin $regPassword ] } {
+          result_error "!!! Failed to login to $name at $ipaddr"
+          continue
+       }
+       if { [lsearch $tempList $ipaddr] != -1 } {
+           puts "xterm windows already killed"
+           continue
+       }
+       # Get the PID of the xterm windows and send SIGKILL signal
+       regKillXtermWindows
+    }
+    lappend tempList $ipaddr    
+    puts  "Xterm windows are removed"
+    exit
+}
+unset tempList
+
+#Clean up the DUT sessions.
+
+#Check if this is shasta build or greater to start cougar reg.
+#Take out the entry for cougar if not shahsta build.
+#This will prevent starting cougar reg if the build <shasta build
+
+if { $fullRegStart && !$shastaBuild } {
+    set tempList [list]
+    foreach pc $regpc_list {
+        if { [regexp -nocase "cougar" $pc] } {
+            continue
+        }
+        lappend tempList $pc
+    }
+    set regpc_list [list]
+    foreach pc $tempList {
+      lappend regpc_list $pc
+    } 
+}
+
+if { $fullRegStart } {
+    foreach pc $term_regpc_list {
+        if { !$shastaBuild  && [regexp -nocase ".*cougar.*" $pc] ==1} {
+             continue
+        }
+        set  termInfoList [set $pc]
+        set len [llength $termInfoList]
+        for {set tIndex 0; set pIndex 1 } { $tIndex < $len && $pIndex < $len } \
+            {incr tIndex 2; incr pIndex 2} {
+             set termIp [lindex $termInfoList $tIndex]
+             set pList  [lindex $termInfoList $pIndex] 
+             clearDUTSessions $termIp $pList
+        }
+    }
+} elseif { $regpcRegStart && $forceFlag  } {
+   set termInfoList $regpcTermServer($regpcs)
+   set len [llength $termInfoList]
+   for {set tIndex 0; set pIndex 1 } { $tIndex < $len && $pIndex < $len } \
+       {incr tIndex 2; incr pIndex 2} {
+        set termIp [lindex $termInfoList $tIndex]
+        set pList  [lindex $termInfoList $pIndex] 
+        clearDUTSessions $termIp $pList
+   }
+} elseif { $platformRegStart && $forceFlag } {
+   set termInfoList $platformTermServer($platform)
+   set len [llength $termInfoList]
+   for {set tIndex 0; set pIndex 1 } { $tIndex < $len && $pIndex < $len } \
+       {incr tIndex 2; incr pIndex 2} {
+        set termIp [lindex $termInfoList $tIndex]
+        set pList  [lindex $termInfoList $pIndex] 
+        clearDUTSessions $termIp $pList
+   }
+}  
+
+
+;# Prep for download of images
+if {!$cvsupdateFlag && !$statusFlag } {
+ 
+    if {($download == "yes") && ($prep == "yes")} {
+	
+	# This is done in 2 loops so we don't have to wait for the reboot from unconfig
+	# before going to next platform
+	result_debug "START UNCONFIG: [exec date]"
+	# Go through and unconfig each platform
+	foreach pc $regpc_list {
+	    regexp (.*)\\\((.*)\\\) $pc  ignore ignore platformPC
+	    if { ! [info exists platformPC] } {
+		result_error "!!! Error could not extract platform PC from $pc...."
+		continue
+	    }
+
+	    runRegAllLocalDoCommand $platformPC "unconfig"
+	}
+	result_debug "END UNCONFIG DELETE: [exec date]"
+
+	# Wait 60 seconds for unconfig to complete
+	exSleep 60
+
+	result_debug "START DEF DELETE: [exec date]"
+	# Go through and def delete port all each platform
+	foreach pc $regpc_list {
+	    regexp (.*)\\\((.*)\\\) $pc  ignore ignore platformPC
+	    if { ! [info exists platformPC] } {
+		result_error "!!! Error could not extract platform PC from $pc...."
+		continue
+	    }
+
+	    runRegAllLocalDoCommand $platformPC "defDelete"
+	}
+	result_debug "END DEF DELETE: [exec date]"
+   }
+
+}
+
+
+# Walk through array and display data
+foreach pc $regpc_list {
+
+    global autoPath
+    global autoScriptPath
+
+    regexp (.*)\\\((.*)\\\) $pc  ignore ignore platformPC
+    if { ! [info exists platformPC] } {
+	result_error "!!! Error could not extract platform PC from $pc...."
+	continue
+    }
+
+    set name      [lindex [set $pc] 0]
+    set ipaddr    [lindex [set $pc] 1]
+    set display   [lindex [set $pc] 2]
+
+    
+    if { ! [regValidateReachable $ipaddr] } {
+	result_error "  !!! $name at $ipaddr is unreachable."
+	continue;
+    }
+
+    if { ! [regTelnetLogin $ipaddr $regLogin $regPassword ] } {
+	result_error "!!! Failed to login to $name at $ipaddr"
+	continue
+    }
+
+    # *Just* get the status on each reg machine.
+    if {$statusFlag} {
+	puts "\n**** Retrieving STATUS on $name at $ipaddr ****"
+	regGetStatus
+	continue;
+    }
+
+    # *Just* do a CVS Update
+    if {$cvsupdateFlag == 1} {
+	result_debug "**** CVS Update on $name at $ipaddr targetdir: $autoPath ****"
+	if {! [regCvsUpdateAutomationDir]} {
+	    result_error "!!! FAILED TO UPDATE !!!"
+	}
+	continue
+    }
+
+    # At this point all commands are directed to telnet window on remote REG PC.
+
+    # Go to directory where local script lives
+    send "cd $autoScriptPath\r"
+    expect "$regLogin@"
+
+    result_debug "Starting regressions on $name at IP: $ipaddr DISPLAY:$display on [exec date]..."
+
+    if {[catch {flush $fd_res} reason]} {
+	result_debug "ERROR: flush $reason"
+    }
+
+    # Based on platform PC start xterms and run regressions
+    runRegAllLocal $platformPC $display $i386ImagePath $marinerImagePath $aspenImagePath $cougarImagePath $x480ImagePath $x870ImagePath $NWIImagePath $include $exclude $download $mailTo $obuild
+
+    sleep 2
+    send "logout\r"
+}
+

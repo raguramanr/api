@@ -1,0 +1,400 @@
+
+#load {expect52.dll}
+set auto_path [linsert $auto_path 0 . ];
+
+################################################################## 
+# Procedure Name: tacLogin
+#   
+# Description: proc that used to login to a switch through console IP
+#              or serial com
+#
+#
+# Input args: 
+#       device: ip address of the switch, or the ip address 
+#                     of the terminal server or the serial port from
+#		      com1 to com4 where switch serial connection is made
+#       fd: a file descriptor for log/debug purposetftpServerList, filename
+#       newconn :explicitly force a new connection even if a connection to the
+#                ip already exists  
+# Output args: none
+# Typical usage:
+#             tacLogin $DUT1_CONNECT
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc tacLogin {{device "0.0.0.0"} {fd "NULL"} {userid "a d m i n"} \
+               {newconn 0}} {
+  global numDUT;
+  global whichDutNow;
+  for {set i 1} {$i <= $numDUT} {incr i} {
+     global DUT${i}_CONNECT DUT${i}_IP;
+     if {$device==[set DUT${i}_CONNECT] || $device==[set DUT${i}_IP]} {
+       set whichDutNow $i;
+       break;
+     }     
+  }
+  # Open appropriate device
+  result_debug "Login on device $device";
+  switch -glob -- $device \
+      "com?" {
+         tac_login_comm $device $fd $userid;
+  } default {
+         set loginresult [tac_login_telnet $device $fd $userid $newconn 1];
+         if {$loginresult <=1} {
+            return $loginresult;
+         } else {
+            return [tac_login_telnet $device $fd $userid $newconn 0];
+           }  
+     }
+}
+
+################################################################## 
+# Procedure Name: tac_login_telnet
+#   
+# Description: internal proc that used to login to a switch through telnet ip address
+#
+# Input args: 
+#       ipaddr : ip address of the switch
+#       fd     : a file descriptor for log/debug purpose
+#       userid : User id to login
+#       newconn :explicitly force a new connection even if a connection to the
+#                ip already exists  
+#       PowerCycler : 1 or 0 to indicate powercycling or not
+#        
+# Output args: none
+# Typical usage:
+#         tac_login_telnet $device $fd "admin" 0
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc tac_login_telnet {ipAddr {fd "NULL"} {userid "a d m i n"} {newconn 0} \
+                      PowerCycler}  {
+  global spawn_id;
+  global hostname;
+  global spawn_ids;
+#exp_internal 1
+  set newConnection 1;
+  #check for existing connection
+  if { $newconn != 1 && [ info exists hostname ] == "1" } {
+    foreach name $hostname {
+      if { $name == $ipAddr } {
+        set spawn_id $spawn_ids($name);
+        if { $spawn_id != "INVALID" } {
+          # --- use it for delay without using sleep
+          #puts "Login $ipAddr - Connection already exists pid=$spawn_id"
+          set newConnection 0;
+        }
+      }
+    }
+    #if brand new connection, add to host name list
+    if { [lsearch $hostname $ipAddr] == -1 } {
+       lappend hostname $ipAddr;
+    }
+  } else {
+       lappend hostname $ipAddr;
+  }
+  #spawn new connection if not exists
+  if { $newConnection == 1 } {
+    # give a delay to avoid connection refused problem
+    after 1000;
+    if [catch "spawn telnet $ipAddr" reason] {
+       result_debug "failed to spawn program: $reason\n";
+       error "failed to spawn program: $reason\n";
+    }
+    set spawn_ids($ipAddr) $spawn_id;
+    global connectionTimeout;
+    set timeout $connectionTimeout;
+    result_debug "Login telnet $ipAddr,  pid=$spawn_id";
+    #wait for connection
+    expect {
+      "?nable to ?onnect" {
+        result_error $expect_out(buffer);
+        expect *
+        result_error $expect_out(buffer);
+        error "Unable to connect";
+        }
+      "?onnected to" {
+        #wait for all remaining characters to come
+        sleep 1;
+        }
+    }
+  } 
+return [tac_login_and_verify_result  $PowerCycler ];
+}
+################################################################## 
+# Procedure Name: tac_login_comm
+#   
+# Description: internal proc that used to login to a switch through serial com
+#
+# Input args: 
+#       comm_port: come1 or com2
+#       fd: a file descriptor for log/debug purpose
+#       userid : User id to login
+#       PowerCycler : 1 or 0 to indicate powercycling or not
+# Output args: none
+# Typical usage:
+#         login_comm $device $fd "admin" 0
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc tac_login_comm {comm_port {fd "NULL"} {userid "a d m i n"}} {
+   global spawn_id;
+   global hostname;
+   global spawn_ids;   
+   
+  set newConnection 1;
+  #check for existing connection
+  if { [ info exists hostname ] == "1" } {
+    foreach name $hostname {
+      if { $name == $comm_port } {
+        set spawn_id $spawn_ids($name);
+        if { $spawn_id != "INVALID" } {
+          puts "Login $comm_port - Connection already exists pid=$spawn_id";
+          set newConnection 0;
+        }
+      }
+    }
+    #if brand new connection, add to host name list
+    if { [lsearch $hostname $comm_port] == -1 } {
+       lappend hostname $comm_port;
+    }
+  } else {
+       lappend hostname $comm_port;
+  }
+   #spawn new connection if not exists
+   if { $newConnection == 1 } {    
+     # s. comm initialization
+     set con [open $comm_port RDWR];
+     fconfigure $con -buffering none -mode 9600,n,8,1  -blocking 0 \
+        -buffersize 8192 -eofchar {} -translation auto;
+     if [catch "spawn -open $con" reason] {
+        send_user "failed to spawn program: $reason\n";
+        error "failed to spawn program: $reason\n";
+     }
+    set spawn_ids($comm_port) $spawn_id;
+     result_debug "Login serial $comm_port,  pid=$spawn_id";
+   }
+   #initial talking with the switch
+return [tac_login_and_verify_result  $PowerCycler ];
+}
+
+##############################################################################
+# Procedure  : tac_login_and_verify_result  
+#
+# Description: This proc is a wrapper to tac_login_on_switch.This is used to check for return value of tac_login_on_switch and appropriately call PowerCyclerif needed.
+#
+# Input args:1 or 0
+#            1 specifies that powercycling should be done if logging on to switch times out from tac_login_on_switch.          
+#
+# Output args: -1 or 0 or 1 or 2
+#            : -2 Connection closed by switch
+#            : -1 Unexpected error.. No response from switch
+#            : 0  Login Successful
+#            : 1  Login failed (Authentication failure
+#            : 2  DUT went through Power Cycling due to timeout (if proc is called with argument as 1       
+#
+# Typical usage:
+#         tac_login_and_verify_result 0
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc tac_login_and_verify_result {PowerCycler} {
+  upvar userid userid
+  upvar ipAddr ipAddr
+  set result [tac_login_on_switch  $ipAddr $userid]
+  switch -exact -- $result {
+   -2 -    
+   -1 {return $result} 
+    0 { 
+        expect {
+          "#" { 
+             return $result;
+           }
+          " >" {
+             return $result;
+           }
+          timeout {
+             result_error "Unexpected timeout after successful login";
+             return -1;
+          }
+        }
+      }
+   1 {return $result}
+   2 { if {$PowerCycler == 1} {
+         set pcycleresult [try_powercycler $ipAddr]
+         if {$pcycleresult== 1} {
+           result_ok "Successfully power cycled DUT";
+           result_debug "Wait for 50 secs for rebooted DUT to come up...";
+           sleep 50;
+           return 2;
+         } else { 
+             result_error "Could not power cycle DUT";
+             #no communication or unexpected behavior
+             result_error "Trouble talking with the sw on $ipAddr";
+             result_error " Check connection and settings \r\r";
+           return -1;
+         } 
+       } else {
+#This is because the proc is first called with powercycler as 1 and then as 0.Hence it means that previous attempt to login to the switch has failed and it was rebooted and still there is login problem for the second time which is an error.
+              result_error "No response from switch"; 
+              return -1;
+         }
+     }
+           
+  }
+}
+
+################################################################## 
+# Procedure Name: tac_login_on_switch
+#   
+# Description: internal proc that sends login prompt and password slower each char at a time.
+#
+# Input args: string : ip address of the DUT ,userid (optional)
+# Output args: Integer denoting the result
+#             -1 :Unexpected Error
+#              0 :Login successful
+#              1 :Login failed (authentication failure)
+#              2 :Login attempt was not successful after 10 attempts 
+# Typical usage:
+#         tac_login_on_switch  $ipAddr
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup	
+##################################################################
+proc tac_login_on_switch {string {userid "a d m i n"}} {
+  global spawn_id;
+  log_user 2;
+  set timeout 5;
+  #try 10 times
+  send "\r";
+  for {set i 0} {$i < 10} {incr i} {
+    expect {
+      "login:" {
+          global module;
+	  global DUTs_info;
+	  global PD2_108161729;
+          if {[info exists DUTs_info(DUT1,version)]} {
+             if {[info exists PD2_108161729] && [eval $PD2_108161729]} {
+                result_debug "sleep for 2 sec due to tacacs PD2-108161729";
+                after 2000;
+             }
+          }
+          ##foreach letter {a d m i n}
+           foreach letter $userid {
+             send $letter
+             expect {
+                "$letter" {
+                    after 10;
+                }
+                timeout {
+                   for {set c 0} {$c<10} {incr c} {
+                      send $letter;
+                      expect {
+                         "$letter" {
+                            break;
+                         }
+                         timeout {
+                            after 10;
+                         }
+                      }
+                   }
+                }
+             }
+          }
+          send "\r";
+          expect "password:";
+          send "\r";
+          expect {
+                "#" {
+                      send "\r";
+                      return 0;
+                }
+                " >" {
+                     send "\r";
+                     return 0;
+                }
+               "Login failed" {
+                   return 1;
+                }        
+          }                                
+      }
+      " >" {
+          send "logout\r";
+          expect { 
+             -nocase -re  "(y*/n*)" {
+                send "n\r";
+             }
+          }     
+      }
+      "#" {
+          send "logout\r";
+          expect {
+            -nocase -re "(y*/n*)" {
+              send "n\r";
+             }
+          }
+      }
+      "\\->" {
+         if {[regexp -nocase {\->$} $expect_out(buffer)]} {
+            send "shswitch\r";
+            expect {
+               "#" {
+                   send "logout\r";
+                   expect {
+                      -nocase -re "(y*/n*)" {
+                         send "n\r";
+                       }
+                   }
+               }
+               " >" {
+                   send "logout\r";
+                   expect {
+                      -nocase -re "(y*/n*)" {
+                         send "n\r";
+                       }
+                   }
+               }
+               timeout {
+                   result_error "Unexpected timeout after finding nofeep";
+                   return -1;
+               }
+            }
+         } else {
+             send "logout\r";
+         }
+      }
+      "closed" {
+         result_debug "Connection closed by switch";
+         return -2;
+      }
+      timeout {
+         #want to get a Login prompt or #
+         send "\r";
+      }
+    }
+  }
+ return 2;
+}
+################################################################################
+proc try_powercycler {ipAddr} {
+  global POWERCYCLE_IP;
+  if {[info exists POWERCYCLE_IP]} {
+     for {set numDUT 1; global DUT${numDUT}_CONNECT} { [info exists DUT${numDUT}_CONNECT] } {incr numDUT ; global DUT${numDUT}_CONNECT} {
+        set connect [set DUT${numDUT}_CONNECT];
+        if {[string compare $ipAddr $connect]==0} {
+           set dut $numDUT;
+           return [PowerCycleDUT $POWERCYCLE_IP $dut];
+        }
+     }
+  }
+}
+################################################################################

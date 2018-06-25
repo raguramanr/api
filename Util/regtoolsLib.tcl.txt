@@ -1,0 +1,598 @@
+#
+proc NumberedMenu {args} {
+    parse_args NumberedMenu $args {
+        head             "This is a Menu"
+        question1        "What"
+        choices          "This That TheOther"
+        chAppendList     "null"
+        chPrependList    "null"
+        menuWidth        100
+        keyWidth         5
+        headerPadChar    "-"
+        barChar          "-"
+        clearXterm       "yes"
+        clearXtermInfo   ""
+        all              "no"
+        simple           "no"
+    }
+
+    if {$chAppendList != "null"} {
+        set choices [concat $choices $chAppendList]
+    }
+    if {$chPrependList != "null"} {
+        set choices [concat $chPrependList $choices]
+    }
+    if {[llength $choices] < 1} {
+        puts "No elements passed into menu"
+        exit
+    } else {
+        #puts "Choices $choices"
+    }
+    set nWidth $keyWidth; # width of number column
+    set longest 0; # init longest value in
+    set i 0
+    foreach cc $choices {
+        set ln [string length $cc]
+        if {$ln > $longest} {
+            set longest $ln; # return the longest string length pased in
+        }
+        incr i
+    }
+    set choiceCount $i
+    set valWidth [expr $longest + 4]; # leave some white space 3 spaces
+    set numValWidth [expr $nWidth + $valWidth];# entire col width
+    set colCount [expr int(floor($menuWidth / $numValWidth))]; # columns in menu 100 chars/ longest val
+    set choiceLen [llength $choices]
+    if {$choiceLen > $colCount} {
+        set numRows [expr int(ceil($choiceLen/$colCount))];# elements in array div by num rows
+    } else {
+        set numRows 1
+    }
+    # Create a bar the width of the menu
+    set bl 0
+    set bar ""
+    while {$bl <= $menuWidth} {
+        append bar "$barChar"
+        incr bl
+    }
+    # ------------------------------------------------
+    #        make header
+    # ------------------------------------------------
+    # Header will look like -----  $head  -----
+    set headWidth [expr $menuWidth - 4]; # leave for with spaces
+    set slen [string length $head];# Length of the header passed in
+    set pad [expr $headWidth - $slen];# buffer is line length of 90 - 4 spaces - header
+    set pad [expr int(floor($pad / 2))];# div buffer by 2 to left and right side
+
+    set h 0 ;# counter for pad string
+    set padStr ""
+    while {$h<=$pad} {
+        append padStr $headerPadChar;# create the pad string
+        incr h ;# pad length
+    }
+    # --------------------------------------------------------------------
+    #  Create the menu
+    # --------------------------------------------------------------------
+
+    # init the menu counters
+    set lastSelection ""
+    set listOut ""
+    set listIn $choices
+    # make the menu
+    while {1} {
+        # print the header
+        puts "\n\n"
+        # ------------------------------------------------
+        # Previous app important info to display
+        #   this menu may clear stdout.  If you want
+        #   to add important info to display at the top
+        #   after stdout is cleared. Pass it in as a list
+        #   $clearXtermInfo ""
+        if {[llength $clearXtermInfo] > 0} {
+            puts "$bar"
+            foreach preI $clearXtermInfo {
+                if {[llength $preI] == 2} {
+                    set pic 0
+                    foreach kv $preI {
+                        set pikv($pic) $kv
+                        incr pic
+                    }
+                    puts "[format "%-20s %-20s" ${pikv(0)}: ${pikv(1)}]"
+                } else {
+                    puts "$preI"
+                }
+            }
+        }
+        puts "${padStr}  ${head}  $padStr"
+
+        set r 0;
+        set x 0;
+        while {$x <= $choiceLen} {
+            # build the format colCount   nWidth valWidth
+            set ls ""
+            for {set ccc 0} {$ccc<$colCount} {incr ccc} {
+                # Loop formats the 
+                if {[string trim [lindex $listIn $x]] != ""} {
+                    set pDigit [expr $x+1]; # print digit is 1 higher than key
+                    lappend ls [format "%-${nWidth}s %-${valWidth}s" ${pDigit}: [lindex $listIn $x]]
+                } else {
+                    set blk ""
+                    lappend ls [format "%-${nWidth}s %-${valWidth}s" $blk $blk]
+                }
+                incr x
+            }
+            puts "[join $ls ""]"
+        }
+
+        if {[llength $listOut] > 0} {
+            set selLen [llength $listOut]
+            puts "\n\nYour Current Selections:"
+            set xx 0;
+            set blk " "
+
+            while {$xx <= $selLen} {
+                # build the format colCount   nWidth valWidth
+                set ls ""
+                for {set ccc 0} {$ccc<$colCount} {incr ccc} {
+                    # Loop formats the 
+                    if {[string trim [lindex $listOut $xx]] != ""} {
+                        lappend ls [format "%-${valWidth}s %-${nWidth}s" [lindex $listOut $xx] $blk]
+                    } else {
+                        set blk " "
+                        lappend ls [format "%-${valWidth}s %-${nWidth}s" $blk $blk]
+                    }
+                    incr xx
+                }
+                puts "[join $ls ""]"
+            }
+        }
+        # reset selection to array index
+        puts " "
+        if {$simple == "yes"} {
+            puts -nonewline "$question1 : Default = 1: [lindex $listIn 0] :";
+        } else {
+            puts -nonewline "$question1 : (a)ll, (u)ndo, (f)inished <CR>Default = 1: [lindex $listIn 0] :";
+        }
+        flush stdout;
+        gets stdin userChoice;
+        if {$userChoice==""} {
+            set userChoice 1
+        }
+        # Simple, what's next, menu case
+        if {$simple == "yes"} {
+            set inIndex [expr $userChoice - 1]
+            return [lindex $listIn $inIndex]
+        }
+        # ---------- Complex, build array menu -------------
+        if {[regexp -nocase "^a" $userChoice]} {
+            set listOut $listIn
+            break
+        }
+        if {[regexp -nocase "^f" $userChoice]} {
+            break
+        }
+        if {[regexp -nocase "^u" $userChoice]} {
+            if {$lastSelection == ""} {
+                puts "You can only undo the last selection"
+                after 3000
+                if {$clearXterm == "yes"} {
+                    catch {exec clear >@ stdout} ww
+                }
+                continue
+            }
+            lappend listIn $lastSelection
+            set listOut [ldelete $listOut "$lastSelection"];
+            set choiceLen [llength $listIn]
+            if {$clearXterm == "yes"} {
+                catch {exec clear >@ stdout} ww
+            }
+            set lastSelection ""
+            continue;
+        }
+        if {[regexp -nocase "\[a-zA-Z]" $userChoice]} {
+            puts "Must be a number";
+            after 2000;
+            if {$clearXterm == "yes"} {
+                catch {exec clear >@ stdout} ww
+            }
+            continue;
+        }
+        set userChoice [expr $userChoice - 1];# reset to list key value
+        if {$userChoice >= 0 && $userChoice < $x} {
+            #puts -nonewline "You selected: [lindex $listIn $userChoice].\
+            #                     <R|Retry>  <S|Select 1> and Contiue <F|Finished> <A|Add>\[A]:";
+
+            #flush stdout;
+            #gets stdin whatNext;
+            set whatNext a
+            if {$whatNext == ""} {
+                set whatNext "a"
+            }
+            if {[regexp -nocase "^a" $whatNext]} {
+                lappend listOut [lindex $listIn $userChoice]
+                set lastSelection "[lindex $listIn $userChoice]"
+                set listIn [ldelete $listIn "[lindex $listIn $userChoice]"];
+                set choiceLen [llength $listIn]
+                if {$clearXterm == "yes"} {
+                    catch {exec clear >@ stdout} ww
+                }
+                continue;
+            } elseif {[regexp -nocase "^r" $whatNext]} {
+                if {$clearXterm == "yes"} {
+                    catch {exec clear >@ stdout} ww
+                }
+                continue;
+
+            } elseif {[regexp -nocase "^f" $userChoice]} {
+                set listOut $listIn
+                break
+            } elseif {[regexp -nocase "^s" $whatNext]} {
+                if {[llength $listOut] <= 0} {
+                    set listOut "[lindex $listIn $userChoice]"
+                }
+                if {$clearXterm == "yes"} {
+                    catch {exec clear >@ stdout} ww
+                }
+                break;
+            } else {
+                puts "You did not enter a legal value. A to Add, R to Retry, S for select and continue"
+                after 2000
+                continue;
+            }
+        } else {
+            puts "Error: You must select a number 1 through [expr $x - 1]\n";
+            continue;
+        }
+
+    }
+    puts "\nRETURN:\n[join $listOut "\n"]\n"
+    return $listOut;
+}
+
+#
+proc runningBeds {} {
+   global DEVREG
+   set psOut [catch {exec ps -eafwww | egrep -e " -cfg " | grep -v grep >& Tmp/ps[pid]} psLines]
+   if {$psOut==0} {
+      set unlockTestbeds ""
+      set fd_tmp [FileOpen Tmp/ps[pid] r]
+      set psLines ""
+      while {[gets $fd_tmp psLine]!=-1} {
+         lappend psLines $psLine
+      }
+      close $fd_tmp
+      file delete Tmp/ps[pid]
+      foreach psLine $psLines {
+         set cfgIndex [lsearch $psLine "-cfg"]
+         set cfgFileName [lindex $psLine [expr $cfgIndex+1]]
+         set fileTail [file tail $cfgFileName]
+         if {[lsearch $unlockTestbeds $fileTail]==-1} {
+            lappend unlockTestbeds $fileTail
+         }
+      }
+      return $unlockTestbeds
+   } else {
+      return ""
+   }
+}
+proc maintestbeds {} {
+   global DEVREG
+   set runningCfgs ""
+   set psOut [catch {exec ps -eafwww | egrep -e "main\.tcl.*\.cfg" | grep -v grep >& Tmp/ps[pid]} psLines]
+   if {$psOut==0} {
+      set loadingtestbeds ""
+      set fd_tmp [FileOpen Tmp/ps[pid] r]
+      set psLines ""
+      while {[gets $fd_tmp psLine]!=-1} {
+         lappend psLines $psLine
+      }
+      close $fd_tmp
+      file delete Tmp/ps[pid]
+      foreach psLine $psLines {
+         set cfgIndex [lsearch $psLine "-cfg"]
+         set cfgFileName [lindex $psLine [expr $cfgIndex+1]]
+         set fileTail [file tail $cfgFileName]
+         lappend runningCfgs $fileTail
+      }
+      return $runningCfgs
+   }
+}
+proc swsharedbeds {incfgs} {
+    global DEVREG
+
+    set mainL [maintestbeds];
+    set ccL [cctestbeds];
+    set qlL [qltestbeds];
+    set vtL [vttestbeds];
+    set lcL [lctestbeds];
+
+    set inUseList [concat $mainL $ccL $qlL $vtL $lcL]   
+
+    #puts "\nmainL $mainL\n"
+    #puts "\nccL $ccL"
+    #puts "\nqlL $qlL"
+    #puts "\nvtL $vtL"
+    #puts "\nlcL $lcL"
+    #puts "\ninuse: $inUseList \n"
+    set runningCfgs ""
+    set sharedCfgs ""
+    set preLines ""
+    set psOut [catch {exec ps -eafwww | egrep -e "regSer.*share" | grep -v grep >& Tmp/ps[pid]} psLines]
+    if {$psOut==0} {
+        set loadingtestbeds ""
+        set fd_tmp [FileOpen Tmp/ps[pid] r]
+        set psLines ""
+        while {[gets $fd_tmp psLine]!=-1} {
+            lappend psLines $psLine
+        }
+        close $fd_tmp
+        file delete Tmp/ps[pid]
+        foreach iCfg $incfgs {
+            foreach psLine $psLines {
+                set cfgIndex [lsearch $psLine "-cfg"]
+                set cfgFileName [lindex $psLine [expr $cfgIndex+1]]
+                set fileTail [file tail $cfgFileName]
+                set cCfg $fileTail
+                set shIndex [lsearch $psLine "-partnerList"]
+                set shCfg [lindex $psLine [expr $shIndex+1]]
+                set fileTail [file tail $shCfg]
+                set sCfg $fileTail
+                if {$iCfg == $cCfg && [lsearch $runningCfgs $iCfg] < 0 && \
+                    [lsearch $runningCfgs $sCfg] < 0} {
+                    #puts "Shared $iCfg sCfg $sCfg"
+                    if {[lsearch $inUseList $iCfg] >= 0 || [lsearch $inUseList $sCfg] >= 0} {
+                        puts "Skip $iCfg - Share $sCfg is probably running"
+                        lappend sharedCfgs $sCfg
+                        continue
+                    } else {
+                        lappend runningCfgs $iCfg
+                        lappend sharedCfgs $sCfg
+                    }
+                } else {
+                    if {$iCfg == $cCfg && [lsearch $runningCfgs $sCfg] >= 0} {
+                        puts "Skip $iCfg shared $sCfg is added already"
+                    }
+                    continue
+                }
+            }
+        }
+        foreach iCfg $incfgs {
+            if {[lsearch $inUseList $iCfg] >= 0} {
+                continue
+            }
+            if {[lsearch $runningCfgs $iCfg] < 0 && [lsearch $sharedCfgs $iCfg] < 0} {
+                #puts "Add nonShared $iCfg"
+                lappend runningCfgs $iCfg
+            }
+        }
+        return $runningCfgs
+    } else {
+        foreach iCfg $incfgs {
+            if {[lsearch $inUseList $iCfg] >= 0} {
+                continue
+            } else {
+                lappend runningCfgs $iCfg
+            }
+        }
+        return $runningCfgs
+    }
+}
+proc cctestbeds {} {
+   global DEVREG
+   set runningCfgs ""
+   set psOut [catch {exec ps -eafwww | egrep -e "checkConn.*\.cfg" | grep -v grep >& Tmp/ps[pid]} psLines]
+   if {$psOut==0} {
+      set loadingtestbeds ""
+      set fd_tmp [FileOpen Tmp/ps[pid] r]
+      set psLines ""
+      while {[gets $fd_tmp psLine]!=-1} {
+         lappend psLines $psLine
+      }
+      close $fd_tmp
+      file delete Tmp/ps[pid]
+      foreach psLine $psLines {
+         set cfgIndex [lsearch $psLine "-cfg"]
+         set cfgFileName [lindex $psLine [expr $cfgIndex+1]]
+         set fileTail [file tail $cfgFileName]
+         lappend runningCfgs $fileTail
+      }
+      return $runningCfgs
+   }
+}
+proc qltestbeds {} {
+   global DEVREG
+   set runningCfgs ""
+   set psOut [catch {exec ps -eafwww | egrep -e "QLoad.*\.cfg" | grep -v grep >& Tmp/ps[pid]} psLines]
+   if {$psOut==0} {
+      set loadingtestbeds ""
+      set fd_tmp [FileOpen Tmp/ps[pid] r]
+      set psLines ""
+      while {[gets $fd_tmp psLine]!=-1} {
+         lappend psLines $psLine
+      }
+      close $fd_tmp
+      file delete Tmp/ps[pid]
+      foreach psLine $psLines {
+         set cfgIndex [lsearch $psLine "-cfg"]
+         set cfgFileName [lindex $psLine [expr $cfgIndex+1]]
+         set fileTail [file tail $cfgFileName]
+         lappend runningCfgs $fileTail
+      }
+      return $runningCfgs
+   }
+}
+proc vttestbeds {} {
+   global DEVREG
+   set runningCfgs ""
+   set psOut [catch {exec ps -eafwww | egrep -e "verifyTest.*\.cfg" | grep -v grep >& Tmp/ps[pid]} psLines]
+   if {$psOut==0} {
+      set loadingtestbeds ""
+      set fd_tmp [FileOpen Tmp/ps[pid] r]
+      set psLines ""
+      while {[gets $fd_tmp psLine]!=-1} {
+         lappend psLines $psLine
+      }
+      close $fd_tmp
+      file delete Tmp/ps[pid]
+      foreach psLine $psLines {
+         set cfgIndex [lsearch $psLine "-cfg"]
+         set cfgFileName [lindex $psLine [expr $cfgIndex+1]]
+         set fileTail [file tail $cfgFileName]
+         lappend runningCfgs $fileTail
+      }
+      return $runningCfgs
+   }
+}
+proc lctestbeds {} {
+   global DEVREG
+   set runningCfgs ""
+   set psOut [catch {exec ps -eafwww | egrep -e "bash_lc.*\cfg" | grep -v grep >& Tmp/ps[pid]} psLines]
+   if {$psOut==0} {
+      set lctestbeds ""
+      set fd_tmp [FileOpen Tmp/ps[pid] r]
+      set psLines ""
+      while {[gets $fd_tmp psLine]!=-1} {
+         lappend psLines $psLine
+      }
+      close $fd_tmp
+      file delete Tmp/ps[pid]
+      foreach psLine $psLines {
+         set cfgIndex [lsearch $psLine "../Util/bash_lc"]
+         set cfgFileName [lindex $psLine [expr $cfgIndex+1]]
+         set fileTail [file tail $cfgFileName]
+         set bob [regexp {(.*\.cfg).*} $fileTail everything lccfg ]
+         lappend runningCfgs $lccfg
+      }
+      return $runningCfgs
+   }
+}
+proc getlocked {} {
+    global DEVREG
+
+    if {[set fd_in [FileOpen $DEVREG(server,lockFile) r]]==-1} {
+        return $fd_in
+    }
+    set lList ""
+    while {[gets $fd_in line]!=-1} {
+        set line [string trimleft $line "!"]
+        lappend lList $line
+    }
+    funlock $fd_in
+    close $fd_in
+    return $lList
+}
+proc getUserLocks {} {
+    global DEVREG
+    set pList ""
+    set queues [glob -nocomplain -- $DEVREG(server,imagesRunningDir)/*]
+    ;# Look for any qId that is actively using queued platform
+    foreach qIdPath $queues {
+        set catchVal [catch {exec egrep -e "lockFile:" $qIdPath/info} userInfo]
+        if {! $catchVal} {
+            regexp {lockFile:\ *([A-Za-z0-9_\-]+\.cfg)\ *$} $userInfo ignore cCfg
+            lappend pList $cCfg
+        }
+    }
+    return "$pList"
+}
+
+proc get_test_beds {release {skipShared "Yes"}} {
+    global DEVREG
+
+    catch {mysqlconnect -host 10.69.6.211 -user regression_user -password extreme \
+                        -db autoweb_db_7} mysql_handler
+
+    set shareCfgFiles [mysqlsel $mysql_handler \
+        "SELECT platform_id,platform_share_list,platform_cfg_file_name \
+        FROM platform_table WHERE start_release <= '$release' \
+        AND end_release >= '$release'  AND status = 'Active' AND location = 'RTP' \
+        ORDER By number_nodes ASC" -list]
+
+    set shareskiplist ""
+    foreach share $shareCfgFiles {
+        set myPlatId [string trim [lindex $share 0]]
+        set platShareList [string trim [lindex $share 1]]
+        set platcfg [string trim [lindex $share 2]]
+        if {$platShareList != ""} {
+            if {[lsearch $shareskiplist $platShareList] < 0 && \
+                   [lsearch $shareskiplist $platcfg] < 0} {
+                lappend shareskiplist $platcfg
+            }
+            set platIdShare($myPlatId) $platShareList
+            set platIdByShareName($platShareList) $myPlatId;
+        }
+    }
+    # Go through all test beds in the release passed in.
+    set allCfgFiles [mysqlsel $mysql_handler "SELECT platform_id,platform_cfg_file_name \
+                FROM platform_table WHERE start_release <= '$release' AND \
+                status = 'Active' AND location = 'RTP' \
+                AND end_release >= '$release' ORDER By number_nodes ASC" -list]
+
+    set pShareList ""
+    foreach cfg $allCfgFiles {
+        set pId  [lindex $cfg 0]
+        set pCfg [lindex $cfg 1]
+        if {[lsearch $shareskiplist $pCfg] >= 0 && $skipShared == "Yes"} {
+            puts "Skip share $cfg"
+            continue;
+        }
+        set cfgShareArray($pId) ""
+        if {[info exists platIdShare($pId)]} {
+            set myS $platIdShare($pId);
+            set mySId $platIdByShareName($myS)
+            set cfgShareArray($pId) $mySId
+        }
+        # Check to see which configs have a pause set to no which equals running fine
+        set statusPId [mysqlsel $mysql_handler "SELECT platform_id \
+            FROM current_run_table WHERE (reserved = 'no' || reserved = 'paused' ) \
+            AND (platform_id = '$pId' OR platform_id = '$cfgShareArray($pId)')" -flatlist]
+        if {0 && [info exists statusPId] && $statusPId > 0} {
+            if {$cfgNameShareArray($pId) != "NULL"} {
+                #puts "$pCfg OR $cfgNameShareArray($pId) is Running";
+            } else {
+                #puts "$pCfg is Running";
+            }
+        } else {
+            #puts "Found $pCfg"
+            lappend cfgList $pCfg
+        }
+        unset statusPId
+    }
+    return $cfgList
+}
+proc get_filtered_test_beds {cfgList {filter "null"}} {
+
+    if {$filter == "null"} {
+        return $cfglist;
+    }
+
+    catch {mysqlconnect -host 10.69.6.211 -user regression_user -password extreme \
+                        -db autoweb_db_7} mysql_handler
+
+    # Go through all test beds in the release passed in.
+    set allCfgFiles [mysqlsel $mysql_handler "SELECT platform_id,platform_cfg_file_name,\
+                platform_owner FROM platform_table WHERE \
+                status = 'Active' AND location = 'RTP' ORDER By number_nodes ASC" -list]
+
+    set myCfgs ""
+    set mc 0
+    foreach cfg $allCfgFiles {
+        set pId    [lindex $cfg 0]
+        set pCfg   [lindex $cfg 1]
+        set pOwner [lindex $cfg 2]
+
+        if {[regexp -nocase "$filter" $pCfg] || [regexp -nocase "$filter" "$pOwner"]} {
+            if {[lsearch $cfgList $pCfg] >=0} {
+                lappend myCfgs $pCfg;
+                incr mc;
+            }
+        }
+    }
+    if {$mc > 0} {
+        return $myCfgs;
+    } else {
+        return $cfgList;
+        puts "\nThe filter did not match any test beds. All test beds will be used.\n";
+    }
+
+}

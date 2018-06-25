@@ -1,0 +1,199 @@
+# ----------------------------------------------------------------------------------------------
+# proc _verifyDutHALSteady
+#
+#      A proc that sends a cli to a broadcom switch and will not return until HAL is in sync
+#
+#
+# Args  In: -dut
+#       Out: return 1 when completed 
+#
+#
+# Typical usage:
+#   if {_verifyHALSteady -dut $nDUT} { proceed with test } { else, connectionTimeout will pop an error }
+#
+# ----------------------------------------------------------------------------------------------
+proc _verifyDutHALSteady {args} {
+    global MAIN
+
+
+    parse_args SendAFileToTftp $args {
+       dut "1"
+    }
+    global DUT${dut}_CONNECT bcmPlatform
+    _setShowOutput -screen off -log off -res_fmt off
+    if {[regexp -nocase "$bcmPlatform" [GetSystemType $dut]]} {
+        Login [set DUT${dut}_CONNECT] -CheckOperational 0 -masterCheck 0 ;
+        SendACmd "debug hal show platform ipv4mc 1"
+    }
+    _setShowOutput -screen on -log on -res_fmt on
+    return 1
+}
+
+# -------------------------------------------------------------------------------------
+# proc _verifyTestBedHALSteady
+#
+#   Using MultiTask proc, connect to all DUTs in a test bed
+#   and make sure that HAL is in sync for all DUTs before continuing
+#
+# Typical usage:
+#               _verifyTestBedHALSteady
+#
+#
+# -------------------------------------------------------------------------------------
+proc _verifyTestBedHALSteady {} {
+    global MAIN bcmPlatform
+
+    # Add stack support??? for Don ?
+    result_debug "Check for HAL steady State"
+    _setShowOutput -screen off -log off -res_fmt off
+    set hList ""
+    for {set nDUT 1; global DUT${nDUT}_CONNECT} { [info exists DUT${nDUT}_CONNECT] } \
+                                             {incr nDUT ; global DUT${nDUT}_CONNECT} {
+        Login [set DUT${nDUT}_CONNECT] -CheckOperational 0 -masterCheck 0 ;
+    }
+    for {set nDUT 1; global DUT${nDUT}_CONNECT} { [info exists DUT${nDUT}_CONNECT] } \
+                                             {incr nDUT ; global DUT${nDUT}_CONNECT} {
+        if {[regexp -nocase "$bcmPlatform" [GetSystemType $nDUT]]} {
+            lappend hList "_verifyHALSteady -dut $nDUT"
+        }
+    }
+    MultiTask $hList
+    _setShowOutput -screen on -log on -res_fmt on
+
+}
+# -------------------------------------------------------------------------------------
+# proc _checkIfHalSyncNeeded
+#
+#  Args In: cmd - The command being sent to the switch
+#
+#  This proc holds all of the specific CLI that we are going to send the hal check
+#
+# -------------------------------------------------------------------------------------
+proc _checkIfHalSyncNeeded {cmd} {
+    global MAIN DUTs_info whichDutNow whichMsmNow
+
+
+    if {![info exists DUTs_info(DUT${whichDutNow}${whichMsmNow},DEBUGENABLED)]} {
+        set DUTs_info(DUT${whichDutNow}${whichMsmNow},DEBUGENABLED) 0;
+    }
+
+    set MAIN(checkhalsync) 0
+    if {[regexp -nocase "cl\[ear]{0,3} cou\[nters]{0,5}" $cmd]} {
+        set MAIN(checkhalsync) 1
+    }
+
+    #
+    # Add any additional CLI that may need to wait for a hal sync here
+    #
+    #    Use _verifyHALSteady -dut # or _verifyTestBedHALSteady in test cases if needed
+    #
+    #    These may be added to traffic if necessary 
+
+    if {$MAIN(checkhalsync)} {
+        result_debug "A HAL Sync will be initiated after $cmd"
+    }
+
+}
+# -------------------------------------------------------------------------------------
+# proc _sendHalSyncCmd
+#     This proc is called at the bottom of SendACmd.  The flag MAIN(checkhalsync)
+#        is set by a match proc _checkIfHalSyncNeeded called at the top of SendACmd
+#
+#
+#
+#
+# -------------------------------------------------------------------------------------
+proc _sendHalSyncCmd {} {
+    global spawn_id
+    global spawn_ids
+    global connectionTimeout
+    global whichDutNow whichMsmNow
+    global DUTs_info timeout
+    global hostname MAIN bcmPlatform
+
+    if {[info exists connectionTimeout]} {
+        set timeout $connectionTimeout
+    }
+
+    if {![info exists DUTs_info(DUT$whichDutNow,platform)]} {
+        return;
+    }
+    if {![regexp -nocase "$bcmPlatform" $DUTs_info(DUT$whichDutNow,platform)]} {
+        return;
+    }
+    if {[info exists MAIN(checkhalsync)] && $MAIN(checkhalsync)} {
+        set t0 [clock seconds]
+        exp_send "\r"
+        expect {
+            -nocase -re "(\\* )?\[a-z0-9()._-]+(:|\\.)\[0-9]+ (#|>) " {
+                puts "Ready to send hal message"
+            }
+            timeout {
+                puts "No prompt returned after sending <cr> to switch"
+            }
+        } 
+        _setShowOutput -screen off -log off -res_fmt off
+        exp_send "debug hal show platform ipv4mc 1\r"
+        expect {
+            -nocase -re "(\\* )?\[a-z0-9()._-]+(:|\\.)\[0-9]+ (#|>) " {
+                expect *; unset expect_out(buffer);
+                exp_send "\r"
+                expect {
+                    -nocase -re "(\\* )?\[a-z0-9()._-]+(:|\\.)\[0-9]+ (#|>) " {}
+                    timeout {
+                        _setShowOutput -screen on -log on -res_fmt on
+                        set t [expr [clock seconds] - $t0]
+                        result_debug "Verify HAL synced. Hide output - debug hal show platform ipv4mc 1 - Time $t"
+                        result_debug "HAL did not sync after $timeout seconds"
+                        expect *; unset expect_out(buffer);
+                        return 0;
+                    }
+                }
+                _setShowOutput -screen on -log on -res_fmt on
+                set t [expr [clock seconds] - $t0]
+                result_debug "Verify HAL synced. Hide output - debug hal show platform ipv4mc 1 - Time $t"
+                expect *; unset expect_out(buffer);
+                return 1
+            }
+            "Bootrom> " {
+                _setShowOutput -screen on -log on -res_fmt on
+                set t [expr [clock seconds] - $t0]
+                result_debug "Verify HAL synced. Hide output - debug hal show platform ipv4mc 1 - Time $t"
+                expect *; unset expect_out(buffer);
+                return 1
+            }
+            timeout {
+                _setShowOutput -screen on -log on -res_fmt on
+                set t [expr [clock seconds] - $t0]
+                result_debug "Verify HAL synced. Hide output - debug hal show platform ipv4mc 1 - Time $t"
+                result_debug "HAL did not sync after $timeout seconds"
+                expect *; unset expect_out(buffer);
+                return 0;
+            }
+        }
+    }
+
+}
+
+# ---------------------------------------------------------------------------------------
+# proc _verifyCurrentHALSteady
+#
+# Enable debug mode and send the debug hal command
+#
+# ---------------------------------------------------------------------------------------
+proc _verifyCurrentHALSteady {} {
+    global MAIN bcmPlatform whichDutNow
+
+    if {[regexp -nocase "$bcmPlatform" [GetSystemType $whichDutNow]]} {
+        set _t1 [clock seconds]
+        result_debug "Send HAL command to verify sync before continuing"
+        _setShowOutput -screen off -log off -res_fmt off
+        SendACmd "debug hal show platform ipv4mc 1"
+        _setShowOutput -screen on -log on -res_fmt on
+        set _t2 [clock seconds]
+        set _stime [expr $_t2 - $_t1]
+        result_debug "Sync Check took  $_stime"
+    }
+    return 1
+}
+

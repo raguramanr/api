@@ -1,0 +1,172 @@
+
+lappend auto_path "/usr/lib/tcl8.3/lib"
+package require Oratcl
+package require -exact Oratcl 4.1
+
+
+proc getPDStatus {hdl pdList pdStatus } {
+  upvar $pdStatus pdStatusArray
+
+  foreach pd $pdList {
+    set sql "select status_cd from siebel.s_prod_defect where defect_num = '$pd'"
+    set status [ExecuteSQL $hdl $sql] 
+    set pdStatusArray($pd) $status
+  }
+  return 0
+}
+
+##################################################################i########
+# Procedure Name: getPdCreateDate 
+#
+# Description: Connects to Siebel server, executes the SQL query to
+#              find the create date of a PD.
+#
+# Input args: pdList    - List of PDs to be checked
+#             pdStatus  - Array to be returned with all the PDs and their status.
+#             hdl - Handle to the sieble connection.
+# Output args: pdAgeArray
+# Typical usage:
+#             getPdCreateDate $hdl $pdList pdAgeArray 
+#
+# Category Types : Query Siebel
+#
+# Constraints : OraTcl4.1 and Oracle9.0 client should be installed
+#################################################################i#########
+
+proc getPdCreateDate {hdl pdList pdAge } {
+  upvar $pdAge pdAgeArray
+
+  foreach pd $pdList {
+    set sql "select  created from siebel.s_prod_Defect where defect_num = '$pd'"
+    set crDate [ExecuteSQL $hdl $sql] 
+    set pdAgeArray($pd) $crDate
+  }
+  return 0
+}
+
+##################################################################i########
+# Procedure Name: OpenSiebelSession 
+#
+# Description: To open a session with Siebel server.
+#
+# Input args: None.
+# Output args: handle to the connection 
+# Typical usage:  set lda [OpenSiebelSession]
+#     
+# Category Types : Init Siebel
+#
+# Constraints : OraTcl4.1 and Oracle9.0 client should be installed
+#################################################################i#########
+
+proc OpenSiebelSession { } {
+  set connect isoper/isoper@sblprd
+  set lda [oralogon $connect]
+
+  if { [ oramsg $lda rc ] == 0 } {
+    puts "Successfully connected to Siebel."
+  } else {
+    puts "Unable to connect: [oramsg $lda rc]"
+    return -1
+  }
+  return $lda
+}
+
+##################################################################i########
+# Procedure Name: CloseSiebelSession 
+#
+# Description: To close a session with Siebel server.
+#
+# Input args: Handle to the connection.
+# Output args: None
+# Typical usage:  CloseSiebelSession $lda
+#     
+# Category Types : logoff  Siebel
+#
+# Constraints : OraTcl4.1 and Oracle9.0 client should be installed
+#################################################################i#########
+
+proc CloseSiebelSession { lda } {
+     oralogoff $lda
+}
+
+##################################################################i########
+# Procedure Name: LoginSiebel 
+#
+# Description: To open a session with oracle database.
+#
+# Input args: Handle to the siebel connection.
+# Output args:handle to the db connection
+# Typical usage: set hdl [LoginSiebel $lda]
+#     
+# Category Types : init  Siebel
+#
+# Constraints : OraTcl4.1 and Oracle9.0 client should be installed
+#################################################################i#########
+
+proc LoginSiebel { lda } {
+    set hdl [oraopen $lda]
+    return $hdl
+}
+
+##################################################################i########
+# Procedure Name: LogoutSiebel 
+#
+# Description: To close a session with oracle database.
+#
+# Input args: Handle to the db connection
+# Output args: None
+# Typical usage: LogoutSiebel $hdl
+#     
+# Category Types : init  Siebel
+#
+# Constraints : OraTcl4.1 and Oracle9.0 client should be installed
+#################################################################i#########
+
+proc LogoutSiebel { hdl } {
+    oraclose $hdl
+}
+
+##################################################################i########
+# Procedure Name: ExecuteSQL 
+#
+# Description: To execute SQL query on Sieble database.
+#
+# Input args: Handle to the db connection, SQL string
+# Output args: output of the SQL query.
+# Typical usage: set row [ExecuteSQL $hdl $sql]
+#     
+# Category Types : Use  Siebel
+#
+# Constraints : OraTcl4.1 and Oracle9.0 client should be installed
+#################################################################i#########
+
+proc ExecuteSQL { hdl sql } {
+    set data "Not Found"
+    orasql $hdl $sql
+    set ret [orafetch $hdl -datavariable row]
+    if { $ret == 0 } {
+        set data $row
+    }
+    return $data
+}
+
+##################################################################i########
+# Procedure Name: GetPdInfo 
+#
+# Description: To execute SQL query on Sieble database with dataarray option.
+#
+# Input args: Handle to the db connection, SQL string,array to hold the output data.
+# Output args: output of the SQL query in a array.
+# Typical usage: set row [GetPdInfo $hdl $sql row]
+#     
+# Category Types : Use  Siebel
+#
+# Constraints : OraTcl4.1 and Oracle9.0 client should be installed
+#################################################################i#########
+
+proc GetPdInfo { hdl sql dataArray } {
+     upvar $dataArray row
+     orasql $hdl $sql
+     set ret [orafetch $hdl -dataarray row]
+     return $ret
+}

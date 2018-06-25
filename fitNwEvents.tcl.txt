@@ -1,0 +1,1125 @@
+#load {expect52.dll}
+set auto_path [linsert $auto_path 0 . ]
+
+
+
+proc restartProcess {args} {
+     parse_args restartProcess $args {
+     processName "eaps"
+     saveConfig "yes"
+     }
+          
+     set returnCode ok
+     set parameterList ""
+
+     lappend parameterList "{$processName.*Ready}  exist"
+     
+
+      set val [CheckKeyValue "show process $processName" $parameterList -comment "Checking the status of process $processName"];
+      if {$val != "ok"} {
+          result_error "process not in ready state to restart"
+          set returnCode error
+          return $returnCode
+      }
+
+     exSleep 5     
+     SendACmd "restart process $processName" "NULL" "NULL" "true" 3 $saveConfig
+     exSleep 20
+
+     set val2 [CheckKeyValue "show process $processName" $parameterList -comment "Checking the status of process $processName" -time {s: 1 i: 5 d: 10 f: 10 r}];
+     unset parameterList;  
+     if {$val2 != "ok"} {
+            set returnCode error
+     }
+
+     return $returnCode;
+
+}
+
+##################################################################
+## Description: CheckRatesFit
+##     This proc can be used to check the tx and Rx packet rate.
+##     It accepts Rx ports' list to check on multiple rx ports.
+##     It calls GetFrameRateSent and GetFrameRateReceived.
+## Input args: txPortId, rxPortIdList, percent_tolerance
+## Output args: None.
+## Typical usage:
+## CheckRatesFit $txPort $rxPortList
+###################################################################
+proc CheckRatesFit {txPortId rxPortIdList {comment ""} {percent_tolerance .011} args } {
+   set rtValue "ok"
+  parse_args CheckRatesFit $args {
+    reportResults 1
+    oversize "false"
+    time  "s: 5 i: 5 f: 60"
+  }
+
+
+set percent_tolerance 15
+if {$time != "0"} {
+set sTime [lindex $time 1] ; # time to initally wait before starting
+set iTime [lindex $time 3] ; # interval time to wait between checks
+set fTime [lindex $time 5] ; # expected time that we should pass
+    
+} else {
+set sTime 2; set iTime 1; set fTime 1;
+}
+
+
+if {$txPortId > 100 } {
+set txRate $txPortId
+} else { set txRate [GetFrameRateSent $txPortId] }
+
+if {$reportResults} {
+report_start_test "Checking Rates $comment"
+}
+
+   
+  
+foreach var $rxPortIdList {
+set done 0
+exSleep $sTime
+set ttime $sTime
+  
+set rxPort [lindex $var 0]
+set rxPercent [lindex $var 1]
+set tag [lindex $var 2]
+
+while {!$done} {
+        
+if {$tag!=""} {
+set rxRate [GetTaggedFrameRateReceived $rxPort]
+result_debug "The tagged rxRate is $rxRate - txPortId $txPortId $txRate";
+               
+} else {
+set rxRate [GetFrameRateReceived $rxPort]
+result_debug "The rxRate is $rxRate - txPortId $txPortId $txRate";
+               
+}
+if {$oversize=="true"} {
+set rxRate [GetOversizedFrameRateReceived $rxPort]
+         
+}
+    
+     
+
+
+
+if { $txRate == 0 } {
+             
+if { $rxRate == 0 } {
+if {$ttime > $fTime} {
+                   
+                                   
+
+if {$reportResults == 1} {
+report_start_test "Comparing txRate($txPortId)=$txRate and rxRate($rxPort)=$rxRate"
+result_error "txRate($txPortId)=rxRate($rxPort)=0"
+report_end_test
+} else {
+result_debug "txRate($txPortId)=rxRate($rxPort)=0"
+}
+}
+set rtValue "error"
+} else {
+if {$ttime > $fTime} {
+if {$reportResults == 1} {
+report_start_test "Comparing txRate($txPortId)=$txRate and rxRate($rxPort)=$rxRate"
+result_error "txRate($txPortId)=0 but rxRate($rxPort)=$rxRate"
+report_end_test
+} else {
+result_debug "txRate($txPortId)=0 but rxRate($rxPort)=$rxRate"
+}
+}
+set rtValue "error"
+}
+} else {
+          
+set exp_rxRate [expr abs (double($txRate) * $rxPercent/100)]
+
+          
+if {$rxRate < $exp_rxRate} {
+set diffLow [expr abs( double($exp_rxRate) - double($rxRate) )]
+} else {
+set diffHigh [expr abs( double($rxRate) - double($exp_rxRate) )]
+}
+if {$exp_rxRate < 0.0001 } {
+if {($txRate > 1000) && ($rxRate <= 10)} {
+set upPercent 0;
+set LowPercent 0;
+} else {
+if {[info exists diffLow]} {
+set lowPercent [expr double($diffLow) / double($txRate) * 100.0]
+} else {
+set upPercent  [expr double($diffHigh) / double($txRate) * 100.0]
+}
+}
+} else {
+
+if {[info exists diffLow]} {
+set lowPercent [expr double($diffLow) / double($exp_rxRate) * 100.0]
+} else {
+set upPercent  [expr double($diffHigh) / double($exp_rxRate) * 100.0]
+}
+}
+if {[info exists lowPercent]} {
+              
+if { $lowPercent <= $percent_tolerance } {
+report_start_test "Comparing txRate($txPortId)=$txRate and rxRate($rxPort)=$rxRate"
+result_ok "TxRate:$txRate, rxRate:$rxRate check Passed"
+set rtValue "ok"
+report_end_test
+} elseif { $diffLow <= 15 } {
+report_start_test "Comparing txRate($txPortId)=$txRate and rxRate($rxPort)=$rxRate"
+result_ok "TxRate:$txRate, rxRate:$rxRate check Passed"
+set rtValue "ok"
+report_end_test
+} else {
+if {$ttime > $fTime} {
+if {$reportResults == 1} {
+report_start_test "Comparing txRate($txPortId)=$txRate and rxRate($rxPort)=$rxRate"
+result_error "TxRate:$txRate, rxRate:$rxRate check Failed. diff percentage:$lowPercent exceeds %tolerance:$percent_tolerance"
+result_error [format "Difference (%01.2f%%) exceeds tolerance (%01.2f%%). Tx Rate is $txRate, Rx Rate is $rxRate.\n" $lowPercent $percent_tolerance]
+report_end_test
+} else {
+result_debug "TxRate:$txRate, rxRate:$rxRate check Failed. diff percentage:$lowPercent exceeds %tolerance:$percent_tolerance"
+result_debug [format "Difference (%01.2f%%) exceeds tolerance (%01.2f%%). Tx Rate is $txRate, Rx Rate is $rxRate.\n" $lowPercent $percent_tolerance]
+}
+}
+set rtValue "error"
+}
+
+} else {
+              
+if { $upPercent <= 25 } {
+report_start_test "Comparing txRate($txPortId)=$txRate and rxRate($rxPort)=$rxRate"
+result_ok "TxRate:$txRate, rxRate:$rxRate check Passed"
+set rtValue "ok"
+report_end_test
+} else {
+if {$ttime > $fTime} {
+if {$reportResults == 1} {
+report_start_test "Comparing txRate($txPortId)=$txRate and rxRate($rxPort)=$rxRate"
+result_error "TxRate:$txRate, rxRate:$rxRate check Failed. diff percentage:$upPercent exceeds %tolerance:25"
+result_error [format "Difference (%01.2f%%) exceeds tolerance (%01.2f%%). Tx Rate is $txRate, Rx Rate is $rxRate.\n" $upPercent 25]
+report_end_test
+} else {
+result_debug "TxRate:$txRate, rxRate:$rxRate check Failed. diff percentage:$upPercent exceeds %tolerance:25"
+result_debug [format "Difference (%01.2f%%) exceeds tolerance (%01.2f%%). Tx Rate is $txRate, Rx Rate is $rxRate.\n" $upPercent 25]
+}
+}
+set rtValue "error"
+}
+
+}
+}
+
+if {($rtValue == "ok") || ($time == "0") || ($ttime > $fTime)} {
+if {$rtValue == "ok"} {
+result_debug "Time taken  for traffic to get received is $ttime secs"
+}
+set done 1
+} else {
+result_debug "sleeping for $iTime secs..."
+result_debug "CheckRates sleep: time= $ttime out of $fTime seconds"
+exSleep $iTime
+set ttime [expr $ttime + $iTime]
+}
+
+ 
+
+
+if {[info exists diffLow]} {
+ unset diffLow
+}
+
+if {[info exists lowPercent]} {
+unset lowPercent
+}
+
+}
+
+     
+if {[info exists diffLow]} {
+unset diffLow
+}
+
+if {[info exists lowPercent]} {
+unset lowPercent
+}
+
+}
+
+if {$reportResults} {
+report_end_test
+}
+
+   
+
+  return $rtValue
+}
+    
+
+proc DoMsmFailover {args} {
+
+     parse_args DoMsmFailover $args {
+                dutNum "1"
+                from "AtoB"
+                                
+     }
+
+   
+     global  whichDutNow
+     global  DUT{$dutNum}_Stacking_msma_slot
+     global  DUT{$dutNum}_Stacking_msmb_slot
+     global  gnssChassis
+     global  bd8kChassis
+     global  everestChassis
+     global  pioneerChassis
+     global  stacking
+     global  DUT1_CONNECT
+     global  DUT1_CONNECTB
+     global  DUT2_CONNECTB
+     global  DUT3_CONNECTB
+     global  DUT4_CONNECTB
+     global  DUT5_CONNECTB
+     global  DUT2_CONNECT
+     global  DUT3_CONNECT
+     global  DUT4_CONNECT
+     global  DUT5_CONNECT
+     
+     set returnCode ok
+     set platform [GetPlatform DUT${dutNum}]
+
+     set parameterList ""
+    
+     
+           if {[regexp -nocase $platform "$stacking"]} {
+                  set cmd "run failover"
+
+              } elseif {[regexp -nocase $platform "$everestChassis|$pioneerChassis"]} {
+                  set cmd "run mm-failover"
+                  
+              } elseif {[regexp -nocase $platform "$gnssChassis|$bd8kChassis"]} {
+                  set cmd "run msm-failover"
+                  
+              } else {
+                  result_debug "The platform is neither stack nor chassis. Failover cannot be done"
+                  return nok
+              }
+
+              if {[regexp -nocase "AtoB" $from]} {
+                      Login [set DUT${dutNum}_CONNECT]
+               
+                                       
+                      lappend parameterList "{Current State:.*MASTER.*BACKUP.*(In Sync)} exist"
+                      set checkKey [CheckKeyValue "show switch" $parameterList ]
+                      unset parameterList;
+                      if {$checkKey == "error"} {
+                              result_debug "cannot failover as Master and back up are not in sync";
+                              return nok
+                      }
+                               
+                      SendACmd "$cmd"
+                      result_debug "sleeping 80 seconds for msm failover"
+                      exSleep 80;
+                      lappend parameterList "{Current State:.*BACKUP.*(In Sync).*MASTER} exist"
+                      CheckKeyValue "show switch" $parameterList -time {s: 2 i: 5 d: 120 f: 120 r}
+                      unset parameterList; 
+                
+                } else {
+        
+                       Login [set DUT${dutNum}_CONNECTB]
+                  
+                          
+                       if {[regexp -nocase $platform "$stacking"]} {
+                             lappend parameterList "{Current State:.*MASTER.*BACKUP.*(In Sync)} exist"
+                       } else {
+                             lappend parameterList "{Current State:.*BACKUP.*(In Sync).*MASTER} exist"
+                       }
+                      set checkKey [CheckKeyValue "show switch" $parameterList]
+                      unset parameterList;
+                      if {$checkKey == "error"} {
+                              result_debug "cannot failover as Master and back up are not in sync";
+                              return nok
+                      }
+            
+                      SendACmd "$cmd"
+                      result_debug "sleeping 80 seconds for msm failover"
+                      exSleep 80;
+                      ;#lappend parameterList "{Current State:.*MASTER.*BACKUP.*(In Sync)} exist"
+                       
+                      if {[regexp -nocase $platform "$stacking"]} {
+                             lappend parameterList "{Current State:.*BACKUP.*(In Sync).*MASTER} exist"
+                       } else {
+                             lappend parameterList "{Current State:.*MASTER.*BACKUP.*(In Sync)} exist"
+                       }
+
+                              
+                      CheckKeyValue "show switch" $parameterList -time {s: 2 i: 5 d: 120 f: 120 r}
+                      unset parameterList;
+              
+                 }
+  
+                      return $returnCode       
+
+                           
+                
+ 
+}            
+       
+
+proc  getSnmpProcessMemory {args} {
+      parse_args getSnmpProcessMemory $args {
+      dutNum "1"
+      msm "no"
+      }
+
+      global whichDutNow
+      global DUT${whichDutNow}_Stacking_msma_slot
+      global DUT${whichDutNow}_Stacking_msmb_slot
+      global DUT1_CONNECT
+      global DUT2_CONNECT
+      global DUT3_CONNECT
+      global DUT4_CONNECT
+      global DUT5_CONNECT
+      
+      global stacking
+      global everestChassis
+      global pioneerChassis
+      global gnssChassis
+      global bd8kChassis
+
+      Login [set DUT${dutNum}_CONNECT]
+
+      set platform [GetPlatform DUT${dutNum}]
+      set parameterList ""
+      set parameterLista ""
+      set parameterListb ""
+      
+      if {[regexp -nocase $platform "$stacking"]} {
+
+                             
+          if {[info exists DUT${whichDutNow}_Stacking_msma_slot] && [info exists DUT${whichDutNow}_Stacking_msmb_slot]} { 
+
+              
+            set slotNumA [set DUT${whichDutNow}_Stacking_msma_slot]
+            set slotNumB [set DUT${whichDutNow}_Stacking_msma_slot]
+            lappend parameterLista  "{Slot-${slotNumA}.*snmpMaster} 1"
+            set snmpMemUsageonMsmA  [GetKeyValue "show memory process snmpmaster" $parameterLista] 
+            lappend parameterListb  "{Slot-${slotNumB}.*snmpMaster} 1"
+            set snmpMemUsageonMsmB  [GetKeyValue "show memory process snmpmaster" $parameterListb]
+
+           }
+      } elseif {[regexp -nocase $platform "$everestChassis|$pioneerChassis"]} {
+ 
+            lappend parameterLista  "{MM-A.*snmpMaster} 1"
+            set snmpMemUsageonMsmA  [GetKeyValue "show memory process snmpmaster" $parameterLista]
+            lappend parameterListb  "{MM-B.*snmpMaster} 1"
+            set snmpMemUsageonMsmB  [GetKeyValue "show memory process snmpmaster" $parameterListb]
+
+      } elseif {[regexp -nocase $platform "$gnssChassis|$bd8kChassis"]} {
+
+            lappend parameterLista  "{MSM-A.*snmpMaster} 1"
+            set snmpMemUsageonMsmA  [GetKeyValue "show memory process snmpmaster" $parameterLista]
+            lappend parameterListb  "{MSM-B.*snmpMaster} 1"
+            set snmpMemUsageonMsmB  [GetKeyValue "show memory process snmpmaster" $parameterListb]
+
+       } else {
+
+          lappend parameterList "{snmpMaster} 1"
+          set snmpMemUsage [GetKeyValue "show memory process snmpmaster" $parameterList]
+
+       }
+
+
+      if {$msm == "A"} {
+         
+              return $snmpMemUsageonMsmA
+    
+       } elseif {$msm == "B"} {
+      
+              return $snmpMemUsageonMsmB
+
+       } else {
+
+              return $snmpMemUsage
+
+       }
+
+
+} 
+              
+proc verifySnmpMemUsage {} {
+
+global stacking
+global everestChassis
+global pioneerChassis
+global gnssChassis
+global bd8kChassis
+
+
+global  initialSnmpMemUsageOnMsmADut1
+global  initialSnmpMemUsageOnMsmADut2
+global  initialSnmpMemUsageOnMsmADut3
+global  initialSnmpMemUsageOnMsmADut4
+global  initialSnmpMemUsageOnMsmADut5
+global  initialSnmpMemUsageOnMsmBDut1
+global  initialSnmpMemUsageOnMsmBDut2
+global  initialSnmpMemUsageOnMsmBDut3
+global  initialSnmpMemUsageOnMsmBDut4
+global  initialSnmpMemUsageOnMsmBDut5
+global  initialSnmpMemUsageDut1
+global  initialSnmpMemUsageDut2
+global  initialSnmpMemUsageDut3
+global  initialSnmpMemUsageDut4
+global  initialSnmpMemUsageDut5
+
+set platformDut1 [GetPlatform DUT1]
+set platformDut2 [GetPlatform DUT2]
+set platformDut3 [GetPlatform DUT3]
+set platformDut4 [GetPlatform DUT4]
+set platformDut5 [GetPlatform DUT5]         
+
+
+       if {[regexp -nocase $platformDut1 "$stacking|$everestChassis|$pioneerChassis|$gnssChassis|$bd8kChassis"]} {
+
+              set SnmpMemUsageOnMsmADut1 [getSnmpProcessMemory -dutNum 1 -msm A]
+              set SnmpMemUsageOnMsmBDut1 [getSnmpProcessMemory -dutNum 1 -msm B]
+   
+       } else {
+       
+               set SnmpMemUsageDut1 [getSnmpProcessMemory -dutNum 1 -msm "no"]
+       }
+ 
+        
+       if {[regexp -nocase $platformDut2 "$stacking|$everestChassis|$pioneerChassis|$gnssChassis|$bd8kChassis"]} {
+
+              set SnmpMemUsageOnMsmADut2 [getSnmpProcessMemory -dutNum 2 -msm A]
+              set SnmpMemUsageOnMsmBDut2 [getSnmpProcessMemory -dutNum 2 -msm B]
+
+         } else {
+
+               set SnmpMemUsageDut2 [getSnmpProcessMemory -dutNum 2 -msm "no"]
+         }
+
+
+          if {[regexp -nocase $platformDut3 "$stacking|$everestChassis|$pioneerChassis|$gnssChassis|$bd8kChassis"]} {
+
+              set SnmpMemUsageOnMsmADut3 [getSnmpProcessMemory -dutNum 3 -msm A]
+              set SnmpMemUsageOnMsmBDut3 [getSnmpProcessMemory -dutNum 3 -msm B]
+
+       } else {
+
+               set SnmpMemUsageDut3 [getSnmpProcessMemory -dutNum 3 -msm "no"]
+       }
+
+
+
+       if {[regexp -nocase $platformDut4 "$stacking|$everestChassis|$pioneerChassis|$gnssChassis|$bd8kChassis"]} {
+
+              set SnmpMemUsageOnMsmADut4 [getSnmpProcessMemory -dutNum 4 -msm A]
+              set SnmpMemUsageOnMsmBDut4 [getSnmpProcessMemory -dutNum 4 -msm B]
+
+       } else {
+
+               set SnmpMemUsageDut4 [getSnmpProcessMemory -dutNum 4 -msm "no"]
+       }
+
+
+
+       if {[regexp -nocase $platformDut5 "$stacking|$everestChassis|$pioneerChassis|$gnssChassis|$bd8kChassis"]} {
+
+              set SnmpMemUsageOnMsmADut5 [getSnmpProcessMemory -dutNum 5 -msm A]
+              set SnmpMemUsageOnMsmBDut5 [getSnmpProcessMemory -dutNum 5 -msm B]
+
+       } else {
+
+               set SnmpMemUsageDut5 [getSnmpProcessMemory -dutNum 5 -msm "no"]
+       }
+
+
+
+
+       if {[info exists initialSnmpMemUsageOnMsmADut1] && [info exists SnmpMemUsageOnMsmADut1]} {
+                
+               if {![catch {set deviation [expr {int($initialSnmpMemUsageOnMsmADut1 * 0.30)}]} var]} {
+                     set diff [expr {int($SnmpMemUsageOnMsmADut1 - $initialSnmpMemUsageOnMsmADut1)}]
+                             
+                 
+                       if {$diff >= $deviation} {
+                             result_debug "initial Memory usage of SNMP process on DUT1 MSMA is $initialSnmpMemUsageOnMsmADut1"
+                             result_debug "Memory usage of SNMP process on DUT1 MSMA is $SnmpMemUsageOnMsmADut1"
+                             result_error "Snmp memory usage on DUT1 MSMA is more than the initial memory usage"
+               
+                       } else {
+                             result_debug "initial Memory usage of SNMP process on DUT1 MSMA is $initialSnmpMemUsageOnMsmADut1"
+                             result_debug "Memory usage of SNMP process on DUT1 MSMA is $SnmpMemUsageOnMsmADut1"
+                             result_ok "snmp memory usage is within expected limits"
+                      }
+              }
+
+      }
+
+    
+      if {[info exists initialSnmpMemUsageOnMsmBDut1] && [info exists SnmpMemUsageOnMsmBDut1]} {
+                
+               if {![catch {set deviation [expr {int($initialSnmpMemUsageOnMsmBDut1 * 0.30)}]} var]} {
+                     set diff [expr {int($SnmpMemUsageOnMsmBDut1 - $initialSnmpMemUsageOnMsmBDut1)}]
+
+                        if {$diff >= $deviation} {
+                              result_debug "initial Memory usage of SNMP process on DUT1 MSMB is $initialSnmpMemUsageOnMsmBDut1"
+                              result_debug "Memory usage of SNMP process on DUT1 MSMB is $SnmpMemUsageOnMsmBDut1"
+                              result_error "Snmp memory usage on DUT1 MSMB is more than the initial memory usage"
+                        } else {
+                              result_debug  "initial Memory usage of SNMP process on DUT1 MSMB is $initialSnmpMemUsageOnMsmBDut1"
+                              result_debug  "Memory usage of SNMP process on DUT1 MSMB is $SnmpMemUsageOnMsmBDut1"
+                              result_ok     "snmp memory usage is within expected limits"
+                        }
+              }
+      }
+
+
+      if {[info exists initialSnmpMemUsageOnMsmADut2] && [info exists SnmpMemUsageOnMsmADut2]} {
+                            
+               if {![catch {set deviation [expr {int($initialSnmpMemUsageOnMsmADut2 * 0.30)}]} var]} {     
+                      set diff [expr {int($SnmpMemUsageOnMsmADut2 - $initialSnmpMemUsageOnMsmADut2)}]
+
+                          if {$diff >= $deviation} {
+
+                                result_debug "initial Memory usage of SNMP process on DUT2 MSMA is $initialSnmpMemUsageOnMsmADut2"
+                                result_debug "Memory usage of SNMP process on DUT2 MSMA is $SnmpMemUsageOnMsmADut2"
+                                result_error "Snmp memory usage on DUT2 MSMA is more than the initial memory usage"
+                          } else {
+                                result_debug "initial Memory usage of SNMP process on DUT2 MSMA is $initialSnmpMemUsageOnMsmADut2"
+                                result_debug "Memory usage of SNMP process on DUT2 MSMA is $SnmpMemUsageOnMsmADut2"
+                                result_ok     "snmp memory usage is within expected limits"
+                          }
+
+             }
+      }
+
+
+        
+      if {[info exists initialSnmpMemUsageOnMsmBDut2] && [info exists SnmpMemUsageOnMsmBDut2]} {
+ 
+                if {![catch {set deviation [expr {int($initialSnmpMemUsageOnMsmBDut2 * 0.30)}]} var]} {
+                         set diff [expr {int($SnmpMemUsageOnMsmBDut2 - $initialSnmpMemUsageOnMsmBDut2)}]
+
+
+                             if {$diff >= $deviation} {
+                                    result_debug "initial Memory usage of SNMP process on DUT2 MSMB is $initialSnmpMemUsageOnMsmBDut2"
+                                    result_debug "Memory usage of SNMP process on DUT2 MSMB is $SnmpMemUsageOnMsmBDut2"
+                                    result_error "Snmp memory usage on DUT2 MSMB is more than the initial memory usage"
+                             } else {
+                                    result_debug  "initial Memory usage of SNMP process on DUT2 MSMB is $initialSnmpMemUsageOnMsmBDut2"
+                                    result_debug  "Memory usage of SNMP process on DUT2 MSMB is $SnmpMemUsageOnMsmBDut2"
+                                    result_ok     "snmp memory usage is within expected limits"
+                             }
+               }
+      }
+
+       
+
+    if {[info exists initialSnmpMemUsageOnMsmADut3] && [info exists SnmpMemUsageOnMsmADut3]} {
+            
+              if {![catch {set deviation [expr {int($initialSnmpMemUsageOnMsmADut3 * 0.30)}]} var]} {
+                       set diff [expr {int($SnmpMemUsageOnMsmADut3 - $initialSnmpMemUsageOnMsmADut3)}]
+
+                            if {$diff >= $deviation} {
+                                  result_debug "initial Memory usage of SNMP process on DUT3 MSMA is $initialSnmpMemUsageOnMsmADut3"
+                                  result_debug "Memory usage of SNMP process on DUT3 MSMA is $SnmpMemUsageOnMsmADut3"
+                                  result_error "Snmp memory usage on DUT3 MSMA is more than the initial memory usage"
+              
+                            } else {
+                                  result_debug "initial Memory usage of SNMP process on DUT3 MSMA is $initialSnmpMemUsageOnMsmADut3"
+                                  result_debug "Memory usage of SNMP process on DUT3 MSMA is $SnmpMemUsageOnMsmADut3"
+                                  result_ok     "snmp memory usage is within expected limits"
+                           }
+
+             }
+      }
+
+
+      if {[info exists initialSnmpMemUsageOnMsmBDut3] && [info exists SnmpMemUsageOnMsmBDut3]} {
+
+                if {![catch {set deviation [expr {int($initialSnmpMemUsageOnMsmBDut3 * 0.30)}]} var]} {
+                         set diff [expr {int($SnmpMemUsageOnMsmBDut3 - $initialSnmpMemUsageOnMsmBDut3)}]
+
+                              if {$diff >= $deviation} {
+                                      result_debug "initial Memory usage of SNMP process on DUT3 MSMB is $initialSnmpMemUsageOnMsmBDut3"
+                                      result_debug "Memory usage of SNMP process on DUT3 MSMB is $SnmpMemUsageOnMsmBDut3"
+                                      result_error "Snmp memory usage on DUT3 MSMB is more than the initial memory usage"
+                
+                             } else {
+                                      result_debug  "initial Memory usage of SNMP process on DUT3 MSMB is $initialSnmpMemUsageOnMsmBDut3"
+                                      result_debug  "Memory usage of SNMP process on DUT3 MSMB is $SnmpMemUsageOnMsmBDut3"
+                                      result_ok     "snmp memory usage is within expected limits"
+                             }
+              }
+
+      }
+
+      if {[info exists initialSnmpMemUsageOnMsmADut4] && [info exists SnmpMemUsageOnMsmADut4]} {
+
+               if {![catch {set deviation [expr {int($initialSnmpMemUsageOnMsmADut4 * 0.30)}]} var]} {
+                        set diff [expr {int($SnmpMemUsageOnMsmADut4 - $initialSnmpMemUsageOnMsmADut4)}]
+
+                          if {$diff >= $deviation} {
+                                 result_debug "initial Memory usage of SNMP process on DUT4 MSMA is $initialSnmpMemUsageOnMsmADut4"
+                                 result_debug "Memory usage of SNMP process on DUT4 MSMA is $SnmpMemUsageOnMsmADut4"
+                                 result_error "Snmp memory usage on DUT4 MSMA is more than the initial memory usage"
+                
+                          } else {
+                                 result_debug "initial Memory usage of SNMP process on DUT4 MSMA is $initialSnmpMemUsageOnMsmADut4"
+                                 result_debug "Memory usage of SNMP process on DUT4 MSMA is $SnmpMemUsageOnMsmADut4"
+                                 result_ok     "snmp memory usage is within expected limits"
+                         }
+                 
+              }
+      }
+
+
+      if {[info exists initialSnmpMemUsageOnMsmBDut4] && [info exists SnmpMemUsageOnMsmBDut4]} {
+
+                if {![catch {set deviation [expr {int($initialSnmpMemUsageOnMsmBDut4 * 0.30)}]} var]} {
+                         set diff [expr {int($SnmpMemUsageOnMsmBDut4 - $initialSnmpMemUsageOnMsmBDut4)}]
+
+                          if {$diff >= $deviation} {
+                                  result_debug "initial Memory usage of SNMP process on DUT4 MSMB is $initialSnmpMemUsageOnMsmBDut4"
+                                  result_debug "Memory usage of SNMP process on DUT4 MSMB is $SnmpMemUsageOnMsmBDut4"
+                                  result_error "Snmp memory usage on DUT4 MSMB is more than the initial memory usage"
+                
+                           } else {
+                                  result_debug  "initial Memory usage of SNMP process on DUT4 MSMB is $initialSnmpMemUsageOnMsmBDut4"
+                                  result_debug  "Memory usage of SNMP process on DUT4 MSMB is $SnmpMemUsageOnMsmBDut4"
+                                  result_ok     "snmp memory usage is within expected limits"
+                           }
+                 }
+
+      }
+
+
+      if {[info exists initialSnmpMemUsageOnMsmADut5] && [info exists SnmpMemUsageOnMsmADut5]} {
+        
+                if {![catch {set deviation [expr {int($initialSnmpMemUsageOnMsmADut5 * 0.30)}]} var]} {
+                                     
+                          set diff [expr {int($SnmpMemUsageOnMsmADut5 - $initialSnmpMemUsageOnMsmADut5)}]
+
+                          if {$diff >= $deviation} {
+                                  result_debug "initial Memory usage of SNMP process on DUT5 MSMA is $initialSnmpMemUsageOnMsmADut5"
+                                  result_debug "Memory usage of SNMP process on DUT5 MSMA is $SnmpMemUsageOnMsmADut5"
+                                  result_error "Snmp memory usage on DUT5 MSMA is more than the initial memory usage"
+                
+                         } else {
+                                  result_debug "initial Memory usage of SNMP process on DUT5 MSMA is $initialSnmpMemUsageOnMsmADut5"
+                                  result_debug "Memory usage of SNMP process on DUT5 MSMA is $SnmpMemUsageOnMsmADut5"
+                                  result_ok     "snmp memory usage is within expected limits"
+                         }
+                 }
+
+      }
+
+
+      if {[info exists initialSnmpMemUsageOnMsmBDut5] && [info exists SnmpMemUsageOnMsmBDut5]} {
+  
+                if {![catch {set deviation [expr {int($initialSnmpMemUsageOnMsmBDut5 * 0.30)}]} var]} {
+                         set diff [expr {int($SnmpMemUsageOnMsmBDut5 - $initialSnmpMemUsageOnMsmBDut5)}]
+
+                          if {$diff >= $deviation} {
+                                 result_debug "initial Memory usage of SNMP process on DUT5 MSMB is $initialSnmpMemUsageOnMsmBDut5"
+                                 result_debug "Memory usage of SNMP process on DUT5 MSMB is $SnmpMemUsageOnMsmBDut5"
+                                 result_error "Snmp memory usage on DUT5 MSMB is more than the initial memory usage"
+                
+                          } else {
+                                 result_debug  "initial Memory usage of SNMP process on DUT5 MSMB is $initialSnmpMemUsageOnMsmBDut5"
+                                 result_debug  "Memory usage of SNMP process on DUT5 MSMB is $SnmpMemUsageOnMsmBDut5"
+                                 result_ok     "snmp memory usage is within expected limits"
+                          }
+
+               }
+      
+       }
+
+    
+     
+       if {[info exists initialSnmpMemUsageDut1] && [info exists SnmpMemUsageDut1]} {
+                
+                 if {![catch {set deviation [expr {int($initialSnmpMemUsageDut1 * 0.30)}]} var]} {
+                           set diff [expr {int($SnmpMemUsageDut1 - $initialSnmpMemUsageDut1)}]
+
+                           if {$diff >= $deviation} {
+                                  result_debug "initial Memory usage of SNMP process on DUT1 is $initialSnmpMemUsageDut1"
+                                  result_debug "Memory usage of SNMP process on DUT1  is $SnmpMemUsageDut1"
+                                  result_error "Snmp memory usage on DUT1 is more than the initial memory usage"
+                
+                           } else {
+                                  result_debug  "initial Memory usage of SNMP process on DUT1 is $initialSnmpMemUsageDut1"
+                                  result_debug  "Memory usage of SNMP process on DUT1  is $SnmpMemUsageDut1"
+                                  result_ok     "snmp memory usage is within expected limits"
+                           }
+                 }
+
+
+      }
+     
+
+
+       if {[info exists initialSnmpMemUsageDut2] && [info exists SnmpMemUsageDut2]} {
+
+                  if {![catch {set deviation [expr {int($initialSnmpMemUsageDut2 * 0.30)}]} var]} {                 
+
+                           set diff [expr {int($SnmpMemUsageDut2 - $initialSnmpMemUsageDut2)}]
+ 
+
+                           if {$diff >= $deviation} {
+                                  result_debug "initial Memory usage of SNMP process on DUT2 is $initialSnmpMemUsageDut2"
+                                  result_debug "Memory usage of SNMP process on DUT2  is $SnmpMemUsageDut2"
+                                  result_error "Snmp memory usage on DUT2 is more than the initial memory usage"
+                
+                           } else {
+                                  result_debug  "initial Memory usage of SNMP process on DUT2 is $initialSnmpMemUsageDut2"
+                                  result_debug  "Memory usage of SNMP process on DUT2  is $SnmpMemUsageDut2"
+                                  result_ok     "snmp memory usage is within expected limits"
+                          }
+                 }
+
+      }
+
+
+      if {[info exists initialSnmpMemUsageDut3] && [info exists SnmpMemUsageDut3]} {
+
+                if {![catch {set deviation [expr {int($initialSnmpMemUsageDut3 * 0.30)}]} var]} {
+                         set diff [expr {int($SnmpMemUsageDut3 - $initialSnmpMemUsageDut3)}]
+ 
+
+                         if {$diff >= $deviation} {
+                                 result_debug "initial Memory usage of SNMP process on DUT3 is $initialSnmpMemUsageDut3"
+                                 result_debug "Memory usage of SNMP process on DUT3  is $SnmpMemUsageDut3"
+                                 result_error "Snmp memory usage on DUT3 is more than the initial memory usage"
+                
+                         } else {
+                                result_debug  "initial Memory usage of SNMP process on DUT3 is $initialSnmpMemUsageDut3"
+                                result_debug  "Memory usage of SNMP process on DUT3  is $SnmpMemUsageDut3"
+                                result_ok     "snmp memory usage is within expected limits"
+                         }
+                }
+
+      }
+
+      
+     if {[info exists initialSnmpMemUsageDut4] && [info exists SnmpMemUsageDut4]} {
+
+               if {![catch {set deviation [expr {int($initialSnmpMemUsageDut4 * 0.30)}]} var]} {
+                        set diff [expr {int($SnmpMemUsageDut4 - $initialSnmpMemUsageDut4)}]
+
+                        if {$diff >= $deviation} {
+                                result_debug "initial Memory usage of SNMP process on DUT4 is $initialSnmpMemUsageDut4"
+                                result_debug "Memory usage of SNMP process on DUT4  is $SnmpMemUsageDut4"
+                                result_error "Snmp memory usage on DUT4 is more than the initial memory usage"
+                
+                        } else {
+                               result_debug  "initial Memory usage of SNMP process on DUT4 is $initialSnmpMemUsageDut4"
+                               result_debug  "Memory usage of SNMP process on DUT4  is $SnmpMemUsageDut4"
+                               result_ok     "snmp memory usage is within expected limits"
+                        }
+             
+              }
+
+      }
+
+
+      if {[info exists initialSnmpMemUsageDut5] && [info exists SnmpMemUsageDut5]} {
+
+               if {![catch {set deviation [expr {int($initialSnmpMemUsageDut5 * 0.30)}]} var]} {
+                       set diff [expr {int($SnmpMemUsageDut5 - $initialSnmpMemUsageDut5)}]
+
+                        if {$diff >= $deviation} {
+                                result_debug "initial Memory usage of SNMP process on DUT5 is $initialSnmpMemUsageDut5"
+                                result_debug "Memory usage of SNMP process on DUT5  is $SnmpMemUsageDut5"
+                                result_error "Snmp memory usage on DUT5 is more than the initial memory usage"
+                
+                        } else {
+                                result_debug  "initial Memory usage of SNMP process on DUT5 is $initialSnmpMemUsageDut5"
+                                result_debug  "Memory usage of SNMP process on DUT5  is $SnmpMemUsageDut5"
+                                result_ok     "snmp memory usage is within expected limits"
+                       }
+              }
+
+      }
+
+     
+
+}
+     
+     
+
+proc getSnmpProcessInitialMemUsage {} {
+
+
+global stacking
+global everestChassis
+global pioneerChassis
+global gnssChassis
+global bd8kChassis
+
+global  initialSnmpMemUsageOnMsmADut1
+global  initialSnmpMemUsageOnMsmADut2
+global  initialSnmpMemUsageOnMsmADut3
+global  initialSnmpMemUsageOnMsmADut4
+global  initialSnmpMemUsageOnMsmADut5
+global  initialSnmpMemUsageOnMsmBDut1
+global  initialSnmpMemUsageOnMsmBDut2
+global  initialSnmpMemUsageOnMsmBDut3
+global  initialSnmpMemUsageOnMsmBDut4
+global  initialSnmpMemUsageOnMsmBDut5
+global  initialSnmpMemUsageDut1
+global  initialSnmpMemUsageDut2
+global  initialSnmpMemUsageDut3
+global  initialSnmpMemUsageDut4
+global  initialSnmpMemUsageDut5
+
+set platformDut1 [GetPlatform DUT1]
+set platformDut2 [GetPlatform DUT2]
+set platformDut3 [GetPlatform DUT3]
+set platformDut4 [GetPlatform DUT4]
+set platformDut5 [GetPlatform DUT5]
+
+if {[regexp -nocase $platformDut1 "$stacking|$everestChassis|$pioneerChassis|$gnssChassis|$bd8kChassis"]} {
+
+       set initialSnmpMemUsageOnMsmADut1 [getSnmpProcessMemory -dutNum 1 -msm "A"]
+       set initialSnmpMemUsageOnMsmBDut1 [getSnmpProcessMemory -dutNum 1 -msm "B"]
+
+} else {
+
+       set  initialSnmpMemUsageDut1 [getSnmpProcessMemory -dutNum 1 -msm "no"]
+}
+
+
+if {[regexp -nocase $platformDut2 "$stacking|$everestChassis|$pioneerChassis|$gnssChassis|$bd8kChassis"]} {
+
+       set initialSnmpMemUsageOnMsmADut2 [getSnmpProcessMemory -dutNum 2 -msm "A"]
+       set initialSnmpMemUsageOnMsmBDut2 [getSnmpProcessMemory -dutNum 2 -msm "B"]
+
+} else {
+
+       set initialSnmpMemUsageDut2 [getSnmpProcessMemory -dutNum 2 -msm "no"]
+}
+
+
+
+if {[regexp -nocase $platformDut3 "$stacking|$everestChassis|$pioneerChassis|$gnssChassis|$bd8kChassis"]} {
+
+       set initialSnmpMemUsageOnMsmADut3 [getSnmpProcessMemory -dutNum 3 -msm "A"]
+       set initialSnmpMemUsageOnMsmBDut3 [getSnmpProcessMemory -dutNum 3 -msm "B"]
+
+} else {
+
+       set initialSnmpMemUsageDut1 [getSnmpProcessMemory -dutNum 3 -msm "no"]
+}
+
+
+if {[regexp -nocase $platformDut4 "$stacking|$everestChassis|$pioneerChassis|$gnssChassis|$bd8kChassis"]} {
+
+       set initialSnmpMemUsageOnMsmADut4 [getSnmpProcessMemory -dutNum 4 -msm "A"]
+       set initialSnmpMemUsageOnMsmBDut4 [getSnmpProcessMemory -dutNum 4 -msm "B"]
+
+} else {
+
+       set initialSnmpMemUsageDut4 [getSnmpProcessMemory -dutNum 4 -msm "no"]
+}
+
+
+if {[regexp -nocase $platformDut5 "$stacking|$everestChassis|$pioneerChassis|$gnssChassis|$bd8kChassis"]} {
+
+       set initialSnmpMemUsageOnMsmADut5 [getSnmpProcessMemory -dutNum 5 -msm "A"]
+       set initialSnmpMemUsageOnMsmBDut5 [getSnmpProcessMemory -dutNum 5 -msm "B"]
+
+} else {
+
+       set initialSnmpMemUsageDut5 [getSnmpProcessMemory -dutNum 5 -msm "no"]
+}
+
+}                  
+     
+     
+
+      
+proc checkShowTechOutput {} {
+
+global DUT1_CONNECT
+global DUT2_CONNECT
+global DUT3_CONNECT
+global DUT4_CONNECT
+global DUT5_CONNECT
+
+# ----- Environment variables setup
+match_max -d 2000000
+set ErrList {"Erro:Kern" "Crit:Kern"  "Warn:Kern"   "Crit:"  "Erro:"  "Kernel.*oops"  "ioctl"}
+
+for {set numDUT 1} {$numDUT <= 5} {incr numDUT} {
+     report_start_test "Check Show tech Output  in DUT$numDUT";
+
+     if {[info exists DUT${numDUT}_CONNECT]} {
+
+         Login  [set DUT${numDUT}_CONNECT]
+
+        set buffer [SendACmd "show tech-support all"]
+         set var 0
+         foreach err $ErrList {
+           if {([regexp -nocase "$err" $buffer])} {
+                  result_error "show tech output in DUT$numDUT has error $err";
+                  incr var
+           }
+
+         }
+        
+         if {$var == 0} {
+            result_ok "show tech output in DUT$numDUT has no errors";
+         }
+     } 
+
+    unset buffer;
+    report_end_test;
+}
+ 
+match_max -d 200000
+}
+
+proc writeInBcmShell {args} {
+
+        parse_args writeInBcmShell $args {
+        dutNum  "1"
+        slotNum "1"
+        unitNum "0"
+        bcmCmd     "null"
+        }
+        global DUT1_CONNECT;
+        global DUT2_CONNECT;
+        global DUT3_CONNECT;
+        global DUT4_CONNECT;
+        global DUT5_CONNECT;
+        set result ok
+
+        Login  [set DUT${dutNum}_CONNECT]
+        
+        set buffer [SendACmd  "show version"]
+        if {![regexp -nocase "debug" $buffer]} {
+             EnableDebugMode
+         }
+
+        unset buffer
+          
+        set cmd \"$bcmCmd\"
+        set buffer [SendACmd "jerry hal platform bcm-cmd slot $slotNum unit $unitNum $cmd"]
+
+        if {[regexp -nocase "error|warn" $buffer]} {
+
+             set result error
+        }            
+
+
+        return $result
+
+}
+
+
+proc readFromBcmShell {args} {
+
+
+       parse_args readFromBcmShell $args {
+       dutNum  "1"
+       slotNum "1"
+       unitNum "0"
+       bcmCmd  "null"
+       parameterList "null"
+       time   "0"
+       }
+
+      global DUT1_CONNECT;
+      global DUT2_CONNECT;
+      global DUT3_CONNECT;
+      global DUT4_CONNECT;
+      global DUT5_CONNECT;
+
+
+      Login  [set DUT${dutNum}_CONNECT]
+
+      set buffer [SendACmd  "show version"]
+      if {![regexp -nocase "debug" $buffer]} {
+            EnableDebugMode
+      }
+
+       unset buffer
+          
+       set cmd \"$bcmCmd\"
+
+       set result [CheckKeyValue "jerry hal platform bcm-cmd slot $slotNum unit $unitNum $cmd" $parameterList -time $time -reportResults 0]
+       return $result
+
+}
+
+
+proc getValFromBcmShell {args} {
+
+        parse_args getValFromBcmShell $args {
+        dutNum  "1"
+        slotNum "1"
+        unitNum "0"
+        bcmCmd     "null"
+        parameterList "null"
+        }
+
+        global DUT1_CONNECT;
+        global DUT2_CONNECT;
+        global DUT3_CONNECT;
+        global DUT4_CONNECT;
+        global DUT5_CONNECT;
+
+
+        Login  [set DUT${dutNum}_CONNECT]
+
+        set buffer [SendACmd  "show version"]
+        if {![regexp -nocase "debug" $buffer]} {
+              EnableDebugMode
+        }
+
+        unset buffer
+
+        set cmd \"$bcmCmd\"
+
+        set result [GetKeyValue "jerry hal platform bcm-cmd slot $slotNum unit $unitNum $cmd" $parameterList]
+        return $result
+
+}
+
+
+
+proc evalEvents {testNo} {
+
+       global fitMode
+       global fitQuick
+       global fitExtended
+       global errorInfo
+
+   
+    set eventList [set $fitMode]
+    foreach event $eventList {
+
+           set var ${testNo}_${event}
+           if {[info procs $var] == $var} {
+                if {[catch {eval $var}]} {
+                    result_debug "The error information $errorInfo\n";
+                }
+           }
+    }
+
+}
+
+
+
+
+
+
+                                          
+ 

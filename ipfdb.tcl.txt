@@ -1,0 +1,261 @@
+
+################################################################## 
+# Procedure Name: ipfdb_bucket_analysis
+#   
+# Description: proc that checks the given list of ip dIpList matches the flag.
+#
+#
+# Input args: dIpList, flag, fd_res, testNo, DUT
+# Output args: none
+# Typical usage:
+#           ipfdb_bucket_analysis $ipList full $fd_res $testNo $DUT1_CONNECT
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifySwitchOutput
+##################################################################
+proc ipfdb_bucket_analysis {dIpList flag fd_res testNo DUT} {
+
+   global DUT1_CONNECT
+   global DUT1_IP
+   global DUT2_CONNECT
+   global DUTs_info
+   set rList {}
+   set fd_in [open "Tmp/tmp_$testNo[pid]" "w+"]
+   set result "ok"
+   set date [clock format [clock seconds] -format "%m-%d-%Y %I.%M.%S%p"]
+   result_debug "*** date=$date"
+
+   Login $DUT1_CONNECT
+   SendACmd	"show ipf" $fd_res $fd_in
+   logout_noSave
+ 
+   set count 0	;# number of sets of IP addresses to check
+   set mainBuild [GetVersion DUT1 2];
+   set build [GetVersion DUT1 3];
+   set ver [GetVersion DUT1 4];
+   if {($ver=="7.0.0"&&$build>=29)||($mainBuild>"7.0")} {
+      set newOutput 1
+   } else {
+      set newOutput 0
+   }
+   if {($ver=="7.0.0"&&$build>=52)||($mainBuild>"7.0")} {
+      set newOutput 0
+   }
+   foreach ipList $dIpList {
+      incr count 1
+      seek $fd_in 0
+      set bList {}	 ;# bucket list
+	  set abList {}	 ;# alternate bucket list
+      while {[gets $fd_in line] != -1} {
+         set inList [eSplit $line]
+	     set len [llength $inList]
+	     if {$newOutput} {
+           if { ($len == 9) || ($len == 10) } {
+              foreach ipAddr $ipList {
+			        if { $ipAddr == [lindex $inList 0] } {
+                    if { ($len == 10) && ([lindex $inList 4] == "A") } {
+				           lappend abList [lindex $inList 1]
+                     if {$flag == "over"} { lappend rList $ipAddr } 
+                     } else {
+                        lappend bList [lindex $inList 1]
+                           if {$flag == "over"} { lappend rList $ipAddr } 
+				         }
+			            break
+			        }
+			     }
+		     }
+	     } else {
+           if { ($len == 8) || ($len == 9) } {
+              foreach ipAddr $ipList {
+			        if { $ipAddr == [lindex $inList 0] } {
+                    if { ($len == 9) && ([lindex $inList 3] == "A") } {
+				           lappend abList [lindex $inList 1]
+                     if {$flag == "over"} { lappend rList $ipAddr } 
+                     } else {
+                        lappend bList [lindex $inList 1]
+                           if {$flag == "over"} { lappend rList $ipAddr } 
+				         }
+			            break
+			        }
+			     }
+		     }
+	     }
+	  }
+ result_debug "Ip list = $ipList"
+ result_debug "Bucket list = $bList"
+ result_debug "Alternate bucket list = $abList"
+      set rtValue [check_same_bucket $bList $abList]
+ result_debug "\n--- ipfdb_bucket_analysis rtValue = $rtValue"
+      if {$flag == "over"} { buildRandomList $ipList $rList	}
+      report_start_test "Bucket checking $count"
+      switch $rtValue {
+         "ok" { result_ok "Bucket checking pass" }
+	     "bError" { result_error "Bucket checking failed (bucket)" }
+	     "abError" { result_error "Bucket checking failed (alternate bucket)" }
+	     "2Error" { result_error "Bucket checking failed (2)" }
+      }
+      report_end_test
+      if { $rtValue	!= "ok" } { set result "error" }
+   }
+   close $fd_in
+   file delete "Tmp/tmp_$testNo[pid]"
+   return $result
+}  
+
+################################################################## 
+# Procedure Name: check_same_bucket
+#   
+# Description: internal proc that checks if bList and abList are in the same bucket
+#
+#
+# Input args: bList, abList
+# Output args: none
+# Typical usage:
+#                set rtValue [check_same_bucket $bList $abList]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifySwitchOutput
+##################################################################
+proc check_same_bucket {bList abList} {
+   if { [check_aList_same_bucket $bList] == "error" } { return "bError" } 
+   if { [check_aList_same_bucket $abList] == "error" } { return "abError" }
+   if { [check_2List_same_bucket $bList $abList] == "error" } { return "2Error"	}
+   return "ok"
+}
+
+################################################################## 
+# Procedure Name: check_aList_same_bucket
+#   
+# Description: internal proc that checks the downloaded image success from the lift of tftp servers provided in
+#              tftpServerList
+#
+# Input args: tftpServerList, filename
+# Output args: none
+# Typical usage:
+#            check_aList_same_bucket $bList
+#
+# return values: Returns error if no matched, ok if matched
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifySwitchOutput
+##################################################################
+proc check_aList_same_bucket { list } {
+   set base3 ""
+   set base4 ""
+   set count 0
+   foreach item [lsort $list] {
+	  set tmp3 [string range $item 0 3]
+	  set tmp5 [string range $item 5 5]
+      if { $tmp3 != $base4 } {
+		 if { $base4 == "" } { 
+		    set base4 $tmp3
+		 } else {
+			return "error"
+		 }
+      }
+	  if { $tmp5 != $count } { return "error" }
+	  incr count 1
+   }
+   if { $count < 3 } { return "error"
+   } else { return "ok"	}
+}
+
+################################################################## 
+# Procedure Name: check_2List_same_bucket
+#   
+# Description: internal proc that checks if the bucket value is ame for bList and abList
+#
+#
+# Input args: bList, abList
+# Output args: none
+# return values: Returns error if mismatch, ok if matched
+# Typical usage:
+#             check_2List_same_bucket $bList $abList
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifySwitchOutput
+##################################################################
+proc check_2List_same_bucket { bList abList } {
+   set bItem [lindex $bList 0]
+   set abItem [lindex $abList 0]
+
+   set bBase [string range $bItem 0 2]
+   set abBase [string range $abItem 0 2]
+
+   if { $bBase != $abBase } { return "error" }
+   return "ok"
+}
+
+################################################################## 
+# Procedure Name: ipfdb_check_data
+#   
+# Description: proc that checks a list of given ip address dIpList exists in ipf table
+#              prints the results in report.txt with report_start_test/report_end_test
+#
+# Input args: dIpList, fd_res, testNo, DUT_C, DUT_IP
+# Output args: none
+# Typical usage:
+#             ipfdb_check_data $ipList $fd_res $testNo $DUT1_CONNECT
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifySwitchOutput
+##################################################################
+proc ipfdb_check_data {{dIpList {}}
+                       {fd_res "NULL"}
+                       {testNo "0"}
+                       {DUT_C "127.0.0.1"}
+                       {DUT_IP "127.0.0.1"}} {
+
+   set fd_in [open "Tmp/tmp_$testNo[pid]" "w+"]
+   set date [clock format [clock seconds] -format "%m-%d-%Y %I.%M.%S%p"]
+   result_debug "*** date=$date"
+
+   Login $DUT_C
+   SendACmd	"show ipf" $fd_res $fd_in
+   logout_noSave
+   close $fd_in
+
+   set fd_in [open "Tmp/tmp_$testNo[pid]" "r"]
+   foreach ipPair $dIpList {
+      set ipAddr [lindex $ipPair 0]
+      set shouldExist [lindex $ipPair 1]
+      set found "false"
+      seek $fd_in 0
+
+      while {[gets $fd_in line] != -1} {
+         set inList [eSplit $line]
+	     set len [llength $inList]
+	     if { $len >= 6 } {
+			if { $ipAddr == [lindex $inList 0] } {
+               set found "true"
+			}
+		 }
+	  }
+      set DUT_INFO ""
+      if { $DUT_IP != "127.0.0.1" } { set DUT_INFO "(${DUT_IP}) " }
+
+      switch $shouldExist {
+         "yes" {
+            report_start_test "Ipfdb check entry $DUT_INFO'$ipAddr'"
+            switch $found {
+               "true"  { result_ok "Ip FDB check entry $ipAddr passed" }
+               "false" { result_error "Ip FDB check entry $ipAddr failed" }
+		    }
+		 } 
+	     "no" { 
+            report_start_test "Ipfdb check NO entry $DUT_INFO'$ipAddr'"
+            switch $found {
+               "true"  { result_error "Ip FDB check NO entry $ipAddr failed" }
+               "false" { result_ok "Ip FDB check NO entry $ipAddr passed" }
+		    }
+		 }
+      }
+      report_end_test
+   }
+   close $fd_in
+   file delete "Tmp/tmp_$testNo[pid]"
+}  

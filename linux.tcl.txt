@@ -1,0 +1,313 @@
+
+################################################################## 
+# Procedure Name: login_linux 
+#   
+# Description: To log into linux pc
+#
+# Input args: IP address
+#             userid
+#             password
+#             super user password
+# Output args: none
+# Typical usage:
+#
+# Category: Setup
+##################################################################
+proc login_linux {ipAddr userid passwd {supasswd "NULL"} {proto "telnet"}} {
+    global spawn_id
+    global hostname 
+    global spawn_ids
+    global tspids
+
+    #exp_internal 2
+    set newConnection 1
+    # -- check for existing connection
+    if { [ info exists hostname ] == "1" } {
+        foreach name $hostname {
+            if { $name == $ipAddr } {
+                set spawn_id $spawn_ids($name)
+                if { $spawn_id != "INVALID" } {
+                    puts "Login $ipAddr - Connection already exists pid=$spawn_id"
+                    set newConnection 0
+                    #send "\r"
+                    if {[catch {exp_send "\r"} reason]} {
+                        if {  [regexp -nocase "not open" $reason] } {
+                            result_print "\n~~~~~\nexpec send found spawn id not open \
+                            : reconnect\n~~~~~";
+                            # # The connection has been dropped so we have to clean up the spawnId and hostname entries
+                            set spawn_ids($name) INVALID
+                            if {$proto == "ssh"} {
+                                set go "spawn ssh ${userid}@$ipAddr"
+                                set goText "ssh ${userid}@$ipAddr"
+                            } else {
+                                set go "spawn telnet $ipAddr"
+                                set goText "telnet $ipAddr"
+                            }
+                            if [catch "$go" reason] {
+                                result_debug "failed to spawn program: $reason\n"
+                                error "failed to spawn program: $reason\n"
+                            }
+                            lappend tspids $spawn_id
+                            lappend tspids $ipAddr
+                            set spawn_ids($ipAddr) $spawn_id
+                            global connectionTimeout
+                            set timeout $connectionTimeout
+                            result_debug "Login $goText,  pid=$spawn_id"
+                        }
+                    }
+                }
+            }
+        }
+        # -- if brand new connection, add to host name list
+        if { [lsearch $hostname $ipAddr] == -1 } {
+            lappend hostname $ipAddr
+        }
+    } else {
+        lappend hostname $ipAddr
+    }
+
+    # -- spawn new connection if not exists
+    if { $newConnection == 1 } {
+        if {$proto == "ssh"} {
+            set go "spawn ssh ${userid}@$ipAddr"
+            set goText "ssh ${userid}@$ipAddr"
+        } else {
+            set go "spawn telnet $ipAddr"
+            set goText "telnet $ipAddr"
+        }
+        if [catch "$go" reason] {
+            result_debug "failed to spawn program: $reason\n"
+            error "failed to spawn program: $reason\n"
+        }
+        lappend tspids $spawn_id
+        lappend tspids $ipAddr
+        set spawn_ids($ipAddr) $spawn_id
+        global connectionTimeout
+        set timeout $connectionTimeout
+        result_debug "Login $goText,  pid=$spawn_id"
+        # -- wait for connection
+        expect {
+            "?nable to ?onnect" {
+                #result_error $expect_out(buffer)
+                expect *
+                #result_error $expect_out(buffer)
+                result_error "Unable to connect"
+            }
+            "?onnected to" {
+                # -- wait for all remaining characters to come
+                sleep 1
+            }
+            "?assword:" {
+                send "$passwd\r";
+            }
+            -ex "$ " {
+                if {$supasswd == "NULL"} {
+                    return;
+                }
+                send "\r"
+            }
+            "\\?" {
+                send "yes\r";
+            }
+        }
+    }
+
+    log_user 2;
+    set timeout 20
+    # -- try login to 10 times
+    #send "\r"
+    for {set i 0} {$i < 10} {incr i} {
+        expect {
+           -re "login: $" {
+                send "$userid\r"
+                expect "Password:"
+                send "$passwd\r"
+                expect {
+                    -ex "$ " {
+                        send "\r"
+                    }
+                    "> " {
+                        send "\r"
+                    }
+                    "# " {
+                        send "\r"
+                    }
+                }
+                if {[string compare "NULL" $supasswd]!=0} {
+                    send "su\r"
+                    expect {
+                        "Password: " {
+                            send "$supasswd\r"
+                            expect {
+                                "# " {
+                                    send "\r"
+                                }
+                            }
+                        }
+                        "# " {
+                            send "\r"
+                        }
+                    }
+                }
+            }
+            "assword:" {
+                send "$passwd\r";
+                exp_continue;
+            }
+            -ex "$ " {
+                send "\r"
+                return
+            }
+            "> " {
+                send "\r"
+                return
+            }
+            "# " {
+                send "\r"
+                return
+            }
+            timeout {
+                # -- time out then try again
+                send "\r"
+            }
+        }
+    }
+    # -- no communication or unexpected behavior
+}
+################################################################## 
+# Procedure Name: Get_Server_EpochTime 
+#   
+# Description: Get the time from a Linux system.  Used by RADIUS
+#              and TACACS+ test modules.
+#
+# Input args: None.
+#             
+# Output args: None.
+#
+# Return value: Integer seconds since the epoch
+#
+# Typical usage:
+#     set SERVER2 10.66.200.11;
+#     login_linux $SERVER2 "autotest" "autotest" "extreme";
+#     set epoch [Get_Server_EpochTime];
+#
+# Category: Setup
+##################################################################
+proc Get_Server_EpochTime {} {
+
+    set epoch [SendACmd "date +%s"]
+    return $epoch;
+}; # Get_Server_Date
+
+################################################################## 
+# Procedure Name: Get_Server_Date 
+#   
+# Description: Get the time from a Linux system.  Used by RADIUS
+#              and TACACS+ test modules.
+#
+# Input args: None.
+#             
+# Output args: None.
+#
+# Return value: Date and time.
+#
+# Typical usage:
+#     set SERVER2 10.66.200.11;
+#     login_linux $SERVER2 "autotest" "autotest" "extreme";
+#     set datetime [Get_Server_Date];
+#
+# Category: Setup
+##################################################################
+proc Get_Server_Date {} {
+
+    set pid _[pid];
+    set time1 [clock seconds];
+    set tmp "Tmp";
+    #puts "$tmp/tmp_GetKeyValue$time1"
+    set fd_in [open "$tmp/tmp_GetKeyValue$time1" "w"];
+    SendACmd "date" NULL $fd_in;
+    close $fd_in;
+    set value "notfound";
+    set fd_in [open "$tmp/tmp_GetKeyValue$time1" "r"];
+    
+    set dayOfWeek {[A-Z][a-z]+};
+    set month {[A-z][a-z]+};
+    set dayOfMonth {[0-9]+};
+    set timeOfDay {[0-9]+:[0-9]+:[0-9]+};
+    set timeZone {[A-Z]+};
+    set year {[0-9]+};
+    set dateTime "$dayOfWeek *$month *$dayOfMonth *$timeOfDay *$timeZone *$year";
+    
+    while {[gets $fd_in line] != -1} {
+        # EY-04-23-2003: Changed regexp to use a generic date-time pattern.
+        # Earlier version was looking for PDT or PST timezone marker.  This
+        # would fail when the RADIUS server was set to a different time zone.
+        if {[regexp $dateTime $line] == 1} {
+            set value [string range $line 0 18];
+            break;
+        } 
+    }
+    close $fd_in;
+    result_debug "\nLINUX Server Date Return"
+    return $value;
+}; # Get_Server_Date
+
+##################################################################
+# Procedure Name: linuxSendACmd
+#
+# Description: Send a command to linux and return result of the command.
+#
+# Input args: command setTimeout
+# Output args: result of the command
+#              Error if echo timeout or timeout waiting for prompt
+# Typical usage:
+#             linuxSendACmd "kill %1"
+#
+# Category: Setup
+##################################################################
+proc linuxSendACmd { command {setTimeout 90}} {
+
+    result_pre "--- Linux Send $command"
+    if {[slow_send $command ] != 1} {
+        exp_send "\r"
+        result_error "linuxSendACmd timeout getting command echo"
+        error "error in linuxSendACmd: timeout getting command echo\n"
+    }
+    #if last character not a return send a return
+    if {[string index $command [expr [string length $command] - 1]] != "\r" } {
+        slow_send "\r"
+    }
+    set timeout $setTimeout
+    expect {
+        -re {.*[>#$]} {
+            SaveOutputBuffer $expect_out(buffer)
+            return $expect_out(buffer)
+        }
+        timeout {
+            result_error \
+                "linuxSendACmd $setTimeout seconds timeout: not seeing linux prompt"
+                error "error in linuxSendACmd: timeout getting linux prompt\n"
+        }
+    }
+}
+##################################################################
+# Procedure Name: CheckLinuxUser
+#
+# Description: Check if user is active user.
+#
+# Input args: user
+# Output args: ok or error
+#             
+# Typical usage:
+#             if {[CheckLinuxUser root] != "ok"} {suToRoot} 
+#
+# Category: Setup
+##################################################################
+proc CheckLinuxUser {user} {
+    set parameterList "";
+    lappend parameterList "{$user} exist";
+    set res [CheckKeyValue "whoami" $parameterList \
+       -comment "Am I linux user $user" -reportResults 0 -showError "false"]
+
+    return $res
+}

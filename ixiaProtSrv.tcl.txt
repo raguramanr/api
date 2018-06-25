@@ -1,0 +1,1401 @@
+
+
+;#################################################################
+;#
+;# GetProtocolServerInfo
+;#
+;# This function will retrieve the specified protocol server
+;# service states for the specified port.  The returned state for
+;# a service will be 1 (true) if that service is enabled, or 0
+;# (false) if the service is disabled.
+;#
+;# Input variables: Variables in []'s are optional.
+;#     portId: The logical port number to query.
+;#
+;# Output variables: Variables in []'s are optional.
+;#     [-arpService <vname="">]: Stores the current state of the
+;#         ARP protocol server in the TCL variable named by vname.
+;#         If -arpService is not specified, the ARP service won't
+;#         be queried.
+;#
+;#     [-bgpService <vname="">]: Stores the current state of the
+;#         BGP4 protocol service in the TCL variable named by
+;#         vname.  If -bgpService is not specified, the BGP4
+;#         service won't be queried.
+;#
+;#     [-igmpService <vname="">]: Stores the current state of the
+;#         IGMP protocol service in the TCL variable named by
+;#         vname.  If -igmpService is not specified, the IGMP
+;#         service won't be queried.
+;#
+;#     [-isisService <vname="">]: Stores the current state of the
+;#         ISIS protocol service in the TCL variable named by
+;#         vname.  If -isisService is not specified, the ISIS
+;#         service won't be queried.
+;#
+;#     [-ospfService <vname="">]: Stores the current state of the
+;#         OSPF protocol service in the TCL variable named by
+;#         vname.  If -ospfService is not specified, the OSPF
+;#         service won't be queried.
+;#
+;#     [-pingService <vname="">]: Stores the current state of the
+;#         PING protocol service in the TCL variable named by
+;#         vname.  If -pingService is not specified, the PING
+;#         service won't be queried.
+;#
+;#     [-ripService <vname="">]: Stores the current state of the
+;#         RIP protocol service in the TCL variable named by
+;#         vname.  If -ripService is not specified, the RIP
+;#         service won't be queried.
+;#
+;#     [-rsvpService <vname="">]: Stores the current state of the
+;#         RSVP protocol service in the TCL variable named by
+;#         vname.  If -rsvpService is not specified, the RSVP
+;#         service won't be queried.
+;#
+;# Return value: None.
+;#
+;# Typical usage:
+;#     set txPort 3
+;#     GetProtocolServerInfo $txPort -ospfService ospfOnOrOff
+;#     if {$ospfOnOrOff} {
+;#         result_debug "OSPF server is enabled."
+;#     } else {
+;#         result_debug "OSPF server is disabled."
+;#     }
+;#
+;#     # Enable the OSPF protocol server.
+;#     SetProtocolServerInfo $txPort -ospfService true
+;#     ...
+;#     # Do other stuff here.
+;#     ...
+;#     # Restore the OSPF protocol server to its former state.
+;#     SetProtocolServerInfo $txPort -ospfService $ospfOnOrOff
+;#
+;# Category: SetupTestTool
+;#
+;#################################################################
+proc GetProtocolServerInfo {portId args} {
+    parse_args -noComplain GetProtocolServerInfo $args {
+        arpService  ""
+        bgpService  ""
+        igmpService ""
+        isisService ""
+        ospfService ""
+        pingService ""
+        ripService  ""
+        rsvpService ""
+        mldService ""
+    }
+
+    if {$portId < 1} {
+        error "GetProtocolServerInfo: Port ID $portId is out of range.  It must be greater than 0."
+    }
+
+    MapIxiaPortId $portId chas card port
+
+    if {[protocolServer get $chas $card $port]} {
+        error "GetProtocolServerInfo: protocolServer get $chas $card $port failed."
+    }
+
+    if {$arpService != ""} {
+        upvar $arpService tmp
+        set tmp [protocolServer cget -enableArpResponse]
+    }
+    if {$bgpService != ""} {
+        upvar $bgpService tmp
+        set tmp [protocolServer cget -enableBgp4Service]
+    }
+    if {$igmpService != ""} {
+        upvar $igmpService tmp
+        set tmp [protocolServer cget -enableIgmpQuery]
+    }
+    if {$isisService != ""} {
+        upvar $isisService tmp
+        set tmp [protocolServer cget -enableIsisService]
+    }
+    if {$ospfService != ""} {
+        upvar $ospfService tmp
+        set tmp [protocolServer cget -enableOspfService]
+    }
+    if {$pingService != ""} {
+        upvar $pingService tmp
+        set tmp [protocolServer cget -enablePingResponse]
+    }
+    if {$ripService != ""} {
+        upvar $ripService tmp
+        set tmp [protocolServer cget -enableRipService]
+    }
+    if {$rsvpService != ""} {
+        upvar $rsvpService tmp
+        set tmp [protocolServer cget -enableRsvpService]
+    }
+    if {$mldService != ""} {
+        upvar $mldService tmp
+        set tmp [protocolServer cget -enableMldService]
+    }
+} ;# GetProtocolServerInfo
+
+
+;#################################################################
+;#
+;# SetProtocolServerInfo
+;#
+;# This function will enable or disable the specified protocol
+;# services for the specified port.  Specifying true or 1 for a
+;# service will enable that service, and specifying false or 0
+;# will disable it.
+;#
+;# Input variables: Variables in []'s are optional.
+;#     portId: The logical port number to query.
+;#
+;#     [-arpService <on="">]: Enable or disable the ARP protocol
+;#         server.  If not specified, no change will be made.
+;#
+;#     [-bgpService <on="">]: Enable or disable the BGP4 protocol
+;#         server.  If not specified, no change will be made.
+;#
+;#     [-igmpService <on="">]: Enable or disable the IGMP protocol
+;#         server.  If not specified, no change will be made.
+;#
+;#     [-isisService <on="">]: Enable or disable the ISIS protocol
+;#         server.  If not specified, no change will be made.
+;#
+;#     [-ospfService <on="">]: Enable or disable the OSPF protocol
+;#         server.  If not specified, no change will be made.
+;#
+;#     [-pingService <on="">]: Enable or disable the PING protocol
+;#         server.  If not specified, no change will be made.
+;#
+;#     [-ripService <on="">]: Enable or disable the RIP protocol
+;#         server.  If not specified, no change will be made.
+;#
+;#     [-rsvpService <on="">]: Enable or disable the RSVP protocol
+;#         server.  If not specified, no change will be made.
+;#
+;#     [-mldService <on="">]: Enable or disable the MLD protocol
+;#         server.  If not specified, no change will be made.
+;#
+;#     [-write <wr=true>]: Specifies if protocol server settings
+;#         are written to the IXIA hardware.  If left omitted,
+;#         -write defaults to true.  When performing multiple
+;#         protocol server changes, it may be useful to inhibit
+;#         writing for performance reasons.
+;#
+;# Output variables: Variables in []'s are optional.
+;#
+;# Return value: None.
+;#
+;# Typical usage:
+;#     set txPort 3
+;#     GetProtocolServerInfo $txPort -ospfService ospfOnOrOff
+;#     if {$ospfOnOrOff} {
+;#         result_debug "OSPF server is enabled."
+;#     } else {
+;#         result_debug "OSPF server is disabled."
+;#     }
+;#
+;#     # Enable the OSPF protocol server.
+;#     SetProtocolServerInfo $txPort -ospfService true
+;#     ...
+;#     # Do other stuff here.
+;#     ...
+;#     # Restore the OSPF protocol server to its former state.
+;#     SetProtocolServerInfo $txPort -ospfService $ospfOnOrOff
+;#
+;# Category: SetupTestTool
+;#
+;#################################################################
+proc SetProtocolServerInfo {portId args} {
+    parse_args -noComplain SetProtocolServerInfo $args {
+        arpService  ""
+        bgpService  ""
+        igmpService ""
+        isisService ""
+        ospfService ""
+        pingService ""
+        ripService  ""
+        rsvpService ""
+        mldService ""
+        write       "true"
+    }
+
+   global TrafficGen
+   switch -exact -- $TrafficGen {
+      
+      stc {
+         return
+      }
+      ixia -
+      ixvm {
+    if {$portId < 1} {
+        error "SetProtocolServerInfo: Port ID $portId is out of range.  It must be greater than 0."
+    }
+
+    MapIxiaPortId $portId chas card port
+
+    if {[protocolServer get $chas $card $port]} {
+        error "SetProtocolServerInfo: protocolServer get $chas $card $port failed."
+    }
+
+    if {$arpService != ""} {
+        protocolServer config -enableArpResponse $arpService
+    }
+    if {$bgpService != ""} {
+        protocolServer config -enableBgp4Service $bgpService
+    }
+    if {$igmpService != ""} {
+        protocolServer config -enableIgmpQuery $igmpService
+    }
+    if {$isisService != ""} {
+        protocolServer config -enableIsisService $isisService
+    }
+    if {$ospfService != ""} {
+        protocolServer config -enableOspfService $ospfService
+    }
+    if {$pingService != ""} {
+        protocolServer config -enablePingResponse $pingService
+    }
+    if {$ripService != ""} {
+        protocolServer config -enableRipService $ripService
+    }
+    if {$rsvpService != ""} {
+        protocolServer config -enableRsvpService $rsvpService
+    }
+    if {$mldService != ""} {
+        protocolServer config -enableMldService $mldService
+    }
+
+    if {[protocolServer set $chas $card $port]} {
+        error "SetProtocolServerInfo: protocolServer set $chas $card $port failed."
+    }
+    
+    if {[IsTrue $write]} {
+        if {[protocolServer write $chas $card $port]} {
+            error "SetProtocolServerInfo: protocolServer write $chas $card $port failed."
+        }
+    }
+      }
+   }
+} ;# SetProtocolServerInfo
+
+
+;#################################################################
+;#
+;# GetGwIpAddr
+;#
+;# This function retrieves the gateway IP address in the IXIA's
+;# IP address table for the specified port.
+;#
+;# Input variables: Variables in []'s are optional.
+;#     portId: The logical port number to query.
+;#
+;# Output variables: Variables in []'s are optional.
+;#
+;# Return value: An IP address.
+;#
+;# Typical usage:
+;#     set txPort 3
+;#     set newGwIpAddr "10.30.1.1"
+;#     set oldGwIpAddr [GetGwIpAddr $txPort]
+;#     SetGwIpAddr $txPort $newGwIpAddr
+;#     ...
+;#     SetGwIpAddr $txPort $oldGwIpAddr
+;#
+;# Category: SetupTestTool
+;#
+;#################################################################
+proc GetGwIpAddr {portId} {
+    if {$portId < 1} {
+        error "GetGwIpAddr: Port ID $portId is out of range.  It must be greater than 0."
+    }
+
+    MapIxiaPortId $portId chas card port
+
+    if {[ipAddressTable get $chas $card $port]} {
+        error "GetGwIpAddr: ipAddressTable get $chas $card $port failed."
+    }
+
+    return [ipAddressTable cget -defaultGateway]
+} ;# GetGwIpAddr
+
+
+;#################################################################
+;#
+;# SetGwIpAddr
+;#
+;# This function sets the gateway IP address in the IXIA's IP
+;# address table for the specified port.
+;#
+;# Input variables: Variables in []'s are optional.
+;#     portId: The logical port number to modify.
+;#
+;#     gIpAddr: An IP address representing the IXIA port's default
+;#         gateway.
+;#
+;#     [-write <wr=true>]: Specifies if protocol server settings
+;#         are written to the IXIA hardware.  If omitted, -write
+;#         defaults to true.  When performing multiple protocol
+;#         server changes, it may be useful to inhibit writing for
+;#         performance reasons.
+;#
+;# Output variables: Variables in []'s are optional.
+;#
+;# Return value: None.
+;#
+;# Typical usage:
+;#     set txPort 3
+;#     set newGwIpAddr "10.30.1.1"
+;#     set oldGwIpAddr [GetGwIpAddr $txPort]
+;#     SetGwIpAddr $txPort $newGwIpAddr -write true
+;#     ...
+;#     SetGwIpAddr $txPort $oldGwIpAddr -write true
+;#
+;# Category: SetupTestTool
+;#
+;#################################################################
+proc SetGwIpAddr {portId gIpAddr args} {
+    parse_args -noComplain SetGwIpAddr $args {
+        write "true"
+    }
+
+    if {$portId < 1} {
+        error "SetGwIpAddr: Port ID $portId is out of range.  It must be greater than 0."
+    }
+
+    if {![IsValidIpAddress $gIpAddr]} {
+        error "SetGwIpAddr: Invalid IP address, \"$gIpAddr\" specified."
+    }
+
+    MapIxiaPortId $portId chas card port
+
+    ipAddressTable setDefault
+    if {[ipAddressTable get $chas $card $port]} {
+        error "SetGwIpAddr: ipAddressTable get $chas $card $port failed."
+    }
+
+    ipAddressTable config -defaultGateway $gIpAddr
+
+    if {[ipAddressTable set $chas $card $port]} {
+        error "SetGwIpAddr: ipAddressTable set $chas $card $port failed."
+    }
+
+    if {[IsTrue $write]} {
+        if {[protocolServer write $chas $card $port]} {
+            error "SetGwIpAddr: protocolServer write $chas $card $port failed."
+        }
+    }
+} ;# SetGwIpAddr
+
+
+;#################################################################
+;#
+;# AddIpAddress
+;#
+;# This function adds a range of IP addresses to the IXIA's IP
+;# address table for the specified port.  No checking is done to
+;# see if the new address range matches or overlaps an already
+;# existing range.
+;#
+;# Input variables: Variables in []'s are optional.
+;#     portId: The logical port number to add to.
+;#
+;#     ipAddr: The starting IP address of the range to add into
+;#             the table.
+;#
+;#     [-macAddr <ma="default">]: The starting MAC address of the
+;#         range to add into the table.  If not specified, or if
+;#         set to the keyword "default", then the starting address
+;#         is set to the MAC address configured in the IXIA "port
+;#         config -MacAddress" object.
+;#
+;#     [-netMask {nm=24>]: An integer represent the IP network
+;#         mask to be used.  If a value of 0 is specified, then
+;#         the network mask is disabled for the IP address range.
+;#         If not specified, the netmask defaults to a value of
+;#         24.
+;#
+;#     [-numAddrs <na=1>]: The number of IP addresses in the new
+;#         address range.  IP addresses are generated by
+;#         incrementing the host portion of $ipAddr (as determined
+;#         by -netMask).  If not specified, the number of
+;#         addresses defaults to 1.
+;#
+;#     [-mapType <mt="oneIpToOneMAC">]: This option controls how
+;#         MAC addresses are generated for thr range.  If the
+;#         keyword "oneIpToOneMAC" or the value "0" is specified,
+;#         then there will be a distinct MAC address for each IP
+;#         address in the range.  MAC addresses are generated by
+;#         incrementing the address specified in the -macAddr
+;#         option.  If the keyword "manyIpToOneMAC" or the value
+;#         "1" is specified, then all the IP addresses in the
+;#         range will use the same MAC address.
+;#
+;#     [-gwIpAddr <gw="">]: The IP address of a gateway used to
+;#         override the gateway IP address specified for this
+;#         port's IP address table.  If not specified, or set to
+;#         the empty string ("" or {}), then the gateway IP
+;#         address will not be overridden.
+;#
+;#     [-objName <on="">]: Specifies an array name from which to
+;#         take parameter values.  The keys for this array are
+;#         ipAddr, macAddr, netMask, numAddrs, mapType, and
+;#         gwIpAddr.  They take the same values and follow the
+;#         same restrictions as their -parameter based counter-
+;#         parts.  If an array name is specified, its values
+;#         override any value specified by -parameters.
+;#
+;#     [-write <wr=true>]: Specifies if protocol server settings
+;#         are written to the IXIA hardware.  If omitted, -write
+;#         defaults to true.  When performing multiple protocol
+;#         server changes, it may be useful to inhibit writing for
+;#         performance reasons.
+;#
+;# Output variables: Variables in []'s are optional.
+;#
+;# Return value: None.
+;#
+;# Typical usage:
+;#     set txPort 3
+;#     set ipAddr "10.30.1.1"
+;#     AddIpAddress $txPort $ipAddr
+;#     ...
+;#     DeleteIpAddress $txPort $ipAddr
+;#
+;# Category: SetupTestTool
+;#
+;#################################################################
+proc AddIpAddress {portId ipAddr args} {
+    parse_args -noComplain AddIpAddress $args {
+        macAddr  "default"
+        tag      "none"
+        netMask  24
+        numAddrs 1
+        mapType  "oneIpToOneMAC"
+        gwIpAddr ""
+        objName  ""
+        write    "true"
+    }
+   global TrafficGen
+    if {$portId < 1} {
+        error "AddIpAddress: Port ID $portId is out of range.  It must be greater than 0."
+    }
+
+   
+   switch -exact -- $TrafficGen {
+      stc {        
+         set error_flag 0
+         if {![IsValidIpAddress $ipAddr]} {
+            error "AddIpAddress: Invalid IP address, \"$ipAddr\" specified."
+         }
+         
+         if {$macAddr != "default" && [isMacAddressValid $macAddr] != 0} {
+            error "AddIpAddress: Invalid MAC address, \"$macAddr\" specified."
+         }
+         
+         if {![string is integer $netMask] || $netMask < 0 || $netMask > 32} {
+            error "AddIpAddress: Invalid netmask, \"$netMask\" specified."
+         }
+         
+         if {![string is integer $numAddrs] || $numAddrs < 1} {
+            error "AddIpAddress: Invalid number of addresses, \"$numAddrs\" specified."
+         }
+         
+         if {([string is integer $mapType] && ($mapType < 0 || $mapType > 1)) ||
+             (![string is integer $mapType] && ($mapType != "oneIpToOneMAC" && $mapType != "manyIpToOneMAC"))} {
+            error "AddIpAddress: Invalid map type, \"$mapType\" specified."
+         }
+         
+         if {$gwIpAddr != "" && ![IsValidIpAddress $gwIpAddr]} {
+            error "AddIpAddress: Invalid gateway IP address, \"$gwIpAddr\" specified."
+         }
+         set txPortId [hMapPortIdToSpirentPort $portId]
+         if {($tag == "none") || !$tag} {
+            array set cmdResults [logcmd stc::perform DeviceCreateCommand -ParentList [logcmd stc::get system1 -children-project] -port $txPortId -IfStack "Ipv4If EthIIIf" -IfCount "1 1" -DeviceCount $numAddrs -CreateCount $numAddrs]
+            
+            
+         } else {
+            array set cmdResults [logcmd stc::perform DeviceCreateCommand -ParentList [logcmd stc::get system1 -children-project] -port $txPortId -IfStack "Ipv4If VlanIf EthIIIf" -IfCount "1 1 1" -DeviceCount $numAddrs -CreateCount $numAddrs]
+            foreach deviceHndl $cmdResults(-ReturnList) {
+               logcmd stc::config [logcmd stc::get $deviceHndl -children-VlanIf] -VlanId $tag
+            }
+         }
+         if {($mapType == "oneIpToOneMAC") && $numAddrs > 1} {
+            
+            
+            set deviceHndlList $cmdResults(-ReturnList)
+            set index 0
+            if {$macAddr == "default"} {set macAddr [GetDefaultPortIdMAC -portId $portId]}
+            set tmpMacAddr $macAddr
+            foreach deviceHndl $deviceHndlList {
+               if {$gwIpAddr == {}} {
+                  logcmd stc::config [logcmd stc::get $deviceHndl -children-Ipv4If] -Address [incrIpField $ipAddr 4 $index] -PrefixLength $netMask -skipReserved FALSE
+               } else {
+                  logcmd stc::config [logcmd stc::get $deviceHndl -children-Ipv4If] -Address [incrIpField $ipAddr 4 $index] -Gateway $gwIpAddr -PrefixLength $netMask -skipReserved FALSE
+               }
+               logcmd stc::config [logcmd stc::get $deviceHndl -children-EthIIIf] -SourceMac $tmpMacAddr
+               incr index
+               set tmpMacAddr [incrMacAddr $tmpMacAddr]
+            }
+         } else {
+            
+            set deviceHndlList $cmdResults(-ReturnList)
+            set index 0
+            
+            foreach deviceHndl $deviceHndlList {
+               set dip [incrIpField $ipAddr 4 $index]
+               # if broadcast then set prefix to 32
+               if {[expr 0xffffffff >> $netMask] == [expr (0xffffffff >> $netMask) & [ip2int $dip]] } {
+                  set netMask 32
+                  if {[lindex [split $dip .] 0] >= 224} { set dip [join [lreplace [split $dip .] 0 0 223] .] }
+               }
+               if {$gwIpAddr == {}} {
+                  logcmd stc::config [logcmd stc::get $deviceHndl -children-Ipv4If] -Address $dip -PrefixLength $netMask -skipReserved FALSE
+               } else {
+                  logcmd stc::config [logcmd stc::get $deviceHndl -children-Ipv4If] -Address $dip -Gateway $gwIpAddr -PrefixLength $netMask -skipReserved FALSE
+               }
+               if {$macAddr == "default"} {set macAddr [GetDefaultPortIdMAC -portId $portId]}
+               logcmd stc::config [logcmd stc::get $deviceHndl -children-EthIIIf] -SourceMac $macAddr
+               incr index
+               logcmd stc::apply
+            }
+         }         
+         return $deviceHndlList
+      }
+      ixia -
+      ixvm {
+    MapIxiaPortId $portId chas card port
+    if {$objName != ""} {
+        upvar $objName ipArray
+        if {![info exists ipArray]} {
+            error "AddIpAddress: Invalid array name, \"$objName\" specified."
+        }
+        set ipAddr   $ipArray(ipAddr)
+        set macAddr  $ipArray(macAddr)
+        set netMask  $ipArray(netMask)
+        set numAddrs $ipArray(numAddrs)
+        set mapType  $ipArray(mapType)
+        set gwIpAddr $ipArray(gwIpAddr)
+    }
+
+    if {![IsValidIpAddress $ipAddr]} {
+        error "AddIpAddress: Invalid IP address, \"$ipAddr\" specified."
+    }
+
+    if {$macAddr != "default" && [isMacAddressValid $macAddr] != 0} {
+        error "AddIpAddress: Invalid MAC address, \"$macAddr\" specified."
+    }
+
+    if {![isValidInteger $netMask] || $netMask < 0 || $netMask > 32} {
+        error "AddIpAddress: Invalid netmask, \"$netMask\" specified."
+    }
+
+    if {![isValidInteger $numAddrs] || $numAddrs < 1} {
+        error "AddIpAddress: Invalid number of addresses, \"$numAddrs\" specified."
+    }
+
+    if {([isValidInteger $mapType] && ($mapType < 0 || $mapType > 1)) ||
+        (![isValidInteger $mapType] && ($mapType != "oneIpToOneMAC" && $mapType != "manyIpToOneMAC"))} {
+        error "AddIpAddress: Invalid map type, \"$mapType\" specified."
+    }
+
+    if {$gwIpAddr != "" && ![IsValidIpAddress $gwIpAddr]} {
+        error "AddIpAddress: Invalid gateway IP address, \"$gwIpAddr\" specified."
+    }
+
+    ipAddressTable setDefault
+    ipAddressTableItem setDefault
+
+    if {[ipAddressTable get $chas $card $port]} {
+        error "AddIpAddress: ipAddressTable get $chas $card $port failed."
+    }
+
+    ipAddressTableItem config -fromIpAddress $ipAddr
+
+    if {$macAddr == "default"} {
+        if {[port get $chas $card $port]} {
+            error "AddIpAddress: port get $chas $card $port failed."
+        }
+        set macAddr [port cget -MacAddress]
+    }
+    ipAddressTableItem config -fromMacAddress $macAddr
+
+    if {$tag != "none"} {
+       # Tag is only available in 3.65
+       if {![regexp -nocase "3.50" [version cget -installVersion]]} {
+          ipAddressTableItem config -enableVlan true
+          ipAddressTableItem config -vlanId $tag
+       }
+    }
+    if {$netMask} {
+        ipAddressTableItem config -enableUseNetwork true
+        ipAddressTableItem config -netMask $netMask
+    }
+
+    ipAddressTableItem config -numAddresses $numAddrs
+    ipAddressTableItem config -mappingOption $mapType
+
+    if {$gwIpAddr != ""} {
+        ipAddressTableItem config -overrideDefaultGateway true
+        ipAddressTableItem config -gatewayIpAddress $gwIpAddr
+    }
+
+    ipAddressTableItem set
+
+    if {[ipAddressTable addItem]} {
+        error "AddIpAddress: ipAddressTable addItem failed."
+    }
+    if {[ipAddressTable set $chas $card $port]} {
+        error "AddIpAddress: ipAddressTable set $chas $card $port failed."
+    }
+
+interfaceTable               select            $chas $card $port
+interfaceTable               clearAllInterfaces 
+interfaceIpV4                setDefault        
+if {$gwIpAddr != ""} {
+   interfaceIpV4                config            -gatewayIpAddress                   $gwIpAddr
+}
+if {$netMask} {
+   interfaceIpV4                config            -maskWidth                          $netMask
+}
+interfaceIpV4                config            -ipAddress                          $ipAddr
+interfaceEntry               addItem           addressTypeIpV4
+
+interfaceEntry               setDefault        
+interfaceEntry               config            -enable                             true
+interfaceEntry               config            -description                        "$ipAddr/$netMask - $card:$port"
+interfaceEntry               config            -macAddress                         $macAddr
+if {$tag != "none"} {
+   interfaceEntry               config            -enableVlan                         true
+   interfaceEntry               config            -vlanId                             $tag
+} else {
+   interfaceEntry               config            -enableVlan                         false
+   interfaceEntry               config            -vlanId                             0
+}
+interfaceEntry               config            -vlanPriority                       0
+interfaceTable               addInterface      
+
+interfaceEntry               clearAllItems     addressTypeIpV6
+interfaceEntry               clearAllItems     addressTypeIpV4
+
+    if {[IsTrue $write]} {
+        if {[protocolServer write $chas $card $port]} {
+            error "AddIpAddress: protocolServer write $chas $card $port failed."
+        }
+    }
+      }
+   }
+} ;# AddIpAddress
+
+
+;#################################################################
+;#
+;# GetIpAddress
+;#
+;# This function will retrieve the attributes for an IP address
+;# range from the IXIA's IP address table for the specified port.
+;#
+;# Input variables: Variables in []'s are optional.
+;#     portId: The logical port number to query.
+;#
+;#     ipAddr: The starting IP address of the range to query.
+;#
+;# Output variables: Variables in []'s are optional.
+;#     [-macAddrName <vn="">]: Specifies a TCL variable name into
+;#         which the base MAC address for the address range will
+;#         be stored.
+;#
+;#     [-netMaskName <vn="">]: Specifies a TCL variable name into
+;#         which the IP network mask for the address range will
+;#         be stored.  If a network mask is disabled for this
+;#         range, then the returned netMask value will be 0.
+;#
+;#     [-numAddrsName <vn="">]: Specifies a TCL variable name into
+;#         which the number of IP addresses for the address range
+;#         will be stored.
+;#
+;#     [-mapTypeName <vn="">]: Specifies a TCL variable name into
+;#         which the IP address to MAC address mapping mode will
+;#         be stored.  A value of "0" indicates a one-to-one
+;#         mapping.  A value of "1" indicates a many-to-one
+;#         mapping.
+;#
+;#     [-gwIpAddrName <vn="">]: Specifies a TCL variable name into
+;#         which the gateway IP address for the address range will
+;#         be stored.  If this range is not overriding the IP
+;#         address table's gateway IP address, then the returned
+;#         value will be the empty string, "".
+;#
+;#     [-objName <on="">]: Specifies a TCL array name into which
+;#         all the attributes of the address range will be stored.
+;#         The keys for this array are ipAddr, macAddr, netMask,
+;#         numAddrs, mapType, and gwIpAddr.  The value for each
+;#         key has the same meaning as its -parameter based
+;#         counterpart.
+;#
+;# Return value:
+;#     0 if the specified IP address range does not exist.
+;#     1 if the specified IP address range exists.
+;#
+;# Typical usage:
+;#     set txPort 3
+;#     set ipAddr "10.30.1.1"
+;#     GetIpAddress $txPort $ipAddr -objName ipAttrs
+;#     ...
+;#     SetIpAddress $txPort $ipAddr -objName ipAttrs
+;#
+;# Category: SetupTestTool
+;#
+;#################################################################
+proc GetIpAddress {portId ipAddr args} {
+    parse_args -noComplain GetIpAddress $args {
+        macAddrName  ""
+        netMaskName  ""
+        numAddrsName ""
+        mapTypeName  ""
+        gwIpAddrName ""
+        objName      ""
+    }
+
+    if {$portId < 1} {
+        error "GetIpAddress: Port ID $portId is out of range.  It must be greater than 0."
+    }
+
+    MapIxiaPortId $portId chas card port
+
+    if {![IsValidIpAddress $ipAddr]} {
+        error "GetIpAddress: Invalid IP address, \"$ipAddr\" specified."
+    }
+
+    ipAddressTable setDefault
+    ipAddressTableItem setDefault
+
+    if {[ipAddressTable get $chas $card $port]} {
+        error "GetIpAddress: ipAddressTable get $chas $card $port failed."
+    }
+
+    if {[ipAddressTable getItem $ipAddr]} {
+        return 0
+    }
+
+    if {$macAddrName != ""} {
+        upvar $macAddrName macAddr
+        set macAddr [ipAddressTableItem cget -fromMacAddress]
+    }
+    if {$netMaskName != ""} {
+        upvar $netMaskName netMask
+        if {[ipAddressTableItem cget -enableUseNetwork]} {
+            set netMask [ipAddressTableItem cget -netMask]
+        } else {
+            set netMask 0
+        }
+    }
+    if {$numAddrsName != ""} {
+        upvar $numAddrsName numAddrs
+        set numAddrs [ipAddressTableItem cget -numAddresses]
+    }
+    if {$mapTypeName != ""} {
+        upvar $mapTypeName mapType
+        set mapType [ipAddressTableItem cget -mappingOption]
+    }
+    if {$gwIpAddrName != ""} {
+        upvar $gwIpAddrName gwIpAddr
+        if {[ipAddressTableItem cget -overrideDefaultGateway]} {
+            set gwIpAddr [ipAddressTableItem cget -gatewayIpAddress]
+        } else {
+            set gwIpAddr ""
+        }
+    }
+
+    if {$objName != ""} {
+        upvar $objName ipArray
+
+        set ipArray(ipAddr)       $ipAddr
+        set ipArray(macAddr)      [ipAddressTableItem cget -fromMacAddress]
+        
+        if {[ipAddressTableItem cget -enableUseNetwork]} {
+            set ipArray(netMask)  [ipAddressTableItem cget -netMask]
+        } else {
+            set ipArray(netMask)  0
+        }
+
+        set ipArray(numAddrs)     [ipAddressTableItem cget -numAddresses]
+        set ipArray(mapType)      [ipAddressTableItem cget -mappingOption]
+
+        if {[ipAddressTableItem cget -overrideDefaultGateway]} {
+            set ipArray(gwIpAddr) [ipAddressTableItem cget -gatewayIpAddress]
+        } else {
+            set ipArray(gwIpAddr) ""
+        }
+    }
+
+    return 1
+} ;# GetIpAddress
+
+
+;#################################################################
+;#
+;# SetIpAddress
+;#
+;# This function will modify the attributes for an existing IP
+;# address range in the IXIA's IP address table for the specified
+;# port.  Note that this function will only modify attributes
+;# specified in the parameter list.  Any unspecified parameters
+;# will preserve the existing attributes.
+;#
+;# Input variables: Variables in []'s are optional.
+;#     portId: The logical port number to modify on.
+;#
+;#     ipAddr: The starting IP address of the range to modify.
+;#
+;#     [-macAddr <ma>]: The starting MAC address of the range to
+;#         modify.  If set to the keyword "default", then the
+;#         starting address is set to the MAC address configured
+;#         in the IXIA "port config -MacAddress" object.
+;#
+;#     [-netMask {nm>]: An integer represent the IP network mask
+;#         to be used.  If a value of 0 is specified, then the
+;#         network mask is disabled for the IP address range.
+;#
+;#     [-numAddrs <na>]: The number of IP addresses in the IP
+;#         address range.  IP addresses are generated by
+;#         incrementing the host portion of $ipAddr (as determined
+;#         by -netMask).
+;#
+;#     [-mapType <mt>]: This option controls how MAC addresses are
+;#         generated for thr range.  If the keyword
+;#         "oneIpToOneMAC" or the value "0" is specified, then
+;#         there will be a distinct MAC address for each IP
+;#         address in the range.  MAC addresses are generated by
+;#         incrementing the address specified in the -macAddr
+;#         option.  If the keyword "manyIpToOneMAC" or the value
+;#         "1" is specified, then all the IP addresses in the
+;#         range will use the same MAC address.
+;#
+;#     [-gwIpAddr <gw>]: The IP address of a gateway used to
+;#         override the gateway IP address specified for this
+;#         port's IP address table.
+;#
+;#     [-objName <on>]: Specifies an array name from which to take
+;#         parameter values.  The keys for this array are ipAddr,
+;#         macAddr, netMask, numAddrs, mapType, and gwIpAddr.
+;#         They take the same values and follow the same restrict-
+;#         ions as their -parameter based counterparts.  If an
+;#         array name is specified, its values override any value
+;#         specified by -parameters.
+;#
+;#     [-write <wr=true>]: Specifies if protocol server settings
+;#         are written to the IXIA hardware.  If omitted, -write
+;#         defaults to true.  When performing multiple protocol
+;#         server changes, it may be useful to inhibit writing for
+;#         performance reasons.
+;#
+;# Output variables: Variables in []'s are optional.
+;#
+;# Return value:
+;#     0 if the specified IP address range does not exist.
+;#     1 if the specified IP address range exists.
+;#
+;# Typical usage:
+;#     set txPort 3
+;#     set ipAddr "10.30.1.1"
+;#     GetIpAddress $txPort $ipAddr -objName ipAttrs
+;#     ...
+;#     SetIpAddress $txPort $ipAddr -objName ipAttrs
+;#
+;# Category: SetupTestTool
+;#
+;#################################################################
+proc SetIpAddress {portId ipAddr args} {
+    parse_args -noComplain AddIpAddress $args {
+        macAddr  "NULL"
+        netMask  "NULL"
+        numAddrs "NULL"
+        mapType  "NULL"
+        gwIpAddr "NULL"
+        objName  "NULL"
+        write    "true"
+    }
+
+    if {$portId < 1} {
+        error "SetIpAddress: Port ID $portId is out of range.  It must be greater than 0."
+    }
+
+    MapIxiaPortId $portId chas card port
+
+    if {$objName != "NULL"} {
+        upvar $objName ipArray
+
+        if {![info exists ipArray]} {
+            error "SetIpAddress: Invalid array name, \"$objName\" specified."
+        }
+
+        set ipAddr   $ipArray(ipAddr)
+        set macAddr  $ipArray(macAddr)
+        set netMask  $ipArray(netMask)
+        set numAddrs $ipArray(numAddrs)
+        set mapType  $ipArray(mapType)
+        set gwIpAddr $ipArray(gwIpAddr)
+    }
+
+    if {![IsValidIpAddress $ipAddr]} {
+        error "SetIpAddress: Invalid IP address, \"$ipAddr\" specified."
+    }
+
+    ipAddressTable setDefault
+    ipAddressTableItem setDefault
+
+    if {[ipAddressTable get $chas $card $port]} {
+        error "SetIpAddress: ipAddressTable get $chas $card $port failed."
+    }
+
+    if {[ipAddressTable getItem $ipAddr]} {
+        return 0
+    }
+
+    if {$macAddr != "NULL"} {
+        if {$macAddr == "default"} {
+            if {[port get $chas $card $port]} {
+                error "SetIpAddress: port get $chas $card $port failed."
+            }
+            set macAddr [port cget -MacAddress]
+        } elseif {[isMacAddressValid $macAddr] != 0} {
+            error "SetIpAddress: Invalid MAC address, \"$macAddr\" specified."
+        }
+        ipAddressTableItem config -fromMacAddress $macAddr
+    }
+
+    if {$netMask != "NULL"} {
+        if {![isValidInteger $netMask] || $netMask < 0 || $netMask > 32} {
+            error "SetIpAddress: Invalid netmask, \"$netMask\" specified."
+        }
+        if {$netMask} {
+            ipAddressTableItem config -enableUseNetwork true
+            ipAddressTableItem config -netMask $netMask
+        }
+    }
+
+    if {$numAddrs != "NULL"} {
+        if {![isValidInteger $numAddrs] || $numAddrs < 1} {
+            error "SetIpAddress: Invalid number of addresses, \"$numAddrs\" specified."
+        }
+        ipAddressTableItem config -numAddresses $numAddrs
+    }
+
+    if {$mapType != "NULL"} {
+        if {([isValidInteger $mapType] && ($mapType < 0 || $mapType > 1)) ||
+            (![isValidInteger $mapType] && ($mapType != "oneIpToOneMAC" && $mapType != "manyIpToOneMAC"))} {
+            error "SetIpAddress: Invalid map type, \"$mapType\" specified."
+        }
+        ipAddressTableItem config -mappingOption $mapType
+    }
+
+    if {$gwIpAddr != "NULL"} {
+        if {$gwIpAddr != "" && ![IsValidIpAddress $gwIpAddr]} {
+            error "SetIpAddress: Invalid gateway IP address, \"$gwIpAddr\" specified."
+        }
+        if {$gwIpAddr != ""} {
+            ipAddressTableItem config -overrideDefaultGateway true
+            ipAddressTableItem config -gatewayIpAddress $gwIpAddr
+        }
+    }
+
+    ipAddressTableItem set
+    if {[ipAddressTable set $chas $card $port]} {
+        error "SetIpAddress: ipAddressTable set $chas $card $port failed."
+    }
+
+
+    if {[IsTrue $write]} {
+        if {[protocolServer write $chas $card $port]} {
+            error "SetIpAddress: protocolServer write $chas $card $port failed."
+        }
+    }
+
+    return 1
+} ;# SetIpAddress
+
+
+;#################################################################
+;#
+;# DeleteIpAddress
+;#
+;# This function will remove an IP address range from the IXIA's
+;# IP address table for the specified port.
+;#
+;# Input variables: Variables in []'s are optional.
+;#     portId: The logical port number from which to delete.
+;#
+;#     ipAddr: The starting IP address of the range to remove.
+;#
+;#     [-write <wr=true>]: Specifies if protocol server settings
+;#         are written to the IXIA hardware.  If omitted, -write
+;#         defaults to true.  When performing multiple protocol
+;#         server changes, it may be useful to inhibit writing for
+;#         performance reasons.
+;#
+;# Output variables: Variables in []'s are optional.
+;#
+;# Return value: None.
+;#
+;# Typical usage:
+;#     set txPort 3
+;#     set ipAddr "10.30.1.1"
+;#     AddIpAddress $txPort $ipAddr
+;#     ...
+;#     DeleteIpAddress $txPort $ipAddr
+;#
+;# Category: SetupTestTool
+;#
+;#################################################################
+proc DeleteIpAddress {portId ipAddr args} {
+    parse_args -noComplain DeleteIpAddress $args {
+        write  "true"
+    }
+
+    if {$portId < 1} {
+        error "DeleteIpAddress: Port ID $portId is out of range.  It must be greater than 0."
+    }
+   global TrafficGen
+   
+   switch -exact -- $TrafficGen {
+      stc {
+         
+         if { [catch {
+            set error_flag 0
+            if {![IsValidIpAddress $ipAddr]} {
+               error "DeleteIpAddress: Invalid IP address, \"$ipAddr\" specified."
+            }
+            
+            set txPortId [hMapPortIdToSpirentPort $portId]
+            foreach deviceHndl [logcmd stc::get $txPortId -affiliationport-Sources] {
+               set ipv4If [logcmd stc::get $deviceHndl -children-Ipv4If] 
+               if {$ipv4If != ""} {
+                  if {[logcmd stc::get $ipv4If -Address] == $ipAddr} {
+                     logcmd stc::delete $deviceHndl
+                  }
+               }
+            }
+            
+            
+            
+            
+            
+         } msg ] } {
+            result_error "AddIpAddress : Failed to configure AddIpAddress  $msg"
+            set error_flag 1
+            
+         }			
+         
+      }
+      ixia -
+      ixvm {
+         
+         
+    MapIxiaPortId $portId chas card port
+
+    if {![IsValidIpAddress $ipAddr]} {
+        error "DeleteIpAddress: Invalid IP address, \"$ipAddr\" specified."
+    }
+
+    ipAddressTable setDefault
+    ipAddressTableItem setDefault
+
+    if {[ipAddressTable get $chas $card $port]} {
+        error "DeleteIpAddress: ipAddressTable get $chas $card $port failed."
+    }
+
+    if {[ipAddressTable getItem $ipAddr]} {
+        return
+    }
+
+    if {[ipAddressTable delItem]} {
+        error "DeleteIpAddress: ipAddressTable delItem failed."
+    }
+    if {[ipAddressTable set $chas $card $port]} {
+        error "DeleteIpAddress: ipAddressTable set $chas $card $port failed."
+    }
+
+    if {[IsTrue $write]} {
+        if {[protocolServer write $chas $card $port]} {
+            error "AddIpAddress: protocolServer write $chas $card $port failed."
+        }
+    }
+      }
+   }
+} ;# DeleteIpAddress
+
+
+;#################################################################
+;#
+;# SaveAndSetProtocolServer
+;#
+;# This function saves specific information about the specified
+;# protocol servers on the IXIA, and then enables those servers
+;# on the specified port.  It also saves any information about the
+;# IXIA's IP address table for that port and then programs the
+;# necessary IP addresses into the table.  All the saved infor-
+;# mation is stored in the TCL array named by the objName para-
+;# meter.  To restore the saved information, the
+;# RestoreSavedProtocolServer function must be called.
+;#
+;# Input variables: Variables in []'s are optional.
+;#     portId: The logical port number to work on.
+;#
+;#     ipAddr: The starting IP address of the range to add or
+;#         modify.
+;#
+;#     gwIpAddr: The IP address of the default gateway for this
+;#         IXIA port.
+;#
+;#   To enable one or more protocol servers, specify any of the
+;#   following parameters.
+;#     [-arpService <on="">]: Enable or disable the ARP protocol
+;#         server.  If not specified, no change will be made.
+;#
+;#     [-bgpService <on="">]: Enable or disable the BGP4 protocol
+;#         server.  If not specified, no change will be made.
+;#
+;#     [-igmpService <on="">]: Enable or disable the IGMP protocol
+;#         server.  If not specified, no change will be made.
+;#
+;#     [-isisService <on="">]: Enable or disable the ISIS protocol
+;#         server.  If not specified, no change will be made.
+;#
+;#     [-ospfService <on="">]: Enable or disable the OSPF protocol
+;#         server.  If not specified, no change will be made.
+;#
+;#     [-pingService <on="">]: Enable or disable the PING protocol
+;#         server.  If not specified, no change will be made.
+;#
+;#     [-ripService <on="">]: Enable or disable the RIP protocol
+;#         server.  If not specified, no change will be made.
+;#
+;#     [-rsvpService <on="">]: Enable or disable the RSVP protocol
+;#         server.  If not specified, no change will be made.
+;#
+;#   Optional IP address parameters:
+;#     [-macAddr <ma="default">]: The starting MAC address of the
+;#         range to add into the table.  If not specified, or if
+;#         set to the keyword "default", then the starting address
+;#         is set to the MAC address configured in the IXIA "port
+;#         config -MacAddress" object.
+;#
+;#     [-netMask {nm=24>]: An integer represent the IP network
+;#         mask to be used.  If a value of 0 is specified, then
+;#         the network mask is disabled for the IP address range.
+;#         If not specified, the netmask defaults to a value of
+;#         24.
+;#
+;#     [-numAddrs <na=1>]: The number of IP addresses in the new
+;#         address range.  IP addresses are generated by
+;#         incrementing the host portion of $ipAddr (as determined
+;#         by -netMask).  If not specified, the number of
+;#         addresses defaults to 1.
+;#
+;#     [-mapType <mt="oneIpToOneMAC">]: This option controls how
+;#         MAC addresses are generated for thr range.  If the
+;#         keyword "oneIpToOneMAC" or the value "0" is specified,
+;#         then there will be a distinct MAC address for each IP
+;#         address in the range.  MAC addresses are generated by
+;#         incrementing the address specified in the -macAddr
+;#         option.  If the keyword "manyIpToOneMAC" or the value
+;#         "1" is specified, then all the IP addresses in the
+;#         range will use the same MAC address.
+;#
+;#     [-gwIpAddr <gw="">]: The IP address of a gateway used to
+;#         override the gateway IP address specified for this
+;#         port's IP address table.  If not specified, or set to
+;#         the empty string ("" or {}), then the gateway IP
+;#         address will not be overridden.
+;#
+;# Output variables: Variables in []'s are optional.
+;#     objName: The name of a TCL array into which information
+;#         will be stored.  The key-value pairs in this array
+;#         are for internal use only and should not be modified.
+;#
+;# Return value:
+;#     0 if the specified IP address range does not exist.
+;#     1 if the specified IP address range exists.
+;#
+;# Typical usage:
+;#     set txPort 3
+;#     set ipAddr "10.30.1.1"
+;#     set gwIpAddr "10.30.1.2"
+;#     SaveAndSetProtocolServer $txPort $ipAddr $gwIpAddr ixInfo \
+;#                              -arpService true \
+;#                              -pingService true \
+;#                              -macAddr "00:A1:F1:00:00:01"
+;#     ...
+;#     RestoreSavedProtocolServer ixInfo
+;#
+;# Category: SetupTestTool
+;#
+;#################################################################
+proc SaveAndSetProtocolServer {portId ipAddr gwIpAddr objName args} {
+    set otherArgs [parse_args -noComplain SaveAndSetProtocolServer $args {
+        tag         "none"
+        arpService  ""
+        bgpService  ""
+        igmpService ""
+        isisService ""
+        ospfService ""
+        pingService ""
+        ripService  ""
+        rsvpService ""
+        mldService ""
+        write       "dummy arg to prevent cascading"
+    }]
+
+    ;# Validate the parameters.
+    if {$portId < 1} {
+        error "SaveAndSetProtocolServer: Port ID $portId is out of range.  It must be greater than 0."
+    }
+
+    if {![IsValidIpAddress $ipAddr]} {
+        error "SaveAndSetProtocolServer: Invalid IP address, \"$ipAddr\" specified."
+    }
+
+    if {![IsValidIpAddress $gwIpAddr]} {
+        error "SaveAndSetProtocolServer: Invalid gateway IP address, \"$gwIpAddr\" specified."
+    }
+
+    if {$objName == ""} {
+        error "SaveAndSetProtocolServer: Invalid array name, \"$objName\" specified."
+    }
+    upvar $objName ipArray
+
+
+    ;# Save the port ID.
+    set ipArray(portId) $portId
+    set ipArray(ipAddr) $ipAddr
+
+    ;# Save the IP address table's default gateway IP address.
+    set ipArray(tableGwIpAddr) [GetGwIpAddr $portId]
+
+    ;# Set the new gateway IP address.
+    SetGwIpAddr $portId $gwIpAddr -write false
+
+    ;# Check to see if the IP address range already exists.
+    set ipArray(ipFound) [GetIpAddress $portId $ipAddr -objName ipArray]
+    if {$ipArray(ipFound)} {
+        ;# It exists, so delete the old one.
+        ;# The parameters for the old range are already saved by the
+        ;# call to GetIpAddress.
+        DeleteIpAddress $portId $ipAddr -write false
+    }
+    
+    ;# Add the new IP address range.
+    eval AddIpAddress $portId $ipAddr -write false $args
+    
+    ;# Build the argument list for GetProtocolServerInfo.
+    set protServs "arpService bgpService igmpService isisService \
+                   ospfService pingService ripService rsvpService \
+                   mldService"
+    set getArgs ""
+    foreach pServ $protServs {
+        if {[set $pServ] == ""} {
+            continue
+        }
+        lappend getArgs "-$pServ ipArray($pServ)"
+    }
+    set getArgs [join $getArgs]
+
+    ;# Save the state of the protocol servers.
+    eval GetProtocolServerInfo $portId $getArgs
+
+    ;# Set the new state of the protocol servers.
+    eval SetProtocolServerInfo $portId $args
+
+    return $ipArray(ipFound)
+} ;# SaveAndSetProtocolServer
+
+
+;#################################################################
+;#
+;# RestoreSavedProtocolServer
+;#
+;# This function restores the IXIA protocol servers and IP address
+;# table to the state saved by the SaveAndSetProtocolServer
+;# function.
+;#
+;# Input variables: Variables in []'s are optional.
+;#     objName: The name of a TCL array containing information
+;#         stored by the SaveAndSetProtocolServer function.  The
+;#         key-value pairs in this array are for internal use only
+;#         and should not be modified.
+;#
+;# Output variables: Variables in []'s are optional.
+;#
+;# Return value: None.
+;#
+;# Typical usage:
+;#     set txPort 3
+;#     set ipAddr "10.30.1.1"
+;#     set gwIpAddr "10.30.1.2"
+;#     SaveAndSetProtocolServer $txPort $ipAddr $gwIpAddr ixInfo \
+;#                              -arpService true \
+;#                              -pingService true \
+;#                              -macAddr "00:A1:F1:00:00:01"
+;#     ...
+;#     RestoreSavedProtocolServer ixInfo
+;#
+;# Category: SetupTestTool
+;#
+;#################################################################
+proc RestoreSavedProtocolServer objName {
+    ;# Validate the parameters.
+    if {$objName == ""} {
+        error "RestoreSavedProtocolServer: Invalid array name, \"$objName\" specified."
+    }
+    upvar $objName ipArray
+
+   global TrafficGen
+   switch -exact -- $TrafficGen {
+      agilent {
+         result_warning "Procedure 'RestoreSavedProtocolServer' is not valid on AGILENT N2X system, aborting..."
+         return 0
+      }
+      stc {
+         result_debug "Procedure 'RestoreSavedProtocolServer' is not valid on Spirent"
+         return 0
+      }
+      ixia {
+      }
+      ept {
+      }
+      default {
+      }
+   }
+   
+    set portId $ipArray(portId)
+
+    ;# Delete the IP address range created by SaveAndSetProtocolServer.
+    DeleteIpAddress $portId $ipArray(ipAddr) -write false
+
+    ;# Restore the original IP address table item, if necessary.
+    if {$ipArray(ipFound)} {
+        AddIpAddress $portId $ipArray(ipAddr) -objName ipArray -write false
+    }
+    
+    ;# Restore the gateway IP address.
+    SetGwIpAddr $portId $ipArray(tableGwIpAddr) -write false
+
+    ;# Build the argument list for SetProtocolServerInfo.
+    set protServs "arpService bgpService igmpService isisService \
+                   ospfService pingService ripService rsvpService"
+    set setArgs ""
+    foreach pServ $protServs {
+        if {![info exists ipArray($pServ)]} {
+            continue
+        }
+        lappend setArgs "-$pServ $ipArray($pServ)"
+    }
+    set setArgs [join $setArgs]
+
+    ;# Restore the previous state of the protocol servers.
+    eval SetProtocolServerInfo $portId $setArgs
+} ;# RestoreSavedProtocolServer
+
+
+

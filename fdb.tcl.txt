@@ -1,0 +1,733 @@
+
+##################################################################
+# Procedure Name: Fdb_noData_check_and_analyze  
+# Description:
+#	Check fdb table and do analysis
+#	Make sure all the expected entries are in fdb
+#	This procedure should be the first one to call for fdb checking
+#
+# Input args: {ipAddr} {fd_res} {testNo} {fd_in}
+#	ipAddr is the $DUTx_CONNECT
+#	fd_in is the file containing the expected data o check
+#
+# Output args: None
+# returns "ok" if success "error" if failure
+# Typical usage:
+#	set result [Fdb_noData_check_and_analyze $DUT1_CONNECT $fd_res $testNo $fd_in]
+# Category: VerifySwitchOutput
+##################################################################
+
+proc Fdb_data_check_and_analyze {ipAddr fd_res testNo realDataFile} {
+   # global variables init
+   global spawn_id
+
+   Login $ipAddr
+   result_debug "Fdb_data_check_and_analyze, spawn_id=$spawn_id"
+
+   set totalFdbEntry 100
+   set totalExpDataEntry 200		   
+   set overflow 0
+
+   for {set f 1} {$f <= 7} {incr f 1} {
+      set fdb(1,$f) 5
+   }
+   for {set r 1} {$r <= 3} {incr r 1} {
+      set expData(1,$r) 5
+   }
+
+   # check fdb and analyze data
+   set fd_in [open "Tmp/tmp_$testNo[pid]" "w"]
+   SendACmd "show fdb" $fd_res $fd_in
+   close $fd_in
+
+   set fd_in [open "Tmp/tmp_$testNo[pid]" "r"]
+   Fdb_2_2_Array $fd_in
+   close $fd_in
+
+   set fd_exp [open "[GetExpDir]/$realDataFile" "r"]
+   Exp_entry_mac_vlan_port_info $fd_exp
+   close $fd_exp
+
+   set fd_in [open "Tmp/tmp_$testNo[pid]" "r"]
+   Fdb_overflow $fd_in	$fd_res
+   close $fd_in
+   file delete "Tmp/tmp_$testNo[pid]"
+
+   set result [Fdb_check_expData $fd_res]
+   logout
+	 return $result
+}
+
+
+##################################################################
+# Procedure Name: Fdb_noData_check_and_analyze  
+# Description:
+#	Check fdb table and do analysis
+#	Make sure all the unexpected entries are NOT in fdb
+#	This procedure should be the first one to call for fdb checking
+#
+# Input args: {ipAddr} {fd_res} {testNo} {fd_in}
+#	ipAddr is the $DUTx_CONNECT
+#	fd_in is the file containing the unexpected data o check
+#
+# Output args: None
+# returns "ok" if success "error" if failure
+# Typical usage:
+#	set result [Fdb_noData_check_and_analyze $DUT1_CONNECT $fd_res $testNo $fd_in]
+# Category: VerifySwitchOutput
+##################################################################
+
+proc Fdb_noData_check_and_analyze {ipAddr fd_res testNo realDataFile} {
+   # global variables init
+   global spawn_id
+
+   Login $ipAddr
+   result_debug "Fdb_data_check_and_analyze, spawn_id=$spawn_id"
+
+   set totalFdbEntry 100
+   set totalExpNoDataEntry 10
+   set overflow 0
+
+   for {set f 1} {$f <= 7} {incr f 1} {
+      set fdb(1,$f) 5
+   }
+   for {set r 1} {$r <= 3} {incr r 1} {
+      set expNoData(1,$r) 5
+   }
+
+   # check fdb and analyze data
+   set fd_in [open "Tmp/tmp_$testNo[pid]" "w"]
+   SendACmd "show fdb" $fd_res $fd_in
+   close $fd_in
+
+   set fd_in [open "Tmp/tmp_$testNo[pid]" "r"]
+   Fdb_2_2_Array $fd_in
+   close $fd_in
+
+   set fd_expNo [open "[GetExpDir]/$realDataFile" "r"]
+   Exp_noEntry_mac_vlan_port_info $fd_expNo
+   close $fd_expNo
+
+   set fd_in [open "Tmp/tmp_$testNo[pid]" "r"]
+   Fdb_overflow $fd_in	$fd_res
+   close $fd_in
+   file delete "Tmp/tmp_$testNo[pid]"
+
+   set result [Fdb_check_expNoData $fd_res]
+   logout
+	 return $result
+}
+
+
+##################################################################
+# Procedure Name: Fdb_check_aging_out  
+# Description:
+#	Check fdb table to make sure all the dynamic entries
+#	are all aging out
+#
+# Input args: {ipAddr} {fd_res} {testNo}
+#	ipAddr is the $DUTx_CONNECT
+#
+# Output args: None
+# returns "ok" if success "error" if failure
+# Typical usage:
+#	set result [Fdb_check_aging_out $DUT1_CONNECT $fd_res $testNo]
+# Category: VerifySwitchOutput
+##################################################################
+
+proc Fdb_check_aging_out {ipAddr fd_res testNo} {
+   # global variables init
+   global spawn_id
+
+   Login $ipAddr
+   result_debug "Fdb_check_aging_out, spawn_id=$spawn_id"
+
+   set totalFdbEntry 100
+   set totalExpDataEntry 200
+   set overflow 0
+
+   for {set f 1} {$f <= 7} {incr f 1} {
+      set fdb(1,$f) 5
+   }
+   for {set r 1} {$r <= 3} {incr r 1} {
+      set expData(1,$r) 5
+   }
+
+   # check fdb and analyze data
+   set fd_in [open "Tmp/tmp_$testNo[pid]" "w"]
+   SendACmd "show fdb" $fd_res $fd_in
+   close $fd_in
+
+   set fd_in [open "Tmp/tmp_$testNo[pid]" "r"]
+   Fdb_2_2_Array $fd_in
+   close $fd_in
+
+   set fd_in [open "Tmp/tmp_$testNo[pid]" "r"]
+   Fdb_overflow $fd_in	$fd_res
+   close $fd_in
+   file delete "Tmp/tmp_$testNo[pid]"
+
+   set __res [Fdb_check_all_aging_out $fd_res]
+   logout
+
+	 return $__res
+}
+
+
+##################################################################
+# Procedure Name: Fdb_2_2_Array
+#	Break a "show fdb" data into a 2x2 array fdb(N,M) and 
+#	find the overflow info.
+#	fdb array, overflow and totalFdbEntry variables are all global
+#
+# Input args: {fd_in}
+#	fd_in is the file containing the "show fdb" data
+# Output args:
+#	fdb array, overflow and totalFdbEntry variables
+# Typical usage:
+#        Fdb_2_2_Array $fd_in
+# Category: 
+######################################################################
+
+proc Fdb_2_2_Array {fd} {
+   # Get the current FDB data
+   global fdb
+   global overflow
+   global totalFdbEntry
+   global spawn_id
+
+   set fdbCount 0
+                             ;# no. of fdb entries
+   while {[gets $fd rawLine] != -1} {         ;# get a line
+      set cookedLine [cookString $rawLine]
+#      result_debug "----- rawLine=$rawLine"
+#	   result_debug "----- cookedLine=$cookedLine"
+      set aList [split $cookedLine] 
+				             ;# n spaces are counted as
+                                           ;#    n elements
+      set lineLength [llength $aList]
+      set firstCol [lindex $aList 0]
+      set lastCol  [lindex $aList [expr $lineLength-1]]
+
+      if { [regexp {([0-9a-fA-F]+)-([0-9a-fA-F]+)} $firstCol] } {
+                                           ;# If the first element is
+                                           ;#    an index, it's a fdb entry
+         set fdbCount [expr $fdbCount+1]
+         set elementCount 0                ;# no. of elements in an entry.
+                                           ;#    should be 7 (ports are
+                                           ;#    treated as 1 element
+
+         for {set i 0} {$i <= 1} {incr i 1} {
+            set tmp [lindex $aList $i]
+            set elementCount [expr $i+1]
+            set fdb($fdbCount,$elementCount) $tmp
+#            result_debug "======== fdb(  $fdbCount, $elementCount ) = $tmp"
+         }
+         set tmp [lindex $aList 2]	;# for vlan
+		 set tmpLength [string length $tmp]
+		 set vlanLength  [expr $tmpLength - 7]
+		 set vlanName [string range $tmp 0 $vlanLength]
+         set elementCount [expr $i+1]
+         set fdb($fdbCount,$elementCount) $vlanName
+
+         for {set i 3} {$i <= 5} {incr i 1} {
+            set tmp [lindex $aList $i]
+            set elementCount [expr $i+1]
+            set fdb($fdbCount,$elementCount) $tmp
+#            result_debug "======== fdb(  $fdbCount, $elementCount ) = $tmp"
+         }
+
+         set fdb($fdbCount,7) [lrange $aList 6 end] ;# for fdbN(7): ports
+         set tmp [lrange $aList 6 end]
+#         result_debug "======== fdb(  $fdbCount, 7 ) = $tmp"
+      } elseif {[string tolower $firstCol] == "total:"} {   ;# to find the overflow info.
+         set overflow $lastCol
+#         result_debug "============= overflow=$overflow|"
+      }
+   }
+   set totalFdbEntry $fdbCount
+}
+
+
+##################################################################
+# Procedure Name: Decode_ports_string 
+# Description:
+#	To break a ports string into an array of ports
+#	put the data to expData array, and set up totalExpDataEntry
+#	variable
+#
+# Input args: {entry} {fd}
+#
+# Output args: {portArray}
+#
+# Typical usage:
+#        Decode_ports_string $real_ports rArray $fd
+# Category: 
+######################################################################
+
+proc Decode_ports_string {entry portArray fd} {
+   global spawn_id
+   upvar $portArray port
+   set aList [split $entry \ ,]
+   set numPorts [llength $aList]           ;# total no. of ports
+#puts "numPorts: $numPorts entry: $entry aList: $aList"
+   for {set i 0} {$i < $numPorts} {incr i 1} {
+      set tmp [lindex $aList $i]
+#    result_debug "*** tmp=$tmp|"
+	  if {$tmp != ""} {
+	     if {$tmp != "{}"} {
+            set count [expr $i+1]
+            set port($count) $tmp
+#            result_debug "*** port ($count)=$tmp"
+         }
+      }
+   }
+}
+
+
+##################################################################
+# Procedure Name: Exp_entry_mac_vlan_port_info 
+# Description:
+#	Read the expected config data from file descriptor fd
+#	put the data to expData array, and set up totalExpDataEntry
+#	variable
+#
+# Input args: {fd}
+#
+# Output args: None
+#
+# Typical usage:
+#	global expData totalExpNoDataEntry
+#       Exp_entry_mac_vlan_port_info $fd_in
+# Category: VerifySwitchOutput
+######################################################################
+
+proc Exp_entry_mac_vlan_port_info {fd} {
+   global spawn_id
+   global expData
+   global totalExpDataEntry
+   set count 0
+   while {[gets $fd line] != -1} {
+      if { $line != "" } {
+         set count [expr $count+1]
+         set aList [split $line]
+         set expData($count,1) [lindex $aList 0]      ;# mac
+         set expData($count,2) [lindex $aList 1]      ;# vlan
+         set expData($count,3) [lrange $aList 2 end]  ;# ports
+      }
+   }
+   set totalExpDataEntry $count
+}
+
+
+##################################################################
+# Procedure Name: Exp_noEntry_mac_vlan_port_info 
+# Description:
+#	Read the unexpected config data from file descriptor fd,
+#	put the data to expNoData array, and set up totalExpNoDataEntry
+#	variable
+#
+# Input args: {fd}
+#
+# Output args: None
+#
+# Typical usage:
+#	global expNoData totalExpNoDataEntry
+#       Exp_noEntry_mac_vlan_port_info $fd_in
+# Category: VerifySwitchOutput
+######################################################################
+
+proc Exp_noEntry_mac_vlan_port_info {fd} {
+   global spawn_id
+   global expNoData
+   global totalExpNoDataEntry
+   set count 0
+   while {[gets $fd line] != -1} {
+      if { $line != "" } {
+         set count [expr $count+1]
+         set aList [split $line]
+         set expNoData($count,1) [lindex $aList 0]      ;# mac
+         set expNoData($count,2) [lindex $aList 1]      ;# vlan
+         set expNoData($count,3) [lrange $aList 2 end]  ;# ports
+      }
+   }
+   set totalExpNoDataEntry $count
+}
+
+
+##################################################################
+# Procedure Name: Fdb_overflow  
+# Description:
+#	To find the overflow info.  return # of packets dropped
+#
+# Input args: {fd_in} {fd_res}
+#	fd_in is the file contains the "show fdb ..." output
+# Output args: None
+# returns # of packets dropped
+# Typical usage:
+#	global overflow
+#       Fdb_overflow $fd_in $fd_res
+# Category: VerifySwitchOutput
+##################################################################
+
+proc Fdb_overflow {fd_in fd_res} {
+   global spawn_id
+   while {[gets $fd_in line] != -1} {         ;# get a line
+      set aList [split [string tolower $line]]              ;# n spaces are counted as
+     # set aList [split $line]              ;# n spaces are counted as
+                                           ;#    n elements
+      if {[lindex $aList 0] == "total:"} { ;# to find the overflow info.
+         global overflow
+         set overflow [lindex $aList end]
+         result_debug "overflow=$overflow"
+         return overflow
+      }
+   }
+}
+
+
+##################################################################
+# Procedure Name: Fdb_check_expData   
+# Description:
+#	Check if there is any expected fdb entry missing
+#
+# Input args: {fd}
+#
+# Output args: None
+# returns "ok" if all expected data presented, 
+#         "error" if there is any expected data missing
+# Typical usage:
+#	set result [Fdb_check_expData $fd_res]
+# Category: VerifySwitchOutput
+##################################################################  
+
+proc Fdb_check_expData {fd} {
+   global spawn_id
+   global totalExpDataEntry
+   global totalFdbEntry
+   global fdb
+   global expData
+   set result "ok"
+   for {set r 1} {$r <= $totalExpDataEntry} {incr r 1} {     ;# expData
+      set tmp_result "error"
+      for {set f 1} {$f <= $totalFdbEntry} {incr f 1} {	      ;# fdb
+#		  result_debug "--- fdb($f)=$fdb(${f},1) $fdb(${f},2) $fdb(${f},3)"
+#         result_debug "---    $fdb(${f},4) $fdb(${f},5) $fdb(${f},6) $fdb(${f},7)"
+	     if {$fdb(${f},5) == {d}} {				              ;# dynamic entry
+		    if {$fdb(${f},2) == $expData(${r},1)} {          ;# mac
+			   if {$fdb(${f},3) == $expData(${r},2)} {       ;# vlan
+			      if {[Ports_check $fdb(${f},7) $expData(${r},3) $fd] == "ok"} { ;# ports
+				     set tmp_result "ok"
+					 break
+				  }
+			   }
+			}
+		 }
+	  }
+      if { $tmp_result == "error" } {
+         set result "error"
+	    result_error "$expData(${r},1), $expData(${r},2), $expData(${r},3) mssing"
+      }
+   }
+   report_start_test "Check fdb expected data"
+   if {$result == "ok"} {
+      result_ok "Check fdb expected data passed"
+   } else {
+	  result_error "Check fdb expected data failed"
+   }
+   report_end_test
+   return $result
+}
+
+
+##################################################################
+# Procedure Name: Fdb_check_expNoData   
+# Description:
+#	Check if there is any unexpected fdb entry appearing
+#
+# Input args: {fd}
+#
+# Output args: None
+# returns "ok" if no unexpected data, 
+#         "error" if there is any unexpected data
+# Typical usage:
+#	set result [Fdb_check_expNoData $fd_res]
+# Category: VerifySwitchOutput
+##################################################################  
+
+proc Fdb_check_expNoData {fd} {
+   global spawn_id
+   global totalExpNoDataEntry
+   global totalFdbEntry
+   global fdb
+   global expNoData
+   set result "ok"
+   for {set r 1} {$r <= $totalExpNoDataEntry} {incr r 1} {     ;# expData
+      set tmp_result "ok"
+      for {set f 1} {$f <= $totalFdbEntry} {incr f 1} {	      ;# fdb
+#			result_debug "--- fdb($f)=$fdb(${f},1) $fdb(${f},2) $fdb(${f},3)"
+#			result_debug "---    $fdb(${f},4) $fdb(${f},5) $fdb(${f},6) $fdb(${f},7)"
+	     if {$fdb(${f},5) == {d}} {				              ;# dynamic entry
+		    if {$fdb(${f},2) == $expNoData(${r},1)} {          ;# mac
+			   if {$fdb(${f},3) == $expNoData(${r},2)} {       ;# vlan
+			      if {[Ports_check $fdb(${f},7) $expNoData(${r},3) $fd] == "ok"} { ;# ports
+				     set tmp_result "error"
+					 break
+				  }
+			   }
+			}
+		 }
+	  }
+      if { $tmp_result == "error" } {
+         set result "error"
+	     result_error "$expNoData(${r},1), $expNoData(${r},2), $expNoData(${r},3) appearing"
+      }
+   }
+   report_start_test "Check fdb unexpected data"
+   if {$result == "ok"} {
+      result_ok "Check fdb unexpected data passed"
+   } else {
+	  result_error "Check fdb unexpected data failed"
+   }
+   report_end_test
+   return $result
+}
+
+
+##################################################################
+# Procedure Name: Fdb_check_all_aging_out  
+# Description:
+#	Check if all dynamic entries in FDB all aging out
+#
+# Input args: {fd}
+#
+# Output args: None
+# returns "ok" if success "error" if failure
+# Typical usage:
+#	set result [Fdb_check_all_aging_out $fd_res]
+# Category: VerifySwitchOutput
+##################################################################
+
+proc Fdb_check_all_aging_out {fd} {
+   global spawn_id
+   global totalExpNoDataEntry
+   global totalFdbEntry
+   global fdb
+   global expNoData
+   set result "ok"
+   global switchPort2DefaultRouter
+   set ignorePort [GetDUTPort $switchPort2DefaultRouter]
+   result_debug "Ignore Port: $ignorePort"
+   for {set f 1} {$f <= $totalFdbEntry} {incr f 1} {	      ;# fdb
+      set tmp_result "ok"
+      if {$fdb(${f},5) == {d}} {  ;# dynamic entry
+#         result_debug "----------------- fdb(${f},7) = $fdb(${f},7)\n"
+         if {[Ports_check $fdb(${f},7) $ignorePort $fd] != "ok"} { ;# ports
+         set tmp_result "error"
+				 result_error "not aging out -- $fdb(${f},2) $fdb(${f},3) $fdb(${f},5) $fdb(${f},7)"
+         }
+      }
+      if { $tmp_result == "error" } {
+         set result "error"
+      }
+   }
+
+   report_start_test "Check fdb aging out"
+   if {$result == "ok"} {
+      result_ok "Fdb all aging out properly"
+   } else {
+	  result_error "Fdb failed to age out properly"
+   }
+   report_end_test
+   return $result
+}
+
+
+##################################################################
+# Procedure Name: Ports_check   
+# Description:
+#	For a fdb entry, check if there is any port missing
+#
+# Input args: {fdb_ports} {real_ports} {fd}
+#
+# Output args: None
+# returns "ok" if no port missing, "error" if any port missing
+# Typical usage:
+#	set result [check_fdb_learn $portNo $conf $fd_res $testNo]
+# Category: VerifySwitchOutput
+##################################################################  
+
+proc Ports_check {fdb_ports real_ports fd} {
+   global spawn_id
+#   result_debug "-------- real_ports=$real_ports"
+#	 result_debug "-------- fdb_ports=$fdb_ports"
+
+   set result "ok"
+   Decode_ports_string $real_ports rArray $fd	    ;# real ports
+   Decode_ports_string $fdb_ports fArray $fd	    ;# fdb ports
+   set rSize [array size rArray]
+   set fSize [array size fArray]
+
+   for {set r 1} {$r <= $rSize} {incr r 1} {    ;# real port array
+      set tmp_result "error"
+      for {set f 1} {$f <= $fSize} {incr f 1} {	;# fdb port array
+         if { $rArray($r) == $fArray($f) } {
+            set tmp_result "ok"
+            break
+         }
+      }
+      if { $tmp_result == "error" } {
+	     set result "error"
+         result_error "port $rArray($r) is missing"
+      }
+   }
+   return $result
+}
+
+
+##################################################################
+# Procedure Name: check_fdb_learn   
+# Description:
+# 	Send "show port xxx info" and analyze the returned data
+#
+# Input args: {portNo} {conf} {fd} {testNo}
+#	conf can be either enable or disable
+# Output args: None
+#
+# Typical usage:
+#	check_fdb_learn $portNo $conf $fd_res $testNo
+# Category: VerifySwitchOutput
+##################################################################  
+
+proc check_fdb_learn {portNo conf fd testNo}  {
+   global spawn_id
+   global VERSION
+
+   set fd_conf [open "Tmp/conf_$testNo[pid]" "w"]
+   switch $VERSION {
+      6 { SendACmd "show port $portNo info de" $fd $fd_conf	}
+	  default { SendACmd "show port $portNo info" $fd $fd_conf }
+   }
+   close $fd_conf
+
+   set fd_conf [open "Tmp/conf_$testNo[pid]" "r"]
+   set result [check_fdb_learn_conf $fd $fd_conf]
+   close $fd_conf
+   file delete "Tmp/tmp_$testNo[pid]"
+
+   report_start_test "Check MAC learning"
+   if {$result == $conf} {
+      result_ok "Check MAC Learning passed"
+   } else {
+      result_error "Check MAC Learning failed"
+   }
+   report_end_test
+}
+
+
+##################################################################
+# Procedure Name: check_fdb_learn_conf    
+# Description:
+# 	Check "MAC Learning" from "show port xxx info" output that has
+#		been saved in a file
+#
+# Input args: {fd} {fd_conf}
+#	fd_conf is the file that already contains the output from
+#		"show port xxx info"
+# Output args: None
+# Retuen enable, disable or error
+# Typical usage:
+#	   set result [check_fdb_learn_conf $fd $fd_conf]
+# Category: VerifySwitchOutput
+##################################################################  
+
+proc check_fdb_learn_conf {fd_res fd_conf} {
+   global spawn_id
+   global VERSION
+
+   while {[gets $fd_conf rawLine] != -1} {         ;# get a line
+      set cookedLine [string trimleft [string tolower $rawLine] " \t"]
+
+      switch $VERSION {
+         6 { set target "learning:"
+             set index1 8
+             set index2 10	}
+	     default { set target "mac learning:"
+	         set index1 12
+	         set index2 14  }
+      }
+	  set keyWord [string range $cookedLine 0 $index1\t]
+puts "keyWord=$keyWord"
+puts "target=$target"
+
+	  if {$keyWord == $target} {
+	     set conf [string range $cookedLine $index2 end]
+	     result_debug "--- MAC Learning is ${conf}"
+	     return $conf
+	  }
+   }
+   result_error "Can't find MAC Learning info in show port info"
+   return error
+}
+
+
+##################################################################
+# Procedure Name: CheckFdb    
+# Description:
+#     	This proc is a wrapper function of 
+#		CheckKeyValue "show fdb" $parameterList.
+#	Check fdb table, by passing in a list instead of a file
+#
+# Input args: {checkMACList} {fd} {testNo}
+#	checkMACList is a list of mac, vlan, and ports
+# Output args: None
+# returns "ok" if success "error" if failure
+# Typical usage:
+#	set returnFlag [CheckFdb $checkMACList $fd_res $testNo]
+# Category: VerifySwitchOutput
+##################################################################  
+
+proc CheckFdb {checkMACList fd_res testNo} {
+   global DUTs_info whichDutNow pioneerPlatform
+   foreach checkMAC $checkMACList {
+      set mac  [lindex $checkMAC 0]       ;# mac
+      set vlan [lindex $checkMAC 1]       ;# vlan
+      set port [lindex $checkMAC 2]       ;# ports
+      set wantResult [lindex $checkMAC 3]
+      if {$wantResult == "notExist"} {
+         lappend parameterList "{$mac .*$vlan.* d .* $port} $wantResult"
+      } else {
+         lappend parameterList "{$mac .*$vlan.*d.*m} $port"
+      }
+   }
+   if {[regexp -nocase $pioneerPlatform $DUTs_info(DUT$whichDutNow,platform)]} {
+        set retValue [CheckKeyValue "show fdb" $parameterList -reportResults "0" -showError "false"]
+   } else {
+        set retValue [CheckKeyValue "show fdb" $parameterList]
+   }
+   if { $retValue == "ok" } {
+       return $retValue
+   } elseif {[regexp -nocase $pioneerPlatform $DUTs_info(DUT$whichDutNow,platform)]} {
+       set retValue "ok"
+       set fdbCheck "ok"
+       foreach checkMAC $checkMACList {
+            set mac  [lindex $checkMAC 0]       ;# mac
+            set vlan [lindex $checkMAC 1]       ;# vlan
+            set port [lindex $checkMAC 2]       ;# ports
+            set wantResult [lindex $checkMAC 3]
+            set parameterList ""
+            if {$wantResult == "notExist"} {
+                 lappend parameterList "{$mac.*$vlan.*$port} $wantResult"
+            } else {
+                  lappend parameterList "{$mac.*$vlan.*$port} exist"
+            }
+            set retValue [CheckKeyValue "show fdb hardware $mac $vlan slot all" $parameterList]
+            if { $retValue != "ok" } {
+              set fdbCheck "error"
+            }
+      }
+      return $fdbCheck
+   } else {
+       return $retValue 
+   }
+}

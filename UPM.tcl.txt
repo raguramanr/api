@@ -1,0 +1,245 @@
+
+proc CreateUpmProfile {args} {
+
+parse_args CreateUpmProfile  $args {
+profileName ""
+profile ""
+}
+
+set cmd "create upm profile $profileName"
+set rtValue 0
+result_debug "--- Send $cmd"
+send "$cmd\r"
+
+expect {
+    -re "Name cannot be a reserved keyword" {
+     result_debug "Profile Name cannot be a reserved keyword"
+     set rtValue 5
+     }  	
+     -re "Name cannot exceed 32 characters" {
+      result_debug "Profile Name \"$profileName\" exceed 32 characters"
+     set rtValue 4
+     }
+     -re "already in use" {
+     set rtValue 3
+     }
+     -re "Name must start with an alphabetical character" {
+     result_debug "Profile Name must start with an alphabetical character"
+     set rtValue 2
+     }
+
+    -re "block mode capability" {
+     if {$profile != ""} {
+     result_debug "--- Send data for the upm profile $profileName"
+     send "$profile\r"
+      }
+         exp_send ".\r"	
+	 expect {
+	    -re "Reached system limit of 128 profiles" {
+	        set rtValue 7
+                result_debug "Reached system limit of 128 profiles"
+		         }
+
+	    -re ".*\[#>]" {
+	       set profileStatus 1
+               set rtValue 1
+               result_debug "succesfully created upm profile"
+                          }
+                          
+
+               }
+     }         
+}
+if {$rtValue == 1} {
+result_debug "Successfully created UPM profile \"$profileName\" "
+} else {
+result_debug "UPM profile  \"$profileName\" not created Successfully"
+}
+return $rtValue
+}
+    	
+##################################################################
+# Procedure Name: CheckCreateUpmProfileIllegal
+#
+# Description: Sets result ok if create upm profile failed
+#
+# Input args:
+#               -profileName  name of the profile
+#               -profile      the profile
+# Output args:
+#               None
+#
+# Typical usage:
+##################################################################
+
+proc CheckCreateUpmProfileIllegal {args} {
+
+parse_args CheckCreateUpmProfileIllegal  $args {
+profileName ""
+profile
+}
+
+set profileStatus ""
+set profileStatus [CreateUpmProfile -profileName $profileName -profile $profile]
+
+report_start_test "UPM profile creation should fail"
+if {$profileStatus != 1} {
+   result_ok "Create upm profile failed"
+} else {
+   result_error "Create upm profile should fail but passed"
+}
+report_end_test
+}
+
+##################################################################
+# Procedure Name: CheckCreateUpmProfileLegal
+#
+# Description: Sets result ok if create upm profile passed
+#
+# Input args:
+#               -profileName  name of the profile
+#               -profile      the profile
+# Output args:
+#               None
+#
+# Typical usage:
+##################################################################
+proc CheckCreateUpmProfileLegal {args} {
+
+parse_args CheckCreateUpmProfileLegal  $args {
+profileName ""
+profile
+}
+
+set profileStatus ""
+set profileStatus [CreateUpmProfile -profileName $profileName -profile $profile]
+
+report_start_test "UPM profile creation should pass"
+if {$profileStatus == 1} {
+   result_ok "Create upm profile passed"
+} else {
+   result_error "Create upm profile should pass but failed"
+}
+report_end_test
+}
+##################################################################
+# Procedure Name: SetupIpPhone
+#
+# Description: This proc configures the LLDP profile for connected avaya phone
+#
+# Input args:
+#               None
+# Output args:
+#               None
+#
+# Typical usage:SetupIpPhone
+##################################################################
+proc SetupIpPhone {} {
+global DUT1_CONNECT
+global DUT1_IP
+global defaultRouter
+
+global IpPhonePort
+global CallServer
+global FileServer
+global VoiceVlan
+global VoiceVlanPort
+global DataVlan
+global DataVlanPort
+global VoiceVlanTag
+global IpPhoneMac
+
+
+report_start_test "Setting up LLDP for IP Phone"
+
+
+Login $DUT1_CONNECT
+ConfigGatewayNetwork
+SendACmd "create vlan $VoiceVlan"
+SendACmd "configure $VoiceVlan tag 50"
+SendACmd "configure $VoiceVlan add ports $IpPhonePort tagged"
+SendACmd "configure $VoiceVlan add ports $VoiceVlanPort"
+SendACmd "create vlan $DataVlan"
+SendACmd "configure $DataVlan add ports $DataVlanPort"
+
+SendACmd "configure lldp transmit-interval 10"
+SendACmd "configure lldp transmit-hold 2"
+SendACmd "enable lldp ports $IpPhonePort"
+SendACmd "configure lldp port $IpPhonePort advertise vendor-specific dot1 port-vlan-id"
+SendACmd "configure lldp port $IpPhonePort advertise vendor-specific dot1 port-protocol-vlan-id"
+SendACmd "configure lldp port $IpPhonePort advertise vendor-specific dot3 mac-phy"
+SendACmd "configure lldp port $IpPhonePort advertise vendor-specific dot3 power-via-mdi"
+SendACmd "configure lldp port $IpPhonePort advertise vendor-specific dot3 link-aggregation"
+SendACmd "configure lldp port $IpPhonePort advertise vendor-specific dot3 max-frame-size"
+SendACmd "configure lldp port $IpPhonePort advertise vendor-specific avaya-extreme poe-conservation-request"
+SendACmd "configure lldp port $IpPhonePort advertise vendor-specific avaya-extreme call-server $CallServer"
+SendACmd "configure lldp port $IpPhonePort advertise vendor-specific avaya-extreme file-server $FileServer"
+SendACmd "configure lldp port $IpPhonePort advertise vendor-specific avaya-extreme dot1q-framing auto"
+
+SendACmd "enable inline-power"
+
+lappend parameterList "{$IpPhonePort.*$IpPhoneMac.*} exist"
+CheckKeyValue "show lldp neighbors" $parameterList \
+ -time {s: 10 i: 10 d: 120 f: 120 r} -comment "Checking VOIP phone detection using LLDP"
+unset parameterList
+
+
+report_end_test
+}
+##################################################################
+# Procedure Name: DeleteIpPhone
+#
+# Description: This proc unconfigures the LLDP profile
+#
+# Input args:
+#               None
+# Output args:
+#               None
+#
+# Typical usage:SetupIpPhone
+##################################################################
+proc DeleteIpPhone {} {
+global DUT1_CONNECT
+global DUT1_IP
+global defaultRouter
+
+global IpPhonePort
+global CallServer
+global FileServer
+global VoiceVlan
+global DataVlan
+global IpPhoneMac
+
+report_start_test "Deleting the LLDP setup for IP Phone"
+
+
+
+Login $DUT1_CONNECT
+SendACmd "disable inline-power"
+exSleep 10
+
+
+SendACmd "configure lldp transmit-interval 30"
+SendACmd "configure lldp transmit-hold 4"
+SendACmd "disable lldp ports $IpPhonePort"
+SendACmd "unconfigure lldp port $IpPhonePort"
+SendACmd "delete vlan $VoiceVlan"
+SendACmd "delete vlan $DataVlan"
+
+lappend parameterList "{$IpPhonePort.*$IpPhoneMac.*} notExist"
+CheckKeyValue "show lldp neighbors" $parameterList \
+ -time {s: 10 i: 10 d: 120 f: 120 r} -comment "Checking VOIP phone is un-detected"
+unset parameterList
+
+UnconfigGatewayNetwork
+
+
+
+report_end_test
+}
+
+
+ 
+ 
+
+

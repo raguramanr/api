@@ -1,0 +1,1511 @@
+
+proc CheckIsisProtocolsup { rawFrame field } {
+    set psup [string range [RemoveIsisVlanTag $rawFrame] 80 190]
+    result_debug "Protocol Supported Bit is $psup"
+    return [regexp -nocase $field $psup]
+}
+
+proc CheckIsisAreasup { rawFrame field } {
+    set asup [string range [RemoveIsisVlanTag $rawFrame] 180 230]
+    result_debug "Area Bit is $asup"
+    return [regexp -nocase $field $asup]
+}
+
+proc GetIsisPduType { rawFrame } {
+    set mFrame [RemoveIsisVlanTag $rawFrame]
+    set llcHead [string range $mFrame 42 52]
+    if { $llcHead == "FE FE 03 83" } {
+        set pduType [string range $mFrame 63 64]
+       result_debug "pdu type is $pduType"
+        switch $pduType {
+            "0F"        { return "ISIS_LEVEL1_HELLO" }  ;# 15
+            "10"        { return "ISIS_LEVEL2_HELLO" }  ;# 16
+            "12"        { return "ISIS_LEVEL1_LSP" }    ;# 18
+            "14"        { return "ISIS_LEVEL2_LSP" }    ;# 20
+            "18"        { return "ISIS_LEVEL1_CSNP" }   ;# 24
+            "19"        { return "ISIS_LEVEL2_CSNP" }   ;# 25
+            "1A"        { return "ISIS_LEVEL1_PSNP" }   ;# 26
+            "1B"        { return "ISIS_LEVEL2_PSNP" }   ;# 27
+            "11"        { return "ISIS_PTOP_HELLO" }   
+            default { return "ISIS_UNKNOWN_TYPE" }
+        }
+    } else {
+        return "NOT_ISIS_PDU"
+    }
+}
+
+proc CheckPTOPAdj { rawFrame field } {
+    set padj [string range [RemoveIsisVlanTag $rawFrame] 100 180]
+    result_debug "Area Bit is $padj"
+    return [regexp -nocase $field $padj]
+}
+
+
+##################################################################
+# Procedure Name:  setupISISRouterV6
+#
+# Description:  This proc is used to setup ixia port as an isis router for v6,v4-v6,v4 interface.
+#               It can create multiple interfaces supplied via interfaceIpList
+#
+#
+# Input args:  args
+# Output args: None.
+#
+# Typical usage:
+# setupISISRouterV6  -maskIpv6List "64" -interfaceIpv6List "3001:0:0:0:0:0:0:1" \
+#    	     -interfaceMacList "default" -areaIdList "{00 11}" \
+#            -levelList "isisLevel1" -routeOriginList "{isisRouteInternal isisRouteExternal}" \
+#            -routeMetricList "{10 10}" -numNetworksList {1 1} -prefixList "{64 64}" \
+#            -networkIpList "{3041:0:0:0:0:0:0:1 3051:0:0:0:0:0:0:0}" -txPortId 1 -ipType "v6"
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: SendTraffic
+##################################################################
+proc  setupISISRouterV6 {args} {
+    parse_args  setupISISRouterV6 $args {
+        dutIp ""
+        interfaceMacList ""
+        interfaceIpList ""
+        interfaceIpv6List ""  
+        maskIpv6List "64"
+        maskList "255.255.255.0"
+        areaIdList "0"
+        levelList "isisLevel2"
+        helloIntervalL1List "10"
+        deadIntervalL1List "30"
+        helloIntervalL2List "10"
+        deadIntervalL2List "30"
+        networkTypeList "isisBroadcast"
+        metricList "10"
+        routeOriginList ""
+        numNetworksList "0"
+        prefixList ""
+        networkIpList ""
+        routeMetricList "10"
+        routerIdList ""
+        txPortId  "1"
+        ipType "v4"
+    }
+
+    # get the port information
+    MapIxiaPortId $txPortId cha car por
+    result_debug " setupISISRouterV6: Chas: $cha Card: $car Port: $por"
+    set netIp [lindex $networkIpList 0]
+
+    ipAddressTable clear
+    ipAddressTable setDefault
+    if {[regexp {([0-9]+)\.([0-9]+)\.([0-9]+)\.([0-9]+)} $netIp]} {
+    ipAddressTable config -defaultGateway $dutIp    
+    } else {
+    ipAddressTable config -defaultGateway 0.0.0.0
+    }
+    interfaceTable select $cha $car $por
+    interfaceTable clearAllInterfaces
+
+#-----Verify the ipType and set the mask and interface details
+
+   if {[regexp -nocase "v6" $ipType]} {
+    interfaceIpV6 setDefault
+    interfaceIpV6 config -maskWidth $maskIpv6List
+    interfaceIpV6 config -ipAddress [lindex $interfaceIpv6List 0]
+    interfaceEntry addItem addressTypeIpV6
+    if {[llength $interfaceMacList] > 0} {
+        set macAddr [lindex $interfaceMacList 0]
+        if {$macAddr == "default"} {
+            if {[port get $cha $car $por]} {
+                error " setupISISRouterV6: port get $chassis $card $port failed."
+            }
+    #        set macAddr [port cget -MacAddress]
+             set macAddr [GetPortIdMac $txPortId]
+        }
+    } else {
+        set macAddr [uniqMac $cha $car $por]
+    }
+ } 
+
+if {[regexp -nocase "v4" $ipType]} {
+    interfaceIpV4 setDefault
+    interfaceIpV4 config -gatewayIpAddress $dutIp
+    interfaceIpV4 config -maskWidth 24
+    interfaceIpV4 config -ipAddress [lindex $interfaceIpList 0]
+    interfaceEntry addItem addressTypeIpV4
+    if {[llength $interfaceMacList] > 0} {
+        set macAddr [lindex $interfaceMacList 0]
+        if {$macAddr == "default"} {
+            if {[port get $cha $car $por]} {
+                error " setupISISRouterV6: port get $chassis $card $port failed."
+            }
+            set macAddr [port cget -MacAddress]
+        }
+    } else {
+        set macAddr [uniqMac $cha $car $por]
+    }
+}
+    interfaceEntry setDefault
+    interfaceEntry config -enable true
+    interfaceEntry config -description "protocol interface-$car.$por"
+    interfaceEntry config -macAddress $macAddr
+    interfaceTable addInterface
+    interfaceEntry clearAllItems addressTypeIpV6
+    interfaceEntry clearAllItems addressTypeIpV4
+
+    if {[isisServer select $cha $car $por]} {
+        error " setupISISRouterV6: isisServer select $cha $car $por failed."
+    }
+    if {[isisServer clearAllRouters]} {
+        error " setupISISRouterV6: isisServer clearAllRouters failed."
+    }
+
+    if {[regexp {([0-9]+)\.([0-9]+)\.([0-9]+)\.([0-9]+)} $netIp]} {
+    set interfaceIpList $interfaceIpList
+    } else {
+    set interfaceIpList $interfaceIpv6List
+   }
+
+    set routerId $macAddr
+
+    for {set i 0} {$i<[llength $interfaceIpList]} {incr i} {
+        result_debug "\nset up interfaces..."
+        set interfaceId $macAddr
+        result_debug "interfaceId: $interfaceId"
+        incrx macAddr 5 1
+        result_debug "macAddr: $macAddr"
+        set interfaceIp [lindex $interfaceIpList $i]
+        result_debug "interfaceIp: $interfaceIp"
+        result_debug "interfaceipv6 : $interfaceIpv6List"
+        result_debug "maskIpv6 : $maskIpv6List"
+        if {[llength $maskList] > 1} {
+            set mask [lindex $maskList $i]
+        } else {
+            set mask [lindex $maskList 0]
+        }
+        result_debug "mask: $mask"
+        if {[llength $areaIdList] > 1} {
+            set areaId [lindex $areaIdList $i]
+        } else {
+            set areaId [lindex $areaIdList 0]
+        }
+        result_debug "areaId: $areaId"
+        if {[llength $levelList] > 1} {
+            set level [lindex $levelList $i]
+        } else {
+            set level [lindex $levelList 0]
+        }
+        result_debug "level: $level"
+        if {[llength $helloIntervalL1List] > 1} {
+            set helloIntervalL1 [lindex $helloIntervalL1List $i]
+        } else {
+            set helloIntervalL1 [lindex $helloIntervalL1List 0]
+        }
+        result_debug "helloIntervalL1: $helloIntervalL1"
+        if {[llength $deadIntervalL1List] > 1} {
+            set deadIntervalL1 [lindex $deadIntervalL1List $i]
+        } else {
+            set deadIntervalL1 [lindex $deadIntervalL1List 0]
+        }
+        result_debug "deadIntervalL1: $deadIntervalL1"
+        if {[llength $helloIntervalL2List] > 1} {
+            set helloIntervalL2 [lindex $helloIntervalL2List $i]
+        } else {
+            set helloIntervalL2 [lindex $helloIntervalL2List 0]
+        }
+        result_debug "helloIntervalL2: $helloIntervalL2"
+        if {[llength $deadIntervalL2List] > 1} {
+            set deadIntervalL2 [lindex $deadIntervalL2List $i]
+        } else {
+            set deadIntervalL2 [lindex $deadIntervalL2List 0]
+        }
+        result_debug "deadIntervalL2: $deadIntervalL2"
+         if {[llength $networkTypeList] > 1} {
+            set networkType [lindex $networkTypeList $i]
+        } else {
+            set networkType [lindex $networkTypeList 0]
+        }
+        result_debug "neworkType: $networkType"
+        if {[llength $metricList] > 1} {
+            set metric [lindex $metricList $i]
+        } else {
+            set metric [lindex $metricList 0]
+        }
+        result_debug "metric: $metric"
+        if {[llength $numNetworksList] > 1} {
+            set numNetworks [lindex $numNetworksList $i]
+        } else {
+            set numNetworks [lindex $numNetworksList 0]
+        }
+        result_debug "numNetworks: $numNetworks"
+        if {[llength $prefixList] > 1} {
+            set prefix [lindex $prefixList $i]
+        } else {
+            set prefix [lindex $prefixList 0]
+        }
+        result_debug "prefix: $prefix"
+        if {[llength $networkIpList] > 1} {
+            set networkIp [lindex $networkIpList $i]
+        } else {
+            set networkIp [lindex $networkIpList 0]
+        }
+        result_debug "networkIp: $networkIp"
+        if {[llength $routeOriginList] > 1} {
+            set routeOrigin [lindex $routeOriginList $i]
+        } else {
+            set routeOrigin [lindex $routeOriginList 0]
+        }
+        result_debug "routeOrigin: $routeOrigin"
+        if {[llength $routeMetricList] > 1} {
+            set routeMetric [lindex $routeMetricList $i]
+        } else {
+            set routeMetric [lindex $routeMetricList 0]
+        }
+        result_debug "routeMetric: $routeMetric"
+        if {[llength $routerIdList] > 1} {
+            set routerId [lindex $routerIdList $i]
+        } else {
+            set routerId [lindex $routerIdList 0]
+        }
+        if {[string length $routerId] == 0} {
+            set routerId $interfaceId
+        }
+        result_debug "routeId: $routerId"
+        set routerLocalId [expr ($i + 1)]
+        result_debug "routerLocaId: $routerLocalId"
+        set returnCode [extrMakeIsisRouterV6 -interfaceId "$interfaceId" \
+                                           -interfaceIp "$interfaceIp" \
+                                           -ipMask "$mask" \
+                                           -areaId "$areaId" \
+                                           -level $level \
+                                           -helloIntervalL1 $helloIntervalL1 \
+                                           -deadIntervalL1 $deadIntervalL1 \
+                                           -helloIntervalL2 $helloIntervalL2 \
+                                           -deadIntervalL2 $deadIntervalL2 \
+                                           -networkType $networkType \
+                                           -metric $metric \
+                                           -routeOrigin $routeOrigin\
+                                           -numNetworks $numNetworks \
+                                           -prefix $prefix \
+                                           -networkIp "$networkIp" \
+                                           -routeMetric $routeMetric \
+                                           -routerId "$routerId" \
+                                           -routerLocalId $routerLocalId \
+                                           -txPortId $txPortId -ipType $ipType \
+                                           -interfaceIpv6List $interfaceIpv6List -maskIpv6List $maskIpv6List]
+
+        if {$returnCode==-1} {
+            return -1
+        }
+    }
+
+    protocolServer setDefault
+    protocolServer config -enableArpResponse true
+    protocolServer config -enablePingResponse true
+    protocolServer config -enableIsisService true
+    if {[protocolServer set $cha $car $por]} {
+        error " setupISISRouterV6: protocolServer set $cha $car $por failed."
+    }
+
+    set portList [list [list $cha $car $por]]
+    result_debug "Writing Configuration to Hardware..."
+    if {[ixWriteConfigToHardware portList]} {
+        result_debug "Error writing config to hardware"
+    }
+} ;#  setupISISRouterV6
+
+
+##################################################################
+# Procedure Name: extrMakeIsisRouterV6
+#
+# Description: This internal proc is used to setup test equipment port for isis configuration
+#              This is called within from  setupISISRouterV6.
+#
+#
+# Input args:  args
+# Output args: None.
+#
+# Typical usage:
+#      set returnCode [extrMakeIsisRouterV6 -interfaceIp $interfaceIp -ipMask $mask -areaId $areaId \
+#          -helloInterval $helloInterval -deadInterval $deadInterval \
+#          -networkType $networkType -metric $metric -numNetworks $numNetworks \
+#          -prefix $prefix -networkIp $networkIp -routerId $routerId -txPortId $txPortId]
+#
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: SendTraffic
+##################################################################
+proc extrMakeIsisRouterV6 {args} {
+    parse_args extrMakeIsisRouterV6 $args {
+        interfaceId ""
+        interfaceIp ""
+        ipMask ""
+        areaId ""
+        interfaceIpv6List ""
+        maskIpv6List ""
+        level "isisLevel2"
+        helloIntervalL1 10
+        deadIntervalL1 30
+        helloIntervalL2 10
+        deadIntervalL2 30
+        networkType "isisBroadcast"
+        metric 10
+        routeMetric 10
+        routeOrigin ""
+        numNetworks 0
+        prefix ""
+        networkIp ""
+        routerId ""
+        routerLocalId "1"
+        txPortId  "1"
+        ipType "v4"
+    }
+
+    # get the port information
+    MapIxiaPortId $txPortId cha car por
+    result_debug "extrMakeIsisRouterV6: Chas: $cha Card: $car Port: $por"
+
+    result_debug "inside extrMakeIsisRouterV6"
+    result_debug "interfaceId: $interfaceId"
+    result_debug "areaId: $areaId"
+    result_debug "level: $level"
+    result_debug "prefix: $prefix"
+    result_debug "networkIp: $networkIp"
+    result_debug "routerId: $routerId"
+    result_debug "routeOrigin: $routeOrigin"
+    result_debug "ipType: $ipType"
+    isisRouter setDefault
+    isisRouter clearAllInterfaces
+    isisRouter clearAllRouteRanges
+    isisRouter config -enable true
+    isisRouter config -routerId $routerId
+    isisRouter config -areaAddressList $areaId
+
+    isisInterface setDefault
+    isisInterface config -enable true
+    isisInterface config -connectToDut true
+    isisInterface config -protocolInterfaceDescription "protocol interface-$car.$por"
+    isisInterface config -metric $metric
+    isisInterface config -interfaceId $interfaceId
+    isisInterface config -networkType $networkType
+    isisInterface config -level $level
+    isisInterface config -enableTrafficEngineering false
+    isisInterface config -administrativeGroup {0.0.0.0}
+    isisInterface config -maxBandwidth 0.0
+    isisInterface config -maxReservableBandwidth 0.0
+    isisInterface config -unreservedBandwidthPriority0 0.0
+    isisInterface config -unreservedBandwidthPriority1 0.0
+    isisInterface config -unreservedBandwidthPriority2 0.0
+    isisInterface config -unreservedBandwidthPriority3 0.0
+    isisInterface config -unreservedBandwidthPriority4 0.0
+    isisInterface config -unreservedBandwidthPriority5 0.0
+    isisInterface config -unreservedBandwidthPriority6 0.0
+    isisInterface config -unreservedBandwidthPriority7 0.0
+    isisInterface config -priorityLevel1 0
+    isisInterface config -helloIntervalLevel1 $helloIntervalL1
+    isisInterface config -deadIntervalLevel1 $deadIntervalL1
+    isisInterface config -extendedDefaultMetric1 10
+    isisInterface config -trafficEngineeringMetric1 10
+    isisInterface config -priorityLevel2 0
+    isisInterface config -helloIntervalLevel2 $helloIntervalL2
+    isisInterface config -deadIntervalLevel2 $deadIntervalL2
+    isisInterface config -extendedDefaultMetric2 10
+    isisInterface config -trafficEngineeringMetric2 10
+
+    if {[isisRouter addInterface interface1]} {
+        error "extrMakeIsisRouterV6: isisRouter addInterface interface1 failed."
+    }
+    set idx 0
+    set rangeId 1
+    while {[llength $networkIp] > $idx} {
+            set myIp [lindex $networkIp $idx]
+            set rMetric [lindex $routeMetric $idx]
+            set prefx [lindex $prefix $idx]
+            set routeOrg [lindex $routeOrigin $idx]
+            set noOfNetworks [lindex $numNetworks $idx]
+            incr idx
+            isisRouteRange config -enable true
+            isisRouteRange config -routeOrigin $routeOrg
+            isisRouteRange config -metric $rMetric
+            isisRouteRange config -numberOfNetworks $noOfNetworks
+            isisRouteRange config -prefix $prefx
+            isisRouteRange config -networkIpAddress $myIp
+          if {[regexp {([0-9]+)\.([0-9]+)\.([0-9]+)\.([0-9]+)} $myIp]} {
+            isisRouteRange config -ipType addressTypeIpV4
+            } else {
+            isisRouteRange config -ipType addressTypeIpV6
+          }
+            isisRouter addRouteRange [format "routeRange%02d" $rangeId]
+            isisRouteRange setDefault
+            incr rangeId
+
+   # if {[isisRouter addRouteRange routeRange1]} {
+   #     error "extrMakeIsisRouterV6: isisRouter addRouteRange routeRange1 failed."
+    #}
+}
+    if {[isisServer addRouter router$routerLocalId]} {
+        error "extrMakeIsisRouterV6: isisServer addRouter router$routerLocalId failed."
+    }
+
+    return 0
+} ;# extrMakeIsisRouterV6
+
+
+##################################################################
+# Procedure Name: startIsis
+#
+# Description: This proc is used to start test equipment isis protocol adjacency
+#              on the list of ports supplied via txPortIdList
+#
+#
+#
+# Input args:  txPortIdList
+# Output args: None.
+#
+# Typical usage:
+#      startIsis 2
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: SendTraffic
+##################################################################
+proc startIsis {txPortIdList} {
+    set pList ""
+    foreach txPortId $txPortIdList {
+        MapIxiaPortId $txPortId cha car por
+        result_debug "startIsis: Chas: $cha Card: $car Port: $por"
+        lappend pList "$cha $car $por"
+    }
+
+    if {[ixStartIsis pList]} {
+        error "startIsis: ixStartIsis failed."
+    }
+}
+
+##################################################################
+# Procedure Name: stopIsis
+#
+# Description: This proc is used to stop test equipment isis protocol adjacency
+#              on the list of ports supplied via txPortIdList
+#              This proc is opposite of startIsis
+#
+#
+#
+# Input args:  txPortIdList
+# Output args: None.
+#
+# Typical usage:
+#      stopIsis 2
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: SendTraffic
+##################################################################
+proc stopIsis {txPortIdList} {
+    set pList ""
+    foreach txPortId $txPortIdList {
+        MapIxiaPortId $txPortId cha car por
+        result_debug "stopIsis: Chas: $cha Card: $car Port: $por"
+        lappend pList "$cha $car $por"
+    }
+
+    if {[ixStopIsis pList]} {
+        error "stopIsis: ixStopIsis failed."
+    }
+}
+
+##################################################################
+# Procedure Name: cleanupIsis
+#
+# Description: This proc is used to cleanup test equipment port for isis configuration
+#              that was performed by  setupISISRouterV6
+#
+#
+#
+# Input args:  txPortIdList
+# Output args: None.
+#
+# Typical usage:
+#      cleanupIsis 2
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: SendTraffic
+##################################################################
+proc cleanupIsis {txPortIdList} {
+    foreach txPortId $txPortIdList {
+        # get the port information
+        MapIxiaPortId $txPortId cha car por
+        result_debug "cleanupIsis: Chas: $cha Card: $car Port: $por"
+
+        # select the port
+        if {[isisServer select $cha $car $por]} {
+            error "cleanupIsis: isisServer select $cha $car $por failed."
+        }
+
+
+        if {[isisServer getFirstRouter]} {
+            error "cleanupIsis: isisServer getFirstRouterfailed."
+        }
+
+        isisRouter clearAllInterfaces
+        isisRouter clearAllRouteRanges
+        isisRouter setDefault
+
+        while {[isisServer getNextRouter] == 0} {
+            isisRouter clearAllInterfaces
+            isisRouter clearAllRouteRanges
+            isisRouter setDefault
+        }
+
+        if {[isisServer clearAllRouters]} {
+            error "cleanupIsis: isisServer clearAllRouters failed."
+        }
+        isisServer write
+
+        ipAddressTable setDefault
+        ipAddressTable clear
+        ipAddressTable set $cha $car $por
+
+        protocolServer setDefault
+        protocolServer config -enableArpResponse false
+        protocolServer config -enablePingResponse false
+        protocolServer config -enableIsisService false
+        if {[protocolServer set $cha $car $por]} {
+            error "cleanupIsis: Error Setting Protocol Server"
+        }
+        if {[protocolServer write $cha $car $por]} {
+            error "cleanupIsis: protocolServer write $cha $car $por failed."
+        }
+    } ;# foreach txPortId
+} ;# cleanupIsis
+
+
+# Description:
+#     The follwoing procs are used to decode PDU type, etc if the frame
+#     is a ISIS PDU.
+#
+# Input args: rawFrame
+# Output args: None.
+##################################################################
+proc RemoveIsisVlanTag { rawFrame } {
+    set tagType [string range $rawFrame 36 40]
+    # if tagged, get rid of type and tag field from 36 to 47
+    if {$tagType == "81 00"} {
+        set leftRawFrame [string range $rawFrame 0 35]
+        set rightRawFrame [string range $rawFrame 48 [string length $rawFrame]]
+        set rawFrame [format "%s%s" $leftRawFrame $rightRawFrame]
+    }
+    return $rawFrame
+}
+
+proc GetIsisDestMacAddr { rawFrame } {
+    return [string range $rawFrame 0 16]
+}
+
+proc GetIsisSourceMacAddr { rawFrame } {
+    return [string range $rawFrame 18 34]
+}
+
+proc GetIsisDlcLength { rawFrame } {
+    set mFrame [RemoveIsisVlanTag $rawFrame]
+    regsub -all { } [string range $mFrame 36 40] {} hexVal
+    return [hextodec $hexVal]
+}
+
+proc GetIsisIRPD { rawFrame } {
+    set mFrame [RemoveIsisVlanTag $rawFrame]
+    return [hextodec [string range $mFrame 51 52]]
+}
+
+proc GetIsisHeaderLength { rawFrame } {
+    set mFrame [RemoveIsisVlanTag $rawFrame]
+    return [hextodec [string range $mFrame 54 55]]
+}
+
+proc GetIsisVersionPID { rawFrame } {
+    set mFrame [RemoveIsisVlanTag $rawFrame]
+    return [hextodec [string range $mFrame 57 58]]
+}
+
+# --- ID length = 0 indciates 6 octets
+proc GetIsisIdLength { rawFrame } {
+    set mFrame [RemoveIsisVlanTag $rawFrame]
+    return [hextodec [string range $mFrame 60 61]]
+}
+
+proc GetIsisVersion { rawFrame } {
+    set mFrame [RemoveIsisVlanTag $rawFrame]
+    return [hextodec [string range $mFrame 66 67]]
+}
+
+proc GetIsisReserved { rawFrame } {
+    set mFrame [RemoveIsisVlanTag $rawFrame]
+    return [hextodec [string range $mFrame 69 70]]
+}
+
+proc GetIsisMaxAreaAddr { rawFrame } {
+    set mFrame [RemoveIsisVlanTag $rawFrame]
+    return [hextodec [string range $mFrame 72 73]]
+}
+
+proc GetIsisHelloCircuitType { rawFrame } {
+    set mFrame [RemoveIsisVlanTag $rawFrame]
+    return [hextodec [string range $mFrame 75 76]]
+}
+
+proc GetIsisHelloSourceId { rawFrame } {
+    set mFrame [RemoveIsisVlanTag $rawFrame]
+    return [string range $mFrame 78 94]
+}
+
+proc GetIsisHelloHoldTime { rawFrame } {
+    set mFrame [RemoveIsisVlanTag $rawFrame]
+    regsub -all { } [string range $mFrame 96 100] {} hexVal
+    return [hextodec $hexVal]
+}
+
+proc GetIsisHelloFrameLength { rawFrame } {
+    set mFrame [RemoveIsisVlanTag $rawFrame]
+    regsub -all { } [string range $mFrame 102 106] {} hexVal
+    return [hextodec $hexVal]
+}
+
+proc GetIsisHelloPriority { rawFrame } {
+    set mFrame [RemoveIsisVlanTag $rawFrame]
+    return [hextodec [string range $mFrame 108 109]]
+}
+
+proc GetIsisHelloLanId { rawFrame } {
+    set mFrame [RemoveIsisVlanTag $rawFrame]
+    return [string range $mFrame 111 130]
+}
+
+proc GetIsisLspFrameLength { rawFrame } {
+    set mFrame [RemoveIsisVlanTag $rawFrame]
+    regsub -all { } [string range $mFrame 75 79] {} hexVal
+    return [hextodec $hexVal]
+}
+
+proc GetIsisLspRemainLifetime { rawFrame } {
+    set mFrame [RemoveIsisVlanTag $rawFrame]
+    regsub -all { } [string range $mFrame 81 85] {} hexVal
+    return [hextodec $hexVal]
+}
+
+proc GetIsisLspFrameId { rawFrame } {
+    set mFrame [RemoveIsisVlanTag $rawFrame]
+    return [string range $mFrame 87 109]
+}
+
+proc GetIsisLspFrameSequence { rawFrame } {
+   set mFrame [RemoveIsisVlanTag $rawFrame]
+   regsub -all { } [string range $mFrame 111 121] {} hexVal
+   return [hextodec $hexVal]
+}
+
+proc GetIsisLspChecksum { rawFrame } {
+    set mFrame [RemoveIsisVlanTag $rawFrame]
+    return [string range $mFrame 123 127]
+}
+
+proc GetIsisCsnpFrameLength { rawFrame } {
+    set mFrame [RemoveIsisVlanTag $rawFrame]
+    regsub -all { } [string range $mFrame 75 79] {} hexVal
+    return [hextodec $hexVal]
+}
+
+proc GetIsisCsnpSourceId { rawFrame } {
+    set mFrame [RemoveIsisVlanTag $rawFrame]
+    return [string range $mFrame 81 100]
+}
+
+proc GetIsisCsnpStartLspId { rawFrame } {
+    set mFrame [RemoveIsisVlanTag $rawFrame]
+    return [string range $mFrame 102 124]
+}
+
+proc GetIsisCsnpEndLspId { rawFrame } {
+    set mFrame [RemoveIsisVlanTag $rawFrame]
+    return [string range $mFrame 126 148]
+}
+
+proc GetIsisPsnpFrameLength { rawFrame } {
+    set mFrame [RemoveIsisVlanTag $rawFrame]
+    regsub -all { } [string range $mFrame 75 79] {} hexVal
+    return [hextodec $hexVal]
+}
+
+proc GetIsisPsnpSourceId { rawFrame } {
+    set mFrame [RemoveIsisVlanTag $rawFrame]
+    return [string range $mFrame 81 100]
+}
+
+# --- in Hello, variable-length fields are after position #132 (44 * 3)
+#proc CheckHelloClv { rawFrame field {byteOffset "44"} } {
+#    set clvs [string range [RemoveIsisVlanTag $rawFrame] [expr 3*$byteOffset] end]
+#    result_debug "$clvs bit"
+#    return [regexp -nocase $field $clvs]
+#}
+
+
+# --- in Hello, variable-length fields are after position #132 (44 * 3)
+proc CheckHelloClv { rawFrame field startByte endByte} {
+    set vlantag [RemoveIsisVlanTag $rawFrame]
+    result_ok "VLANTAG==> $vlantag"
+    set clvs [string range [RemoveIsisVlanTag $rawFrame] $startByte $endByte]
+    result_debug "$clvs bit"
+    return [regexp -nocase $field $clvs]
+}
+
+
+
+# --- in LSP, variable-length fields are after position #132 (44 * 3)
+proc CheckLspClv { rawFrame field {byteOffset "44"} } {
+    set clvs [string range [RemoveIsisVlanTag $rawFrame] [expr 3*$byteOffset] end]
+    return [regexp -nocase $field $clvs]
+}
+
+# --- in LSP, variable-length fields are after position #132 (44 * 3)
+proc GetLspClvs { rawFrame {byteOffset "44"} } {
+    set clvs [string range [RemoveIsisVlanTag $rawFrame] [expr 3*$byteOffset] end]
+    return $clvs
+}
+
+# --- in CSNP, variable-length fields are after position #150 (50 * 3)
+proc CheckCsnpClv { rawFrame field {byteOffset "50"} } {
+    set clvs [string range [RemoveIsisVlanTag $rawFrame] [expr 3*$byteOffset] end]
+    return [regexp -nocase $field $clvs]
+}
+
+# --- in PSNP, variable-length fields are after position #102 (34 * 3)
+proc CheckPsnpClv { rawFrame field {byteOffset "34"} } {
+    set clvs [string range [RemoveIsisVlanTag $rawFrame] [expr 3*$byteOffset] end]
+    return [regexp -nocase $field $clvs]
+}
+
+proc GetPsnpClvs { rawFrame {byteOffset "34"} } {
+    set clvs [string range [RemoveIsisVlanTag $rawFrame] [expr 3*$byteOffset] end]
+    return $clvs
+}
+
+
+##################################################################
+# Procedure Name: GetCLV
+# Description:
+#     The follwoing proc is used to search the CLVs to find the one
+#       match the clv code specified
+#
+# Input args:
+#       clvs    - the clvs returned from GetxxxxClvs (including the ending
+#                       frame checksum)
+#       code    - the clv code to locate
+#       index   - the index-sh clv in the clvs
+# Output args: None
+# return: the clv
+# Typical Usage:
+#       set clvs [GetpsnpClvs $frame]
+#       set code9Clv [GetCLV $clvs 9 0]
+##################################################################
+# --- the input clvs is expected to have included the ending checksum
+proc GetCLV { clvs code {index 0}} {
+    set clvsLength [string length $clvs]
+    incr clvsLength -6
+    set clvs [string range $clvs 0 [expr $clvsLength -1]]
+    result_debug "clvs = $clvs"
+    result_debug "clvsLength = $clvsLength"
+    set count 0
+    while { $clvsLength > 0 } {
+        set clvCode [hextodec [string range $clvs 0 1]]
+        set clvLengthField [hextodec [string range $clvs 3 4]]
+        result_debug "clvCode = $clvCode"
+        result_debug "clvLengthField = $clvLengthField"
+        set clvLength [expr 3 * [expr $clvLengthField + 2]]
+        if { $clvCode == $code } {
+            if {$count == $index } {
+                return [string range $clvs 0  [expr $clvLength - 1]]
+            }
+            incr count
+        }
+        set clvs [string range $clvs $clvLength [expr $clvsLength -1]]
+        set clvsLength [expr $clvsLength - $clvLength]
+        result_debug "clvs = $clvs"
+        result_debug "clvsLength = $clvsLength"
+    }
+    return ""
+}
+
+
+##################################################################
+# Procedure Name: decodeIsisPackets
+# Description:
+#     The follwoing proc is used to decode ISIS packets
+#
+# Input args:
+#       frameList- the captured raw frames
+#       dut     - for output display purpose
+#       level   - for output display purpose
+# Output args: None
+# Typical Usage:
+#       decodeIsisPackets $frameList 1 2
+##################################################################
+# --- to decode isis packets
+proc decodeIsisPackets {frameList {dut 1} {level 1} } {
+
+    set dutMac [GetDUTMac DUT$dut " "]
+    if {$level == 1} {
+        set isisDestMac "01 80 C2 00 00 14"
+    } else {
+        set isisDestMac "01 80 C2 00 00 15"
+    }
+
+    result_debug "\n==== Decode DUT $dut Level $level PDU ===="
+    result_debug "Source Mac = $dutMac"
+    result_debug "Dest Mac = $isisDestMac"
+    set frameListLength [llength $frameList]
+    result_debug "total number of frames: $frameListLength"
+
+    for {set i 0} {$i < $frameListLength} {incr i} {
+
+        result_debug "\n    ++++ Decoded DUT $dut Level $level PDU ++++"
+        set frame [lindex $frameList $i]
+        result_debug "frame $i = $frame"
+        set destMac [GetIsisDestMacAddr $frame]
+        set srcMac [GetIsisSourceMacAddr $frame]
+        set 8023Len [GetIsisDlcLength $frame]
+        set headerLen [GetIsisHeaderLength $frame]
+        set pduType [GetIsisPduType $frame]
+        set frameLen [GetIsisLspFrameLength $frame]
+        result_debug "destination MAC = $destMac"
+        result_debug "source MAC = $srcMac"
+        result_debug "802.3 length = $8023Len"
+        result_debug "header length = $headerLen"
+        result_debug "PDU Type = $pduType"
+        result_debug "frame length = $frameLen"
+
+        if {$pduType == "ISIS_LEVEL1_LSP" || $pduType == "ISIS_LEVEL2_LSP" } {
+            set remainLifetime [GetIsisLspRemainLifetime $frame]
+            set lspId [GetIsisLspFrameId $frame]
+            set frameSeq [GetIsisLspFrameSequence $frame]
+            set checksum [GetIsisLspChecksum $frame]
+            result_debug "remaining lifetime = $remainLifetime"
+            result_debug "LSP ID = $lspId"
+            result_debug "frame sequence = $frameSeq"
+            result_debug "checksum = $checksum"
+        } elseif {$pduType == "ISIS_LEVEL1_CSNP" || $pduType == "ISIS_LEVEL2_CSNP" } {
+            set srcId [GetIsisCsnpSourceId $frame]
+            set startLspId [GetIsisCsnpStartLspId $frame]
+            set endLspId [GetIsisCsnpEndLspId $frame]
+            result_debug "source ID = $srcId"
+            result_debug "start LSP ID = $startLspId"
+            result_debug "end LSP ID = $endLspId"
+        } elseif {$pduType == "ISIS_LEVEL1_PSNP" || $pduType == "ISIS_LEVEL2_PSNP" } {
+            set srcId [GetIsisPsnpSourceId $frame]
+            result_debug "source ID = $srcId"
+        }
+    }
+
+}
+
+
+##################################################################
+# Procedure Name: EnableIsisFilterOutHello
+# Description:
+#     The follwoing proc is used to set up ixia filter to filter out
+#       ISIS Hello packets
+#
+# Input args:
+#       PostIdList - ixia port IDs
+# Output args: None
+# Typical Usage:
+#       EnableIsisFilterOutHello 1
+##################################################################
+# --- Most of the time, we dont need to look into hello packets
+proc EnableIsisFilterOutHello {portIdList} {
+global TrafficGen
+    foreach portId $portIdList {
+        MapIxiaPortId $portId chas card port
+        port get $chas $card $port
+
+        # Define filter & capture
+        filterPallette config -pattern1 {05 D9}
+        filterPallette config -patternMask1 {00 00}
+        filterPallette config -patternOffset1 34
+        filterPallette config -matchType1 3
+	if {$TrafficGen != "ept"} {
+        filterPallette set $chas $card $port
+
+        filter config -captureFilterEnable true
+        filter config -captureTriggerEnable true
+        filter config -captureFilterPattern notPattern1
+        filter config -captureTriggerPattern notPattern1
+        filter config -captureTriggerDA anyAddr
+        filter config -captureFilterDA anyAddr
+        filter set $chas $card $port
+        set portList [list [list $chas $card $port]]
+        ixWriteConfigToHardware portList
+	} else {
+	 filter config -captureFilterEnable true
+        filter config -captureTriggerEnable true
+        filter config -captureFilterPattern notPattern1
+        filter config -captureTriggerPattern notPattern1
+        filter config -captureTriggerDA anyAddr
+        filter config -captureFilterDA anyAddr
+	}
+
+	}
+
+    }
+
+
+##################################################################
+# Procedure Name: DisableIsisFilterOutHello
+# Description:
+#     The follwoing proc is used to reset the ixia filter that has been set up
+#       to filter out ISIS Hello packets
+#
+# Input args:
+#       PostIdList - ixia port IDs
+# Output args: None
+# Typical Usage:
+#       DisableIsisFilterOutHello 1
+##################################################################
+proc DisableIsisFilterOutHello {portIdList} {
+global TrafficGen
+
+    foreach portId $portIdList {
+        MapIxiaPortId $portId chas card port
+        port get $chas $card $port
+
+        # Define filter & capture
+
+        filterPallette config -pattern1 00
+        filterPallette config -patternMask1 00
+  if {$TrafficGen != "ept"} {
+        filterPallette set $chas $card $port
+
+        filter config -captureFilterEnable true
+        filter config -captureTriggerEnable true
+        filter config -captureFilterPattern anypattern
+        filter config -captureTriggerPattern anypattern
+        filter config -captureTriggerDA anyAddr
+        filter config -captureFilterDA anyAddr
+        filter set $chas $card $port
+        set portList [list [list $chas $card $port]]
+        ixWriteConfigToHardware portList
+	} else {
+	
+	filter config -captureFilterEnable true
+        filter config -captureTriggerEnable true
+        filter config -captureFilterPattern anypattern
+        filter config -captureTriggerPattern anypattern
+        filter config -captureTriggerDA anyAddr
+        filter config -captureFilterDA anyAddr
+
+	}
+    }
+}
+
+
+# convert MAC format to ISIS system ID format, e.g. 01:02:03:04:05:06 -> 0102.0304.0506
+proc MacToIsisId {mac} {
+   set list [split [string tolower $mac] ":"]
+   return [lindex $list 0][lindex $list 1].[lindex $list 2][lindex $list 3].[lindex $list 4][lindex $list 5]
+}
+
+# clean manual area address of Level-2 except the 1st one which is the last one and can't be deleted
+proc CleanLevel2AreaManuAddress { {dutNo "1"} } {
+
+    global DUT${dutNo}_CONNECT
+
+    Login [set DUT${dutNo}_CONNECT]
+
+    lappend getKeyList "{Manual Area Addresses:} 1"
+    set numAddress [GetKeyValue "show isis Level-2" $getKeyList]
+    unset getKeyList
+    if {$numAddress == 0} {
+        return "NO_MANUAL_ADDRESS"
+    } else {
+        set i $numAddress
+        while { $i > 1 } {
+            lappend getKeyList "{Manual Area Addresses: $numAddress -} $i"
+            set addr [GetKeyValue "show isis Level-2" $getKeyList]
+            unset getKeyList
+            SendACmd "config isis Level-2 delete [string trimright $addr , ]"
+            set i [expr $i - 1]
+        }
+        lappend getKeyList "{Manual Area Addresses: 1 -} 1"
+        set addr [GetKeyValue "show isis Level-2" $getKeyList]
+        unset getKeyList
+        return [string trimright $addr , ]  ;# return the 1st area address if existing
+    }
+
+}
+
+proc VerifyRefreshInterval {timeStampList lspId {interval 900} {tolerance 25}} {
+   set subTest "Verify Refresh interval is $interval seconds for LSPID $lspId"
+   report_start_test "$subTest"
+
+   # Check for error
+   if {[llength $timeStampList]<2} {
+      result_error "Insufficient information in timestamp list, FAIL"
+      report_end_test
+
+      return 0
+   }
+
+   for {set i 0} {$i < [expr [llength $timeStampList]-1]} {incr i} {
+      set secondTimeStamp [lindex $timeStampList [expr $i + 1]]
+      set firstTimeStamp [lindex $timeStampList $i]
+
+      # Store in mili seconds
+#      set secTimeStamp [string range $secondTimeStamp 0 8]
+#      set firTimeStamp [string range $firstTimeStamp 0 8]
+
+      #result_debug "the firTimeStamp:$firTimeStamp, secTimeStamp:$secTimeStamp"
+      set intervalInSe [mpexpr $secondTimeStamp-$firstTimeStamp]
+      set intervalInSec [mpexpr $intervalInSe/1000000000.0]
+      set diff [expr abs(double($intervalInSec) - double($interval))]
+      set percent [expr double($diff)/ double($interval)*100.0]
+      result_debug "The interval=$intervalInSec, percent=$percent and diff:$diff"
+      # Count for a percentage of 1 tolerance
+      if {$percent <= $tolerance} {
+         set result "ok"
+      } else {
+         set wrongInterval $intervalInSec
+         set result "ng"
+      }
+   }
+
+   if {$result == "ok"} {
+      result_ok "Packets correctly spaced with $intervalInSec secs, PASS"
+   } else {
+      result_error "Packets incorrectly spaced with $wrongInterval secs, FAIL"
+   }
+   report_end_test
+}
+
+proc CheckIsisV6Installed { } {
+  global ixiaCh1
+  global env
+  set IXIA_VER $env(IXIA_VERSION)
+result_debug "Ixia chassis ip is $ixiaCh1"
+result_debug "Ixia version is $IXIA_VER"
+
+if {[regexp -nocase "3.80" $IXIA_VER]} {
+       return "Skip"
+} elseif {[regexp -nocase "4.10" $IXIA_VER]} {
+    if {[ixIsIsisInstalled]} {
+       return "ok"
+     } else {
+       return "Skip"
+   }
+} elseif {[regexp -nocase "5.00 || 5.10" $IXIA_VER]} {
+    if {([licenseManagement isFeatureLicensed $ixiaCh1 licenseISIS] && [licenseManagement isFeatureLicensed $ixiaCh1 licenseIsIsIPV6])} { 
+     return "ok"
+     } else {
+     return "Skip"
+    }
+   }
+ }
+ 
+
+proc IsisInstalled { } {
+  global ixiaCh1
+  global env
+  set IXIA_VER $env(IXIA_VERSION)
+result_debug "Ixia chassis ip is $ixiaCh1"
+result_debug "Ixia version is $IXIA_VER"
+
+if {[regexp -nocase "3.80" $IXIA_VER]} {
+    if {[ixIsIsisInstalled]} {
+       return "ok"
+     } else {
+       return "Skip"
+    }
+} elseif {[regexp -nocase "4.10" $IXIA_VER]} {
+    if {[ixIsIsisInstalled]} {
+       return "ok"
+     } else {
+       return "Skip"
+   }
+} elseif {[regexp -nocase "5.00 || 5.10" $IXIA_VER]} {
+    if {([licenseManagement isFeatureLicensed $ixiaCh1 licenseISIS])} {
+     return "ok"
+     } else {
+     return "Skip"
+    }
+   }
+ }
+
+
+
+
+
+##################################################################
+# Procedure Name : checkIxiaCardTypeIsisV6
+# Description:
+# This procedure checks for per port CPU cards to run ISISv6Router and if those
+# cards are not found it will skip the test case
+#
+# optional Input args:
+# Output args: None.
+# Typical usage: checkIxiaCardTypeIsisV6
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: Utility
+##################################################################
+
+proc checkIxiaCardTypeIsisV6 {testNo time1 txPortList} {
+
+foreach txPort $txPortList {
+       if {[getIxiaPortType $txPort] < 82 } {
+  result_skip "Skipping this test as only per port CPU Card support ISISv6 feature"
+          set time2 [clock seconds]
+          result_p "*** Time for $testNo = [expr $time2-$time1] secs\n\n"
+          close_result_file
+          report_end_test
+          return -code return
+       }
+    }
+
+}
+
+
+
+
+
+##################################################################
+# Procedure Name: CheckLSP
+#
+# Description: Verify a LSP is recevied on a particular ixia port,
+#           from the mentioned source dut witht the expected ipaddress
+# Input args:
+#       port --- the ixia port number on which LSP needs be verified
+#       Level -- the Level at which the LSP frame needs to be verified
+#             Valid Args L1- Level 1, L2- Level 2, L1L2-  both at Level 1&2
+#       trans -- if value of trans is 1 proc verifies no LSP is sent from the
+#                list of source duts mentioned in srcdutLst on ixia port
+#                if value of trans is 0, proc verifies or looks out for LSP
+#                from source duts mentioned in srcdutLst on ixia port
+#       srcdutLst- List of dut numbers from which LSP is expected/ not expected
+#       ipaddv4stOct -- value of first octet of the expected/not expected
+#                        ipv4 address in LSP#
+#       ipaddv6stOct -- value of first octet of the expected/not expected
+#                        ipv6 address in LSP
+#
+#
+#
+# Output args:
+#              None
+#
+# Typical usage:
+#
+# Category: Utility
+##################################################################
+
+
+proc CheckLSP {port Level {trans 1} {srcdutLst 1} {ipaddv4stOct 100} {ipaddv6stOct "31 00"}} {
+set ipaddv4stOct [dectohex $ipaddv4stOct]
+set frameLst [GetCapturedFrames $port "NULL" 1000]
+foreach srcdut $srcdutLst {
+   set dutMac [GetDUTMac DUT$srcdut]
+   set dutMac [split $dutMac :]
+   set validation 0
+   set frameNo 1
+   set psnpFrameNo ""
+   set lspFrameNo ""
+   set ipaddrV4 "$ipaddv4stOct 00 00 00 FF FF FF"
+#  result_debug "the vlau eof ipaddv4 is $ipaddrV4"
+#  result_debug "reference DUTmac is $dutMac"
+   set ipaddrV6 "$ipaddv6stOct 00 00 00 00 00 00 00 00 00"
+
+   foreach frame $frameLst {
+      set frame [RemoveIsisVlanTag $frame]
+      set pduType [GetIsisPduType $frame]
+#      result_debug "the PDU type captured is $pduType"
+      set srcMac [GetIsisSourceMacAddr  $frame]
+#      result_debug "the source mac captured is $srcMac"
+      switch $Level {
+
+         "L1" {
+            if {(($pduType == "ISIS_LEVEL1_LSP") && ($srcMac == $dutMac))} {
+               set lspFrameLen [GetIsisLspFrameLength $frame]
+               if {$lspFrameLen > 100} {
+ #                result_debug "the frame captured is $frame"
+                  if {(([regexp -nocase $ipaddrV4 $frame])||([regexp -nocase $ipaddrV6 $frame]))} {
+                     incr validation
+                     lappend lspFrameNo $frameNo
+                  }
+               }
+            }
+            if {$pduType == "ISIS_LEVEL1_PSNP" } {
+               set psnpSrc [GetIsisPsnpSourceId $frame]
+               if {$psnpSrc != $dutMac} {
+                  lappend  psnpFrameNo $frameNo
+               }
+            }
+         }
+         "L2" {
+            if {(($pduType == "ISIS_LEVEL2_LSP") && ($srcMac == $dutMac))} {
+               set lspFrameLen [GetIsisLspFrameLength $frame]
+  #             result_debug "the frame captured is $frame"
+               if {$lspFrameLen > 100} {
+                  if {(([regexp -nocase $ipaddrV4 $frame])||([regexp -nocase $ipaddrV6 $frame]))} {
+                     incr validation
+                     lappend lspFrameNo $frameNo
+                  }
+               }
+            }
+           if {$pduType == "ISIS_LEVEL2_PSNP" } {
+              set psnpSrc [GetIsisPsnpSourceId $frame]
+               if {$psnpSrc != $dutMac} {
+                 lappend  psnpFrameNo $frameNo
+               }
+           }
+        }
+        "L1L2" {
+           if {((($pduType == "ISIS_LEVEL1_LSP") || \
+              ($pduType == "ISIS_LEVEL2_LSP") ) \
+               && ($srcMac == $dutMac))} {
+               set lspFrameLen [GetIsisLspFrameLength $frame]
+               if {$lspFrameLen > 100} {
+   #            result_debug "the frame captured is $frame"
+                 if {(([regexp -nocase $ipaddrV4 $frame])||([regexp -nocase $ipaddrV6 $frame]))} {
+                    incr validation
+                    lappend lspFrameNo $frameNo
+                 }
+               }
+           }
+           if {(($pduType == "ISIS_LEVEL1_PSNP") || \
+             ($pduType == "ISIS_LEVEL2_PSNP"))} {
+              set psnpSrc [GetIsisPsnpSourceId $frame]
+              if {$psnpSrc != $dutMac} {
+                 lappend  psnpFrameNo $frameNo
+              }
+           }
+        }
+     }
+     incr frameNo
+   }
+   if $trans {
+      report_start_test "verify LSP is not sent with mesh block from DUT$srcdut"
+      if !$validation {
+         result_ok "No LSP sent over the monitored link"
+      } else {
+         if {[lindex $lspFrameNo 0] > [lindex $psnpFrameNo 0]} {
+            result_ok "LSP sent over the monitored link over PSNP request"
+         } else {
+            result_error "LSP sent over the monitored link"
+         }
+     }
+     report_end_test
+   } else {
+      report_start_test "verify LSP is sent with mesh block  from DUT$srcdut"
+      if $validation {
+         result_ok " LSP sent over the monitored link"
+      } else {
+         result_error " NoLSP sent over the monitored link"
+      }
+      report_end_test
+   }
+
+}
+}
+
+proc CheckRestartTlv {args} {
+     parse_args CheckRestartTlv $args {
+     capPort "4"
+     FirstDutno "DUT1"
+     SecondDutno "DUT2"
+     conditionCheck "11"
+     }
+################################################################
+set subTest "Checking for RR and RA bit in Restart TLV in Hello PDUs "
+################################################################
+result_h2 "$subTest"
+report_start_test "$subTest"
+set frameList [GetCapturedFrames $capPort NULL 2000]
+
+set restart_clv_RR "D3 03 01 00 00"
+set restart_clv_RA "D3 03 02"
+set numHello 0
+set RR 0
+set RA 0
+        foreach frame $frameList {
+        set frame [RemoveIsisVlanTag $frame]
+          puts "$frame"
+          set pduType [GetIsisPduType $frame]
+          result_debug "PDUTYPE : $pduType"
+          set pduType1 "ISIS_LEVEL1_HELLO"
+          set pduType2 "ISIS_LEVEL2_HELLO"
+          set pduType3 "ISIS_PTOP_HELLO"
+           if {($pduType == $pduType1) || ($pduType == $pduType2) || ($pduType == $pduType3)} {
+                        result_debug "\n$pduType captured:"
+                        result_debug "$frame"
+                        set srcMac [GetIsisSourceMacAddr  $frame]
+                        set 8023Len [GetIsisDlcLength $frame]
+                        set destMac [GetIsisDestMacAddr $frame]
+                        set headerLen [GetIsisHeaderLength $frame]
+                        set idLen [GetIsisIdLength $frame]
+                        if { ($pduType == $pduType3) } {
+                        set restartTlvRR [string range $frame 111 124]
+                        set restartTlvRA [string range $frame 111 118]
+                        } else {
+                        set restartTlvRR [string range $frame 132 145]
+                        set restartTlvRA [string range $frame 132 139]
+                        }
+                        result_debug "    ++++ Decoded $pduType packet ++++"
+                        result_debug "destination MAC = $destMac "
+                        result_debug "source MAC = $srcMac"
+                        result_debug "802.3 length = $8023Len "
+                        result_debug "header length = $headerLen"
+                        result_debug "ID length = $idLen"
+                        result_debug "RestartTLV value is RR=$restartTlvRR"
+                        result_debug "RestartTLV value is RA=$restartTlvRA"
+                                 if {( $restartTlvRR == $restart_clv_RR) && ($srcMac == [GetDUTMac $FirstDutno " "])} {
+                                         incr RR
+                                         result_debug "$RR"
+                                 } elseif {( $restartTlvRA == $restart_clv_RA) && ($srcMac == [GetDUTMac $SecondDutno " "]) } {
+                                         incr RA
+                                         result_debug "$RA"
+                                          }
+                                 }
+
+                 }
+
+
+set type $conditionCheck
+switch -- $type \
+        "11" {
+                if {$RR >= 1 && $RA >= 1} {
+                result_ok "L1-L2 Hello from DUTs is captured and RR & RA  Bit is set in Planned/Unplanned/both state"
+                        } else {
+                result_error "L1-L2 Hello from DUTs is captured and RR & RA  Bit is not set  Planned/Unplanned/both state"
+                        }
+             } "00" {
+                if {$RR == "0" && $RA == "0"} {
+                result_ok "L1-L2 Hello from DUTs is captured and RR & RA  Bit should not be set in NONE state"
+                      } else {
+                result_error "L1-L2 Hello from DUTs is captured and RR & RA  Bit is set in NONE state"
+                      }
+             } "10" {
+                if {$RR >= "1" && $RA == "0"} {
+                result_ok "L1-L2 Hello from DUT1 is captured and RR Bit is set and RA bit is not set for one switch config"   
+                        } else {
+          result_error "L1-L2 Hello from DUTs is captured and RR Bit is not set or RA bit is also set for one switch config"
+                        }
+             } "01" {
+                if {$RR >= "0" && $RA == "1"} {
+                result_ok "L1-L2 Hello from DUT2 is captured and RA Bit is set and RR bit is not set for one switch config"
+                        } else {
+          result_error "L1-L2 Hello from DUTs is captured and RA Bit is not set or RR bit is also set for one switch config"
+                        }
+
+             } "L1-L2" {
+                if {$RR >= "2" && $RA >= "2"} {
+                result_ok "L1-L2 Hello from DUT1 is captured and RR Bit and RA bit is set in Planned/Unplanned/both state"                                    } else {
+          result_error "L1-L2 Hello from DUTs is captured and RR Bit or RA bit is not set"
+                        }
+             } default {
+                result_debug "RA and RR bit not set accordingly"
+                return -1
+             }
+
+
+report_end_test
+
+}
+
+
+proc startRestartTraffic {args} {
+     parse_args startRestartTraffic $args {
+     Dut1Port "1"
+     Dut2Port "3"
+     }
+
+upvar 1 dut1Mac dut1mac
+upvar 1 dut2Mac dut2mac
+
+#---Verify the traffic flow between Dut1 and Dut 2
+
+report_start_test "Transmit a ip frame between the ports"
+
+   set sip1 "11.10.10.4";
+   set dip1 "12.10.10.4";
+
+  EnableProtocolServer 1 11.10.10.4 none true
+  EnableProtocolServer 3 12.10.10.4 none true
+
+   SendIpFrame -protocol "ip" -txPortId "$Dut1Port" -destMac $dut1mac -destIp $dip1 \
+                -sourceIp $sip1  \
+               -streamType "contPacket" -frameRate 14881 ;#-percentage 10
+
+   result_debug "sleep for 5s for packet transmission";
+   exSleep 5
+
+
+   SendIpFrame -protocol "ip" -txPortId "$Dut2Port" -destMac $dut2mac -destIp $sip1 \
+                -sourceIp $dip1  \
+               -streamType "contPacket" -frameRate 14881 ;#-percentage 10
+
+   result_debug "sleep for 5s for packet transmission";
+   exSleep 5
+report_end_test
+
+}
+
+proc checkRestartTraffic {args} {
+     parse_args checkRestartTraffic $args {
+     Dut1Port "1"
+     Dut2Port "3"
+     }
+
+ #---- Checking the traffic in port $Dut1Port
+   result_ok "Checking the traffic in port $Dut1Port"
+   set percentageList "";
+   lappend percentageList "$Dut2Port 100";
+   CheckRates $Dut1Port $percentageList "" 1.5;
+   unset percentageList;
+
+
+ #---- Checking the traffic in port $Dut1Port
+   result_ok "Checking the traffic in port $Dut2Port"
+   set percentageList "";
+   lappend percentageList "$Dut1Port 100";
+   CheckRates $Dut2Port $percentageList "" 1.5;
+
+}
+
+
+
+proc cleanupProtocolServer {} {
+
+  DisableProtocolServer 1 11.10.10.4
+  DisableProtocolServer 3 12.10.10.4
+
+}
+
+
+
+proc CheckQueens {dut} {
+global DUT[set dut]_CONNECT
+Login [set DUT[set dut]_CONNECT]
+global bcmChassis
+global stacking
+set platform [GetPlatform DUT$dut]
+set msmSlot "none"
+if {((![regexp -nocase $stacking $platform ]) && \
+     ([regexp -nocase $bcmChassis $platform]))} {
+   set parameter ""
+   lappend parameter "{MSM-A} 1"
+   set msmSlot [GetKeyValue "show slot" $parameter]
+   unset parameter
+}
+
+if [regexp "8500" $msmSlot] {
+   return 1
+} else {
+   return 0
+}
+}
+

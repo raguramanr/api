@@ -1,0 +1,489 @@
+
+# ----- Environment variables setup
+
+proc EnableStack {args} {
+parse_args EnableStack $args {
+SetDefaults "0"
+}
+global DUT1_CONNECT
+global DUT1_CONNECTB
+global DUTs_info
+global maxSlot
+global getSlotId
+global BackupNodeMac
+global MasterNodeMac
+global DUT1_Stacking_msma_slot
+global DUT1_Stacking_msmb_slot
+
+if {![info exists DUT1_CONNECTB]==1} {
+
+result_ok "not applicable as no DUT1_CONNECTB"
+
+} else {
+# ----- Switch config
+Login $DUT1_CONNECT -masterCheck 0 -CheckOperational 0 
+
+# Default configuration for the stack topology
+if { [CheckStack ] == 1 } {
+result_debug "Get the No of Slots"
+set parameterList ""
+lappend parameterList "{Factory MAC address} 2"
+set nodeMac [GetKeyValue "show stacking detail" $parameterList]
+set maxSlot [llength $nodeMac]
+result_ok "No of Slots is $maxSlot"
+
+result_debug "Get the Master Node-Mac"
+set parameterList ""
+lappend parameterList "{Role} 0 2"
+set MasterNodeMac [GetKeyValue "show stacking" $parameterList]
+regsub -all \\* $MasterNodeMac "" MasterNodeMac
+result_ok "MasterNodeMac -$MasterNodeMac"
+
+Login $DUT1_CONNECTB -masterCheck 0 -CheckOperational 0
+result_debug "Get the Backup node mac"
+set parameterList ""
+lappend parameterList "{Role} 0 2"
+set BackupNodeMac [GetKeyValue "show stacking" $parameterList]
+regsub -all \\* $BackupNodeMac "" BackupNodeMac
+result_ok "BackupNodeMac $BackupNodeMac"
+
+Login $DUT1_CONNECT -masterCheck 0
+# verify Stacking is disabled
+result_debug "Verify Stacking is disabled"
+set parameterList ""
+lappend parameterList "{$MasterNodeMac.*Disabled.*Master} exist"
+lappend parameterList "{$BackupNodeMac.*Disabled.*Master} exist"
+set result [CheckKeyValue "show stacking" $parameterList \
+     -comment "check show slot output" -reportResults 0]
+result_ok "result -$result"
+
+if {[regexp -nocase "error" $result]} {
+Login $DUT1_CONNECT  -masterCheck 0
+SendACmd "Disable stacking"
+SendACmd "reboot stack-topology"
+WaitForRebootStack 220 "Waiting after reboot-stack"
+
+Login $DUT1_CONNECT -masterCheck 0
+
+set parameterList ""
+lappend parameterList "{$MasterNodeMac.*Disabled.*Master} exist"
+lappend parameterList "{$BackupNodeMac.*Disabled.*Master} exist"
+CheckKeyValue "show stacking" $parameterList -time \
+{s: 1 i: 5 d: 240 f: 240 r}  -comment "Verify configurations after reboot"
+}
+
+
+for {set i 1} {$i <= $maxSlot} {incr i} {
+set flag($i) 0
+}
+
+Login $DUT1_CONNECT
+
+# Configure Master priority
+SendACmd "enable stacking node-address $MasterNodeMac"
+SendACmd "configure stacking node-address $MasterNodeMac master-capability on"
+SendACmd "configure stacking node-address $MasterNodeMac priority 3"
+SendACmd "configure stacking node-address $MasterNodeMac  slot-number $DUT1_Stacking_msma_slot"
+SendACmd "configure stacking mac-address"
+set flag($DUT1_Stacking_msma_slot) 1
+
+#Login $DUT1_CONNECT -masterCheck 0
+
+#  Configure Backup Node
+SendACmd "enable stacking node-address $BackupNodeMac"
+SendACmd "configure stacking node-addres $BackupNodeMac master-capability on"
+SendACmd "configure stacking node-address $BackupNodeMac priority 2"
+SendACmd "configure stacking node-address $BackupNodeMac slot-number $DUT1_Stacking_msmb_slot"
+set flag($DUT1_Stacking_msmb_slot) 1
+
+if { $maxSlot > 2 } {
+
+result_debug "Get the Nodemac for all the slots"
+set parameterList ""
+lappend parameterList "{Factory MAC address} 2"
+SendACmd " disable clipaging"
+set nodeMac [GetKeyValue "show stacking detail" $parameterList]
+set maxSlot [llength $nodeMac]
+set StandbyMac ""
+for {set i 0 } {$i < $maxSlot} {incr i } {
+set mac [lindex $nodeMac $i]
+if {($mac == $MasterNodeMac) || ($mac == $BackupNodeMac)} {
+# skipping for master and backup mac
+} else {
+lappend StandbyMac $mac
+}
+}
+result_ok "StandbyMac -$StandbyMac"
+
+
+# Configure remaining slots
+foreach slot $StandbyMac {
+SendACmd "enable stacking node-address $slot"
+SendACmd "configure stacking node-addres $slot master-capability off"
+SendACmd "configure stacking node-address $slot priority 1"
+
+  for { set j 1 } {$j <=$maxSlot }  {incr j } {
+     if { $flag($j) == 0 } {
+     SendACmd "configure stacking node-address $slot slot-number $j"
+     set flag($j) 1
+     break
+     } 
+  }
+}
+}
+
+SendACmd "reboot stack-topology"
+WaitForRebootStack 220 "Waiting after reboot-stack"
+
+Login $DUT1_CONNECT -masterCheck 0
+set parameterList ""
+lappend parameterList "{$MasterNodeMac.*$DUT1_Stacking_msma_slot.*Active.*Master} exist"
+lappend parameterList "{$BackupNodeMac.*$DUT1_Stacking_msmb_slot.*Active.*Backup} exist"
+CheckKeyValue "show stacking" $parameterList -time {s: 1 i: 5 d: 180 f: 180 r} \
+                                -comment "check show slot output"
+
+result_debug "check show slot output"
+set parameterList ""
+lappend parameterList "{Current State.*MASTER.*BACKUP.*In Sync} exist"
+CheckKeyValue "show switch" $parameterList -time {s: 1 i: 5 d: 180 f: 180 r} \
+                                         -comment "check show slot output"
+
+} else {
+
+if { $SetDefaults == 1} {
+SetStackToDefaults
+}
+result_ok "Stack is Up"
+}
+
+}
+}
+
+proc CheckStack {} {
+
+global DUT1_CONNECT
+global DUT1_CONNECTB
+global DUTs_info
+global maxSlot
+global getSlotId
+global BackupNodeMac
+global MasterNodeMac
+global DUT1_Stacking_msma_slot
+global DUT1_Stacking_msmb_slot
+
+Login $DUT1_CONNECT -masterCheck 0 -CheckOperational 0
+
+# Default configuration for the stack topology
+
+result_debug "Get the No of Slots"
+set parameterList ""
+lappend parameterList "{Factory MAC address} 2"
+set nodeMac [GetKeyValue "show stacking detail" $parameterList]
+#set StandbyMac [getStandbyMac]
+set maxSlot [llength $nodeMac]
+result_ok "No of Slots is $maxSlot"
+
+result_debug "Get the Master Node-Mac"
+set parameterList ""
+lappend parameterList "{Role} 0 2"
+set MasterNodeMac [GetKeyValue "show stacking" $parameterList]
+regsub -all \\* $MasterNodeMac "" MasterNodeMac
+result_ok "MasterNodeMac -$MasterNodeMac"
+
+Login $DUT1_CONNECTB -masterCheck 0 -CheckOperational 0
+result_debug "Get the Backup node mac"
+set parameterList ""
+lappend parameterList "{Role} 0 2"
+set BackupNodeMac [GetKeyValue "show stacking" $parameterList]
+regsub -all \\* $BackupNodeMac "" BackupNodeMac
+result_ok "BackupNodeMac $BackupNodeMac"
+
+Login $DUT1_CONNECT -masterCheck 0
+
+set StandbyMac [getStandbyMac]
+
+set parameterList ""
+lappend parameterList "{$MasterNodeMac.*$DUT1_Stacking_msma_slot.*Active.*Master} exist"
+lappend parameterList "{$BackupNodeMac.*$DUT1_Stacking_msmb_slot.*Active.*Backup} exist"
+lappend parameterList "{Disabled} notExist"
+if {$maxSlot > 2} {
+foreach standby $StandbyMac {
+lappend parameterList "{$standby.*Active.*Standby} exist"
+}
+}
+set res1 [CheckKeyValue "show stacking" $parameterList \
+                                -comment "check show stacking" -reportResults 0]
+result_debug "check show slot output"
+set parameterList ""
+lappend parameterList "{Current State.*MASTER.*BACKUP.*In Sync} exist"
+set res2 [CheckKeyValue "show switch" $parameterList \
+                                         -comment "check show switch output" -reportResults 0]
+
+          set slotBState ""
+          for {set i 1} {$i <= $maxSlot} {incr i } {
+         lappend slotBState "{Slot-$i.*Operational} exist"
+         }
+         set res3 [CheckKeyValue "show slot"  $slotBState  \
+                                         -comment "check show slot output" -reportResults 0]
+
+
+set res [regexp "error|0" $res1|$res2|res3]
+
+if { $res == 1 } { 
+return 1 
+} else {
+return 0
+}
+}
+
+
+##################################################################
+# Procedure Name: getStandbyMac
+# Description:
+#       This proc is used to get the list of the Standby mac
+#
+# Input args:  None
+#
+# Output args: None
+# Typical usage:
+#
+# Category:
+##################################################################
+proc getStandbyMac {args} {
+global getStandbyMac
+global DUT1_CONNECT
+global DUT1_CONNECTB
+
+result_debug "Get the StandbyMac list for the stack"
+Login $DUT1_CONNECT -masterCheck 0
+set parameterList ""
+lappend parameterList "{Factory MAC address} 2"
+set nodeMac [GetKeyValue "show stacking detail" $parameterList]
+set maxSlot [llength $nodeMac]
+result_ok "nodeMac $nodeMac"
+result_ok "No of Slots is $maxSlot"
+
+result_debug "Get the Master Node-Mac"
+set parameterList ""
+lappend parameterList "{Role} 0 2"
+set MasterNodeMac [GetKeyValue "show stacking" $parameterList]
+regsub -all \\* $MasterNodeMac "" MasterNodeMac
+result_ok "MasterNodeMac -$MasterNodeMac"
+
+Login $DUT1_CONNECTB -masterCheck 0 -CheckOperational 0
+result_debug "Get the Backup node mac"
+set parameterList ""
+lappend parameterList "{Role} 0 2"
+set BackupNodeMac [GetKeyValue "show stacking" $parameterList]
+regsub -all \\* $BackupNodeMac "" BackupNodeMac
+result_ok "BackupNodeMac $BackupNodeMac"
+
+Login $DUT1_CONNECT -masterCheck 0
+
+set getStandbyMac ""
+for {set i 0 } {$i < $maxSlot} {incr i } {
+set mac [lindex $nodeMac $i]
+if {($mac == $MasterNodeMac) || ($mac == $BackupNodeMac)} {
+# skipping for master and backup mac
+} else {
+lappend getStandbyMac $mac
+}
+}
+result_ok "getStandbyMac -$getStandbyMac"
+return $getStandbyMac
+}
+
+
+proc CheckPriority {} {
+
+global DUT1_CONNECT
+Login $DUT1_CONNECT
+if { ![CheckStack ] == 1 } {
+set parameterList ""
+set priorityList ""
+lappend parameterList "{Priority} 2"
+set priorityList [GetKeyValue "show stacking detail" $parameterList]
+puts "priorityList: $priorityList"
+if { [regexp Automatic $priorityList] } {
+return "Automatic"
+} else  {
+return "userDefined"
+}
+} else {
+result_debug "Stack is not UP"
+}
+}
+
+proc SetPriority {{priority "userDefined"}} {
+global DUT1_CONNECT
+global DUT1_CONNECTB
+global DUTs_info
+global maxSlot
+global getSlotId
+global BackupNodeMac
+global MasterNodeMac
+
+Login $DUT1_CONNECT
+
+if {[CheckStack]== 0} {
+result_debug "Get the No of Slots"
+set parameterList ""
+lappend parameterList "{Factory MAC address} 2"
+set nodeMac [GetKeyValue "show stacking detail" $parameterList]
+set maxSlot [llength $nodeMac]
+result_ok "No of Slots is $maxSlot"
+
+result_debug "Get the Master Node-Mac"
+set parameterList ""
+lappend parameterList "{Role} 0 2"
+set MasterNodeMac [GetKeyValue "show stacking" $parameterList]
+regsub -all \\* $MasterNodeMac "" MasterNodeMac
+result_ok "MasterNodeMac -$MasterNodeMac"
+
+Login $DUT1_CONNECTB -masterCheck 0 -CheckOperational 0
+result_debug "Get the Backup node mac"
+set parameterList ""
+lappend parameterList "{Role} 0 2"
+set BackupNodeMac [GetKeyValue "show stacking" $parameterList]
+regsub -all \\* $BackupNodeMac "" BackupNodeMac
+result_ok "BackupNodeMac $BackupNodeMac"
+  
+set StandbyMac [getStandbyMac]
+
+if {$priority=="userDefined"} {
+Login $DUT1_CONNECT
+# Configure Master priority
+SendACmd "configure stacking node-address $MasterNodeMac priority 3"
+#  Configure Backup Node
+SendACmd "configure stacking node-address $BackupNodeMac priority 2"
+
+foreach slot $StandbyMac {
+SendACmd "configure stacking node-address $slot priority 1"
+}
+SendACmd "show stacking detail"
+SendACmd "show stacking configuration"
+} elseif {$priority=="Automatic"} {
+
+Login $DUT1_CONNECT
+# Configure Master priority
+SendACmd "configure stacking node-address $MasterNodeMac priority automatic"
+#  Configure Backup Node
+SendACmd "configure stacking node-address $BackupNodeMac priority automatic"
+
+foreach slot $StandbyMac {
+SendACmd "configure stacking node-address $slot priority automatic"
+}
+}
+} else {
+result_debug "Stack is not UP"
+}
+
+}
+
+proc SetStackToDefaults { } {
+
+global DUT1_CONNECT
+global DUT1_CONNECTB
+global DUTs_info
+global maxSlot
+global getSlotId
+global BackupNodeMac
+global MasterNodeMac
+global DUT1_Stacking_msma_slot
+global DUT1_Stacking_msmb_slot
+
+
+if {![info exists DUT1_CONNECTB]==1} {
+
+result_ok "not applicable as no DUT1_CONNECTB"
+
+} else {
+
+Login $DUT1_CONNECT
+result_debug "Get the No of Slots"
+set parameterList ""
+lappend parameterList "{Factory MAC address} 2"
+set nodeMac [GetKeyValue "show stacking detail" $parameterList]
+set maxSlot [llength $nodeMac]
+result_ok "No of Slots is $maxSlot"
+
+result_debug "Get the Master Node-Mac"
+set parameterList ""
+lappend parameterList "{Role} 0 2"
+set MasterNodeMac [GetKeyValue "show stacking" $parameterList]
+regsub -all \\* $MasterNodeMac "" MasterNodeMac
+result_ok "MasterNodeMac -$MasterNodeMac"
+
+Login $DUT1_CONNECTB -masterCheck 0 -CheckOperational 0
+result_debug "Get the Backup node mac"
+set parameterList ""
+lappend parameterList "{Role} 0 2"
+set BackupNodeMac [GetKeyValue "show stacking" $parameterList]
+regsub -all \\* $BackupNodeMac "" BackupNodeMac
+result_ok "BackupNodeMac $BackupNodeMac"
+
+for {set i 1} {$i <= $maxSlot} {incr i} {
+set flag($i) 0
+}
+
+Login $DUT1_CONNECT
+# Configure Master priority
+SendACmd "enable stacking node-address $MasterNodeMac"
+SendACmd "configure stacking node-address $MasterNodeMac master-capability on"
+SendACmd "configure stacking node-address $MasterNodeMac priority 3"
+SendACmd "configure stacking node-address $MasterNodeMac  slot-number $DUT1_Stacking_msma_slot"
+SendACmd "configure stacking mac-address"
+set flag($DUT1_Stacking_msma_slot) 1
+
+#Login $DUT1_CONNECT -masterCheck 0
+
+#  Configure Backup Node
+SendACmd "enable stacking node-address $BackupNodeMac"
+SendACmd "configure stacking node-addres $BackupNodeMac master-capability on"
+SendACmd "configure stacking node-address $BackupNodeMac priority 2"
+SendACmd "configure stacking node-address $BackupNodeMac slot-number $DUT1_Stacking_msmb_slot"
+set flag($DUT1_Stacking_msmb_slot) 1
+
+if { $maxSlot > 2 } {
+
+set StandbyMac [getStandbyMac]
+result_ok "StandbyMac -$StandbyMac"
+
+# Configure remaining slots
+
+foreach slot $StandbyMac {
+
+SendACmd "enable stacking node-address $slot"
+SendACmd "configure stacking node-addres $slot master-capability off"
+SendACmd "configure stacking node-address $slot priority 1"
+  for { set j 1 } {$j <=$maxSlot }  {incr j } {
+     if { $flag($j) == 0 } {
+     SendACmd "configure stacking node-address $slot slot-number $j"
+     set flag($j) 1
+     break
+     } 
+  }
+
+}
+}
+
+SendACmd "reboot stack-topology"
+WaitForRebootStack 220 "Waiting after reboot-stack"
+
+Login $DUT1_CONNECT -masterCheck 0
+set parameterList ""
+lappend parameterList "{$MasterNodeMac.*$DUT1_Stacking_msma_slot.*Active.*Master} exist"
+lappend parameterList "{$BackupNodeMac.*$DUT1_Stacking_msmb_slot.*Active.*Backup} exist"
+CheckKeyValue "show stacking" $parameterList -time {s: 1 i: 5 d: 180 f: 180 r} \
+                                -comment "check show slot output"
+
+result_debug "check show slot output"
+set parameterList ""
+lappend parameterList "{Current State.*MASTER.*BACKUP.*In Sync} exist"
+CheckKeyValue "show switch" $parameterList -time {s: 1 i: 5 d: 180 f: 180 r} \
+                                         -comment "check show slot output"
+
+}
+
+}
+

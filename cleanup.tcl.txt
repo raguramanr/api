@@ -1,0 +1,1121 @@
+
+# Global variable for upload debug command
+set coreDumpFiles ""
+
+################################################################## 
+# Procedure Name: cleanup  
+# Description:  show log information of all involved DUTs at the end
+#		of each test module 
+# Input args: {verIndex "all"}
+# Output args: none
+# Typical usage: 
+#           cleanup
+# Category: GetSwitchInfo
+##################################################################
+proc cleanup {{verIndex "all"}} {
+    global env
+    global DUTs_info MAIN
+    global supportedPlatform
+    global coreDumpFiles 
+    global efence
+    global chassis
+    global enableSaveConfigPerTest
+    global DUTs_Slot_info
+    global pioneerChassis;
+    global gHeapTracingProcess heapTraceEnabled;
+    global stacking
+    global noNvram
+    global tftpServerList
+    global returnFlag
+
+    # ----- Environment variables setup
+    set _log_user [log_user]
+    set DUTs_info(tftpserverlist) $tftpServerList;
+    
+    UpdateTrackDBTxt "executing: cleanup";# tracking db location
+
+    # Logic to check for code coverage run.  If this in fact a code coverage run, 
+    #    a reboot is required in order to build the coverage files in internal memory.
+    set rebootList ""
+    set ccovSession 0
+    set coreDumpIFiles ""
+    if {[CompareRelease [GetVersion DUT1] "15.1.0"] < 0} {
+        result_debug "INFO:  Release too early for code coverage support"
+    } else {
+        set fd_res [open_result_file "CCOV_Check" "a"]
+        result_debug "CCOV Check for /tmp/gcov_enabled on all DUTs"
+        for {set numDUT 1; global DUT${numDUT}_CONNECT} \
+                    { [info exists DUT${numDUT}_CONNECT] } \
+                    {incr numDUT ; global DUT${numDUT}_CONNECT} {
+            global DUT${numDUT}_CONNECTB
+            foreach msm {a b} {
+                if {$msm=="a"||($msm=="b"&&[info exists DUT${numDUT}_CONNECTB])} {
+                    if {$msm=="a"} {
+                        set connect [set DUT${numDUT}_CONNECT]
+                        Login $connect
+                    } elseif {$msm=="b"} {
+                        set connect [set DUT${numDUT}_CONNECTB]
+                        Login $connect -masterCheck 0 -CheckOperational 0
+                    }
+                    result_debug "================= CCOV File Check ====================="
+                    EnableDebugMode
+                    set ccovBuf [SendACmd "!ls /tmp"]
+                    if {([regexp -nocase "gcov_enabled" $ccovBuf])} {
+                        lappend rebootList $numDUT
+                        set ccovSession 1
+                        set newName $DUTs_info(DUT${numDUT},sysType)
+                        regsub -all {[ ]+} $newName "-" newName
+                        result_debug "GCOV Enabled on DUT $numDUT"
+                        SendACmd "configure snmp sysName $newName"
+                    }
+                    unset ccovBuf
+                }
+            }
+        }
+        close_result_file
+    }
+    # Reboot all code coverage switches to build the coverage data files.
+    if {$ccovSession} {
+        set rebootString [join $rebootList ","]
+        CheckReboot $rebootString
+    }
+    #  End of code coverage run check
+    for {set numDUT 1; global DUT${numDUT}_CONNECT} { [info exists DUT${numDUT}_CONNECT] } \
+                                     {incr numDUT ; global DUT${numDUT}_CONNECT} {
+        global DUT${numDUT}_CONNECTB
+        result_debug " Memory Card Present : [regexp -nocase \"present\" $DUTs_info(DUT${numDUT},memoryCard)]"
+        if {[CompareRelease [GetVersion DUT${numDUT}] "11.6.0.1"] >= 0} {
+            foreach msm {a b} {
+                if {$msm=="a"||($msm=="b"&&[info exists DUT${numDUT}_CONNECTB])} {
+                    set fd_res [open_result_file "DUT${numDUT}Log$msm" "a"]
+                    result_h1 "Cleaning up on DUT$numDUT $msm"
+                    if {$msm=="a"} {
+                        set connect [set DUT${numDUT}_CONNECT]
+                        Login $connect
+                    } elseif {$msm=="b"} {
+                        set connect [set DUT${numDUT}_CONNECTB]
+                        Login $connect -masterCheck 0 -CheckOperational 0
+                    }
+                    result_debug "=============================WARNING LOGS============================="
+                    set buf [SendACmd "show log warning"]
+                    SendACmd "show switch"
+                    CaptureErroneousLog $buf
+                    #_verifyCFCorruptionStatusOnLogin
+                    EnableDebugMode
+                    result_debug "Gather info for ECC bug"
+                    SendACmd "debug hal show sys-health-check"
+
+                    if {[CompareRelease [GetVersion DUT${numDUT}] "12.0.3.1"] >= 0} {
+                        if {![regexp -nocase $noNvram [GetPlatform DUT$numDUT]]} {
+                            lappend cfbuff "{^1} notExist"
+                            if {[CheckKeyValue "!cat /proc/jffs2_corruption" $cfbuff -reportResults 0] != "ok"} {
+                                result_error "CF corruption happened. Format CF"
+                                SendACmd "!dd if=/dev/hda7 of=/dev/null bs=1024 count=16384"
+                            }
+                            unset cfbuff
+                        }
+                        SendACmd "ls"
+
+                        set efenceBuf [SendACmd "debug epm show heapdbg"]
+                        if {([regexp -nocase "not" $efenceBuf])} {
+                            result_debug "$efenceBuf"
+                        } else {
+                            result_debug "Efence is enabled for process $efenceBuf"
+                            result_debug "Disabling efence for all process now"
+                            SendACmd "debug epm disable heapdbg process all"
+                        }
+                        unset efenceBuf
+                    }
+
+                    result_debug "Display MiniCore if any"
+                    if {[regexp -nocase $noNvram [GetPlatform DUT$numDUT]]} {
+                        set coreNvramContent [SendACmd "!cat /persistent/clearOnRescue/core*" NULL NULL false]
+                    } else {
+                        set coreNvramContent [SendACmd "!cat /proc/core*" NULL NULL false]
+                    }
+                    if { [regexp -nocase "bd-88|aspen|xcm|$pioneerChassis" $DUTs_info(DUT${numDUT},platform)] } {
+                        SendACmd "show debug system-dump" 
+                        set slotNumber 1
+                        foreach slot $DUTs_info(DUT${numDUT},hwList) {
+                            if {[regexp -nocase "Empty" $slot]} {
+                                incr slotNumber;
+                                continue;
+                            }
+
+                            SendACmd "show debug system-dump slot $slotNumber" 
+                            if {[regexp -nocase $pioneerChassis $DUTs_info(DUT${numDUT},platform)]} {
+                                exSleep 40
+                                SendACmd ""
+                            } 
+                            SendACmd "clear debug system-dump slot $slotNumber" 
+                            incr slotNumber
+                        }
+                    } 
+                    SendACmd "clear debug system-dump" NULL NULL false
+                    if {[regexp -nocase $noNvram [GetPlatform DUT$numDUT]]} {
+                        result_debug "core_dump_info cleared by previous command"
+                    } else {
+                        SendACmd "!echo clear_old > /proc/core_dump_info" NULL NULL false
+                        SendACmd "!echo clear_old > /proc/core_dump_info_last" NULL NULL false
+                    }
+                    if { ([info exists enableSaveConfigPerTest] ) && \
+                    ([CompareRelease [GetVersion DUT${numDUT}] 12.1]>=0 ) \
+                    && ($enableSaveConfigPerTest == "yes" ) } {
+                        if {$msm=="a"} {
+                            uploadConfigDiff
+                        }
+                    }
+                    if {[regexp -nocase "present" $DUTs_info(DUT${numDUT},memoryCard)] && \
+                           $DUTs_info(DUT${numDUT},coreFileTarget) == "memorycard"} {
+                        set coreBuf [SendACmd "ls /usr/local/ext"]
+                    } else {
+                        set coreBuf [SendACmd "ls /usr/local/tmp"]
+                    }
+                    if {$ccovSession} {
+                        if {(![regexp -nocase "core.*" $coreBuf]) && \
+                               (![regexp -nocase "trace.*_" $coreBuf]) && \
+                               (![regexp -nocase "ccov.*" $coreBuf]) } {
+                            close_result_file
+                            continue
+                        }
+                    } elseif {(![regexp -nocase "core.*" $coreBuf]) && \
+                           (![regexp -nocase "trace.*_" $coreBuf]) } {
+                        close_result_file
+                        continue
+                    }
+                    # If ONLY ccov code coverage is hit, don't fail the test.
+                    set COREPRESENT($numDUT) 0
+                    if {(![regexp -nocase "core.*" $coreBuf]) && \
+                            (![regexp -nocase "trace.*_" $coreBuf]) && \
+                            ([regexp -nocase "ccov.*" $coreBuf]) } {
+                        set CCOV_ONLY($numDUT) 1
+                    } else {
+                        set CCOV_ONLY($numDUT) 0
+                    }
+                    # We only want to set as a failure if a core file is present.
+                    if {([regexp -nocase "core.*" $coreBuf]) } {
+                        set COREPRESENT($numDUT) 1
+                        set testText "core dump"
+                    } else {
+                        set COREPRESENT($numDUT) 0
+                        set testText "system files"
+                    }
+                    SendACmd "configure default delete port all" ;# needed if sw rebooted
+                    #EnableDebugMode
+                    #SendACmd "jerry ems gzip trace"
+                    exSleep 3 
+                    DisableDebugMode
+
+                    report_start_test "NOTE: found $testText in DUT${numDUT} MSM-$msm \
+                    internal memory, moving it to TFTP server"
+                    if { $msm == "b" } {
+                        set fd_bak $fd_res
+                        set connect [set DUT${numDUT}_CONNECT]
+                        puts "connect : $connect"
+                        Login $connect
+                        if {![info exists configGw]} {
+                            ConfigGatewayNetwork
+                            set configGw 1
+                        }
+                        set fd_res $fd_bak
+                    } else {
+                        ConfigGatewayNetwork
+                        set configGw 1
+                    }
+                    SendACmd "ping vr [GetVrString $numDUT] [lindex $DUTs_info(tftpserverlist) 0]"
+
+                    exSleep 15
+                    set outFd [open "Tmp/sendcmdOut" "w"]
+                    SendACmd "upload debug [lindex $DUTs_info(tftpserverlist) 0] vr [GetVrString $numDUT]" \
+                             "NULL" $outFd "true" "3" "n"
+                    if {$COREPRESENT($numDUT)} {
+                        result_error "There is a coredump file on DUT${numDUT} MSM-$msm ."
+                    } else {
+                        result_ok "Moved the code coverage file from DUT${numDUT} MSM-$msm to TFTP server"
+                    }
+
+                    close $outFd 
+
+                    set outFd [open "Tmp/sendcmdOut" "r"]
+                    while { [gets $outFd line] != -1 } {
+                        if {[regexp -nocase "Tarball Name: (.*.tgz)" $line result fileName]} {
+                            lappend coreDumpFiles "DUT${numDUT}_$fileName"
+                            if [regexp "I" "DUT${numDUT}_$fileName"] {
+                                result_debug "CORE FILE NAME $fileName"
+                                lappend coreDumpIFiles "DUT${numDUT}_$fileName"
+                            }
+                        }
+                    }
+                    #added for sending mail on a core
+                    global cfg
+                    if {$COREPRESENT($numDUT)} {
+                        set message1 "\nOn cfg $cfg\n Seeing a core file on DUT${numDUT} \
+                           while running $MAIN(feature_directory)\n\
+                           on build $DUTs_info(DUT${numDUT},version) $coreBuf \n \
+                           $coreNvramContent"
+                        set tempMsgFile   "/tmp/filedoesnot.txt.[pid]"
+                        exec echo $message1 > $tempMsgFile
+                        catch {exec dos2unix -f $tempMsgFile} a
+                        exec mail -s "CoreDump seen in test bed $cfg on DUT${numDUT} during $MAIN(feature_directory) " \
+                                      sqaauto@extremenetworks.com < $tempMsgFile
+                        exec rm -f $tempMsgFile
+                    }
+                    close $outFd
+                    result_debug "List of debug file names are $coreDumpFiles"
+                    file delete  "Tmp/sendcmdOut"
+                    report_end_test
+                    close_result_file
+                }
+            }
+
+            # ---- Unconfigure network only if it already configured
+            if {[info exists configGw]} {
+                set connect [set DUT${numDUT}_CONNECT]
+                Login $connect
+                UnconfigGatewayNetwork
+                unset configGw
+            }
+            continue
+        }
+        ###
+        foreach msm {a b} {
+            if {$msm=="a"||($msm=="b"&&[info exists DUT${numDUT}_CONNECTB])} {
+                set fd_res [open_result_file "DUT${numDUT}Log$msm" "a"]
+                result_h1 "Cleaning up on DUT$numDUT $msm"
+                set buf ""
+                if {[regexp -nocase $supportedPlatform [GetPlatform DUT$numDUT]]} {
+                    if {$msm=="a"} {
+                        set connect [set DUT${numDUT}_CONNECT]
+                        Login $connect
+                    } elseif {$msm=="b"} {
+                        set connect [set DUT${numDUT}_CONNECTB]
+                        Login $connect -masterCheck 0 -CheckOperational 0
+                    }
+                    result_debug "<<<<<    after test scripts in tests_to_run($verIndex) finished    >>>>>"
+                    result_debug "=============================WARNING LOGS============================="
+                    set buf [SendACmd "show log warning"]
+                    result_debug "=============================ALL LOGS============================="
+                    #   SendACmd	"show log"
+                }
+                # SK: Foll proc is written on request from Developers to be able to capture specific error
+                # nasty logs and maybe dump additional info
+                CaptureErroneousLog $buf
+
+                #   SendACmd "clear log stat"
+                if {[CompareRelease [GetVersion DUT${numDUT}] 11.1.0.21]>=0} {
+                    # EY-06-14-2006: Changed regexp switch from "--" to "-nocase".
+                    if {[regexp -nocase "present" $DUTs_info(DUT${numDUT},memoryCard)] && \
+                        $DUTs_info(DUT${numDUT},coreFileTarget) == "memorycard"} {
+                        set coreBuf [SendACmd "ls /usr/local/ext"]
+                        if { [regexp -nocase "Value too large for defined data type|No such file" $coreBuf] } {
+                            result_error "External Memory Card corruption happened. Format Memory Card"
+                            formatExternalCF
+                        } 
+                        set tftpCliMode externalMem
+                    } else {
+                        set coreFileList ""
+                        set coreBuf [SendACmd "ls /usr/local/tmp"]
+                        set tftpCliMode internalMem
+                        result_debug "coreBuf $coreBuf"
+                    }
+
+                    #_verifyCFCorruptionStatusOnLogin
+                    EnableDebugMode
+                    if {[CompareRelease [GetVersion DUT${numDUT}] "12.0.3.1"] >= 0} {
+                        lappend cfbuff "{^1} notExist"
+                        if {[CheckKeyValue "!cat /proc/jffs2_corruption" $cfbuff -reportResults 0] != "ok"} {
+                            result_error "CF corruption happened. Format CF"
+                            SendACmd "!dd if=/dev/hda7 of=/dev/null bs=1024 count=16384"
+                        }
+                        unset cfbuff
+                        result_debug "Display MiniCore if any"
+                        SendACmd "!cat /proc/core*" NULL NULL false
+                        if { [regexp -nocase "bd-88|aspen|xcm|$pioneerChassis" \
+                                               $DUTs_info(DUT${numDUT},platform)] } {
+                            SendACmd "show debug system-dump" 
+                            set slotNumber 1
+                            foreach slot $DUTs_info(DUT${numDUT},hwList) {
+                                if {[regexp -nocase "Empty" $slot]} {
+                                    incr slotNumber;
+                                    continue;
+                                }
+                                SendACmd "show debug system-dump slot $slotNumber" 
+                                #LK In pioneer slot eeprom is not directly connected to MSM it takes 
+                                # around 12 seconds to get the slot dump info from IO
+                                # hence user will get a prompt and then he will get the dump after 12-30 seconds
+                                # below is workaround for same to capture this info
+                                if {[regexp -nocase $pioneerChassis $DUTs_info(DUT${numDUT},platform)]} {
+                                    exSleep 40
+                                    SendACmd ""
+                                } 
+                                SendACmd "clear debug system-dump slot $slotNumber" 
+                                incr slotNumber;
+                            }
+                        } 
+                        SendACmd "clear debug system-dump" NULL NULL false
+                        SendACmd "!echo clear_old > /proc/core_dump_info" NULL NULL false
+                        SendACmd "!echo clear_old > /proc/core_dump_info_last" NULL NULL false
+                        if { ([info exists enableSaveConfigPerTest] ) && \
+                               ([CompareRelease [GetVersion DUT${numDUT}] 12.1]>=0 ) && \
+                               ($enableSaveConfigPerTest == "yes") } {
+                            if {$msm=="a"} {
+                                uploadConfigDiff
+                            }
+                        }
+
+                        set efenceBuf [SendACmd "debug epm show heapdbg"]
+                        if {([regexp -nocase "not" $efenceBuf])} {
+                            result_debug "$efenceBuf"
+                        } else {
+                            result_debug "Efence is enabled for process $efenceBuf"
+                            result_debug "Disabling efence for all process now"
+                            SendACmd "debug epm disable heapdbg process all"
+                        }
+                        unset efenceBuf
+                    }
+
+                    if {[regexp -nocase "core.*" $coreBuf]} {
+                        report_start_test "NOTE: found core dump on memoryCard, moving it out using tftp..."
+                        result_error "NOTE: found core dump on memoryCard, moving it out using tftp..."
+                        SendACmd "configure default delete port all" ;# needed if sw rebooted
+                        if {$msm=="a"} {
+                            ConfigGatewayNetwork
+                        }
+                        after 3000
+                        global DUT${numDUT}_IP 
+                        set dutIp [set DUT${numDUT}_IP]
+                        set tarBallIndex 0
+                        foreach coreFile $coreBuf {
+                            #puts "coreFile:|$coreFile,[regexp -nocase "^core" $coreFile]|"
+                            if {[regexp -nocase "^core" $coreFile]} {
+                                if {$msm=="a"} {
+                                    set connect [set DUT${numDUT}_CONNECT]
+                                    Login $connect
+                                    EnableDebugMode
+                                    if {$tarBallIndex==0} {
+                                        #SendACmd "jerry ems gzip trace"
+                                        exSleep 1 ;# needed for device to recover or else truncates cli
+                                        set tarBallIndex 1
+                                        _tftpProcessOutFromA $dutIp $numDUT $msm
+                                    }
+                                } elseif {$msm=="b"} {
+                                    set connect [set DUT${numDUT}_CONNECTB]
+                                    Login $connect -masterCheck 0 -CheckOperational 0
+                                    EnableDebugMode
+                                    #SendACmd "jerry ems gzip trace"
+                                    _tftpFromBToA [set DUT${numDUT}_CONNECT] $connect $coreFile $numDUT
+                                    if {$tarBallIndex==0} {
+                                        Login [set DUT${numDUT}_CONNECT]
+                                        ConfigGatewayNetwork
+                                        exSleep 2
+                                        set tarBallIndex 1
+                                        _tftpProcessOutFromA $dutIp $numDUT $msm
+                                    }
+                                }
+                                _tftpCoresOutFromA [set DUT${numDUT}_CONNECT] $tftpCliMode \
+                                             $coreFile $dutIp $msm $numDUT
+                            } else {
+                                continue
+                            }
+                        }
+                        report_end_test
+                        set connect [set DUT${numDUT}_CONNECT]
+                        Login $connect
+                        UnconfigGatewayNetwork
+                    }
+                }
+                close_result_file
+            }
+        }
+    }
+
+    for {set numDUT 1; global DUT${numDUT}_CONNECT} { [info exists DUT${numDUT}_CONNECT] } \
+                {incr numDUT ; global DUT${numDUT}_CONNECT} {
+        set connect [set DUT${numDUT}_CONNECT]
+        #Added following procedure to avoid unnecessary erroes while removing unconfig sw from cfg
+        #allCleanup  $numDUT
+
+        foreach msm {a b} {
+            if {$msm=="a"||($msm=="b"&&[info exists DUT${numDUT}_CONNECTB])} {
+                set fd_res [open_result_file "DUT${numDUT}Log$msm" "a"]
+                result_h1 "disabling Electric Fence on DUT$numDUT $msm"
+                if {[regexp -nocase $supportedPlatform [GetPlatform DUT$numDUT]]} {
+                    if {$msm=="a"} {
+                        set connect [set DUT${numDUT}_CONNECT]
+                        Login $connect
+                    } elseif {$msm=="b"} {
+                        set connect [set DUT${numDUT}_CONNECTB]
+                        Login $connect -masterCheck 0 -CheckOperational 0
+                    }
+                    SendACmd "show config"
+                    SendACmd "show memory"
+
+                    if {[info exists efence]} {
+                        set goEfence 1
+                        if {!([CompareRelease [GetVersion DUT${numDUT}] 12.0.3]>=0)} {
+                            set goEfence 0
+                        }
+                        if {![regexp -nocase "$chassis" [GetPlatform DUT${numDUT}]]} {
+                            set goEfence 0
+                        }
+                        if {([llength $efence] == 1) && ([lindex $efence 0] == "no")} {
+                            set goEfence 0
+                        }
+
+                        if {$goEfence} {
+                            # disable Electric Fence
+                            puts "*****************************************************************"
+                            puts "*****************************************************************"
+                            puts "** Disabling Electric Fence on DUT$numDUT **"
+                            puts "*****************************************************************"
+                            puts "*****************************************************************"
+
+                            EnableDebugMode
+                            SendACmd "debug epm disable heapdbg process all"
+                            exSleep 10
+                            DisableDebugMode
+                            #CheckReboot $numDUT
+                        }
+                    }
+                    if { ([info exists gHeapTracingProcess] ) && ($gHeapTracingProcess != "no") } {
+                        if {!([regexp -nocase "$stacking" [GetPlatform DUT${numDUT}]])} {
+                            # enable heaptracing only onces in a module regression
+                            if { $heapTraceEnabled == "yes" } {
+                                if { [regexp -nocase "$chassis" [GetPlatform DUT${numDUT}]] == 1 } {
+                                    if { $msm=="b" } {
+                                        disableHeapTrc $numDUT "B"
+                                    } elseif { $msm=="a" } {
+                                        disableHeapTrc $numDUT
+                                    }
+                                } else {
+                                    disableHeapTrc $numDUT
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        set connect [set DUT${numDUT}_CONNECT]
+        Login $connect -masterCheck 0 -CheckOperational 0
+    }
+    global harness
+    if {![info exists harness]} {
+        set harness "tcl"
+    }
+    if {1 || $harness == "tpb"} {
+        global RESWEB
+        package forget http 1.0
+        package require http
+        global sourceFile optionalPath subversion qId autoPath
+        set HOST [exec hostname -s]
+        set dir [string trimleft [pwd] "$autoPath"]
+        puts "create_report_directory $sourceFile no $optionalPath '' $subversion $qId"
+        set repDir [create_report_directory "$sourceFile" "no" "$optionalPath" "" "$subversion" "$qId"]
+        set link "http://${RESWEB}/${dir}/${repDir}/"
+        puts "@@@@ TPB TCL Report Link @@@@"
+        puts "\"$link\""
+        puts "@@@@ Test Builder END Report Link @@@@"
+
+        if {[info exists returnFlag] && $returnFlag == "connectionBad"} {
+            puts "Hit Check Connections Failure"
+            set resDir [get_result_dir]
+            set link "http://${RESWEB}/${dir}/$resDir/"
+            puts "\nResult Directory - Check System Setup for CC failures:\n \"$link\"\n";
+        }
+
+        if {[llength $coreDumpIFiles] >= 1} {
+            puts "@@@@ TPB TCL Core Report Link @@@@"
+            set myLinkList ""
+            foreach cif $coreDumpIFiles {
+                lappend myLinkList "${link}${cif}"
+            }
+            set fullCoreLink [join $myLinkList "!!"]
+            puts "$fullCoreLink"
+            puts "@@@@ Test Builder END Core Report Link @@@@"
+        }
+        package forget http
+        package require http 1.0
+    }
+    log_user $_log_user
+}
+
+proc _tftpCoresOutFromA {connect tftpCliMode coreFile dutIp msm numDUT} {
+    global DUTs_info
+    global CCOV_ONLY
+
+    Login $connect
+    if {$tftpCliMode=="externalMem"} {
+        set myCmd "tftp [lindex $DUTs_info(tftpserverlist) 0] -v [GetVrString $numDUT] "
+        append myCmd "-p -l /usr/local/ext/$coreFile -r [set coreFile]_$dutIp$msm"
+        set tftpCliLegality [CheckCmdLegal "$myCmd"]
+    } elseif {$tftpCliMode=="internalMem"} {
+        set myCmd "tftp [lindex $DUTs_info(tftpserverlist) 0] -v [GetVrString $numDUT] "
+        append myCmd "-p -l /usr/local/tmp/$coreFile -r [set coreFile]_$dutIp$msm"
+        set tftpCliLegality [CheckCmdLegal "$myCmd"]
+    } else {
+        # OldCoreDumpMethod(pre-mcKinley) tftp can not be done as core is in /scratch.
+        # Using unix tftp
+        if {[regexp -nocase default [GetVrString $numDUT]]} {
+            set vr 2
+        } else {
+            set vr 0
+        }
+        set timeout 300
+        set myCmd "!tftp [lindex $DUTs_info(tftpserverlist) 0] -v $vr -p "
+        append myCmd "-l /scratch/$coreFile -r [set coreFile]_$dutIp$msm"
+        set tftpCliLegality [CheckCmdLegal "$myCmd"]
+        global connectionTimeout
+        set timeout $connectionTimeout
+    }
+    if {$tftpCliLegality!="illegal"} {
+        report_start_test "$coreFile saved as [set coreFile]_$dutIp$msm"
+        result_debug "[set coreFile]_$dutIp$msm successfully put on tftp server"
+        result_error "$coreFile saved as [set coreFile]_$dutIp$msm"
+        report_end_test
+        set fd_out [open "Tmp/tmp_$dutIp$msm" "w"];
+        set targetCore "[set coreFile]_$dutIp$msm"
+        puts $fd_out "get [set coreFile]_$dutIp$msm $targetCore"
+        puts $fd_out "quit"
+        close $fd_out
+        if {[catch {exec /usr/bin/tftp [lindex $DUTs_info(tftpserverlist) 0] < ./Tmp/tmp_$dutIp$msm} reason]} {
+            result_error "error: $reason"
+            return -1
+        }
+        if {[catch {file rename $targetCore [get_result_dir]} reason]} {
+            result_error "error: $reason"
+            return -1
+        }
+        file delete ./Tmp/tmp_$dutIp$msm
+        result_debug "Remove core $coreFile from /usr/local/ext ..."
+        if {[regexp -- "present" $DUTs_info(DUT${numDUT},memoryCard)]} {
+            SendACmd "rm /usr/local/ext/$coreFile"
+        } elseif {$tftpCliMode=="internalMem"} {
+            SendACmd "rm /usr/local/tmp/$coreFile"
+        } else {
+            SendACmd "!rm /scratch/$coreFile"
+        }
+        global tftpServerLogin tftpServerPasswd tftpServerTftpboot
+        login_linux [lindex $DUTs_info(tftpserverlist) 0] $tftpServerLogin $tftpServerPasswd
+        catch {SendACmd "/bin/rm $tftpServerTftpboot/[set coreFile]_$dutIp$msm" NULL NULL true 1}
+    } else {
+        result_error "Error while tftp core $coreFile"
+    }
+}
+
+proc _tftpProcessOutFromA {dutIp numDUT msm} {
+    global DUTs_info
+
+    if {$msm=="a"} {
+        set myCmd "tftp [lindex $DUTs_info(tftpserverlist) 0] "
+        append myCmd "-v [GetVrString $numDUT] -p -l process_traces.tgz "
+        append myCmd "-r process_traces.tgz_$dutIp$msm"
+        set tftpCliLegality [CheckCmdLegal "$myCmd"]
+    } elseif {$msm=="b"} {
+        set myCmd "tftp [lindex $DUTs_info(tftpserverlist) 0] -v [GetVrString $numDUT] "
+        append myCmd "-p -l /usr/local/tmp/process_tracesB.tgz -r process_traces.tgz_$dutIp$msm"
+        set tftpCliLegality [CheckCmdLegal "$myCmd"]
+    }
+    if {$tftpCliLegality!="illegal"} {
+        report_start_test "process_traces.tgz saved as process_traces.tgz_$dutIp$msm"
+        result_debug "process_traces.tgz_$dutIp$msm successfully put on tftp server"
+        result_ok "process_traces.tgz saved as process_traces.tgz_$dutIp$msm"
+        report_end_test
+        set fd_out [open "Tmp/tmp_$dutIp$msm" "w"];
+        set targetProcess "process_tracesDUT${numDUT}msm${msm}.tgz"
+        puts $fd_out "get process_traces.tgz_$dutIp$msm $targetProcess"
+        puts $fd_out "quit"
+        close $fd_out
+        if {[catch {exec /usr/bin/tftp [lindex $DUTs_info(tftpserverlist) 0] < ./Tmp/tmp_$dutIp$msm} reason]} {
+            result_error "error: $reason"
+            return -1
+        }
+        if {[catch {file rename $targetProcess [get_result_dir]} reason]} {
+            result_error "error: $reason"
+            return -1
+        }
+        file delete ./Tmp/tmp_$dutIp$msm
+        result_debug "Remove process_traces.tgz from DUT..."
+        SendACmd "rm process_traces.tgz"
+        global tftpServerLogin tftpServerPasswd tftpServerTftpboot
+        login_linux [lindex $DUTs_info(tftpserverlist) 0] $tftpServerLogin $tftpServerPasswd
+        catch {SendACmd "/bin/rm $tftpServerTftpboot/process_traces.tgz_$dutIp$msm" NULL NULL true 1}
+    } else {
+        result_error "Error while tftp process_traces.tgz to process_traces.tgz_$dutIp$msm"
+    }
+}
+
+proc _tftpFromBToA {connecta connectb coreFile numDUT} {
+    global bcmChassis DUTs_info
+
+    set msmb 0
+    if {[regexp -nocase $bcmChassis $DUTs_info(DUT$numDUT,platform)]} {
+        ;# 10.0.<slot>.2  MSMA-slot 11, MSMB-slot 12
+        if {[regexp -nocase "8810" $DUTs_info(DUT$numDUT,platform)]} {
+            set msmb 12
+        } else {
+            set msmb 8
+        }
+    } else {
+        set msmb 10
+    }
+    Login $connectb -masterCheck 0
+    if {[regexp -nocase "present" $DUTs_info(DUT${numDUT},memoryCard)]} {
+        SendACmd "!mv /mnt/a/$coreFile /scratch/$coreFile"
+        Login $connecta
+        EnableDebugMode
+        SendACmd "!tftp -v 1 -g -r /scratch/$coreFile -l /scratch/intern/$coreFile 10.0.$msmb.2"
+        SendACmd "mv /usr/local/tmp/$coreFile /usr/local/ext/$coreFile"
+        SendACmd "!tftp -v 1 -g -r /config/process_traces.tgz -l /scratch/process_tracesB.tgz 10.0.$msmb.2"
+        SendACmd "!mv /scratch/process_tracesB.tgz /scratch/intern/process_tracesB.tgz"
+    } else {
+        SendACmd "!mv /scratch/intern/$coreFile /scratch/$coreFile"
+        Login $connecta
+        EnableDebugMode
+        SendACmd "!tftp -v 1 -g -r /scratch/$coreFile -l /scratch/intern/$coreFile 10.0.$msmb.2"
+        SendACmd "!tftp -v 1 -g -r /config/process_traces.tgz -l /scratch/process_tracesB.tgz 10.0.$msmb.2"
+        SendACmd "!mv /scratch/process_tracesB.tgz /scratch/intern/process_tracesB.tgz"
+    }
+    # Remove unwatned files in msm-b
+    Login $connectb -masterCheck 0
+    SendACmd "!rm /scratch/$coreFile"
+    return
+}
+
+
+################################################################## 
+# Procedure Name:  dumpAllSwitchInfo
+# Description:  dump switch, version, vlan, port and edp information of 
+#	all involved DUTs when getting connectionBad during checkConnection
+# Input args: none
+# Output args: none
+# Typical usage: 
+#           showPortandEDPinfo
+# Category: GetSwitchInfo
+##################################################################
+proc dumpAllSwitchInfo {} {
+    global DUTs_info;
+    global supportedPlatform
+
+    # ----- Environment variables setup
+    set _log_user [log_user];
+
+    for {set numDUT 1; global DUT${numDUT}_CONNECT} { [info exists DUT${numDUT}_CONNECT] } \
+                           {incr numDUT ; global DUT${numDUT}_CONNECT} {
+        set fd_res [open_result_file "DUT${numDUT}Log" "a"];
+        set connect [set DUT${numDUT}_CONNECT];
+        Login $connect;
+        result_debug "<<<<<    after connectionBad   >>>>>";
+        set platform [GetPlatform DUT$numDUT];
+        result_debug "===========================show switch all==============================";
+        SendACmd	"show switch";
+        result_debug "===========================show version all==============================";
+        SendACmd	"show version";
+        result_debug "===========================show vlan==============================";
+        SendACmd	"show vlan";
+        result_debug "===========================show fdb==============================";
+        SendACmd	"show fdb";
+        if {[regexp -nocase $supportedPlatform $platform]} {
+            result_debug "===========================show port info all==============================";
+            SendACmd	"show port info";
+            result_debug "=============================edp port all============================="
+            SendACmd  "show edp port all";
+        } elseif {[regexp -nocase "BD" $platform]} {
+            # --- BD-PC
+            result_debug "===========================show port info all==============================";
+            SendACmd	"show port 1:1-5:4 info";
+            result_debug "=============================edp port all============================="
+            SendACmd	"show edp port 1:1-5:4";
+        } else {
+            # --- Summit-PC
+            result_debug "===========================show port info all==============================";
+            SendACmd	"show port 1-12 info";
+            result_debug "=============================edp port all============================="
+            SendACmd	"show edp port 1-12";
+        }
+        result_debug "=============================ALL LOGS============================="
+        SendACmd	"show log"
+        close_result_file
+    }
+
+    log_user $_log_user;
+}
+
+proc CaptureErroneousLog {buff} {
+    if {[regexp -nocase {Port ([0-9]:[0-9]) has encountered a fault condition} $buff matched subStr]} {
+        SendACmd "show inline-power info details ports $subStr"
+    }
+    if {[regexp -nocase "aspendiags" $buff]} {
+        result_error "Aspen diags have log error msgs"
+    }
+    return
+}
+
+proc moveCoreDumpsToReportDir { } {
+    global tftpServerList tftpServerLogin tftpServerPasswd tftpServerTftpboot
+    global coreDumpFiles
+    global reportDir
+
+    if { [llength $coreDumpFiles] == 0 } {
+        result_debug "No core dump files found in DUTs"
+        return
+    }
+    pushd $reportDir
+    set tftpServer [lindex $tftpServerList 0]
+    foreach coreFile $coreDumpFiles {
+        set dutCoreFile $coreFile
+        # EY-12-01-2009: Changed regexp pattern to handle more than five DUTs.
+        regexp -nocase {DUT[0-9]+_(.*)} $coreFile match tftpCoreFile
+        lappend tftpCoreFiles $tftpCoreFile
+        exec echo "get $tftpCoreFile $dutCoreFile\nquit\n" | /usr/bin/tftp $tftpServer
+    }
+    popd
+    global spawn_id
+    set sid $spawn_id
+    login_linux $tftpServer $tftpServerLogin $tftpServerPasswd
+    result_debug "Files to be deleted from TFTP server are $coreDumpFiles"
+    foreach coreFile $tftpCoreFiles {
+        result_debug "Removing $coreFile from TFTP server"
+        linuxSendACmd "/bin/rm $tftpServerTftpboot/$coreFile"
+    }
+    set spawn_id $sid
+}
+
+proc decodeCores { } {
+    global coreDumpFiles reportDir curAutoRoot modName
+
+    if {[llength $coreDumpFiles] == 0 } {
+        result_debug "No core dumps to decode"
+        return
+    }
+    set defaultDir "/home/autotest-sc/coreDecode"
+    if {![file exists /home/autotest-sc/coreDecode/corePrep.pl]} {
+        result_debug "Cores present but corePrep.pl is not present in the dir $defaultDir to decode"
+        return
+    }
+    set process_id [pid]
+    set decodeDir "/home/autotest-sc/coreDecode/decodes_${process_id}"
+    file mkdir $decodeDir
+    file copy  $defaultDir/corePrep.pl $decodeDir
+    pushd $reportDir
+    puts "report_dir is $reportDir"
+    set coreFilesFound [glob -nocomplain  *.tgz]
+    foreach filename $coreFilesFound {
+        file copy $filename $decodeDir
+    }
+    pushd $decodeDir
+    foreach filename $coreFilesFound {
+        exec tar -xvf $filename
+    }
+    set coreFiles [glob -nocomplain *.gz]
+    if {[llength $coreFiles] == 0} {
+        result_debug "Invalid coredump"
+        return
+    }
+    login_linux sicily autotest-sc glitterpen
+    result_debug "Logging into sicily server"
+    linuxSendACmd "cd $decodeDir"
+    foreach filename $coreFiles {
+        set logfilename [file root $filename]
+        set logfilename [$logfilename .log]
+        linuxSendACmd "./corePrep.pl -n $filename | tee -a $logfilename"
+        exSleep 10
+    }
+    set corelogs [glob -nocomplain *.log]
+    logout
+    pushd $decodeDir
+    if {[llength $corelogs] == 0} {
+        result_debug "Invalid  coredump"
+        return
+    }
+    foreach logfile $corelogs {
+        file copy  $logfile ${curAutoRoot}/Functionaltest/${modName}/${reportDir}
+    }
+
+    cd ..
+    exec rm -rf  $decodeDir
+    return
+}
+
+
+proc  uploadConfigDiff { } {
+    global whichDutNow
+    global DUT1_IP 
+    global numDUT 
+    global tftpServerList tftpServerLogin tftpServerPasswd tftpServerTftpboot
+    ConfigGatewayNetwork
+    if {[CompareRelease [GetVersion DUT${numDUT}] 11.4.0.1]>=0} {
+        SendACmd "!tar -cvzf /scratch/intern/config_diff_DUT${whichDutNow}.tgz_$DUT1_IP /config/perTest_*.xsf"
+    } else {
+        SendACmd "!tar -cvzf /scratch/config_diff_DUT${whichDutNow}.tgz_$DUT1_IP /config/perTest_*.xsf"
+    }
+    SendACmd "tftp [lindex $tftpServerList 0] -v [GetVrString $numDUT] -p -l /usr/local/tmp/config_diff_DUT${whichDutNow}.tgz_$DUT1_IP"
+    SendACmd "rm /usr/local/tmp/config_diff_DUT${whichDutNow}.tgz_$DUT1_IP"
+    SendACmd "rm perTest_*.xsf"
+}
+proc moveConfigDiffToReportDir { } {
+    global tftpServerList tftpServerLogin tftpServerPasswd tftpServerTftpboot
+    global reportDir
+    global numDUT
+    global DUT1_IP
+    global enableSaveConfigPerTest
+    if { ([info exists enableSaveConfigPerTest] ) && \
+               ([CompareRelease [GetVersion DUT${numDUT}] 12.1]>=0 )  &&  \
+               ($enableSaveConfigPerTest == "yes")} { 
+        pushd $reportDir
+        set tftpServer [lindex $tftpServerList 0]
+        for {set i 1} {$i <= $numDUT} {incr i 1} {
+            exec echo "get config_diff_DUT${i}.tgz_$DUT1_IP\nquit\n" | /usr/bin/tftp $tftpServer
+        }
+        popd
+        global spawn_id
+        set sid $spawn_id
+        login_linux $tftpServer $tftpServerLogin $tftpServerPasswd
+        for {set i 1} {$i <= $numDUT} {incr i 1} {
+            result_debug "Removing config_diff_DUT${i}.tgz_$DUT1_IP from TFTP server"
+            linuxSendACmd "/bin/rm $tftpServerTftpboot/config_diff_DUT${i}.tgz_$DUT1_IP"  
+        }
+        set spawn_id $sid
+    }
+
+}
+
+proc allCleanup {numDUT} {
+
+    global DUT${numDUT}_CONNECT
+    set connect [set DUT${numDUT}_CONNECT]
+
+    Login $connect -CheckOperational 0
+
+    SendACmd "enable port all"
+    exSleep 2
+
+    # ----- PROTOCOL SECTION -----
+    SendACmd "disable ospf"
+    SendACmd "config ospf delete vlan all"
+    SendACmd "delete ospf area all"
+    SendACmd "config ospf routerid automatic"
+    SendACmd "unconfigure ospf"
+
+    SendACmd "disable ospfv3"
+    SendACmd "config ospfv3 delete vlan all"
+    SendACmd "delete ospfv3 area all"
+    SendACmd "config ospfv3 routerid automatic"
+    SendACmd "unconfigure ospfv3"
+
+    SendACmd "disable mpls"
+    SendACmd "delete l2vpn vpls all"
+    SendACmd "delete l2vpn vpws all"
+    SendACmd "unconfigure mpls"
+
+    SendACmd "disable pim"
+    SendACmd "config pim delete vlan all"
+    SendACmd "disable pim ssm vlan all"
+    SendACmd "unconfigure pim"
+
+    SendACmd "disable rip"
+    SendACmd "disable ripng"
+    SendACmd "configure rip delete vlan all"
+    SendACmd "configure ripng delete vlan all"
+    SendACmd "unconfigure rip"
+    SendACmd "unconfigure ripng"
+
+    SendACmd "disable bgp"
+    SendACmd "delete bgp neighbor all"
+    SendACmd "configure bgp routerid 0.0.0.0"
+    SendACmd "configure bgp AS-number 0"
+
+    SendACmd "disable vrrp"
+
+    SendACmd "disable netlogin ports all mac"
+    SendACmd "disable netlogin ports all dot1x"
+    SendACmd "disable netlogin ports all web"
+    SendACmd "disable netlogin mac"
+    SendACmd "disable netlogin dot1x"
+    SendACmd "disable netlogin web"
+    SendACmd "unconfigure netlogin vlan"
+
+    SendACmd "unconfigure radius"
+    SendACmd "unconfigure identity-management"
+
+    # ----- VLAN VMAN VR HAL -----
+    SendACmd "unconfig default ipaddress"
+    SendACmd "unconfigure ports all redundant"
+    SendACmd "configure default delete port all"
+
+
+    # --- VLAN
+    set parameterList ""
+    lappend parameterList "{vlanProc {name1}}"
+    set resVLANS [GetDictValue -cmd "show vlan" -parameterList $parameterList -debugjson "false"]
+    unset parameterList
+
+    foreach vn $resVLANS {
+        if {$vn != "Default" && $vn != "Mgmt"} {
+            SendACmd "delete vlan $vn"
+        }
+    } 
+    # --- VMAN
+    set parameterList ""
+    lappend parameterList "{vlanProc {name1}}"
+    set resVMANS [GetDictValue -cmd "show vman" -parameterList $parameterList -debugjson "true"]
+    unset parameterList
+
+    foreach vn $resVMANS {
+        SendACmd "delete vman $vn"
+    }
+
+
+    set shareName [GetColumnValues "show port sharing" {{0 8}} \
+       "==============================================================================" \
+       "=============================================================================="]
+    if {[llength $shareName]} {
+        for {set i 0} {$i<[llength [lindex $shareName 0]]} {incr i} {
+            set everyShare [lindex [lindex $shareName 0] $i]
+            set name [split $everyShare " "]
+            set perShare [lindex $name 0]
+            if {$perShare == "        "} {
+                continue
+            }
+            if {![CascadeSharePort $numDUT $perShare]} {
+                SendACmd "disable sharing $perShare"
+            }
+        }
+    }
+
+
+    SendACmd "disable jumbo-frame por all"
+    SendACmd "disable mac-lockdown-timeout ports all"
+    SendACmd "disable mirroring"
+
+    #SendACmd "configure port <all> ethertype primary"; # no easy global for all ports
+    SendACmd "unconfigure vman ethertype secondary"
+    SendACmd "unconfigure vman ethertype"
+    SendACmd "disable dot1p examination inner-tag ports all"
+    SendACmd "enable dot1p examination ports all"
+    SendACmd "enable learning ports all"
+    SendACmd "enable flooding all_cast ports all"
+    SendACmd "unconfigure access-list"
+
+
+    global gnssPlatform bcmLynx bcmPlatform
+    set platform [GetPlatform DUT${numDUT}];
+
+    if {[regexp -nocase "$bcmPlatform" $platform]} {
+        SendACmd "configure dot1p type 0 qp1"
+        SendACmd "configure dot1p type 1 qp1"
+        SendACmd "configure dot1p type 2 qp1"
+        SendACmd "configure dot1p type 3 qp1"
+        SendACmd "configure dot1p type 4 qp1"
+        SendACmd "configure dot1p type 5 qp1"
+        SendACmd "configure dot1p type 6 qp1"
+        SendACmd "configure dot1p type 7 qp8"
+        SendACmd "delete qosprofile qp2"
+        SendACmd "delete qosprofile qp3"
+        SendACmd "delete qosprofile qp4"
+        SendACmd "delete qosprofile qp5"
+        SendACmd "delete qosprofile qp6"
+        SendACmd "delete qosprofile qp7"
+    }
+
+    if {![regexp -nocase "$bcmLynx" $platform]} {
+        set vrName [GetColumnValues "show virtual-router" {{0 32}} "Router *VLANs" "Flags :"]
+        if {[llength $vrName]} { 
+            for {set i 0} {$i<[llength [lindex $vrName 0]]} {incr i} {
+                set everyVr [lindex [lindex $vrName 0] $i]
+                if {[string trim $everyVr] == ""} {continue;}
+                set name [split $everyVr " "]
+                set perVrName [lindex $name 0]
+                if {$perVrName == "KEY_NOT_FOUND"} {continue;}
+                if {[regexp -nocase "\[\-]{2,32}" $perVrName]} {continue;}
+                if {$perVrName != "VR-Default" && $perVrName != "VR-Mgmt" \
+                                              && $perVrName != "VR-Control"} {
+                    SendACmd "delete virtual-router $perVrName"
+                }
+
+            } 
+        }
+    }
+
+    # ----  EAPS
+    SendACmd "disable eaps"
+    set eapsName [GetColumnValues "show eaps" {{0 20}} "Domain *State" "Flags :"]
+    if {[llength $eapsName]} {
+        for {set i 0} {$i<[llength [lindex $eapsName 0]]} {incr i} {
+            set eapsLine [lindex [lindex $eapsName 0] $i]
+            if {[string trim $eapsLine] == "" || $eapsLine == "*"} {continue;}
+            set eapsWords [split $eapsLine " "]
+            set eapsWord0 [lindex $eapsWords 0]
+            if {[regexp -nocase "\[\-]{2,20}" $eapsWord0]} {continue;}
+            if {$eapsWord0 == "KEY_NOT_FOUND"} {continue;}
+            SendACmd "delete eaps $eapsWord0"
+        }
+    }    
+    set eapsShare [GetColumnValues "show eaps share" {{0 13}} "Shared-port *Mode" \
+        ".*#.*"]
+    if {[llength $eapsShare]} {
+        for {set i 0} {$i<[llength [lindex $eapsShare 0]]} {incr i} {
+            set eapsLine [lindex [lindex $eapsShare 0] $i]
+            if {[string trim $eapsLine] == ""} {continue;}
+            set eapsWords [split $eapsLine " "]
+            set eapsWord0 [lindex $eapsWords 0]
+            if {[regexp -nocase "\[\-]{2,20}" $eapsWord0]} {continue;}
+            if {$eapsWord0 == "KEY_NOT_FOUND"} {continue;}
+            SendACmd "delete eaps shared-port $eapsWord0"
+        }
+    } else {
+        puts "MISSED ALL shares"
+    }
+
+    # ---- STPD
+    SendACmd "disable stpd"
+    set stpdName [GetColumnValues "show stpd" {{0 20}} "Name *Tag" "Total number of"]
+    if {[llength $stpdName]} {
+        for {set i 0} {$i<[llength [lindex $stpdName 0]]} {incr i} {
+            set stpdLine [lindex [lindex $stpdName 0] $i]
+            if {[string trim $stpdLine] == ""} {continue;}
+            set stpdWords [split $stpdLine " "]
+            set stpdWord0 [lindex $stpdWords 0]
+            if {$stpdWord0 == "s0"} {
+                continue;
+            }
+            if {$stpdWord0 == "KEY_NOT_FOUND"} {continue;}
+            if {[regexp -nocase "\[\-]{2,20}" $stpdWord0]} {continue;}
+            SendACmd "delete stpd $stpdWord0"
+        }
+    }
+    #
+    #  Add code to remove PVLAN
+    #
+}
+# -----------------------------------------------------------------------------
+# proc CleanTestBedCfgs
+#
+# args: no in put arg
+#
+#
+#
+#
+# Typical usage:  CleanTestBedCfgs
+#
+# -----------------------------------------------------------------------------
+proc CleanTestBedCfgs {} {
+    set cleancliList ""
+    for {set i 1} {$i<30} {incr i} {
+        global DUT${i}_CONNECT
+        if {[info exists DUT${i}_CONNECT]} {
+            lappend cleancliList "allCleanup $i"
+        }
+    }
+    # All data storage is off b/c this is not really test data... just a tool
+    _setShowOutput -screen on -log on -res_fmt on
+    puts "\n#########################################################################"
+    puts "               S T A R T I N G     PARALLEL CLI CLEANUP"
+    puts "#########################################################################\n"
+    MultiTask $cleancliList
+    puts "\n#########################################################################"
+    puts "                F I N I S H E D    PARALLEL CLI CLEANUP"
+    puts "#########################################################################"
+    _setShowOutput -screen on -log on -res_fmt on
+
+}

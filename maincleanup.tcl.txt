@@ -1,0 +1,206 @@
+# ------------------------------  Clean up everything at the bottom ---------------------------------
+proc _cleanAndStoreResults {args} {
+
+    global MAIN
+    parse_args _cleanAndStoreResults $args {
+        returnFlag    "testCompleted"
+    }
+
+    puts "@@@@@@@@@@@@@@@@@@  returnFlag $returnFlag  @@@@@@@@@@@@@@@@@@"
+    puts " ---   Old style returnFlag = [lindex $returnFlag 0]   ----"
+
+    set returnFlag [lindex $returnFlag 0]
+
+    flush stdout
+    flush stderr
+
+    # -----------------------------------------------------------------------------------------
+    # Any harness files that need to be moved to the results storage will be covered here
+    #
+    # Also - init files to the main/Tmp location
+    # -----------------------------------------------------------------------------------------
+
+    # --- Generate the topology html    
+    if {0 && ![regexp -nocase {clitest|SystemTest} $regPath]} {
+    } 
+
+    # -----   Init file handling
+    if {($MAIN(ifPipe) != "NULL") && ($MAIN(runMode) == 0)} {
+        close $MAIN(ifPipe)
+        result_debug "closed $MAIN(initFile)"
+    } else {
+        result_debug "No need to close init file: initFile pipe= $MAIN(ifPipe) runMode= $MAIN(runMode)"
+    }
+    if {[VerifyInitFile $MAIN(initFile)]} {
+        result_debug "Copying good init file $MAIN(initFile) to Tmp2"
+        regsub -all "Tmp" $MAIN(initFile) "Tmp2" initFile2
+        catch {file copy -force $MAIN(initFile) $initFile2} why
+    }
+    if {[file exists $MAIN(initFile)]} {
+        puts "Move init file to result directory"
+        file copy $MAIN(initFile) [get_result_dir { $randomIndex }]/initFile.txt
+    }
+    # -----  Store the cfg file with the results
+    set cfg_file "$MAIN(autoRoot)/main/cfg/$MAIN(cfg)"
+    if {[file exists $cfg_file]} {
+        puts "Move config file to result directory"
+        file copy $cfg_file  [get_result_dir { $randomIndex }]/[file root [file tail $cfg_file]]_config.txt
+    }
+
+    # -----  Generate a Execution Summary File only if we used "all/pass/quick" list.
+    if {[file exists $MAIN(timeFile)] } {
+        result_debug "Generating Execution Summary File"
+        if {[generateExecutionSummary $MAIN(timeFile) $MAIN(lst) $MAIN(module) \
+                $MAIN(tSetupDuration) $MAIN(tCheckConnectionDuration) $MAIN(MainDuration)] == 0} {
+            result_debug "...No execution summary file was generated..."
+        }
+
+    } else {
+        result_debug "Execution Summary File NOT generated"
+        result_debug "$MAIN(timeFile) present:  [file exists $MAIN(timeFile)]"
+        result_debug "lst file: $MAIN(lst)"
+    }
+    # ----- Create json file from tcl vars collected during run
+    _createJSONfromTclResults
+
+    if { $returnFlag == "testCompleted" || $returnFlag == "testSkipped" } {
+        create_report_directory $MAIN(sourceFile) yes $MAIN(optionalPath) "" $MAIN(subversion) $MAIN(qId)
+        gen_text_report "[get_result_dir { $MAIN(randomIndex) }]/report.exr" "stdout" $MAIN(feature_directory) $MAIN(sourceFile)
+        ;# Move the complete result directory to report directory
+        result_debug "Moving contents of [get_result_dir] to Report directory"
+        if {$returnFlag == "testSkipped" && !$MAIN(NOFEATSUPPORT)} {
+            if {[set fd_main_skip [open "[get_result_dir]/skipTestsList.txt" "w"]] == -1} {
+                return -1
+            }
+            puts $fd_main_skip "FeatureSkipped"
+            close $fd_main_skip
+        }
+        move_result_directory $MAIN(optionalPath) "" $MAIN(timeFile)
+
+    } elseif {$returnFlag == "connectionBad" } {
+        result_error "Connections between DUTs and/or Ixia/Hub are not detected properly"
+        result_error "Please make sure physical connections match with config setup file"
+        result_debug "Program will now clean the boxes and terminate"
+        cleanup
+    } else {
+        result_error "main.tcl error $returnFlag"
+        result_error "Report NOT moved to Report directory"
+    }
+    return $returnFlag
+}
+######################################################################
+#
+#
+#
+#
+#
+#
+######################################################################
+proc _createJSONfromTclResults {args} {
+    global MAIN REG_PATH module auto_path modName DUTs_info
+
+    parse_args _createJSONfromTclResults $args {
+        name    "null"
+    }
+    set resVarFile [get_result_dir {$MAIN(randomIndex)}]/TCLStatusVars.txt
+    set trackerFile [get_result_dir {$MAIN(randomIndex)}]/TCRealTimeCR.txt];
+    set resJSONFile [get_result_dir {$MAIN(randomIndex)}]/JsonResults.txt
+    if {[file exists $resVarFile]} {
+        if {[set fd_json [open "$resJSONFile" "w"]] == -1} {
+            return -1
+        }
+        if {[catch {source $resVarFile} why]} {
+            puts "Failed to source result file: $why"
+            return -1
+        }
+        if {![info exists ReportCases] || [llength $ReportCases] <= 0} {
+            return -1
+        }
+        set cc [llength $ReportCases];
+        puts $fd_json "\{"
+        puts $fd_json "\"TestCases\": \[ \"[join $ReportCases "\",\""]\" \],"
+        puts $fd_json "\"Results\": \{"
+        set i 1;
+        foreach tc $ReportCases {
+            if {$i == $cc} {
+                puts $fd_json "    \"$tc\": \{\"status\": \"$RepResArray($tc)\", \
+                   \"duration\": \"$RepDurArray($tc)\"\}"
+            } else {
+                puts $fd_json "    \"$tc\": \{\"status\": \"$RepResArray($tc)\", \
+                   \"duration\": \"$RepDurArray($tc)\"\},"
+            }
+            incr i
+        }
+        puts $fd_json "    \}";# End of Results
+        if {[file exists $trackerFile]} {
+            catch {source $trackerFile} why
+            if {![info exists TrackerCases] || [llength $TrackerCases] <= 0} {
+                break;
+            }
+            set cc [llength $TrackerCases]
+            set i 1
+            puts $fd_json "\"CR_TestCases\": \[ \"[join $TrackerCases "\",\""]\" \],"
+            puts $fd_json "\"Tracker\": \{"
+            foreach tc $TrackerCases {
+                if {$i == $cc} {
+                    puts $fd_json "    \"$tc\": \{\"CR\": \"$RepResArray($tc)\", \
+                       \"globalState\": \"$RepResArray($tc)\", \
+                       \"status\": \"$RepDurArray($tc)\"\}"
+                } else {
+                    puts $fd_json "    \"$tc\": \{\"CR\": \"$RepResArray($tc)\", \
+                       \"globalState\": \"$RepResArray($tc)\", \
+                       \"status\": \"$RepDurArray($tc)\"\},"
+                }
+                incr i
+            }
+        }
+        puts $fd_json "\}"
+        close $fd_json
+    }
+}
+######################################################################
+# proc _changeFeature
+#
+# Change to a new feature directory in order to execute tests.
+#
+#
+#
+######################################################################
+proc _changeFeature {args} {
+    global MAIN REG_PATH module auto_path modName DUTs_info
+
+    #    set REG_PATH [pwd]  - directory of the feature
+    #    set MAIN(REG_PATH) [pwd] - dir of the feature
+
+    parse_args _changeFeature $args {
+        regPath    "Functional"
+        module     "qad"
+        m          "null"
+    }
+
+    if {$m != "null"} {
+        set module $m
+    }
+    #Remove previous feature from the auto path , MAIN(auto_path_clean)
+    set auto_path $MAIN(auto_path_clean)
+
+    cd $MAIN(autoRoot)/main ;# return to the base of the automation tree
+puts "1- [pwd]"
+    set regPath [_verifyRegPathArg -regPath $regPath]
+    set module [_verifyModuleNameArg $regPath $module]
+    puts "Changing to $module"
+    cd $module
+    set REG_PATH [pwd]
+    set MAIN(REG_PATH) [pwd]
+    # Create supporting dirctories for this feature
+    _createSupportDirectories -dirList "Report Result Tmp Log"
+
+    set MAIN(module) $module;# Full path, not just the short one passed into the arg
+    set modName [file tail $module]; # modName is feature_directory name
+    set MAIN(feature_directory) $modName;
+    set auto_path [linsert $auto_path 0 [pwd] ]
+    gen_index [pwd]
+    _createSupportDirectories -dirList "Report Result Tmp Tmp2 Log"
+    puts "Successfully changed feature to [pwd]"
+    puts "CUT AND PASTE:   gen_index .  To put this directories procs in your scope."
+}

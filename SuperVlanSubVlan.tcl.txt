@@ -1,0 +1,194 @@
+
+##################################################################    
+# Procedure Name: check_subvlan_exist
+# Description:
+#     	Check to see if a given subVlan is a sub-vlan of the 
+#	specified superVlan.
+# Input args: subVlan superVlan fd_res testNo
+# Output args: None.
+# Return value: none
+# Typical usage:
+#	check_subvlan_exist vlanson vlandad  $fd_res $testNo
+# Category: VerifySwitchOutput
+##################################################################    
+proc check_subvlan_exist {subVlan superVlan fd_res testNo} {
+   global spawn_id
+   set found "false"
+
+   set fd_in [open "Tmp/tmp_$testNo[pid]" "w"]
+   SendACmd "sh $subVlan" $fd_res $fd_in
+   close $fd_in
+
+   set fd_in [open "Tmp/tmp_$testNo[pid]" "r"]
+   report_start_test "Checking Sub-VLAN $subVlan to be part of Super-VLAN $superVlan"
+   while {[gets $fd_in line] != -1} {
+      set cookedLine [cookString $line]
+      set aList [split $cookedLine]
+#result_debug "----- cookedLine=$cookedLine"
+	#for older version
+      if { ([lindex $aList 0] == "Super") &&
+            ([lindex $aList 1] == "vlan:") &&
+            ([lindex $aList 2] == $superVlan) } {
+         set found "true"
+         result_ok "$subVlan is sub_VLAN of Super-VLAN $superVlan, as expected"
+	 break
+      }
+      #for newer version
+      if { ([lindex $aList 0] == "SuperVlan:") &&
+            ([lindex $aList 1] == $superVlan) } {
+         set found "true"
+         result_ok "$subVlan is sub_VLAN of Super-VLAN $superVlan, as expected"
+	 break
+      }   }
+   if { ($found == "false") }	{
+      result_error "$subVlan is NOT sub_VLAN of Super-VLAN $superVlan, unexpected"
+   }
+   report_end_test
+   close $fd_in
+   file delete "Tmp/tmp_$testNo[pid]"
+}
+
+##################################################################    
+# Procedure Name: check_supervlan_subbridges
+# Description:
+#     	Check if a given superVlan contains all the subVlans in list.
+# Input args: superVlan subVlanList  fd_res testNo
+# Output args: None.
+# Return value: none
+# Typical usage:
+#	set subvlansList {"vlanson exist" "vlandaughter exist"}
+#	check_supervlan_subbridges vlandad $subvlansList $fd_res $testNo
+# Category: VerifySwitchOutput
+##################################################################  
+proc check_supervlan_subbridges {superVlan subVlanList  fd_res testNo} {
+   global spawn_id
+
+   set fd_in [open "Tmp/tmp_$testNo[pid]" "w"]
+   SendACmd "sh $superVlan" $fd_res $fd_in
+   close $fd_in
+   
+   #set all flag to false
+   foreach subVlan  $subVlanList  {
+      set subVlanExist($subVlan) "false"
+   }
+   
+   set fd_in [open "Tmp/tmp_$testNo[pid]" "r"]
+   report_start_test "Checking Super-VLAN $superVlan sub-bridges list"
+   while {[gets $fd_in line] != -1} {
+#result_debug "----- Line=$line"
+      foreach subVlan $subVlanList {
+      	 set subVlanName [lindex $subVlan 0]
+         if { [string first $subVlanName $line] >= 0 } {
+            set subVlanExist($subVlan) "true"
+         }
+      }
+   }
+   
+   #check for any missing subvlan
+   foreach subVlan $subVlanList  {
+      set subVlanFlag [lindex $subVlan 1]
+      if { (([set subVlanExist($subVlan)] == "true") && \
+       	   ($subVlanFlag == "exist")) } {
+         result_ok "Super-VLAN $superVlan does contain Sub_VLAN $subVlan, as expected"
+      } elseif { (([set subVlanExist($subVlan)] == "false") && \
+       	   ($subVlanFlag == "notExist")) } {
+         result_ok "Super-VLAN $superVlan does not contain Sub_VLAN $subVlan, as expected"
+      } elseif { (([set subVlanExist($subVlan)] == "false") && \
+       	   ($subVlanFlag == "exist")) } {
+         result_error "Super-VLAN $superVlan DOES contain Sub_VLAN $subVlan, unexpected"
+      } elseif { (([set subVlanExist($subVlan)] == "true") && \
+       	   ($subVlanFlag == "notExist")) } {
+         result_error "Super-VLAN $superVlan DOES NOT contain Sub_VLAN $subVlan, unexpected"
+      } else {       
+         result_error "Unexpected result for Sub_VLAN $subVlan"
+      }
+   }
+   report_end_test
+   close $fd_in
+   file delete "Tmp/tmp_$testNo[pid]"
+}
+
+##################################################################    
+# Procedure Name: check_vlan_ip_addresses
+# Description:
+#     	Check if a given superVlan has primary and secondary address
+#	or just regular vlan IP
+# Input args: superVlan superVlanIPList fd_res testNo
+# Output args: None.
+# Return value: none
+# Typical usage:
+#	lappend superVlanIPList "$superVlanIP1 notExist"
+#	lappend superVlanIPList "$superVlanIP3 primaryExist"
+#	lappend superVlanIPList "$superVlanIP2/32 secondaryExist"
+#	check_vlan_ip_addresses vlandad $superVlanIPList  $fd_res $testNo
+# Category: VerifySwitchOutput
+##################################################################
+proc check_vlan_ip_addresses {superVlan superVlanIPList  fd_res testNo} {
+   global spawn_id
+
+   set fd_in [open "Tmp/tmp_$testNo[pid]" "w"]
+   SendACmd "sh ipconfig $superVlan" $fd_res $fd_in
+   close $fd_in
+   
+   set fd_in [open "Tmp/tmp_$testNo[pid]" "r"]
+   report_start_test "Checking vlan $superVlan IP addresses"
+   lappend ipFoundList ""
+   #get all the primary and secondary IPs
+   while {[gets $fd_in line] != -1 && ![regexp -nocase "\"" $line]} {
+#result_debug "----- Line=$line"
+      if { ([lindex $line 0] == "inet") } {
+         set ip [lindex $line 1]
+         lappend ipFoundList $ip
+         set ipFoundArrayFlag($ip) "primaryExist"
+         result_debug "Found primary IP for $superVlan: $ip"
+      }
+      if { ([lindex $line 0] == "Secondary:") } {
+         set ipList [lrange $line 1 end]
+         #puts "IpList $ipList"
+         foreach ip $ipList {
+            lappend ipFoundList $ip
+            set ipFoundArrayFlag($ip) "secondaryExist"
+            result_debug "Found secondary IP for $superVlan: $ip"
+         }
+      }
+   }
+   foreach ipList $superVlanIPList {
+      set ip [lindex $ipList 0]
+      set ipFlagWanted [lindex $ipList 1]
+      set ipFlagFound "notExist"
+      #check with what is found
+      foreach ipFound $ipFoundList {
+#      puts "Found: ip=$ip ipFound=$ipFound"
+         if { $ip == $ipFound } {
+            set ipFlagFound $ipFoundArrayFlag($ipFound)
+         }
+      }
+#      puts "Found: ip=$ip ipFlagFound=$ipFlagFound  ipFlagWanted=$ipFlagWanted"
+      switch -- $ipFlagWanted \
+         "primaryNotExist" {
+         if { $ipFlagFound == "primaryExist" } {
+            result_error "Check Super-VLAN IP address $ip with flag: $ipFlagWanted"
+            result_debug "Found: ip=$ip ipFlagFound=$ipFlagFound  ipFlagWanted=$ipFlagWanted"
+         } else {
+            result_ok "Check Super-VLAN IP address $ip with flag: $ipFlagWanted"
+         }
+      }  "secondaryNotExist" {
+         if { $ipFlagFound == "secondaryExist" } {
+            result_error "Check Super-VLAN IP address $ip with flag: $ipFlagWanted"
+            result_debug "Found: ip=$ip ipFlagFound=$ipFlagFound  ipFlagWanted=$ipFlagWanted"
+         } else {
+            result_ok "Check Super-VLAN IP address $ip with flag: $ipFlagWanted"
+         }
+      } default {
+         if { $ipFlagFound == $ipFlagWanted } {
+            result_ok "Check Super-VLAN IP address $ip with flag: $ipFlagWanted"
+         } else {
+            result_error "Check Super-VLAN IP address $ip with flag: $ipFlagWanted"
+            result_debug "Found: ip=$ip ipFlagFound=$ipFlagFound  ipFlagWanted=$ipFlagWanted"
+         }
+      }
+   }
+   report_end_test
+   close $fd_in
+   file delete "Tmp/tmp_$testNo[pid]"
+}

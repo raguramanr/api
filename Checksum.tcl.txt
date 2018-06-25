@@ -1,0 +1,283 @@
+
+ 
+################################################################## 
+# Procedure Name: Checksum
+#   
+# Description: calculate the 2 bytes checksum number
+#               
+#     
+#
+# Input args:
+#                rawFame - the string of the frame
+#                index   - the start index to repace by the checksum number
+# Output args: none
+# Typical usage: 
+#      
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: Utility
+################################################################## 
+proc Checksum {rawFrame index} {
+
+set lngth [llength $rawFrame];
+#puts "length = $lngth";
+set remainder [expr $lngth % 2];
+set dx 0x00;
+set dy 0x00;
+
+# --- not even number
+if {$remainder != 0} {
+    #puts "before data = $rawFrame";
+    set lg [expr $lngth - 1];
+    set lvar [lindex $rawFrame $lg];
+    set rawFrame [lreplace $rawFrame $lg $lg 00 $lvar]; 
+}
+
+#puts "Raw Frame before checksum = $rawFrame";
+
+# --- all together
+foreach {x y} $rawFrame {
+    set x1 0x$x;
+    #puts "xbefore ==> $dx $x1";
+    set d [expr $x1 + $dx];
+    set dx [format 0x%x $d]; 
+    #puts "xafter ==> $dx $x1";
+    
+    set y1 0x$y;
+    #puts "\nybefore ==> $dy $y1";
+    set d [expr $y1 + $dy];
+    set dy [format 0x%x $d];
+    #puts "\nyafter ==> $dy $y1";      
+}
+
+#puts "\n======> $dx $dy";
+
+set tmp [expr $dx << 24];
+set tmp2 [format %x $tmp];
+set lx [string range $tmp2 0 1];
+set rx [expr $dx >> 8];
+#puts "\n@@@ $rx $lx ";
+
+set tmp [expr $dy << 24];
+set tmp2 [format %x $tmp];
+set ly [string range $tmp2 0 1];
+set ry [expr $dy >> 8];
+#puts "\n@@@ $ry $ly ";
+
+set tmpx [format %x [expr ~0x[format %x [expr 0x$lx + 0x$ry]]]];
+set tmpy [format %x [expr ~0x[format %x [expr 0x$ly + 0x$rx]]]];
+set x [string toupper [string range $tmpx 6 7]];
+set y [string toupper [string range $tmpy 6 7]];
+#puts "\n!!! => $x $y";
+
+#puts "\nRaw Frame after checksum = [lreplace $rawFrame [expr $index-1] $index $x $y]";
+return  [lreplace $rawFrame [expr $index-1] $index $x $y]; 
+}
+
+################################################################## 
+# Procedure Name: GetICMPv6Checksum
+#   
+# Description: return the 2 bytes checksum number: 1's complement of the
+#                 sum of the 1's complement 
+#               
+# Input args: args
+# Output args: none
+# Typical usage: 
+#          GetICMPv6Checksum $args
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: Utility
+################################################################## 
+proc GetICMPv6Checksum {args} {
+   parse_args GetICMPv6Checksum $args {
+      sourceIp      "fe 80 00 00 00 00 00 00 02 a1 f1 ff fe 00 00 01"
+      destIp        "ff 05 00 00 00 00 00 00 00 00 00 00 11 11 00 33"
+      group         "ff 05 00 00 00 00 00 00 00 00 00 00 11 11 00 33"
+      type          "130"
+      code          "00"
+      mldReponseDelay      "00 00"
+      parameterProbPointer "00 00 00 00"
+      packetTooBigMTU      "00 00 00 00"
+      echoRequestIdentifer "00 00"
+      echoRequestSeqNum    "00 00"
+      echoReplyIdentifer   "00 00"
+      echoReplySeqNum      "00 00"
+      advTypeValue         "20"
+      ndTargetAddr         "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00"
+      ndType               "00"
+      ndLength             "00"
+      ndLinkLayerAddr      "00 00 00 00 00 00"
+      blank                "00 00 00 00"
+      nHeaderLength        "00 00 00 18"
+      options              ""
+   }
+
+set nullCSum ""
+switch -- $type \
+      "1" {
+      set nHeaderLength "00 00 00 08"
+      set options $blank 
+   }  "2" {
+      set nHeaderLength "00 00 00 08"
+      set options $packetTooBigMTU
+   }  "3" {
+      set nHeaderLength "00 00 00 08"
+      set options $blank
+   }  "4" {
+      set nHeaderLength "00 00 00 08"
+      set options $parameterProbPointer
+   }  "128" {
+      set nHeaderLength "00 00 00 08"
+      set options "$echoRequestIdentifer $echoRequestSeqNum"
+   }  "129" {
+      set nHeaderLength "00 00 00 08"
+      set options "$echoReplyIdentifer $echoReplySeqNum"
+   }  "130" {
+      set nHeaderLength "00 00 00 18"
+      set options "$mldReponseDelay $group"
+      set nullCSum "00 00"
+   }  "131" {
+      set nHeaderLength "00 00 00 18"
+      set options "$mldReponseDelay $group"
+      set nullCSum "00 00"
+   }  "132" {
+      set nHeaderLength "00 00 00 18"
+      set options "$mldReponseDelay $group"
+      set nullCSum "00 00"
+   }  "135" {
+      set nHeaderLength "00 00 00 20" ;# 
+      set options "$advTypeValue $ndTargetAddr $ndType $ndLength $ndLinkLayerAddr"
+      set nullCSum ""
+   }  "136" {
+      set nHeaderLength "00 00 00 20" ;#
+      set options "$advTypeValue $ndTargetAddr $ndType $ndLength $ndLinkLayerAddr"
+      set nullCSum ""
+   }  "143" {
+      set nHeaderLength "$nHeaderLength" ;#
+      set options "$options"
+      set nullCSum "00 00"
+   }  "mldv2query" {
+      set nHeaderLength "$nHeaderLength"
+      set options "$options"
+      set nullCSum "00 00"
+      set type 130
+   }
+
+set icmpNHeader "00 00 00 3A"
+set hexType [dectohex $type]
+if {[string length $hexType] == 1} {
+   set hexType "0$hexType"
+}
+set hexCode [dectohex $code]
+if {[string length $hexCode] == 1} {
+   set hexCode "0$hexCode"
+}
+#$nullCSum 
+set tframe "$sourceIp $destIp $nHeaderLength $icmpNHeader $hexType $hexCode $options"
+
+#result_debug "CheckSum Frame: $tframe" 
+
+set lngth [llength $tframe];
+#puts "length = $lngth";
+set remainder [expr $lngth % 2];
+
+# --- not even number
+if {$remainder != 0} {
+    #puts "before data = $rawFrame";
+    set lg [expr $lngth - 1];
+    set lvar [lindex $tframe $lg];
+    set rawFrame [lreplace $tframe $lg $lg 00 $lvar]; 
+}
+
+#puts "Raw Frame before checksum = $rawFrame";
+
+# --- Sum all together
+set sumHex 0x0;
+foreach {x y} $tframe {
+    set d1 ${x}$y;
+    set sumHex 0x[format %x [expr 0x$d1 + $sumHex]]
+}
+
+##set sumHex [string trimleft $sumHex 0x]
+##set sLength [string length $sumHex]
+##set r [expr $sLength - 4]
+##set s [expr $r - 1]
+
+#2feef
+##set lx [string range $sumHex 0 $s];
+##set rx [string range $sumHex $r $sLength];
+
+##set sumOnesComp [format %x [expr 0x$lx + 0x$rx]];
+
+while {$sumHex > 0xFFFF} {
+set sumHex [string trimleft $sumHex 0x]
+set sLength [string length $sumHex]
+set r [expr $sLength - 4]
+set s [expr $r - 1]
+
+#2feef
+set lx [string range $sumHex 0 $s];
+set rx [string range $sumHex $r $sLength];
+#result_debug "0x${rx}  ==>  ${lx}"
+set sumHex 0x[format %04x [expr 0x$lx + 0x$rx]];
+#result_debug "sumHex  ==>  ${sumHex}"
+set sumOnesComp [format %04x [expr 0x$lx + 0x$rx]]
+#result_debug "sumOnesComp  ==>  ${sumOnesComp} [format %04x [expr 0x$lx + 0x$rx]]"
+}
+
+result_debug "FINAL  -->  $sumOnesComp"
+
+
+# Get a list of the 4 sum ones complement digits
+set digitList "";
+for {set i 0} {$i<4} {incr i} {
+   lappend digitList [string range $sumOnesComp $i $i ]
+}
+# Get the ones complement of the ones compliment sum
+set checkSumList "";
+foreach digit $digitList {
+   set digit [string toupper $digit];
+   switch -- $digit \
+      "" {
+      lappend checkSumList "F"        
+   }  "0" {
+      lappend checkSumList "F"        
+   }  "1" {
+      lappend checkSumList "E"   
+   }  "2" {
+      lappend checkSumList "D"        
+   }  "3" {
+      lappend checkSumList "C"   
+   }  "4" {
+      lappend checkSumList "B"        
+   }  "5" {
+      lappend checkSumList "A"   
+   }  "6" {
+      lappend checkSumList "9"        
+   }  "7" {     
+      lappend checkSumList "8"   
+   }  "8" {
+      lappend checkSumList "7"        
+   }  "9" {
+      lappend checkSumList "6"   
+   }  "A" {
+      lappend checkSumList "5"        
+   }  "B" {
+      lappend checkSumList "4"   
+   }  "C" {
+      lappend checkSumList "3"        
+   }  "D" {
+      lappend checkSumList "2"   
+   }  "E" {
+      lappend checkSumList "1"        
+   }  "F" {
+      lappend checkSumList "0"   
+   }  
+}
+
+set checkSum "[lindex $checkSumList 0][lindex $checkSumList 1] [lindex $checkSumList 2][lindex $checkSumList 3]";
+result_debug "####### Calculated ICMPv6 Checksum: $checkSum #######" 
+return $checkSum;
+}

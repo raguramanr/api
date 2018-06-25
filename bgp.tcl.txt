@@ -1,0 +1,2974 @@
+
+###################################################################
+#  EBGP routes
+#  -----------
+#  setupEBGPPeer $dutIp $asNumber $ipNetworkList $numRoutesList $txPortId ...
+#  startBGP $txPortId
+#  stopBGP  $txPortId
+#
+#  - dutIp          : DUT IP address
+#  - asNumber       : Ixia AS number
+#  - ipNetworkList  : Start IP address list of broadcast routes
+#  - fromPrefixList : Start routes' mask list
+#  - thruPrefixList : End routes' mask list
+#  - numRoutesList  : List number of routes to broadcast
+#  - txPortId       : Ixia port to broadcast the routes 
+#  - communityList  : List of community
+#  - clusterList    : List of cluster
+#  - asPathList     : List of AS path
+###################################################################
+#  IBGP routes
+#  -----------
+#  setupIBGPPeer $dutIp $asNumber $ipNetwork $numRoutes $txPortId
+#  startBGP $txPortId
+#  stopBGP  $txPortId
+#
+#  - dutIp     : DUT IP address
+#  - asNumber  : AS number
+#  - ipNetwork : Start IP address of broadcast routes
+#  - numRoutes : Number of routes to broadcast
+#  - txPortId  : Ixia port to broadcast the routes
+#
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: Setup
+####################################################################
+################################################################## 
+# Procedure Name: startBgp
+#   
+# Description:  start the BGP protocol server on the ixia
+#               
+#     
+#
+# Input args: txPortIdList
+# Output args: none
+# Typical usage: 
+#      startBgp 1
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: SetupTestTool
+##################################################################
+
+proc startBgp {txPortIdList} {
+    set pList ""
+   
+   global TrafficGen
+   switch -exact -- $TrafficGen {
+      ixia -
+      ixvm {
+    foreach txPortId $txPortIdList {
+        MapIxiaPortId $txPortId cha car por
+        result_debug "startBgp: Chas: $cha Card: $car Port: $por"
+        lappend pList "$cha $car $por"
+    }
+
+    if {[ixStartBGP4 pList]} {
+        error "startBgp: ixStartBGP4 failed."
+    } 
+      }
+      stc {
+         set globalDeviceList ""
+         foreach txPortId $txPortIdList {
+            set txPortId [hMapPortIdToSpirentPort $txPortId]
+            set deviceList [logcmd stc::get $txPortId -affiliationport-Sources]
+				result_debug "startBgp: Device List - $deviceList"
+            set globalDeviceList [concat $globalDeviceList $deviceList]				
+         }
+         foreach device $globalDeviceList {
+            logcmd stc::perform DeviceStartCommand -DeviceList $device            
+#             if {[catch {logcmd stc::perform DeviceStartCommand -DeviceList $device} retCode]} {
+#                error "startBgp: $device Spirent device start failed."
+#             }
+         }
+      }
+   }
+}
+      
+
+
+################################################################## 
+# Procedure Name: stopBgp
+#   
+# Description:  Stop the BGP protocol server on the ixia
+#               
+#     
+#
+# Input args: txPortIdList
+# Output args: none
+# Typical usage: 
+#        stopBgp {1 2 3 4}
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: Setup
+##################################################################
+proc stopBgp {txPortIdList} {
+    set pList ""
+   
+   global TrafficGen
+   switch -exact -- $TrafficGen {
+      ixia -
+      ixvm {
+         
+    foreach txPortId $txPortIdList {	
+        MapIxiaPortId $txPortId cha car por
+        if {[ixPortClearOwnership $cha $car $por force]!=0} {
+           result_error "Can not clear ixia port ownership:$cha $car $por"
+        }
+        result_debug "stopBgp: Chas: $cha Card: $car Port: $por"
+        lappend pList "$cha $car $por"
+    }
+
+    if {[ixStopBGP4 pList]} {
+        error "stopBgp: ixStopBGP4 failed."
+    }
+}
+      stc {
+         
+         set globalDeviceList ""
+         foreach txPortId $txPortIdList {
+            set txPortId [hMapPortIdToSpirentPort $txPortId]
+            set deviceList [logcmd stc::get $txPortId -affiliationport-Sources]
+            result_debug "stopBgp: Device List - $deviceList"
+            set globalDeviceList [concat $globalDeviceList $deviceList]				
+         }
+         
+         if {[catch {logcmd stc::perform DeviceStopCommand -DeviceList $globalDeviceList} retCode]} {
+            error "stopBgp: Spirent device start failed."
+         } 
+      }
+   }
+}
+
+################################################################## 
+# Procedure Name: cleanupBgp
+#   
+# Description:  Disable and cleanup the BGP protocol server on the ixia
+#               
+#     
+#
+# Input args: txPortIdList
+# Output args: none
+# Typical usage: 
+#      cleanupBgp {1 2 3 4}
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: SetupTestTool
+##################################################################
+proc cleanupBgp {txPortIdList} {
+
+   global TrafficGen
+   switch -exact -- $TrafficGen {
+      ixia -
+      ixvm {
+         
+foreach txPortId $txPortIdList {    
+   # get the port information
+   MapIxiaPortId $txPortId cha car por
+   set chas(1) $cha
+   set card(1) $car
+   set port(1) $por
+   result_debug "Chas: $cha Card: $car Port: $por"
+   
+   # select the port
+   bgp4Server setDefault
+   if {[bgp4Server select $chas(1) $card(1) $port(1)]} {
+      result_debug "Error Connecting to bgp4Server"
+      exit
+   }
+   bgp4RouteItem clearASPathList
+   bgp4RouteItem clearExtendedCommunityList
+   bgp4RouteItem setDefault
+   bgp4Neighbor clearAllRouteRanges
+   bgp4Neighbor setDefault
+   bgp4Server clearAllNeighbors
+   bgp4Server setDefault
+   bgp4Server  set
+     	
+   ipAddressTable setDefault
+   ipAddressTable clear
+   if {[ipAddressTable set $chas(1) $card(1) $port(1)]} {
+       result_debug "cleanupBgp: ipAddressTable set $chas(1) $card(1) $port(1) failed."
+   }
+
+    #--- This will delete the interface table
+    interfaceTable select $chas(1) $card(1) $port(1)
+    interfaceTable getInterface "Port $card(1):$port(1) Interface"
+    interfaceTable delInterface "Port $card(1):$port(1) Interface"
+    # EY-07-17-2008: Removed invalid parameter to "interfaceTable
+    # clearAllInterfaces" command.
+    interfaceTable clearAllInterfaces;
+    interfaceTable write;
+
+
+   protocolServer setDefault
+   protocolServer get $chas(1) $card(1) $port(1)
+   protocolServer config -enableArpResponse false
+   protocolServer config -enableBgp4Service false
+   if {[protocolServer set $chas(1) $card(1) $port(1)]} {
+      result_debug "Error Setting Protocol Server"
+   }
+   if {[protocolServer write $chas(1) $card(1) $port(1)]} {
+      result_debug "cleanupBgp: protocolServer write $chas(1) $card(1) $port(1) failed."
+   }
+   if {[ixPortClearOwnership $chas(1) $card(1) $port(1) force]!=0} {
+      result_error "Can not clear ixia port ownership:$chas(1) $card(1) $port(1)"
+   }
+}
+      }
+      stc {
+         foreach txPortId $txPortIdList {
+            set txPortId [hMapPortIdToSpirentPort $txPortId]
+            foreach emulatedDevice [logcmd stc::get $txPortId -affiliationport-Sources] {
+               set ipv4If [logcmd stc::get $emulatedDevice -children-Ipv4If]
+               if {$ipv4If != ""} {
+                  logcmd stc::delete $emulatedDevice							
+               }
+            }
+         }
+      }
+   }  
+}
+
+##################################################################
+# Procedure Name: setupEBGPPeer
+#
+# Description: Setup an EBGP peer on the ixia
+#              protocol server
+#
+#
+# Input args: args
+# Output args: none
+# Typical usage:
+#
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: SetupTestTool
+##################################################################
+proc setupEBGPPeer {args} {
+   global TrafficGen
+   puts "[lindex [info level 0] 0] : $args"
+   parse_args setupEBGPPeer $args {
+     dutIp "1.1.1.1"
+      dutAsNumber 1
+     myIp ""
+     asNumber "9999"
+     numPeers "1"
+     ipNetworkList ""
+     fromPrefixList ""
+     thruPrefixList ""
+     originProtocolList ""
+     numRoutesList ""
+     txPortId  "1"
+     communityList ""
+     expcomList ""
+     localPrefList ""
+     clusterList ""
+     asTypeList ""
+     mode ""
+     asPathList ""
+     medList ""
+     atomicaggregate ""
+     routeFlapDropTimeList ""
+     routeFlapTimeList ""
+     routesToFlapFromList ""
+     routesToFlapToList ""
+     linkFlapDropTime ""
+     linkFlapTime ""
+     extendedcommunity "false"
+     extendedcommunityList ""
+     tag "none"
+     vlanPrio "0"
+     enGraResList ""
+     resTimList ""
+     staleTimeList ""
+     multProtocol "false"
+     4byteAs "false"
+   }
+
+   # TODO: Ixia does not specify DUT AS number in the API call and uses ASPathList for BGP routes only and not for BGP Router configuration. Find a way to retreive the DUT AS number and check if AS Path is required for spirent.
+   
+   
+   
+   switch -exact -- $TrafficGen {
+      
+      stc {
+         # delete all BGP on target port
+         cleanupBgp $txPortId
+         
+         set txPortId [MapIxiaPortId $txPortId cha car por]
+         set chas(1) $cha
+         set card(1) $car
+         set port(1) [string range $por 4 end]
+         for {set i 0} {$i<$numPeers} {incr i} {
+            
+#             set ipNetworkListValue [lindex $ipNetworkList $i]
+#             set fromPrefixListValue [lindex $fromPrefixList $i]
+#             set thruPrefixListValue [lindex $thruPrefixList $i]
+#             set numRoutesListValue [lindex $numRoutesList $i]
+#             set communityListValue [lindex $communityList $i]
+#             set expcomListValue [lindex $expcomList $i]
+#             set clusterListValue [lindex $clusterList $i]
+#             set localPrefListValue [lindex $localPrefList $i]
+#             set originProtocolListValue [lindex $originProtocolList $i]
+#             set asTypeListValue [lindex $asTypeList $i]
+#             if {$mode != ""} {
+#                set modeListValue [lindex $mode $i]
+#             } else {
+#                set modeListValue ""
+#             }
+#             set asPathListValue [lindex $asPathList $i]
+#             set medListValue [lindex $medList $i]
+#             if {$myIp == ""} {
+#                if {$i == 0} {
+#                   set myIp1 [incrIpField $dutIp 4 [expr $i+1]]
+#                } else {
+#                   set myIp1 [incrIpField $myIp1 4 [expr 1]]
+#                }
+#             } else {
+#                set myIp1 $myIp
+#             }
+#             set asNum [lindex $asNumber $i]
+
+#             set routeFlapDropTimeListValue [lindex $routeFlapDropTimeList $i]
+#             set routeFlapTimeListValue [lindex $routeFlapTimeList $i]
+#             set routesToFlapFromListValue [lindex $routesToFlapFromList $i]
+#             set routesToFlapToListValue [lindex $routesToFlapToList $i]
+#             set linkFlapDropTimeValue [lindex $linkFlapDropTime $i]
+#             set linkFlapTimeValue [lindex $linkFlapTime $i]
+#             set atomicaggregateValue [lindex $atomicaggregate $i]
+#             #set extendedcommunityValue [lindex $extendedcommunity $i]
+#             set extendedcommunityValue $extendedcommunity
+#             if {[regexp -nocase $extendedcommunityValue "true"]} {
+#                set extendedcommunityListValue [lindex $extendedcommunityList $i]
+#             } else {
+#                set extendedcommunityListValue ""
+#             }
+            
+#             set graceRestartValue [ lindex $enGraResList $i]
+#             set resTimeValue [lindex $resTimList $i]
+#             set staleTimeValue [lindex $staleTimeList $i]
+#             result_debug "the asPathListValue $asPathListValue and asNum $asNum"
+
+
+#             #set dutIpi [incrIpField $dutIp 4 [expr $i+1]]
+#             set dutIpi $dutIp 
+#             set ipNetworkListValue [lindex $ipNetworkList $i]
+#             set fromPrefixListValue [lindex $fromPrefixList $i]
+#             set thruPrefixListValue [lindex $thruPrefixList $i]
+#             set numRoutesListValue [lindex $numRoutesList $i]
+#             set communityListValue [lindex $communityList $i]
+#             set expcomListValue [lindex $expcomList $i]
+#             set clusterListValue [lindex $clusterList $i]
+#             set localPrefListValue [lindex $localPrefList $i]
+#             set originProtocolListValue [lindex $originProtocolList $i]
+#             set asTypeListValue [lindex $asTypeList $i]
+#             if {$mode != ""} {
+#                set modeListValue [lindex $mode $i]
+#             } else {
+#                set modeListValue ""
+#             }
+#             set asPathListValue [lindex $asPathList $i]
+#             set medListValue [lindex $medList $i]
+#             if {$myIp == ""} {
+#                if {$i == 0} {
+#                   set myIp1 [incrIpField $dutIp 4 [expr $i+1]]
+#                } else {
+#                   set myIp1 [incrIpField $myIp1 4 [expr 1]]
+#                }
+#             } else {
+#                set myIp1 $myIp
+#             }
+#             set asNum [lindex $asNumber $i]
+
+
+#             set modeListValue [lindex $mode $i]
+#             set graceRestartValue [ lindex $enGraResList $i]
+#             set resTimeValue [lindex $resTimList $i]
+#             set staleTimeValue [lindex $staleTimeList $i]
+#             set asPathTypeListValue [lindex $asTypeList $i]
+#             set atomicaggregateListValue [lindex $atomicaggregate $i]
+#             set asNum [lindex $asNumber $i]
+            
+#             if {$myIp == ""} {
+#                if {$i == 0} {
+#                   set myIpi [incrIpField $dutIpi 4 [expr $i+1]]
+#                } else {
+#                   set myIpi [incrIpField $myIpi 4 [expr 1]]
+#                }
+#             } else {
+#                set myIpi $myIp
+#             }
+#             set showOutput ""
+#             lappend showOutput "\{As\} 2"
+#             result_debug "showOutput $showOutput"
+#             set dutASN [lindex [GetKeyValue "show bgp" $showOutput] 0]
+            set ipNetworkListValue [lindex $ipNetworkList $i]
+            set fromPrefixListValue [lindex $fromPrefixList $i]
+            set thruPrefixListValue [lindex $thruPrefixList $i]
+            set numRoutesListValue [lindex $numRoutesList $i]
+            set communityListValue [lindex $communityList $i]
+            set expcomListValue [lindex $expcomList $i]
+            set clusterListValue [lindex $clusterList $i]
+            set localPrefListValue [lindex $localPrefList $i]
+            set originProtocolListValue [lindex $originProtocolList $i]
+            set asTypeListValue [lindex $asTypeList $i]
+            if {$mode != ""} {
+               set modeListValue [lindex $mode $i]
+            } else {
+               set modeListValue ""
+            }
+            set asPathListValue [lindex $asPathList $i]
+            set medListValue [lindex $medList $i]
+            if {$myIp == ""} {
+               if {$i == 0} {
+                  set myIp1 [incrIpField $dutIp 4 [expr $i+1]]
+               } else {
+                  set myIp1 [incrIpField $myIp1 4 [expr 1]]
+               }
+            } else {
+               set myIp1 $myIp
+            }
+            set asNum [lindex $asNumber $i]
+
+            set routeFlapDropTimeListValue [lindex $routeFlapDropTimeList $i]
+            set routeFlapTimeListValue [lindex $routeFlapTimeList $i]
+            set routesToFlapFromListValue [lindex $routesToFlapFromList $i]
+            set routesToFlapToListValue [lindex $routesToFlapToList $i]
+            set linkFlapDropTimeValue [lindex $linkFlapDropTime $i]
+            set linkFlapTimeValue [lindex $linkFlapTime $i]
+            set atomicaggregateValue [lindex $atomicaggregate $i]
+            #set extendedcommunityValue [lindex $extendedcommunity $i]
+            set extendedcommunityValue $extendedcommunity
+            if {[regexp -nocase $extendedcommunityValue "true"]} {
+               set extendedcommunityListValue [lindex $extendedcommunityList $i]
+            } else {
+               set extendedcommunityListValue ""
+            }
+            
+            set graceRestartValue [ lindex $enGraResList $i]
+            set resTimeValue [lindex $resTimList $i]
+            set staleTimeValue [lindex $staleTimeList $i]
+            set myMac [join [format "00 be ef 00 %02x %02x" $card(1) $port(1)] :]
+            result_debug "the asPathListValue $asPathListValue and asNum $asNum"
+            
+            # Create emulated device
+            
+            if {$tag == "none"} {
+               array set cmdResults [logcmd stc::perform DeviceCreateCommand -ParentList [logcmd stc::get system1 -children-project]\
+                                        -port $txPortId -IfStack "Ipv4If EthIIIf" -IfCount "1 1"]
+               set deviceHndl $cmdResults(-ReturnList)
+            } else {
+               array set cmdResults [logcmd stc::perform DeviceCreateCommand -ParentList [logcmd stc::get system1 -children-project]\
+                                        -port $txPortId -IfStack "Ipv4If VlanIf EthIIIf" -IfCount "1 1 1"]
+               set deviceHndl $cmdResults(-ReturnList)
+               logcmd stc::config [logcmd stc::get $deviceHndl -children-VlanIf] -VlanId $tag -Priority $vlanPrio
+            }
+            logcmd stc::config [logcmd stc::get $deviceHndl -children-Ipv4If] -Address $myIp1 -Gateway $dutIp
+            logcmd stc::config [logcmd stc::get $deviceHndl -children-EthIIIf] -SourceMac $myMac
+
+# handled in icetMakeExternalPeer now            
+            # Configure BGP Session info
+#            set bgpAttributes "-under $deviceHndl -BgpSessionIpAddress INTERFACE_IP -DutIpv4Addr $dutIp" 
+#            if {!$4byteAs} {
+#               append bgpAttributes " -AsNum $asNum -DutAsNum $dutASN"
+#            } else {
+#               append bgpAttributes " -AsNum4Byte asNum -Enable4ByteAsNum TRUE -DutAsNum4Byte $dutASN"
+#            }
+#            if {($graceRestartValue != "") && $graceRestartValue} {
+#               append bgpAttributes " -GracefulRestart $graceRestartValue -RestartTime $resTimeValue -RestartDelay $staleTimeValue"					
+#            }					
+            
+#            set bgpRouterConfigHndl [eval "logcmd stc::create BgpRouterConfig [subst $bgpAttributes]"] 
+################
+
+            set returnCode [icetMakeExternalPeer -deviceHndl $deviceHndl -dutAsNumber $dutAsNumber\
+                               -myIp $myIp1 -dutIp $dutIp -asNumber $asNum -ipNetworkList $ipNetworkListValue \
+                               -fromPrefixList $fromPrefixListValue -thruPrefixList $thruPrefixListValue \
+                               -numRoutesList $numRoutesListValue \
+                               -txPortId $txPortId -communityList $communityListValue -clusterList $clusterListValue \
+                               -asTypeList $asTypeListValue \
+                               -medList $medListValue -atomicaggregateList $atomicaggregateValue -mode $modeListValue \
+                               -asPathList $asPathListValue -originProtocolList $originProtocolListValue \
+                               -localPrefList $localPrefListValue -expcomList $expcomListValue \
+                               -localPrefList $localPrefListValue \
+                               -routeFlapDropTimeList $routeFlapDropTimeListValue \
+                               -routeFlapTimeList $routeFlapTimeListValue -routesToFlapFromList $routesToFlapFromListValue \
+                               -routesToFlapToList $routesToFlapToListValue -linkFlapDropTime $linkFlapDropTimeValue \
+                               -linkFlapTime $linkFlapTimeValue -extendedcommunityList $extendedcommunityListValue \
+                               -extendedcommunity $extendedcommunityValue -graceRestart $graceRestartValue \
+                               -graResTime $resTimeValue -graStaleTime $staleTimeValue -4byteAs $4byteAs]
+            if {$returnCode==-1} {
+               return -code return testSkipped
+            }
+         }
+      }
+      
+      ixia -
+      ixvm {
+         
+   # get the port information
+   MapIxiaPortId $txPortId cha car por
+   set chas(1) $cha
+   set card(1) $car
+   set port(1) $por
+   result_debug "Chas: $cha Card: $car Port: $por"
+
+   set IXIA_10G [getIxiaPortType $txPortId]
+   result_debug "IXIA_10G === $IXIA_10G"
+   if {$IXIA_10G == 98} { 
+	   result_debug "Chas: $cha Card: $car Port: $por"
+	    port config -autonegotiate                      false
+	    port config -advertise100FullDuplex             false
+	    port config -advertise100HalfDuplex             false
+	    port config -advertise10FullDuplex              false
+	    port config -advertise10HalfDuplex              false
+	    port config -advertise1000FullDuplex            false
+	    port config -portMode                           port10GigLanMode
+    }
+
+   if {[bgp4Server select $chas(1) $card(1) $port(1)]} {
+      result_debug "Error Connecting to bgp4Server"
+      return -code return testSkipped
+   }
+   bgp4RouteItem clearASPathList
+   bgp4RouteItem clearExtendedCommunityList
+   bgp4RouteItem setDefault
+   bgp4Neighbor clearAllRouteRanges
+   bgp4Neighbor setDefault
+   bgp4Server clearAllNeighbors
+   bgp4Server setDefault
+   bgp4Server  set
+
+   for {set i 0} {$i<$numPeers} {incr i} {
+      set ipNetworkListValue [lindex $ipNetworkList $i]
+      set fromPrefixListValue [lindex $fromPrefixList $i]
+      set thruPrefixListValue [lindex $thruPrefixList $i]
+      set numRoutesListValue [lindex $numRoutesList $i]
+      set communityListValue [lindex $communityList $i]
+      set expcomListValue [lindex $expcomList $i]
+      set clusterListValue [lindex $clusterList $i]
+      set localPrefListValue [lindex $localPrefList $i]
+      set originProtocolListValue [lindex $originProtocolList $i]
+      set asTypeListValue [lindex $asTypeList $i]
+      if {$mode != ""} {
+      set modeListValue [lindex $mode $i]
+      } else {
+      set modeListValue ""
+      }
+      set asPathListValue [lindex $asPathList $i]
+      set medListValue [lindex $medList $i]
+      if {$myIp == ""} {
+      if {$i == 0} {
+        set myIp1 [incrIpField $dutIp 4 [expr $i+1]]
+       } else {
+        set myIp1 [incrIpField $myIp1 4 [expr 1]]
+       }
+      } else {
+      set myIp1 $myIp
+      }
+      set asNum [lindex $asNumber $i]
+
+      set routeFlapDropTimeListValue [lindex $routeFlapDropTimeList $i]
+      set routeFlapTimeListValue [lindex $routeFlapTimeList $i]
+      set routesToFlapFromListValue [lindex $routesToFlapFromList $i]
+      set routesToFlapToListValue [lindex $routesToFlapToList $i]
+      set linkFlapDropTimeValue [lindex $linkFlapDropTime $i]
+      set linkFlapTimeValue [lindex $linkFlapTime $i]
+      set atomicaggregateValue [lindex $atomicaggregate $i]
+      #set extendedcommunityValue [lindex $extendedcommunity $i]
+      set extendedcommunityValue $extendedcommunity
+      if {[regexp -nocase $extendedcommunityValue "true"]} {
+      set extendedcommunityListValue [lindex $extendedcommunityList $i]
+      } else {
+      set extendedcommunityListValue ""
+      }
+
+      set graceRestartValue [ lindex $enGraResList $i]
+      set resTimeValue [lindex $resTimList $i]
+      set staleTimeValue [lindex $staleTimeList $i]
+result_debug "the asPathListValue $asPathListValue and asNum $asNum"
+
+
+      set returnCode [icetMakeExternalPeer -myIp $myIp1 -dutIp $dutIp -asNumber $asNum \
+          -ipNetworkList $ipNetworkListValue \
+          -fromPrefixList $fromPrefixListValue -thruPrefixList $thruPrefixListValue -numRoutesList $numRoutesListValue \
+          -txPortId $txPortId -communityList $communityListValue -clusterList $clusterListValue -asTypeList $asTypeListValue \
+          -medList $medListValue -atomicaggregateList $atomicaggregateValue -mode $modeListValue \
+          -asPathList $asPathListValue -originProtocolList $originProtocolListValue \
+          -localPrefList $localPrefListValue -expcomList $expcomListValue \
+          -localPrefList $localPrefListValue \
+          -routeFlapDropTimeList $routeFlapDropTimeListValue \
+          -routeFlapTimeList $routeFlapTimeListValue -routesToFlapFromList $routesToFlapFromListValue \
+          -routesToFlapToList $routesToFlapToListValue -linkFlapDropTime $linkFlapDropTimeValue \
+          -linkFlapTime $linkFlapTimeValue -extendedcommunityList $extendedcommunityListValue -extendedcommunity $extendedcommunityValue -graceRestart $graceRestartValue \
+  -graResTime $resTimeValue -graStaleTime $staleTimeValue -4byteAs $4byteAs]
+      if {$returnCode==-1} {
+          return -code return testSkipped
+      }
+set neib [expr $i+1]
+if {[bgp4Server  addNeighbor  neighbor$neib]} {
+   result_debug "error adding bgp neighbor $neib"
+}
+}
+
+   if {[bgp4Server  set]} {
+       result_debug "Error setting bgp server"
+   }
+
+   #set IP address table
+   setIpAddressTable $dutIp $numPeers $chas(1) $card(1) $port(1) "" $tag $multProtocol
+   set myMac [format "00 be ef 00 %02x %02x" $card(1) $port(1)]
+
+   if {![regexp -nocase "3.50" [version cget -installVersion]]} {
+       interfaceTable               select            $chas(1) $card(1) $port(1)
+       if {$multProtocol == "false"} {
+          interfaceIpV4                setDefault
+       }
+       interfaceIpV4                config            -gatewayIpAddress                   "$dutIp"
+       interfaceIpV4                config            -maskWidth                          24
+       interfaceIpV4                config            -ipAddress                          "$myIp"
+       interfaceEntry               addItem           addressTypeIpV4
+       if {$multProtocol == "false"} {
+          interfaceEntry               setDefault
+       }
+       interfaceEntry               config            -enable                             true
+       interfaceEntry               config            -description                        "Port $card(1):$port(1) Interface"
+       interfaceEntry               config            -macAddress                         "$myMac"
+       if {$tag !="none"} {
+          interfaceEntry               config            -enableVlan                         "true"
+          interfaceEntry               config            -vlanId                             $tag
+          interfaceEntry               config            -vlanPriority                      $vlanPrio 
+       } else {
+          interfaceEntry               config            -enableVlan                         false
+          interfaceEntry               config            -vlanId                             0
+          interfaceEntry               config            -vlanPriority                       0
+       } 
+       interfaceTable               addInterface
+
+       interfaceEntry               clearAllItems     addressTypeIpV6
+       interfaceEntry               clearAllItems     addressTypeIpV4
+   }
+
+   # just for naming the port
+   #port get $chas(1) $card(1) $port(1)
+   #port config -name "$numPeers Peers/[expr $numPeers * $rangePerPeer * $routePerRange] routes EBGP"
+   port set $chas(1) $card(1) $port(1)
+
+   set myportList [list [format "%s,%s,%s" $chas(1) $card(1) $port(1)]]
+   result_debug "Writing Configuration to Hardware..."
+   if {[writeConfigToHardware myportList]} {
+      result_debug "Error writing config to hardware"
+      return -code return testSkipped
+   }
+
+   #----This proc would run only if 
+   #----4byte AS flage is set and Asnumber greater than 65535
+   if {![regexp -nocase "false" $4byteAs]} {
+      setEbgpAsnum $txPortId $numPeers $asNumber
+   }
+}
+   }
+}
+
+##################################################################
+# Procedure Name: setupIBGPPeer
+#
+# Description: Setup an IBGP Peer on the Ixia protocol server
+#
+#
+#
+# Input args: args
+# Output args: none
+# Typical usage:
+#
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: SetupTestTool
+##################################################################
+proc setupIBGPPeer {args} {
+   global TrafficGen
+   parse_args setupIBGPPeer $args {
+     dutIp "1.1.1.1"
+      dutAsNumber 1
+     myIp ""
+     bgpServerMac ""
+     asNumber "9999"
+     numPeers "1"
+     ipNetworkList ""
+     fromPrefixList ""
+     thruPrefixList ""
+     numRoutesList ""
+     txPortId  "1"
+     communityList ""
+     expcomList ""
+     clusterList ""
+     localPrefList ""
+     originProtocolList ""
+     asTypeList ""
+     mode ""
+     asPathList ""
+     medList ""
+     nextHopList ""
+     routeFlapDropTimeList ""
+     routeFlapTimeList ""
+     routesToFlapFromList ""
+     routesToFlapToList ""
+     linkFlapDropTime ""
+     linkFlapTime ""
+     originatorId ""
+     extendedcommunity "false"
+     extendedcommunityList ""
+     4byteAs "false"
+      tag "none"
+   }
+   
+   switch -exact -- $TrafficGen {
+      
+      stc {
+#          cleanupBgp $txPortId
+#          set txPortId [hMapPortIdToSpirentPort $txPortId]
+#          for {set i 0} {$i<$numPeers} {incr i} {
+            
+#             set dutIpi $dutIp 
+#             #set dutIpi [incrIpField $dutIp 4 [expr $i+1]]
+#             set ipNetworkListValue [lindex $ipNetworkList $i]
+#             set fromPrefixListValue [lindex $fromPrefixList $i]
+#             set thruPrefixListValue [lindex $thruPrefixList $i]
+#             set numRoutesListValue [lindex $numRoutesList $i]
+#             set communityListValue [lindex $communityList $i]
+#             set expcomListValue [lindex $expcomList $i]
+#             set clusterListValue [lindex $clusterList $i]
+#             set localPrefListValue [lindex $localPrefList $i]
+#             set originProtocolListValue [lindex $originProtocolList $i]
+#             set asTypeListValue [lindex $asTypeList $i]
+#             set asPathListValue [lindex $asPathList $i]
+#             set medListValue [lindex $medList $i]
+#             set modeListValue [lindex $mode $i]
+#             set asPathTypeListValue [lindex $asPathList $i]
+#             set asNum [lindex $asNumber $i]
+#             set nextHop [lindex $nextHopList $i]
+            
+#             if {$myIp == ""} {
+#                if {$i == 0} {
+#                   set myIpi [incrIpField $dutIpi 4 [expr $i+1]]
+#                } else {
+#                   set myIpi [incrIpField $myIpi 4 [expr 1]]
+#                }
+#             } else {
+#                set myIpi $myIp
+#             }
+            
+#             # Create emulated device
+            
+            
+#             array set cmdResults [logcmd stc::perform DeviceCreateCommand -ParentList [logcmd stc::get system1 -children-project] -port $txPortId -IfStack "Ipv4If EthIIIf" -IfCount "1 1"]
+#             set deviceHndl $cmdResults(-ReturnList)
+            
+#             logcmd stc::config [logcmd stc::get $deviceHndl -children-Ipv4If] -Address $myIpi -Gateway $dutIpi
+            
+#             set bgpAttributes "-BgpSessionIpAddress INTERFACE_IP -DutIpv4Addr $dutIpi" 
+#             if {!$4byteAs} {
+#                append bgpAttributes " -AsNum $asNum -DutAsNum $asNum"
+#                #set bgpRouterConfigHndl [logcmd stc::create BgpRouterConfig -under $deviceHndl -BgpSessionIpAddress INTERFACE_IP -DutIpv4Addr $dutIpi -AsNum $asNum -DutAsNum $asNum] 
+#             } else {
+#                append bgpAttributes " -AsNum4Byte asNum -Enable4ByteAsNum TRUE -DutAsNum4Byte $asNum"
+#                #set bgpRouterConfigHndl [logcmd stc::create BgpRouterConfig -under $deviceHndl -BgpSessionIpAddress INTERFACE_IP -DutIpv4Addr $dutIpi -AsNum4Byte asNum -Enable4ByteAsNum TRUE -DutAsNum4Byte $asNum] 
+#             }
+            
+#             #puts "logcmd stc::create BgpRouterConfig -under $deviceHndl -BgpSessionIpAddress INTERFACE_IP -DutIpv4Addr $dutIpi -AsNum $asNum -DutAsNum $asNum"
+#             #set bgpRouterConfigHndl [logcmd stc::create BgpRouterConfig -under $deviceHndl -BgpSessionIpAddress INTERFACE_IP -DutIpv4Addr $dutIpi -AsNum $asNum -DutAsNum $asNum] 
+#             set bgpRouterConfigHndl [eval "logcmd stc::create BgpRouterConfig -under $deviceHndl [subst $bgpAttributes]"] 
+            
+#             set numOfIpv4Routes [llength $fromPrefixListValue]
+            
+#             for {set j 0} {$j < $numOfIpv4Routes} {incr j} {
+               
+#                set ipNetworkValue [lindex $ipNetworkListValue $j]
+#                set modeValue [lindex $modeListValue $j]
+#                set clusterIdValue [lindex $clusterListValue $j]
+#                set communityValue [lindex $communityListValue $j]
+#                set localPrefValue [lindex $localPrefListValue $j]
+#                set fromPrefixValue [lindex $fromPrefixListValue $j]
+#                set numRoutesValue [lindex $numRoutesListValue $j]
+#                set medValue [lindex $medListValue $j]
+#                set asTypeValue [lindex $asTypeListValue $j]
+#                set asPathValue [lindex $asPathListValue $j]
+               
+               
+               
+               
+#                if {$modeValue == "unicast"} {
+#                   set modeValue "UNICAST"
+#                } else {
+#                   set modeValue "MULTICAST"
+#                }
+#                if {$nextHop == {}} {set nextHop $myIpi}							
+#                set ipv4RouteAttrs "-under $bgpRouterConfigHndl -Origin IGP -nexthop $nextHop"
+               
+               
+               
+#                if {$asPathValue != ""} {
+#                   append ipv4RouteAttrs " -AsPath \{$asPathValue\}"						
+#                }
+               
+#                if {$clusterIdValue != ""} {
+#                   append ipv4RouteAttrs " -ClusterIdList $clusterIdValue"						
+#                }
+#                if {($communityValue != "") && ($communityValue != "null") } {
+#                   append ipv4RouteAttrs " -Community $communityValue"						
+#                }
+#                if {$localPrefValue != ""} {
+#                   append ipv4RouteAttrs " -LocalPreference $localPrefValue"						
+#                }
+#                if {$medValue != ""} {
+#                   append ipv4RouteAttrs " -Med $medValue"						
+#                }
+#                if {$asTypeValue != ""} {
+#                   append ipv4RouteAttrs " -AsPathSegmentType $asTypeValue"						
+#                }
+#                #puts "logcmd stc::create BgpIpv4RouteConfig  [subst $ipv4RouteAttrs]"
+#                set hBgpIpv4Route [eval "logcmd stc::create BgpIpv4RouteConfig  [subst $ipv4RouteAttrs]"]
+               
+#                if {[llength $fromPrefixValue] != 0} {
+#                   logcmd stc::config [logcmd stc::get $hBgpIpv4Route -children-Ipv4NetworkBlock] -NetworkCount $numRoutesValue -StartIpList $ipNetworkValue -PrefixLength $fromPrefixValue
+#                }						
+               
+#             }
+            
+#          }
+         # get the port information
+          MapIxiaPortId $txPortId cha car por
+          set chas(1) $cha
+          set card(1) $car
+          set port(1) [string range $por 4 end]
+          result_debug "Chas: $cha Card: $car Port: $por"
+
+         cleanupBgp $txPortId
+         set txPortId [hMapPortIdToSpirentPort $txPortId]
+         
+#          set IXIA_10G [getIxiaPortType $txPortId]
+#          result_debug "IXIA_10G === $IXIA_10G"
+#          if {$IXIA_10G == 98} { 
+#             result_debug "Chas: $cha Card: $car Port: $por"
+#             port config -autonegotiate                      false
+#             port config -advertise100FullDuplex             false
+#             port config -advertise100HalfDuplex             false
+#             port config -advertise10FullDuplex              false
+#             port config -advertise10HalfDuplex              false
+#             port config -advertise1000FullDuplex            false
+#             port config -portMode                           port10GigLanMode
+#          }
+         
+         # select the port
+         #  ixLogin "autotest-sc"
+         #  if {[ixPortTakeOwnership $cha $car $por force]!=0} {
+         #     result_error "Can not take ixia port ownership:$cha $car  $por"
+         #      return -code return testSkipped
+         #  }
+#          bgp4Server setDefault
+#          if {[bgp4Server select $chas(1) $card(1) $port(1)]} {
+#             result_debug "Error Connecting to bgp4Server"
+#             return -code return testSkipped
+#          }
+#          bgp4RouteItem clearASPathList
+#          bgp4RouteItem clearExtendedCommunityList
+#          bgp4RouteItem setDefault
+#          bgp4Neighbor clearAllRouteRanges
+#          bgp4Neighbor setDefault
+#          bgp4Server clearAllNeighbors
+#          bgp4Server setDefault
+#          bgp4Server  set
+         
+         #--newely added for mode
+         
+         #   if {[llength $mode] < 1} {
+         #      set numpeer [llength $ipNetworkList]
+         #       for {set i 1} {$i <= $numpeer} {incr i} {
+         #       lappend mode unicast
+         #    }
+         #}
+         
+         for {set i 0} {$i<$numPeers} {incr i} {
+            set ipNetworkListValue [lindex $ipNetworkList $i]
+            set fromPrefixListValue [lindex $fromPrefixList $i]
+            set thruPrefixListValue [lindex $thruPrefixList $i]
+            set numRoutesListValue [lindex $numRoutesList $i]
+            set communityListValue [lindex $communityList $i]
+            set expcomListValue [lindex $expcomList $i]
+            set clusterListValue [lindex $clusterList $i]
+            set localPrefListValue [lindex $localPrefList $i]
+            set originProtocolListValue [lindex $originProtocolList $i]
+            set asTypeListValue [lindex $asTypeList $i]
+            if {$mode != ""} {
+               set modeListValue [lindex $mode $i]
+            } else {
+               set modeListValue ""
+            }
+            set asPathListValue [lindex $asPathList $i]
+            set medListValue [lindex $medList $i]
+            if {$myIp == ""} {
+               if {$i == 0} {
+                  set myIp1 [incrIpField $dutIp 4 [expr $i+1]]
+                  result_debug "incrementing here in dutip"
+               } else {
+                  set myIp1 [incrIpField $myIp1 4 [expr 1]]
+                  result_debug "incrementing here in myip"
+                  result_debug "myIp1 here is $myIp1"
+               }
+            } else {
+               set myIp1 $myIp
+            }
+            result_debug "myIp is $myIp1"
+            set nextHopListValue [lindex $nextHopList $i]
+            
+            set routeFlapDropTimeListValue [lindex $routeFlapDropTimeList $i]
+            set routeFlapTimeListValue [lindex $routeFlapTimeList $i]
+            set routesToFlapFromListValue [lindex $routesToFlapFromList $i]
+            set routesToFlapToListValue [lindex $routesToFlapToList $i]
+            set linkFlapDropTimeValue [lindex $linkFlapDropTime $i]
+            set linkFlapTimeValue [lindex $linkFlapTime $i]
+            set originatorId [lindex $originatorId $i]
+            #set extendedcommunityValue [lindex $extendedcommunity $i]
+            set extendedcommunityValue $extendedcommunity
+            if {[regexp $extendedcommunityValue "true"]} {
+               set extendedcommunityListValue [lindex $extendedcommunityList $i]
+            } else {
+               set extendedcommunityListValue ""
+            }
+            
+            if {$tag == "none"} {
+               array set cmdResults [logcmd stc::perform DeviceCreateCommand -ParentList [logcmd stc::get system1 -children-project]\
+                                        -port $txPortId -IfStack "Ipv4If EthIIIf" -IfCount "1 1"]
+               set deviceHndl $cmdResults(-ReturnList)
+            } else {
+               array set cmdResults [logcmd stc::perform DeviceCreateCommand -ParentList [logcmd stc::get system1 -children-project]\
+                                        -port $txPortId -IfStack "Ipv4If VlanIf EthIIIf" -IfCount "1 1 1"]
+               set deviceHndl $cmdResults(-ReturnList)
+               logcmd stc::config [logcmd stc::get $deviceHndl -children-VlanIf] -VlanId $tag -Priority $vlanPrio
+            }
+            logcmd stc::config [logcmd stc::get $deviceHndl -children-Ipv4If] -Address $myIp1 -Gateway $dutIp
+            if {$bgpServerMac == {}} { set bgpServerMac [format "00 be ef 00 %02x %02x" $card(1) $port(1)] }
+            logcmd stc::config [logcmd stc::get $deviceHndl -children-EthIIIf] -SourceMac [join $bgpServerMac :]
+
+            #---- set the local as number of the bgp peer
+            
+            result_debug "the asPathListValue $asPathListValue, nextHopListValue $nextHopListValue"
+            
+            set returnCode [icetMakeInternalPeer -deviceHndl $deviceHndl -myIp $myIp1 -dutIp $dutIp -asNumber $asNumber  -dutAsNumber $dutAsNumber\
+                               -ipNetworkList $ipNetworkListValue \
+                               -fromPrefixList $fromPrefixListValue -thruPrefixList $thruPrefixListValue -numRoutesList $numRoutesListValue \
+                               -txPortId $txPortId -communityList $communityListValue -clusterList $clusterListValue -asTypeList $asTypeListValue \
+                               -medList $medListValue -asPathList $asPathListValue -originProtocolList $originProtocolListValue \
+                               -localPrefList $localPrefListValue -nextHopList $nextHopListValue -mode $modeListValue \
+                               -routeFlapDropTimeList $routeFlapDropTimeListValue -expcomList $expcomListValue \
+                               -routeFlapTimeList $routeFlapTimeListValue -routesToFlapFromList $routesToFlapFromListValue \
+                               -routesToFlapToList $routesToFlapToListValue -linkFlapDropTime $linkFlapDropTimeValue -extendedcommunity $extendedcommunityValue \
+                               -linkFlapTime $linkFlapTimeValue -originatorId $originatorId -extendedcommunityList $extendedcommunityListValue -4byteAs $4byteAs]
+            if {$returnCode==-1} {
+               return -code return testSkipped
+            }
+         }
+      }
+      
+      ixia -
+      ixvm {
+         
+   # get the port information
+   MapIxiaPortId $txPortId cha car por
+   set chas(1) $cha
+   set card(1) $car
+   set port(1) $por
+   result_debug "Chas: $cha Card: $car Port: $por"
+
+   set IXIA_10G [getIxiaPortType $txPortId]
+   result_debug "IXIA_10G === $IXIA_10G"
+   if {$IXIA_10G == 98} { 
+	   result_debug "Chas: $cha Card: $car Port: $por"
+	    port config -autonegotiate                      false
+	    port config -advertise100FullDuplex             false
+	    port config -advertise100HalfDuplex             false
+	    port config -advertise10FullDuplex              false
+	    port config -advertise10HalfDuplex              false
+	    port config -advertise1000FullDuplex            false
+	    port config -portMode                           port10GigLanMode
+    }
+
+   # select the port
+ #  ixLogin "autotest-sc"
+ #  if {[ixPortTakeOwnership $cha $car $por force]!=0} {
+ #     result_error "Can not take ixia port ownership:$cha $car  $por"
+ #      return -code return testSkipped
+ #  }
+   bgp4Server setDefault
+   if {[bgp4Server select $chas(1) $card(1) $port(1)]} {
+      result_debug "Error Connecting to bgp4Server"
+      return -code return testSkipped
+   }
+   bgp4RouteItem clearASPathList
+   bgp4RouteItem clearExtendedCommunityList
+   bgp4RouteItem setDefault
+   bgp4Neighbor clearAllRouteRanges
+   bgp4Neighbor setDefault
+   bgp4Server clearAllNeighbors
+   bgp4Server setDefault
+   bgp4Server  set
+
+#--newely added for mode
+
+#   if {[llength $mode] < 1} {
+#      set numpeer [llength $ipNetworkList]
+#       for {set i 1} {$i <= $numpeer} {incr i} {
+#       lappend mode unicast
+#    }
+#}
+
+  for {set i 0} {$i<$numPeers} {incr i} {
+      set ipNetworkListValue [lindex $ipNetworkList $i]
+      set fromPrefixListValue [lindex $fromPrefixList $i]
+      set thruPrefixListValue [lindex $thruPrefixList $i]
+      set numRoutesListValue [lindex $numRoutesList $i]
+      set communityListValue [lindex $communityList $i]
+      set expcomListValue [lindex $expcomList $i]
+      set clusterListValue [lindex $clusterList $i]
+      set localPrefListValue [lindex $localPrefList $i]
+      set originProtocolListValue [lindex $originProtocolList $i]
+      set asTypeListValue [lindex $asTypeList $i]
+      if {$mode != ""} {
+        set modeListValue [lindex $mode $i]
+      } else {
+        set modeListValue ""
+      }
+      set asPathListValue [lindex $asPathList $i]
+      set medListValue [lindex $medList $i]
+      if {$myIp == ""} {
+       if {$i == 0} {
+           set myIp1 [incrIpField $dutIp 4 [expr $i+1]]
+           result_debug "incrementing here in dutip"
+       } else {
+           set myIp1 [incrIpField $myIp1 4 [expr 1]]
+           result_debug "incrementing here in myip"
+           result_debug "myIp1 here is $myIp1"
+       }
+      } else {
+      set myIp1 $myIp
+      }
+      result_debug "myIp is $myIp1"
+      set nextHopListValue [lindex $nextHopList $i]
+
+      set routeFlapDropTimeListValue [lindex $routeFlapDropTimeList $i]
+      set routeFlapTimeListValue [lindex $routeFlapTimeList $i]
+      set routesToFlapFromListValue [lindex $routesToFlapFromList $i]
+      set routesToFlapToListValue [lindex $routesToFlapToList $i]
+      set linkFlapDropTimeValue [lindex $linkFlapDropTime $i]
+      set linkFlapTimeValue [lindex $linkFlapTime $i]
+      set originatorId [lindex $originatorId $i]
+      #set extendedcommunityValue [lindex $extendedcommunity $i]
+      set extendedcommunityValue $extendedcommunity
+      if {[regexp $extendedcommunityValue "true"]} {
+         set extendedcommunityListValue [lindex $extendedcommunityList $i]
+      } else {
+         set extendedcommunityListValue ""
+      }
+      
+#---- set the local as number of the bgp peer
+
+      result_debug "the asPathListValue $asPathListValue, nextHopListValue $nextHopListValue"
+
+      set returnCode [icetMakeInternalPeer -myIp $myIp1 -dutIp $dutIp -asNumber $asNumber \
+          -ipNetworkList $ipNetworkListValue \
+          -fromPrefixList $fromPrefixListValue -thruPrefixList $thruPrefixListValue -numRoutesList $numRoutesListValue \
+          -txPortId $txPortId -communityList $communityListValue -clusterList $clusterListValue -asTypeList $asTypeListValue \
+          -medList $medListValue -asPathList $asPathListValue -originProtocolList $originProtocolListValue \
+          -localPrefList $localPrefListValue -nextHopList $nextHopListValue -mode $modeListValue \
+          -routeFlapDropTimeList $routeFlapDropTimeListValue -expcomList $expcomListValue \
+          -routeFlapTimeList $routeFlapTimeListValue -routesToFlapFromList $routesToFlapFromListValue \
+          -routesToFlapToList $routesToFlapToListValue -linkFlapDropTime $linkFlapDropTimeValue -extendedcommunity $extendedcommunityValue \
+          -linkFlapTime $linkFlapTimeValue -originatorId $originatorId -extendedcommunityList $extendedcommunityListValue -4byteAs $4byteAs]
+      if {$returnCode==-1} {
+          return -code return testSkipped
+      }
+
+set neib [expr $i+1]
+if {[bgp4Server  addNeighbor  neighbor$neib]} {
+   result_debug "error adding bgp neighbor $neib"
+}
+
+if {![regexp -nocase "false" $4byteAs]} {
+   bgp4Server  config -internalLocalAsNum4Byte $asNumber
+} else {             
+   bgp4Server  config -internalLocalAsNum $asNumber   
+}
+   if {[bgp4Server  set]} {
+       result_debug "Error setting bgp server"
+   }
+
+}
+
+
+   #set IP address table
+   setIpAddressTable $dutIp $numPeers $chas(1) $card(1) $port(1) $bgpServerMac $tag
+         
+   #port get $chas(1) $card(1) $port(1)
+   #port config -name "$numPeers Peers/[expr $numPeers * $rangePerPeer * $routePerRange] routes EBGP"
+   #port set $chas(1) $card(1) $port(1)
+
+   set myportList [list [format "%s,%s,%s" $chas(1) $card(1) $port(1)]]
+   result_debug "Writing Configuration to Hardware..."
+   if {[writeConfigToHardware myportList]} {
+      result_debug "Error writing config to hardware"
+      return -code return testSkipped
+   }
+   if {![regexp -nocase "false" $4byteAs]} {
+      setIbgpAsnum $txPortId $asNumber
+   }
+}
+   }
+}
+
+##################################################################
+# Procedure Name: icetMakeExternalPeer
+#
+# Description:  Setup an external BGP peer on the ixia protocol
+#               server. Internal proc not exposed out of lib.
+#
+#
+# Input args: args
+# Output args: none
+# Typical usage:
+#      set returnCode [icetMakeExternalPeer -myIp $myIp -dutIp $dutIp -asNumber $asNum \
+#          -ipNetworkList $ipNetworkListValue \
+#          -fromPrefixList $fromPrefixListValue -thruPrefixList $thruPrefixListValue -numRoutesList $numRoutesListValue \
+#          -txPortId $txPortId -communityList $communityListValue -clusterList $clusterListValue -asTypeList $asTypeListValue \
+#          -medList $medListValue -asPathList $asPathListValue -originProtocolList $originProtocolListValue \
+#          -localPrefList $localPrefListValue \
+#          -routeFlapDropTimeList $routeFlapDropTimeListValue \
+#          -routeFlapTimeList $routeFlapTimeListValue -routesToFlapFromList $routesToFlapFromListValue \
+#          -routesToFlapToList $routesToFlapToListValue -linkFlapDropTime $linkFlapDropTimeValue \
+#          -linkFlapTime $linkFlapTimeValue]
+#
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: SetupTestTool
+##################################################################
+proc icetMakeExternalPeer {args} {
+   parse_args icetMakeExternalPeer $args {
+     dutIp "1.1.1.1"
+     myIp "1.1.1.2"
+     asNumber "9999"
+     ipNetworkList ""
+     fromPrefixList ""
+     thruPrefixList ""
+     localPrefList ""
+     numRoutesList ""
+     originProtocolList ""
+     txPortId  "1"
+     communityList ""
+     expcomList ""
+     clusterList ""
+     asTypeList ""
+     mode ""
+     asPathList ""
+     medList ""
+     atomicaggregateList ""
+     routeFlapDropTimeList ""
+     routeFlapTimeList ""
+     routesToFlapFromList ""
+     routesToFlapToList ""
+     linkFlapDropTime ""
+     linkFlapTime ""
+     extendedcommunity "false"
+     extendedcommunityList ""
+     graceRestart ""
+     graResTime ""
+     graStaleTime ""
+     4byteAs "false"
+   }
+
+   result_debug "myIp=($myIp) dutIp=($dutIp)"
+
+   set index [llength $ipNetworkList]
+   result_debug "index = $index";
+   if {[llength $fromPrefixList]!=$index || [llength $thruPrefixList]!=$index || [llength $numRoutesList]!=$index} {
+      result_debug "Error in input args:fromPrefixList,thruPrefixList,numRoutesList,ipNetworkList should be same length"
+      return -1
+   }
+   for {set i 0} {$i<$index} {incr i} {
+       set ipNetwork [lindex $ipNetworkList $i]
+       set fromPrefix [lindex $fromPrefixList $i]
+       set thruPrefix [lindex $thruPrefixList $i]
+       set numRoutes [lindex $numRoutesList $i]
+       #set ecom [lindex $extendedcommunity $i]
+       set ecom $extendedcommunity
+       if {[regexp -nocase $ecom "true"]} {
+         set extcom [lindex $extendedcommunityList $i]
+       } else {
+         set extcom ""
+       }
+       result_debug "ipNetwork $ipNetwork"
+       result_debug "fromPrefix $fromPrefix"
+       result_debug "thruPrefix $thruPrefix"
+       result_debug "numRoutes $numRoutes"
+       result_debug "ecom $ecom"
+       result_debug "extcom $extcom"
+
+ #---newely added for extended community
+        set param ""
+        set valueLst ""
+        set extcommunity ""
+        if {($ecom == "true") && ($extcom != "null")} {
+           bgp4RouteItem clearExtendedCommunityList
+           bgp4ExtendedCommunity setDefault
+        foreach extcommunity $extcom {
+        set param ""
+        set valueLst ""
+        set param [split $extcommunity :]
+         if {[lindex $param 0] == "rt"} {
+            bgp4ExtendedCommunity config -subType 2
+         } else {
+             bgp4ExtendedCommunity config -subType 3
+         }
+        if {[regexp {[0-9]+\.} [lindex $param 1]]} {
+         bgp4ExtendedCommunity config -type 1
+          set ipLst [split [lindex $param 1] "."]
+         foreach ip $ipLst {
+          set value1 [dectohex $ip]
+         if {[string length $value1] == 1} {
+         lappend valueLst "0$value1"
+         } elseif {[string length $value1] == 2} {
+         lappend valueLst "$value1"
+         }
+        }
+          set value2 [dectohex [lindex $param 2]]
+         lappend valueLst [conVal2Byte 2 $value2]
+       } else {
+         regexp {[0-9]+} [lindex $param 1] val
+         set value1 [dectohex $val]
+         set value2 [dectohex [lindex $param 2]]
+         if [regexp -nocase "L" [lindex $param 1]] {
+            bgp4ExtendedCommunity config -type 2
+            lappend valueLst [conVal2Byte 4 $value1]
+            lappend valueLst [conVal2Byte 2 $value2]
+         } else {
+            bgp4ExtendedCommunity config -type 0
+            lappend valueLst [conVal2Byte 2 $value1]
+            lappend valueLst [conVal2Byte 4 $value2]
+         }
+     }
+       set valueLst [join $valueLst]
+       result_debug "value list is $valueLst"
+       bgp4ExtendedCommunity config -value  "$valueLst"
+       bgp4RouteItem addExtendedCommunity
+     }
+  }
+       bgp4RouteItem setDefault
+       bgp4RouteItem config -networkAddress $ipNetwork
+       bgp4RouteItem config -fromPrefix $fromPrefix
+       bgp4RouteItem config -thruPrefix $thruPrefix
+       bgp4RouteItem config -numRoutes $numRoutes
+       if {[llength $localPrefList]!=0} {
+          set localPref [lindex $localPrefList $i]
+          if {$localPref!=""} {
+             result_debug "localPref $localPref"
+             bgp4RouteItem config -enableLocalPref 1
+             bgp4RouteItem config -localPref $localPref
+           }
+       }
+
+#---newely added for mode
+
+       if {$mode != ""} {
+       set modeType [lindex $mode $i]
+       result_debug "modeType $modeType"
+       if {$modeType == "unicast"} {
+           bgp4RouteItem config -enableIncludeMulticast false
+           bgp4RouteItem config -enableProperSafi false
+           bgp4RouteItem config -enableTraditionalNlriUpdate true
+          } else {
+           bgp4RouteItem config -enableIncludeMulticast true
+           bgp4RouteItem config -enableProperSafi true
+           bgp4RouteItem config -enableTraditionalNlriUpdate false
+      }
+      }
+
+       bgp4RouteItem config -enableNextHop 1
+       bgp4RouteItem config -nextHopIpAddress $myIp
+       bgp4RouteItem config -originProtocol [lindex $originProtocolList $i]
+       bgp4RouteItem config -enableRouteRange true
+       if {[llength $communityList] != 0} {
+           # --- 65535:65281 = NO_EXPORT
+           set community1 [lindex $communityList $i]
+           if {[llength $expcomList] != 0} {
+           set expcom [lindex $expcomList $i]
+           } else {
+           set expcom "null"
+          }
+
+           if {($community1 != "null") && ($expcom == "null")} {
+               result_debug "community1 $community1"
+               bgp4RouteItem config -enableCommunity  1
+               bgp4RouteItem config -communityList $community1
+           } elseif {($community1 != "null") && ($expcom != "null") } {
+            result_debug "community1 $community1"
+            result_debug "expcom $expcom"
+            #expcom = 1 (NO_EXPORT)
+            #expcom = 2 (NO_ADVERTISE)
+            #expcom = 3 (NO_EXPORT_SUBCONFED)
+              if {$expcom ==1} {
+               bgp4RouteItem config -enableCommunity  1
+               bgp4RouteItem config -communityList "$community1 65535:65281"
+               } elseif {$expcom ==2} {
+               bgp4RouteItem config -enableCommunity  1
+               bgp4RouteItem config -communityList "$community1 65535:65282"
+              } else {
+               bgp4RouteItem config -enableCommunity  1
+               bgp4RouteItem config -communityList "$community1 65535:65283"
+            }
+         }
+       }
+       if {[llength $clusterList] != 0} {
+           set cluster1 [lindex $clusterList $i]
+           if {$cluster1 != "null"} {
+               result_debug "cluster1 $cluster1"
+               bgp4RouteItem config -enableCluster 1
+               bgp4RouteItem config -clusterList $cluster1
+           }
+       }
+       bgp4RouteItem config -enableASPath  1
+       bgp4AsPathItem setDefault
+       if {[llength $asPathList]!=0} {
+          set aslist [lindex $asPathList $i]
+          set asSegmentTypes [lindex $asTypeList $i]
+          if {$aslist!=""} {
+             set indice 0
+             bgp4RouteItem clearASPathList
+             foreach asType $asSegmentTypes {
+                bgp4AsPathItem config -enableAsSegment true
+                bgp4AsPathItem config -asSegmentType $asType
+                if {[llength $asSegmentTypes]>1} {
+                   bgp4AsPathItem config -asList [lindex $aslist $indice]
+                } else {
+                   bgp4AsPathItem config -asList $aslist
+                }
+                incr indice
+                if {[bgp4RouteItem addASPathItem]} {
+                   result_debug "Error Adding AS_PATH item"
+                }
+             }
+          } else {
+              bgp4AsPathItem config -enableAsSegment false
+              bgp4AsPathItem config -asPathSeqList [list $asNumber 257 ]
+              bgp4RouteItem clearASPathList    ;# for ixia 3.5 version and above
+          }
+       } else {
+             bgp4AsPathItem config -enableAsSegment false
+          bgp4AsPathItem config -asPathSeqList [list $asNumber 257 ]
+          bgp4RouteItem clearASPathList    ;# for ixia 3.5 version and above
+       }
+       if {[llength $medList]!=0} {
+           set med [lindex $medList $i]
+           if {$med!=""} {
+               result_debug "med $med"
+               bgp4RouteItem config -enableMED 1
+               bgp4RouteItem config -med $med
+           }
+       }
+       # add ATomic aggregate
+       if {[llength $atomicaggregateList]!=0} {
+           set aggregate [lindex $atomicaggregateList $i]
+           if {$aggregate == 1} {
+              bgp4RouteItem config -enableAtomicAggregate true
+           } else {
+              bgp4RouteItem config -enableAtomicAggregate false
+           }
+       }
+       # add route flap
+       set routeFlapDropTime [lindex $routeFlapDropTimeList $i]
+       if {($routeFlapDropTime!="") && ($routeFlapDropTime!="null")} {
+           result_debug "-Do route Flap"
+           set routeFlapTime [lindex $routeFlapTimeList $i]
+           set routesToFlapFrom [lindex $routesToFlapFromList $i]
+           set routesToFlapTo [lindex $routesToFlapToList $i]
+           bgp4RouteItem config -enableRouteFlap 1
+           bgp4RouteItem config -routeFlapDropTime $routeFlapDropTime
+           bgp4RouteItem config -routeFlapTime $routeFlapTime
+           bgp4RouteItem config -routesToFlapFrom $routesToFlapFrom
+           bgp4RouteItem config -routesToFlapTo $routesToFlapTo
+       } else {
+           bgp4RouteItem config -enableRouteFlap 0
+       }
+       set rr [expr $i +1]
+       if {[bgp4Neighbor addRouteRange routeRange$rr]} {
+           result_debug "Error Adding Route item"
+       }
+   }
+   bgp4Neighbor config  -type  bgp4NeighborExternal
+   bgp4Neighbor config  -enable true
+   bgp4Neighbor config -localIpAddress $myIp
+   bgp4Neighbor config -rangeCount 1
+   bgp4Neighbor config -dutIpAddress $dutIp
+   if {![regexp -nocase "false" $4byteAs]} {
+      catch [bgp4Neighbor config -enable4ByteAsNumber $4byteAs] resultCatch  
+      if  [regexp "type.*enable" $resultCatch] {
+         return -1
+      }
+   }
+   bgp4Neighbor config -localAsNumber $asNumber
+   # add link flap
+   if {$linkFlapDropTime!=""} {
+       bgp4Neighbor config -enableLinkFlap true
+       bgp4Neighbor config -linkFlapDropTime $linkFlapDropTime
+       bgp4Neighbor config -linkFlapTime $linkFlapTime
+   } else {
+       bgp4Neighbor config -enableLinkFlap false
+   }
+if {$graceRestart !=""} {
+    bgp4Neighbor config -enableGracefulRestart  true
+    bgp4Neighbor config -restartTime $graResTime
+    bgp4Neighbor config -staleTime   $graStaleTime
+}
+
+}
+
+##################################################################
+# Procedure Name: icetMakeInternalPeer
+#
+# Description:  Setup an internal BGP peer on the ixia protocol server.
+#               Internal proc not to be exposed out of lib.
+#
+#
+#
+# Input args: args
+# Output args: none
+# Typical usage:
+#      set returnCode [icetMakeInternalPeer -myIp $myIp -dutIp $dutIp -asNumber $asNumber \
+#          -ipNetworkList $ipNetworkListValue \
+#          -fromPrefixList $fromPrefixListValue -thruPrefixList $thruPrefixListValue -numRoutesList $numRoutesListValue \
+#          -txPortId $txPortId -communityList $communityListValue -clusterList $clusterListValue -asTypeList $asTypeListValue \
+#          -medList $medListValue -asPathList $asPathListValue -originProtocolList $originProtocolListValue \
+#          -localPrefList $localPrefListValue -nextHopList $nextHopListValue \
+#          -routeFlapDropTimeList $routeFlapDropTimeListValue \
+#          -routeFlapTimeList $routeFlapTimeListValue -routesToFlapFromList $routesToFlapFromListValue \
+#          -routesToFlapToList $routesToFlapToListValue -linkFlapDropTime $linkFlapDropTimeValue \
+#          -linkFlapTime $linkFlapTimeValue]
+#
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: SetupTestTool
+##################################################################
+proc icetMakeInternalPeer {args} {
+   parse_args icetMakeInternalPeer $args {
+     myIp "1.1.1.2"
+     dutIp "1.1.1.1"
+     asNumber "9999"
+     ipNetworkList ""
+     fromPrefixList ""
+     thruPrefixList ""
+     numRoutesList ""
+     originProtocolList ""
+     txPortId  "1"
+     localPrefList ""
+     communityList ""
+     expcomList ""
+     clusterList ""
+     asTypeList ""
+     mode ""
+     asPathList ""
+     medList ""
+     nextHopList ""
+     routeFlapDropTimeList ""
+     routeFlapTimeList ""
+     routesToFlapFromList ""
+     routesToFlapToList ""
+     linkFlapDropTime ""
+     linkFlapTime ""
+     originatorId ""
+     extendedcommunity "false"
+     extendedcommunityList ""
+     4byteAs "false"
+   }
+
+   set index [llength $ipNetworkList]
+   puts "index = $index";
+   if {[llength $fromPrefixList]!=$index || [llength $thruPrefixList]!=$index || [llength $numRoutesList]!=$index} {
+      result_debug "Error in input args:fromPrefixList,thruPrefixList,numRoutesList,ipNetworkList should be same length"
+      return -1
+   }
+
+   for {set i 0} {$i < $index} {incr i} {
+       set ipNetwork [lindex $ipNetworkList $i]
+       set fromPrefix [lindex $fromPrefixList $i]
+       set thruPrefix [lindex $thruPrefixList $i]
+       set numRoutes [lindex $numRoutesList $i]
+       set nextHop [lindex $nextHopList $i]
+       set origId [lindex $originatorId $i]
+       #set ecom [lindex $extendedcommunity $i]
+       set ecom $extendedcommunity
+       if {[regexp -nocase $ecom "true"]} {
+         set extcom [lindex $extendedcommunityList $i]
+       } else {
+         set extcom ""
+       }
+       result_debug "ipNetwork $ipNetwork"
+       result_debug "fromPrefix $fromPrefix"
+       result_debug "thruPrefix $thruPrefix"
+       result_debug "numRoutes $numRoutes"
+       result_debug "ecom $ecom"
+       result_debug "extcom $extcom"
+
+ #---newely added for extended community
+        set param ""
+        set valueLst ""
+        set extcommunity ""
+        if {($ecom == "true") && ($extcom != "null")} {
+          puts "#############*********** coming here ########*********"
+           bgp4RouteItem clearExtendedCommunityList
+           bgp4ExtendedCommunity setDefault
+        foreach extcommunity $extcom {
+        set param ""
+        set valueLst ""
+        set param [split $extcommunity :]
+         if {[lindex $param 0] == "rt"} {
+            bgp4ExtendedCommunity config -subType 2
+         } else {
+             bgp4ExtendedCommunity config -subType 3
+         }
+        if {[regexp {[0-9]+\.} [lindex $param 1]]} {
+         bgp4ExtendedCommunity config -type 1
+          set ipLst [split [lindex $param 1] "."]
+         foreach ip $ipLst {
+          set value1 [dectohex $ip]
+         if {[string length $value1] == 1} {
+         lappend valueLst "0$value1"
+         } elseif {[string length $value1] == 2} {
+         lappend valueLst "$value1"
+         }
+        }
+          set value2 [dectohex [lindex $param 2]]
+         lappend valueLst [conVal2Byte 2 $value2]
+       } else {
+         regexp {[0-9]+} [lindex $param 1] val
+         set value1 [dectohex $val]
+         set value2 [dectohex [lindex $param 2]]
+         if [regexp -nocase "L" [lindex $param 1]] {
+            bgp4ExtendedCommunity config -type 2
+            lappend valueLst [conVal2Byte 4 $value1]
+            lappend valueLst [conVal2Byte 2 $value2]
+         } else {
+            bgp4ExtendedCommunity config -type 0
+            lappend valueLst [conVal2Byte 2 $value1]
+            lappend valueLst [conVal2Byte 4 $value2]
+         }
+     }
+
+       set valueLst [join $valueLst]
+       result_debug "value list is $valueLst"
+       bgp4ExtendedCommunity config -value  "$valueLst"
+       bgp4RouteItem addExtendedCommunity
+     }
+  }
+       bgp4RouteItem setDefault
+       bgp4RouteItem config -asPathSetMode bgpRouteAsPathNoInclude
+       bgp4RouteItem config -networkAddress $ipNetwork
+       bgp4RouteItem config -fromPrefix $fromPrefix
+       bgp4RouteItem config -thruPrefix $thruPrefix
+       bgp4RouteItem config -numRoutes $numRoutes
+#---newely added for mode
+
+      if {$mode != ""} {
+       set modeType [lindex $mode $i]
+       result_debug "modeType $modeType"
+       if {$modeType == "unicast"} {
+           bgp4RouteItem config -enableIncludeMulticast false
+           bgp4RouteItem config -enableProperSafi false
+           bgp4RouteItem config -enableTraditionalNlriUpdate true
+          } else {
+           bgp4RouteItem config -enableIncludeMulticast true
+           bgp4RouteItem config -enableProperSafi true
+           bgp4RouteItem config -enableTraditionalNlriUpdate false
+      }
+      }
+
+       bgp4RouteItem config -enableNextHop 1
+       if {$nextHop!=""} {
+          result_debug "the nexthop $nextHop"
+          bgp4RouteItem config -nextHopIpAddress $nextHop
+          bgp4RouteItem config -nextHopMode 1
+          bgp4RouteItem config -nextHopSetMode bgpRouteNextHopSetManually
+       } else {
+          bgp4RouteItem config -nextHopIpAddress $myIp
+       }
+       if {$origId !=""} {
+          bgp4RouteItem config -enableOriginatorId true
+          bgp4RouteItem config -originatorId $origId
+       }
+       set localPref [lindex $localPrefList $i]
+       if {$localPref==""} {
+          set $localPref 0
+       }
+       result_debug "localPref $localPref"
+       bgp4RouteItem config -enableLocalPref 1
+       bgp4RouteItem config -localPref $localPref
+       bgp4RouteItem config -originProtocol [lindex $originProtocolList $i]
+       bgp4RouteItem config -enableRouteRange true
+       if {[llength $communityList] != 0} {
+           # --- 65535:65281 = NO_EXPORT
+           set community1 [lindex $communityList $i]
+           if {[llength $expcomList] != 0} {
+           set expcom [lindex $expcomList $i]
+           } else {
+           set expcom "null"
+          }
+
+           if {($community1 != "null") && ($expcom == "null")} {
+               result_debug "community1 $community1"
+               bgp4RouteItem config -enableCommunity  1
+               bgp4RouteItem config -communityList $community1
+           } elseif {($community1 != "null") && ($expcom != "null") } {
+            result_debug "community1 $community1"
+            result_debug "expcom $expcom"
+            #expcom = 1 (NO_EXPORT)
+            #expcom = 2 (NO_ADVERTISE)
+            #expcom = 3 (NO_EXPORT_SUBCONFED)
+              if {$expcom ==1} {
+               bgp4RouteItem config -enableCommunity  1
+               bgp4RouteItem config -communityList "$community1 65535:65281"
+               } elseif {$expcom ==2} {
+               bgp4RouteItem config -enableCommunity  1
+               bgp4RouteItem config -communityList "$community1 65535:65282"
+              } else {
+               bgp4RouteItem config -enableCommunity  1
+               bgp4RouteItem config -communityList "$community1 65535:65283"
+            }
+         }
+       }
+       if {[llength $clusterList] != 0} {
+           set cluster1 [lindex $clusterList $i]
+           if {$cluster1 != "null"} {
+               result_debug "cluster1 $cluster1"
+               bgp4RouteItem config -enableCluster 1
+               bgp4RouteItem config -clusterList $cluster1
+           }
+       }
+
+       bgp4RouteItem config -enableASPath  1
+       bgp4AsPathItem setDefault
+       if {[llength $asPathList]!=0} {
+          set aslist [lindex $asPathList $i]
+          set asSegmentTypes [lindex $asTypeList $i]
+          if {$aslist!=""} {
+             set indice 0
+             bgp4RouteItem clearASPathList
+             foreach asType $asSegmentTypes {
+                result_debug "the asType $asType and asList $aslist"
+                bgp4AsPathItem config -enableAsSegment true
+                bgp4AsPathItem config -asSegmentType $asType
+                if {[llength $asSegmentTypes]>1} {
+                   bgp4AsPathItem config -asList [lindex $aslist $indice]
+                } else {
+                   bgp4AsPathItem config -asList $aslist
+                }
+                incr indice
+                if {[bgp4RouteItem addASPathItem]} {
+                   result_debug "Error Adding AS_PATH item"
+                }
+             }
+          } else {
+             bgp4AsPathItem config -enableAsSegment false
+              bgp4AsPathItem config -asPathSeqList [list $asNumber 257 ]
+#              if {[bgp4RouteItem addASPathItem]} {
+#                 result_debug "Error Adding AS_PATH item"
+#              }
+             bgp4RouteItem clearASPathList    ;# for ixia 3.5 version and above
+          }
+          #result_debug "AS_PATH ($aslist)"
+       } else {
+             bgp4AsPathItem config -enableAsSegment false
+          bgp4AsPathItem config -asPathSeqList [list $asNumber 257 ]
+#          if {[bgp4RouteItem addASPathItem]} {
+#             result_debug "Error Adding AS_PATH item"
+#          }
+         bgp4RouteItem                clearASPathList    ;# for ixia 3.5 version and above
+       }
+
+       if {[llength $medList]!=0} {
+           set med [lindex $medList $i]
+           if {$med!=""} {
+               result_debug "med $med"
+               bgp4RouteItem config -enableMED 1
+               bgp4RouteItem config -med $med
+           }
+       }
+       # add route flap
+       set routeFlapDropTime [lindex $routeFlapDropTimeList $i]
+       if {($routeFlapDropTime!="") && ($routeFlapDropTime != "null")} {
+           result_debug "-Do route Flap"
+           set routeFlapTime [lindex $routeFlapTimeList $i]
+           set routesToFlapFrom [lindex $routesToFlapFromList $i]
+           set routesToFlapTo [lindex $routesToFlapToList $i]
+           bgp4RouteItem config -enableRouteFlap 1
+           bgp4RouteItem config -routeFlapDropTime $routeFlapDropTime
+           bgp4RouteItem config -routeFlapTime $routeFlapTime
+           bgp4RouteItem config -routesToFlapFrom $routesToFlapFrom
+           bgp4RouteItem config -routesToFlapTo $routesToFlapTo
+       } else {
+           bgp4RouteItem config -enableRouteFlap 0
+       }
+       set rr [expr $i +1]
+       if {[bgp4Neighbor addRouteRange routeRange$rr]} {
+           result_debug "Error Adding Route item"
+       }
+}
+   bgp4Neighbor config  -type  bgp4NeighborInternal
+   bgp4Neighbor config  -enable true
+   if {![regexp -nocase "false" $4byteAs]} {
+      bgp4Neighbor config -enable4ByteAsNumber $4byteAs
+   }
+   bgp4Neighbor config -localIpAddress $myIp
+   bgp4Neighbor config -rangeCount 1
+   bgp4Neighbor config -dutIpAddress $dutIp
+
+   # add link flap
+   if {$linkFlapDropTime!=""} {
+       bgp4Neighbor config -enableLinkFlap true
+       bgp4Neighbor config -linkFlapDropTime $linkFlapDropTime
+       bgp4Neighbor config -linkFlapTime $linkFlapTime
+   } else {
+       bgp4Neighbor config -enableLinkFlap false
+   }
+
+}
+
+################################################################## 
+# Procedure Name: setIpAddressTable
+#   
+# Description: Setup an IP address table in the ixia protocol server 
+#               
+#     
+#
+# Input args: gatewayIP count chas card port
+# Output args: none
+# Typical usage: 
+#      setIpAddressTable 10.1.1.1 100 1 1 1
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: SetupTestTool
+##################################################################
+proc setIpAddressTable {gatewayIP count chas card port {macAddress ""} {vlanTag "none"} {multipleProt "false"}} {
+   #puts "setIpAddressTable is deprecated, please use icetSetIpAddressTable"
+
+   result_debug "Setting Addr Tbl Item..."
+   if {$multipleProt == "false" } {
+      ipAddressTableItem setDefault
+   }
+   ipAddressTableItem config -fromIpAddress [incrIpField $gatewayIP 4 1]
+   if {$macAddress != ""} {
+       if {$macAddress == "default"} {
+           if {[port get $chas $card $port]} {
+               error "setIpAddressTable: port get $chas $card $port failed."
+           }
+           set macAddress [port cget -MacAddress]
+       }
+   } else {
+       set macAddress [uniqMac $chas $card $port]
+   }
+   ipAddressTableItem config -fromMacAddress $macAddress
+   ipAddressTableItem config -numAddresses $count
+   if {$vlanTag !="none"} {
+      ipAddressTableItem           config            -enableVlan                         true
+      ipAddressTableItem           config            -vlanId                             $vlanTag
+    }
+   if [ipAddressTableItem set] {
+      result_debug "Error Setting IP Address Table Item"
+   }
+   
+   result_debug "Setting Addr Table..."
+   ipAddressTable setDefault
+   ipAddressTable config -defaultGateway $gatewayIP
+   if [ipAddressTable addItem] {
+      result_debug "Error Adding IP Address Table Item"
+   }
+   if [ipAddressTable set $chas $card $port] {
+      result_debug "Error Setting IP Address Table"
+   }
+   result_debug "Configuring Protocol Server on $chas $card $port"
+   if {$multipleProt == "false" } {
+   protocolServer setDefault
+   }
+   protocolServer config -enablePingResponse 1
+   protocolServer config -enableArpResponse 1
+   protocolServer config -enableBgp4Service 1
+   if [protocolServer set $chas $card $port] {
+      result_debug "Error Setting Protocol Server"
+   }
+   result_debug "Default Gateway: [ipAddressTable cget -defaultGateway]"
+}
+
+################################################################## 
+# Procedure Name: uniqMac
+#   
+# Description:  format 3 hex bytes into a specific MAC format
+#               
+#     
+#
+# Input args: ch ca po
+# Output args: none
+# Return value: "6a be [format "%02x %02x %02x" $ch $ca $po] 00"
+# Typical usage: 
+#       uniqMac 11 22 33
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: Utility
+##################################################################
+proc uniqMac {ch ca po} { 
+   return "6a be [format "%02x %02x %02x" $ch $ca $po] 00"
+}
+
+##
+## New Functions for XOS
+##
+
+##################################################################
+# Procedure Name: GetBGPMessages
+#
+# Description:
+#     This proc is used to get the BGP Messages from a frame received
+#
+# Input args: rawFrame
+# Output args: None.
+# Return value: List of BGP Messages in ixia raw frame format
+# Typical usage:
+#     set bgpMsgs [GetBGPMessages $frame]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#     VerifySwitchOutput,VerifyTraffic)
+# Category: CaptureTraffic
+##################################################################
+proc GetBGPMessages {rawFrame} {
+
+   set rtnMsgs ""
+   set type [string range $rawFrame 36 40]
+
+   # if tagged, get rid of type and tag field from 36 to 47
+   if {$type == "81 00"} {
+     set leftRawFrame [string range $rawFrame 0 35]
+     set rightRawFrame [string range $rawFrame 48 [string length $rawFrame]]
+     set rawFrame [format "%s%s" $leftRawFrame $rightRawFrame]
+   }
+
+   set type [string range $rawFrame 36 40]
+   result_debug "the type $type"
+   if { $type == "08 00" } {
+      set IpType [string range $rawFrame 69 70]
+      if { $IpType == "06" } {
+         set srcPort [GetIPSourcePort $rawFrame]
+         set dstPort [GetIPDestPort $rawFrame]
+         #result_debug "The srcPort $srcPort and dstPort $dstPort"
+         if {$srcPort=="179"||$dstPort=="179"} {
+            set macHdrLen 14
+	    set ipHdrLen 20
+	    set ipLenPos 16
+	    set bgpMakerLen 16
+	    set ipLen [GetShortIntOffset $rawFrame [expr ($ipLenPos * 3)]]
+            set tcpLenPos [expr (46 * 3)]
+            set tcpHdrLen [expr ([hextodec [string range $rawFrame $tcpLenPos $tcpLenPos]] * 4)]
+	    set ipOffset [ expr ($ipHdrLen + $tcpHdrLen)]
+	    while {$ipOffset < $ipLen} {
+               set bgpLengthPos [expr (14 + 16 + $ipOffset) * 3]
+	       set bgpLength [GetShortIntOffset $rawFrame $bgpLengthPos]
+	       set b_start [expr (($ipOffset +14 ) * 3)]
+	       set b_end [expr ($b_start + ([expr $bgpLength * 3]) - 2)]
+	       lappend rtnMsgs [string range $rawFrame $b_start $b_end]
+	       set ipOffset [expr ($ipOffset + $bgpLength)]
+            }
+         }
+      }
+   }
+#   result_debug "bgpMsgs: $rtnMsgs"
+   return $rtnMsgs
+}
+
+
+##################################################################
+# Procedure Name: GetBGPMsgTypes
+#
+# Description:
+#     This proc is used to get the BGP Message Types from a list of BGP
+#     messages which is obtained from raw frame via GetBGPMesssges
+#
+# Input args: list of BGP Messages
+# Output args: None.
+# Return value: List of BGP Message types
+# Typical usage:
+#    set bgpMsgs [GetBGPMessages $frame]
+#    set bgpMsgTypes [GetBGPMsgTypes $$bgpMsgs]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#     VerifySwitchOutput,VerifyTraffic)
+# Category: CaptureTraffic
+##################################################################
+proc GetBGPMsgTypes {bgpMsgs} {
+   set rtnTypes ""
+   foreach bgpMsg $bgpMsgs {
+      set bgpTypeOffset 18
+      set bgpTypePos [expr ($bgpTypeOffset * 3)]
+      set bgpType [GetByteOffset $bgpMsg $bgpTypePos]
+      switch -- $bgpType \
+      "1"  {
+         lappend rtnTypes "IP_BGPv4_OPEN"
+      }  "2"  {
+         lappend rtnTypes "IP_BGPv4_UPDATE"
+      }  "3"  {
+         lappend rtnTypes "IP_BGPv4_NOTIFICATION"
+      }  "4"  {
+         lappend rtnTypes "IP_BGPv4_KEEPALIVE"
+      }  default  {
+         lappend rtnTypes "IP_TCP"
+      }
+   }
+#   result_debug "bgpMsgTypes: $rtnTypes"
+   return $rtnTypes
+}
+
+##################################################################
+# Procedure Name: GetBGPNotificationErrorCodes
+#
+# Description:
+#     This proc is used to get the BGP Notification Error Codes from 
+#     a list of BGP messages which is obtained from raw frame via GetBGPMesssges
+#
+# Input args: list of BGP Messages
+# Output args: None.
+# Return value: List of BGP Notificaton Error Codes/Subcodes
+# Typical usage:
+#    set bgpMsgs [GetBGPMessages $frame]
+#    set bgpNotifErrCodes [GetBGPNotificationErrorCodes $$bgpMsgs]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#     VerifySwitchOutput,VerifyTraffic)
+# Category: CaptureTraffic
+##################################################################
+proc GetBGPNotificationErrorCodes {bgpMsgs} {
+   set rtnCodes ""
+   foreach bgpMsg $bgpMsgs {
+      set bgpTypeOffset 18
+      set bgpTypePos [expr ($bgpTypeOffset * 3)]
+      set bgpType [GetByteOffset $bgpMsg $bgpTypePos]
+      switch -- $bgpType \
+      "3"  {
+         set bgpCodeOffset 19
+	 set bgpCodePos [expr ($bgpCodeOffset * 3)]
+         set bgpCode [GetByteOffset $bgpMsg $bgpCodePos]
+         set bgpSubCodeOffset 20
+	 set bgpSubCodePos [expr ($bgpSubCodeOffset * 3)]
+         set bgpSubCode [GetByteOffset $bgpMsg $bgpSubCodePos]
+	 lappend rtnCodes "$bgpCode $bgpSubCode"
+      }
+   }
+#   result_debug "bgpNotificationCodes: $rtnCodes"
+   return $rtnCodes
+}
+
+##################################################################
+# Procedure Name: GetBGPUpdateAttributes
+#
+# Description:
+#     This proc is used to get the BGP the specified attribute values from 
+#     a list of BGP messages which is obtained from raw frame via GetBGPMesssges
+#
+# Input args: list of BGP Messages, and the attribute type
+# Output args: None.
+# Return value: List of BGP the specified attribute values
+# Typical usage:
+#    set bgpMsgs [GetBGPMessages $frame]
+#    set attriType 3
+#    set bgpNextHops [GetBGPUpdateNextHops $$bgpMsgs $attriType]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#     VerifySwitchOutput,VerifyTraffic)
+# Category: CaptureTraffic
+##################################################################
+proc GetBGPUpdateAttributes {bgpMsgs attrType} {
+#   result_debug "bgpMsgs: $bgpMsgs"
+   set rtnAttrs ""
+   foreach bgpMsg $bgpMsgs {
+      result_debug "bgpMsg: $bgpMsg"
+      set bgpTypeOffset 18
+      set bgpTypePos [expr ($bgpTypeOffset * 3)]
+      set bgpType [GetByteOffset $bgpMsg $bgpTypePos]
+      result_debug "bgpType: $bgpType"
+      switch -- $bgpType \
+      "2"  {
+	 set bgpUFRLOffset 19
+	 set bgpUFRLPos [expr ($bgpUFRLOffset * 3)]
+         set bgpUFRL [GetShortIntOffset $bgpMsg $bgpUFRLPos]
+         set bgpPALOffset [expr (21 + $bgpUFRL)]     ;# path attr length field
+	 set bgpPALPos [expr ($bgpPALOffset * 3)]
+         set bgpPAL [GetShortIntOffset $bgpMsg $bgpPALPos]
+	 set bgpPAOffset [expr ($bgpPALOffset + 2)]
+	 set paOffset 0
+	 result_debug "bgpPAL: $bgpPAL, bgpPAOffset: $bgpPAOffset"
+	 while {$paOffset < $bgpPAL} {
+	    set typeOffset [expr $paOffset + 1]
+	    set typePos [expr (($typeOffset + $bgpPAOffset) * 3)]
+            set type [GetByteOffset $bgpMsg $typePos]
+	    set lengthOffset [expr $typeOffset + 1]
+	    set lengthPos [expr (($lengthOffset + $bgpPAOffset) * 3)]
+            set length [GetByteOffset $bgpMsg $lengthPos]
+            set attrOffset [expr $paOffset + 3]
+            set b_start [expr (($attrOffset + $bgpPAOffset) * 3)]
+	    if {$type == $attrType } {
+               switch -- $attrType \
+      	       "3"  {
+                  set attr [GetIPAddressOffset $bgpMsg $b_start]
+	          lappend rtnAttrs $attr
+	       } "4" {
+                  set attr [GetIntOffset $bgpMsg $b_start]
+	          lappend rtnAttrs $attr
+	       } "8" {
+                  set b_end [expr (($attrOffset + $bgpPAOffset + $length) * 3)- 2]
+                  set attr [string range $bgpMsg $b_start $b_end]
+	          lappend rtnAttrs $attr
+               }
+	    }
+	    result_debug "type, length, attr Offset: $typeOffset, $lengthOffset, $attrOffset"
+	    set paOffset [expr $paOffset + $length + 3]
+	 }
+      }
+   }
+   result_debug "bgpUpdateAttributes: $rtnAttrs"
+   return $rtnAttrs
+}
+
+##################################################
+
+## NEW Functions added for EXOS from EWARE 
+
+##################################################
+
+
+##################################################################
+# Procedure Name: GetBGPUpdateLengths
+#
+# Description:  Parse Update Length from a BGP update frame
+#
+#
+#
+# Input args: rawFrame
+# Output args: none
+# Return value: updateLengths
+# Typical usage:
+#        GetBGPUpdateLengths $rawFrame
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc GetBGPUpdateLengths {rawFrame} {
+   set messageType [GetMessageType $rawFrame]
+   set updateLengths ""
+   if {$messageType=="IP_BGPv4_UPDATE"} {
+      set type [string range $rawFrame 36 40]
+      # if tagged, get rid of type and tag field from 36 to 47
+      if {$type == "81 00"} {
+        set leftRawFrame [string range $rawFrame 0 35]
+        set rightRawFrame [string range $rawFrame 48 [string length $rawFrame]]
+        set rawFrame [format "%s%s" $leftRawFrame $rightRawFrame]
+      }
+      set routeRangeLength [GetShortIntOffset $rawFrame 210]   ;# This serves as
+ first route range length
+      lappend updateLengths $routeRangeLength
+      set bgpMarker 162  ;# BGP packet starts at 162 in IP_TCP packet
+      for {set startLoc $bgpMarker} {[expr $startLoc+[expr $routeRangeLength*3]]
+<=[expr [string length $rawFrame]-12]} {incr startLoc [expr $routeRangeLength*3]
+} {
+         set routeRangeLength [GetShortIntOffset $rawFrame [expr $startLoc+[expr
+ $routeRangeLength*3]+48]]
+#         result_debug "the updateLengths $updateLengths and routeRangeLength $routeRangeLength"
+         lappend updateLengths $routeRangeLength
+      }
+   }
+   return $updateLengths
+}
+
+##################################################################
+# Procedure Name: GetBGPUpdatePathAttributeLength
+#
+# Description:  Parse BGP Update path attribute length from a
+#               BGP update frame
+#
+#
+# Input args: rawFrame
+# Output args: none
+# Return value: pathAttributeLengths
+# Typical usage:
+#       GetBGPUpdatePathAttributeLength $rawFrame
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc GetBGPUpdatePathAttributeLength {rawFrame} {
+   set messageType [GetMessageType $rawFrame]
+   set pathAttributeLengths ""
+   if {$messageType=="IP_BGPv4_UPDATE"} {
+      set type [string range $rawFrame 36 40]
+      # if tagged, get rid of type and tag field from 36 to 47
+      if {$type == "81 00"} {
+        set leftRawFrame [string range $rawFrame 0 35]
+        set rightRawFrame [string range $rawFrame 48 [string length $rawFrame]]
+        set rawFrame [format "%s%s" $leftRawFrame $rightRawFrame]
+      }
+      set routeLengths [GetBGPUpdateLengths $rawFrame]
+      set unfeasibleRoutesLen [GetShortIntOffset $rawFrame 219]
+      set pathAttributeLength [GetShortIntOffset $rawFrame [expr 210+15+[expr $u
+nfeasibleRoutesLen*3]]]   ;# This serves as first path attribute length
+      lappend pathAttributeLengths $pathAttributeLength
+      set bgpMarker 162  ;# BGP packet starts at 162 in IP_TCP packet
+      set i 0
+      set routeRangeLength [lindex $routeLengths $i]
+      result_debug "the pathAttributeLength $pathAttributeLength and routeRangeL
+ength $routeRangeLength"
+      for {set startLoc $bgpMarker} {[expr $startLoc+[expr $routeRangeLength*3]]
+<=[expr [string length $rawFrame]-12]} {incr startLoc [expr $routeRangeLength*3]
+} {
+         incr i
+         set pathAttributeLength [GetShortIntOffset $rawFrame [expr $startLoc+48
++15]]
+         set routeRangeLength [lindex $routeLengths $i]
+         result_debug "the pathAttributeLength $pathAttributeLength and routeRan
+geLength $routeRangeLength and startLoc $startLoc"
+         lappend pathAttributeLengths $pathAttributeLength
+      }
+   }
+   return $pathAttributeLengths
+}
+
+##################################################################
+# Procedure Name: GetBGPUpdateTypeCodes
+#
+# Description:  Parse BGP typecodes from a frame
+#
+#
+#
+# Input args: rawFrame
+# Output args: none
+# Return value: typeCodeList
+# Typical usage:
+#       GetBGPUpdateTypeCodes $rawFrame
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc GetBGPUpdateTypeCodes {rawFrame} {
+   set messageType [GetMessageType $rawFrame]
+   set typeCodeList ""
+   if {$messageType=="IP_BGPv4_UPDATE"} {
+      set type [string range $rawFrame 36 40]
+      # if tagged, get rid of type and tag field from 36 to 47
+      if {$type == "81 00"} {
+        set leftRawFrame [string range $rawFrame 0 35]
+        set rightRawFrame [string range $rawFrame 48 [string length $rawFrame]]
+        set rawFrame [format "%s%s" $leftRawFrame $rightRawFrame]
+      }
+      set routeLengths [GetBGPUpdateLengths $rawFrame]
+      set attribLengths [GetBGPUpdatePathAttributeLength $rawFrame]
+      result_debug "the routeLengths $routeLengths and attribLengths $attribLeng
+ths"
+      set unfeasibleRoutesLen [GetShortIntOffset $rawFrame 219]
+      set typeCodeStart [expr 210+24+[expr $unfeasibleRoutesLen*3]]
+      for {set i 0} {$i<[llength $routeLengths]} {incr i} {
+         set routeLength [lindex $routeLengths $i]
+         set attribLength [lindex $attribLengths $i]
+         set j $typeCodeStart
+         set typeCodes ""
+         while {$j<[expr $typeCodeStart+[expr $attribLength*3]]} {
+            lappend typeCodes [hextodec [string range $rawFrame $j [expr $j+1]]]
+            set attribDataLength [hextodec [string range $rawFrame [expr $j+3] [
+expr $j+4]]]
+            incr j [expr [expr $attribDataLength+1+1+1]*3]   ;# 1 byte for lengt
+h field, 1 for attrib flags
+            #result_debug "the typeCodes $typeCodes, attribDataLength $attribDataLength and j $j"
+         }
+         set typeCodeStart [expr [expr $routeLength*3]+$typeCodeStart]
+         lappend typeCodeList $typeCodes
+         #result_debug "the typeCodeStart is $typeCodeStart now and typeCodeList $typeCodeList"
+      }
+      }
+   return $typeCodeList
+}
+
+##################################################################
+# Procedure Name: GetBGPUpdateNextHops
+#
+# Description:  Parse BGP next hop info from a frame
+#
+#
+#
+# Input args: rawFrame
+# Output args: none
+# Return value: nextHops
+# Typical usage:
+#      GetBGPUpdateNextHops $rawFrame
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc GetBGPUpdateNextHops {rawFrame} {
+   set messageType [GetMessageType $rawFrame]
+   set nextHops ""
+   if {$messageType=="IP_BGPv4_UPDATE"} {
+      set type [string range $rawFrame 36 40]
+      # if tagged, get rid of type and tag field from 36 to 47
+      if {$type == "81 00"} {
+        set leftRawFrame [string range $rawFrame 0 35]
+        set rightRawFrame [string range $rawFrame 48 [string length $rawFrame]]
+        set rawFrame [format "%s%s" $leftRawFrame $rightRawFrame]
+      }
+      set routeLengths [GetBGPUpdateLengths $rawFrame]
+      set attributeTypeCodes [GetBGPUpdateTypeCodes $rawFrame]
+      set nexthopStartLoc 252    ;# First attt type found at 252 in a IP_TCP_BGP
+ packet
+      set startLoc 210
+      result_debug "the routeLengths $routeLengths and attributeTypeCodes $attri
+buteTypeCodes"
+      for {set i 0} {$i<[llength $routeLengths]} {incr i} {
+         foreach typeCode [lindex $attributeTypeCodes $i] {
+            if {$typeCode==3} {    ;# if attribute is next hop
+               lappend nextHops [GetIPAddressOffset $rawFrame [expr $nexthopStar
+tLoc]]
+               set nexthopStartLoc [expr $startLoc+[expr [lindex $routeLengths $
+i]*3]+42]
+               result_debug "the nextHops $nextHops and nexthopStartLoc $nexthop
+StartLoc"
+               incr startLoc [expr [lindex $routeLengths $i]*3]
+            }
+         }
+      }
+   }
+   return $nextHops
+}
+
+##################################################################
+# Procedure Name: GetBGPUpdateMEDs
+#
+# Description: Parse BGP MED info from a frame
+#
+#
+#
+# Input args: rawFrame
+# Output args: none
+# Return value: meds
+# Typical usage:
+#        GetBGPUpdateMEDs $rawFrame
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc GetBGPUpdateMEDs {rawFrame} {
+   set messageType [GetMessageType $rawFrame]
+   set meds ""
+   if {$messageType=="IP_BGPv4_UPDATE"} {
+      set type [string range $rawFrame 36 40]
+      # if tagged, get rid of type and tag field from 36 to 47
+      if {$type == "81 00"} {
+        set leftRawFrame [string range $rawFrame 0 35]
+        set rightRawFrame [string range $rawFrame 48 [string length $rawFrame]]
+        set rawFrame [format "%s%s" $leftRawFrame $rightRawFrame]
+      }
+      set routeLengths [GetBGPUpdateLengths $rawFrame]
+      set attributeTypeCodes [GetBGPUpdateTypeCodes $rawFrame]
+      set medStartLoc 252    ;# First attr type found at 252 in a IP_TCP_BGP pac
+ket
+      set startLoc 210
+      result_debug "the routeLengths $routeLengths and attributeTypeCodes $attri
+buteTypeCodes"
+      for {set i 0} {$i<[llength $routeLengths]} {incr i} {
+         foreach typeCode [lindex $attributeTypeCodes $i] {
+            if {$typeCode==4} {    ;# if attribute is med
+               lappend meds [GetIntOffset $rawFrame [expr $medStartLoc]]
+               set medStartLoc [expr $startLoc+[expr [lindex $routeLengths $i]*3
+]+42]
+               result_debug "the meds $meds and medStartLoc $medStartLoc"
+               incr startLoc [expr [lindex $routeLengths $i]*3]
+            }
+         }
+      }
+   }
+   return $meds
+}
+
+##################################################################
+# Procedure Name: GetBGPUpdateCommunities
+#
+# Description: Parse BGP Community info from a frame
+#
+#
+#
+# Input args: rawFrame
+# Output args: none
+# Return value: communityAtt
+# Typical usage:
+#         GetBGPUpdateCommunities $rawFrame
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc GetBGPUpdateCommunities {rawFrame} {
+   set messageType [GetMessageType $rawFrame]
+   set communityAtt ""
+   if {$messageType=="IP_BGPv4_UPDATE"} {
+      set type [string range $rawFrame 36 40]
+      # if tagged, get rid of type and tag field from 36 to 47
+      if {$type == "81 00"} {
+        set leftRawFrame [string range $rawFrame 0 35]
+        set rightRawFrame [string range $rawFrame 48 [string length $rawFrame]]
+        set rawFrame [format "%s%s" $leftRawFrame $rightRawFrame]
+      }
+      set routeLengths [GetBGPUpdateLengths $rawFrame]
+      set attributeTypeCodes [GetBGPUpdateTypeCodes $rawFrame]
+      set comStartLoc 249    ;# First attt type found at 249 in a IP_TCP_BGP pac
+ket
+      set startLoc 210
+      result_debug "the routeLengths $routeLengths and attributeTypeCodes $attri
+buteTypeCodes"
+      for {set i 0} {$i<[llength $routeLengths]} {incr i} {
+         foreach typeCode [lindex $attributeTypeCodes $i] {
+            if {$typeCode==8} {    ;# if attribute is community
+               set attribLength [hextodec [string range $rawFrame $comStartLoc [
+expr $comStartLoc+1]]]
+               set communityAtt [string range $rawFrame [expr $comStartLoc+3] [e
+xpr $comStartLoc+1+[expr $attribLength*3]]]
+               result_debug "the communityAtt $communityAtt, attribLength $attri
+bLength"
+            }
+         }
+      }
+   }
+   return $communityAtt
+}
+
+
+
+#################################################################
+# Procedure Name: GetBGPOpenAsNum
+#
+# Description: Parse BGP AS Number from OPEN message
+#
+#
+#
+# Input args: rawFrame
+# Output args: none
+# Return value: AS Number
+# Typical usage:
+#         GetBGPOpenAsNum $rawFrame
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: VerifyTraffic
+################################################################
+proc GetBGPOpenAsNum {frame} {
+    set bgpframes [GetBGPMessages $frame]
+    set asNum ""
+    set type [string range $frame 36 40]
+       if {$type == "08 00"} {
+	set asNum [GetShortIntOffset $bgpframes 61]
+        result_debug "The value of As Number is $asNum"
+	return $asNum
+      }
+}
+
+
+#################################################################
+# Procedure Name : GetBGPGRCapability
+#
+# Description: Decodes the BGP Graceful Restart(GR) Capability advertisement
+# and returns a list of BGP GR capabilities 
+#
+# Input args: BGP Frame
+# Return value: List of BGP GR capabilities
+# Typical usage:
+#         GetBGPGRCapability $bgpFrame 
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: VerifyTraffic
+################################################################
+
+proc GetBGPGRCapability {bgpFrame} {
+     global capList
+     set capList ""
+
+     if {[GetVersion DUT1 majmin] >= "12.1" } {
+     GetBGPGRCapabilityFromZugspitz $bgpFrame
+     return $capList
+     
+     } else {
+
+     set BGPMarker [string range $bgpFrame 1 47]
+     result_debug "BGPMarker :: $BGPMarker"
+     lappend capList $BGPMarker
+
+     regsub -all " " [string range $bgpFrame 49 53] "" BGPOpenMesgLen
+     result_debug "BGPOpenMesgLen :: [format "%u" "0x$BGPOpenMesgLen"]"
+     set BGPOpenMesgLen [format "%u" "0x$BGPOpenMesgLen"]
+     lappend capList $BGPOpenMesgLen
+     
+     if { $BGPOpenMesgLen <= 29 } {
+        result_debug "BGP OPEN Message doesn't have any BGP GR capability advertisements"
+        return $capList
+     } else {
+        set BGPCapability [hextodec [string range $bgpFrame 94 95]]
+        result_debug "BGPCapability :: $BGPCapability"
+        lappend capList $BGPCapability
+
+        set BGPGRMsgLen [hextodec [string range $bgpFrame 97 98]]    
+        result_debug "BGPGRMsgLen :: $BGPGRMsgLen"
+        lappend capList $BGPGRMsgLen
+
+        set BGPRestartCap [hextodec [string range $bgpFrame 100 101]]          
+        result_debug "BGPRestartCap :: $BGPRestartCap"
+        lappend capList $BGPRestartCap
+ 
+        set BGPRestartTime [hextodec [string range $bgpFrame 103 104]]
+        result_debug "BGPRestartTime :: $BGPRestartTime"
+        lappend capList $BGPRestartTime
+
+        if {$BGPGRMsgLen <= 2 } {
+           result_debug "BGP GR Advertisement doesn't have any address family information"
+           return $capList
+        } else {
+           regsub -all " " [string range $bgpFrame 106 110] "" BGPAddrFamily
+           result_debug "BGPAddrFamily :: [format "%u" "0x$BGPAddrFamily"]"
+           lappend capList "[format "%u" "0x$BGPAddrFamily"]"
+
+           set BGPSAddrFamily [hextodec [string range $bgpFrame 112 113]]
+           result_debug "BGPSAddrFamily :: $BGPSAddrFamily"
+           lappend capList $BGPSAddrFamily
+
+           set BGPAFFlags [string range $bgpFrame 115 116]
+           result_debug "BGPAFFlags :: $BGPAFFlags"
+           lappend capList $BGPAFFlags
+        }
+
+     }  
+     }
+
+     return $capList
+} 
+
+
+#################################################################
+# Procedure Name : CheckBGPEndOfRIBUpdate
+#
+# Description: Decodes the BGP IP_BGPv4_UPDATE frame and check for
+#              whether it is a End-of-RIB BGP UPDATE message
+#
+# Input args: BGP IP_BGPv4_UPDATE frame
+# Return value: true/false
+# Typical usage:
+#         CheckBGPEndOfRIBUpdate $bgpFrame
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: VerifyTraffic
+################################################################  
+
+proc CheckBGPEndOfRIBUpdate {frameList} {
+
+   set returnType "false"
+
+   # ---- Get frame captured on the ixia port, check for End-of-RIB BGP UPDATE message
+   if { [llength $frameList] == 0 } {
+      result_error "No Frames are captured"
+      return $returnType
+   }
+
+   foreach frame $frameList {
+      set bgpMsgs [GetBGPMessages $frame]
+      result_debug "bgpMsgs :: $bgpMsgs"
+      set bgpMsgTypes [GetBGPMsgTypes $bgpMsgs]
+      result_debug "bgpMsgTypes :: $bgpMsgTypes"
+
+      if {[lsearch -glob $bgpMsgTypes "IP_BGPv4_UPDATE"] >= 0} {
+         result_debug "BGP UPDATE Packet : $bgpMsgs"
+
+         foreach bgpMsg $bgpMsgs {
+            # --- Check that it is a End-of-RIB packet
+	    result_debug "bgp messages Nataraj $bgpMsg"
+            result_debug "RIB :: [string range $bgpMsg 51 52]"
+            result_debug "Type :: [string range $bgpMsg 54 55]"
+            if { ([string range $bgpMsg 51 52] == "17") && ([string range $bgpMsg 54 55] == "02") } {
+               set returnType "true"
+               result_debug "RIB :: [string range $bgpMsg 51 52]"
+               return $returnType
+            }
+         }
+      }
+   unset bgpMsgs
+   unset bgpMsgTypes
+   }
+   return $returnType
+
+}
+
+#################################################################
+# Procedure Name : CheckBGPEndOfRIBUpdate_MBGP
+#
+# Description: Decodes the BGP IP_BGPv4_UPDATE frame and check for
+#              whether it is a End-of-RIB BGP UPDATE message
+#
+# Input args: BGP IP_BGPv4_UPDATE frame
+# Return value: true/false
+# Typical usage:
+#         CheckBGPEndOfRIBUpdate_MBGP -frameList $rawframe -afi "00 01" -safi "02"
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: VerifyTraffic
+################################################################  
+
+proc CheckBGPEndOfRIBUpdate_MBGP {args} {
+ parse_args CheckBGPEndOfRIBUpdate_MBGP $args {
+	frameList ""
+	afi "00 01"
+	safi "02"
+}
+#default afi -ipv4
+#safi -multicast
+   set returnType "false"
+
+   # ---- Get frame captured on the ixia port, check for End-of-RIB BGP UPDATE message
+   if { [llength $frameList] == 0 } {
+      result_error "No Frames are captured"
+      return $returnType
+   }
+
+   foreach frame $frameList {
+      set bgpMsgs [GetBGPMessages $frame]
+      result_debug "bgpMsgs :: $bgpMsgs"
+      set bgpMsgTypes [GetBGPMsgTypes $bgpMsgs]
+      result_debug "bgpMsgTypes :: $bgpMsgTypes"
+
+      if {[lsearch -glob $bgpMsgTypes "IP_BGPv4_UPDATE"] >= 0} {
+         result_debug "BGP UPDATE Packet : $bgpMsgs"
+
+         foreach bgpMsg $bgpMsgs {
+            # --- Check that it is a End-of-RIB packet
+            result_debug "RIB :: [string range $bgpMsg 51 52]"
+            result_debug "Type :: [string range $bgpMsg 54 55]"
+#length of update message 30 byte ==1e in hex
+            if { ([string range $bgpMsg 51 52] == "1E") && ([string range $bgpMsg 54 55] == "02") } {
+#path attir type code for  mp-unreach nlri is 0F
+		result_debug "The bgp frame is \n [string range $bgpMsg 51 90] \n\n"
+	    if { ([string range $bgpMsg 72 73] == "0F") && ([string range $bgpMsg 78 82] == $afi) && ([string range $bgpMsg 84 85] == $safi)} {
+
+               set returnType "true"
+		result_debug "other than ipv4 address family, it is an UPDATE message that contains \
+			only the MP_UNREACH_NLRI attribute with no withdrawn routes for that <AFI, SAFI> to indicate EOR"
+               result_debug "Received update length = [string range $bgpMsg 51 52]"
+               return $returnType
+	     } else {
+		result_debug "Received path attir type for mp-unreachnlri:[string range $bgpMsg 72 73] \n"
+		result_debug "Received AFI is:[string range $bgpMsg 78 82] \n"
+		result_debug "Received SAFI is:[string range $bgpMsg 84 85]"
+		}
+            }
+         }
+      }
+   unset bgpMsgs
+   unset bgpMsgTypes
+   }
+   return $returnType
+
+}
+#################################################################
+# Procedure Name : GetBGPGRCapabilityFromZugspitz
+#
+# Description: Decodes the BGP Graceful Restart(GR) Capability advertisement
+# and returns a list of BGP GR capabilities. This proc supports decoding from 
+# Zugspitz ownwards for earlier builds use proc GetBGPGRCapability.
+#
+# Input args: BGP Frame
+# Return value: List of BGP GR capabilities
+# Typical usage:
+#         GetBGPGRCapabilityFromZugspitz $bgpFrame 
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: VerifyTraffic
+################################################################
+
+
+proc GetBGPGRCapabilityFromZugspitz {bgpFrame} {
+     global capList
+ 
+     set BGPMarker [string range $bgpFrame 1 47]
+     result_debug "BGPMarker :: $BGPMarker"
+     lappend capList $BGPMarker
+
+     regsub -all " " [string range $bgpFrame 49 53] "" BGPOpenMesgLen
+     result_debug "BGPOpenMesgLen :: [format "%u" "0x$BGPOpenMesgLen"]"
+     set BGPOpenMesgLen [format "%u" "0x$BGPOpenMesgLen"]
+     lappend capList $BGPOpenMesgLen
+     result_debug "capList :: $capList"
+     
+     if { $BGPOpenMesgLen <= 50 } {
+        result_debug "BGP OPEN Message doesn't have any BGP GR capability advertisements"
+        return $capList
+     } else {
+        set BGPCapability [hextodec [string range $bgpFrame 166 167]]
+        result_debug "BGPCapability :: $BGPCapability"
+        lappend capList $BGPCapability
+
+        set BGPGRMsgLen [hextodec [string range $bgpFrame 169 170]]    
+        result_debug "BGPGRMsgLen :: $BGPGRMsgLen"
+        lappend capList $BGPGRMsgLen
+
+        set BGPRestartCap [hextodec [string range $bgpFrame 172 173]]          
+        result_debug "BGPRestartCap :: $BGPRestartCap"
+        lappend capList $BGPRestartCap
+ 
+        set BGPRestartTime [hextodec [string range $bgpFrame 175 176]]
+        result_debug "BGPRestartTime :: $BGPRestartTime"
+        lappend capList $BGPRestartTime
+
+        if {$BGPGRMsgLen <= 2 } {
+           result_debug "BGP GR Advertisement doesn't have any address family information"
+           return $capList
+        } else {
+           regsub -all " " [string range $bgpFrame 178 182] "" BGPAddrFamily
+           result_debug "BGPAddrFamily :: [format "%u" "0x$BGPAddrFamily"]"
+           lappend capList "[format "%u" "0x$BGPAddrFamily"]"
+
+           set BGPSAddrFamily [hextodec [string range $bgpFrame 184 185]]
+           result_debug "BGPSAddrFamily :: $BGPSAddrFamily"
+           lappend capList $BGPSAddrFamily
+
+           set BGPAFFlags [string range $bgpFrame 187 188]
+           result_debug "BGPAFFlags :: $BGPAFFlags"
+           lappend capList $BGPAFFlags
+        }
+
+     }  
+
+     return $capList
+} 
+
+
+proc BGPChangeConnRetTimer {dividerValue} {
+
+global DUT1_CONNECT
+global DUT2_CONNECT
+global DUT3_CONNECT
+global DUT4_CONNECT
+global DUT5_CONNECT
+global numDUT
+
+set i 1
+for {set i 1} {$i <= $numDUT} {incr i} {
+ global DUT${i}_CONNECT
+if {[info exist DUT${i}_CONNECT]} { 
+ Login [set DUT${i}_CONNECT] 
+ EnableDebugMode
+ SendACmd "jerry configure bgp conn-retry-timer-divider $dividerValue"
+   
+} else {
+  break
+}
+
+}
+
+}
+
+proc conVal2Byte {noBytes conValue} {
+set x $noBytes
+set a $conValue
+set c [expr [string length $a] % 2]
+set b [expr $x - [expr [string length $a] /2]-$c]
+
+for {set i 1} {$i <=$b} {incr i} {
+lappend value "00"
+}
+if {$c} {
+lappend value "0[string range $a 0 0]"
+for {set i 1} {$i < [string length $a]} {incr i 2} {
+   lappend value [string range $a $i [expr $i +1]]
+}
+} else {
+
+for {set i 0} {$i < [string length $a]} {incr i 2} {
+   lappend value [string range $a $i [expr $i +1]]
+}
+}
+return $value
+}
+
+
+proc setEbgpAsnum {txPortId numPeers asnumLst} {
+   MapIxiaPortId $txPortId cha car por
+   set chas(1) $cha
+   set card(1) $car
+   set port(1) $por
+   result_debug "Chas: $cha Card: $car Port: $por"
+
+   if {[bgp4Server select $chas(1) $card(1) $port(1)]} {
+      result_debug "Error Connecting to bgp4Server"
+      return -code return testSkipped
+   }
+
+   for {set i 0} {$i<$numPeers} {incr i} {
+      set neib [expr $i+1]
+      set asNumber [lindex $asnumLst $i]
+      if [bgp4Server getNeighbor neighbor$neib] {
+         ixPuts "unable to get the neighborid for the server"
+      }
+    set asnumconfig [bgp4Neighbor cget -localAsNumber]
+    ixPuts "the AS number conigured is $asnumconfig"
+    if {$asnumconfig != $asNumber} {
+      bgp4Neighbor config -localAsNumber $asNumber
+      bgp4Server setNeighbor neighbor$neib
+    }
+    if {[bgp4Server set]} {
+      result_debug "Error setting bgp server"
+    }
+
+    if {[bgp4Server write]} {
+           result_debug "Error writing bgp server"
+    }
+
+   }
+}
+
+proc setIbgpAsnum {txPortId asNumber} {
+   MapIxiaPortId $txPortId cha car por
+   set chas(1) $cha
+   set card(1) $car
+   set port(1) $por
+   result_debug "Chas: $cha Card: $car Port: $por"
+
+   if {[bgp4Server select $chas(1) $card(1) $port(1)]} {
+      result_debug "Error Connecting to bgp4Server"
+      return -code return testSkipped
+   }
+    set asnumconfig [bgp4Server cget -internalLocalAsNum4Byte]
+    ixPuts "the AS number conigured is $asnumconfig"
+    if {$asnumconfig != $asNumber} {
+      bgp4Server config -internalLocalAsNum4Byte $asNumber
+    }
+    if {[bgp4Server set]} {
+      result_debug "Error setting bgp server"
+    }
+
+    if {[bgp4Server write]} {
+           result_debug "Error writing bgp server"
+    }
+
+}
+
+proc checkRestartBit { rawframe } {
+#check restart bit is set in open message
+foreach frame $rawframe {
+   set bgpMsgs [GetBGPMessages $frame]
+   set bgpMsgTypes [GetBGPMsgTypes $bgpMsgs]
+   set result 1
+if {[lsearch -glob $bgpMsgTypes "IP_BGPv4_OPEN"] >= 0} {
+      result_debug "BGP OPEN Packet : $bgpMsgs"
+      #set capList [GetBGPGRCapability $bgpMsgs]
+	set capList [GetBGPGRCapabilityFromZugspitz $bgpMsgs]
+if { [lindex $capList 1] <= "29" } {
+         result_debug "BGP OPEN Message doesn't have GR Capability advertisements"
+         result_debug "BGP OPEN Message Length :: [lindex $capList 1]"
+         set result 0
+      } elseif { [lindex $capList 2] != "64" } {
+# --- Check that BGP GR capability code is set properly
+          result_debug "BGP GR capability code is not set properly"
+         result_debug "BGP GR capability code :: [lindex $capList 2]"
+         set result 0
+      } elseif { [lindex $capList 4] != "0" } {
+         result_debug "BGP Restart capability is not set properly"
+         result_debug "BGP Restart capability :: [lindex $capList 4]"
+         set result 1
+      }
+}
+}
+}
+
+##################################################################
+# Procedure Name:GetBGPCapability 
+#
+# Description:
+#     This proc is used to get the BGP capabilities from bgp open message.
+#It has capability code in capTypes and the full cap message in capMessage.
+#Parse capMessage to get the AFI/SAFI
+#
+# Input args: BGP open message
+# Output args: None.
+# Return value: List of capability codes
+# Typical usage:
+#    set bgpMsgs [GetBGPMessages $frame]
+#   set capList [GetBGPCapability $bgpMsgs] 
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#     VerifySwitchOutput,VerifyTraffic)
+# Category: CaptureTraffic
+##################################################################
+
+proc GetBGPCapability {bgpFrame} {
+    set capTypes ""
+    global capMessage
+    # set capMessage ""
+    set BGPMarker [string range $bgpFrame 1 47]
+    result_debug "BGPMarker :: $BGPMarker"
+    regsub -all " " [string range $bgpFrame 49 53] "" BGPOpenMesgLen
+    result_debug "BGPOpenMesgLen :: [format "%u" "0x$BGPOpenMesgLen"]"
+    set BGPOpenMesgLen [format "%u" "0x$BGPOpenMesgLen"]
+    #puts "There are [string length $bgpFrame] characters"
+    if { $BGPOpenMesgLen <= 29 } {
+        puts "BGP OPEN Message doesn't have any capability advertisements"
+        return $capTypes
+    } else {
+        result_debug "start of cap msg: [string range $bgpFrame 91 92]"
+        set capLen [format "%u" "0x[string range $bgpFrame 91 92]"]
+        result_debug "capability length is $capLen\n"
+        set currentLen 1
+        #get the capabilityies alone
+        regsub -all " " [string range $bgpFrame 94 [string length $bgpFrame]] "" CapabilityMsg
+        result_debug "The complete capability message is $CapabilityMsg \n"
+        #current length
+        set i 0
+        set j 0
+        set capStrLen [expr $capLen *2]
+        while { $i < $capStrLen } {
+        result_debug "Type$j : "
+        lappend capTypes [string range $CapabilityMsg $i [expr $i+1]]
+        set type [string range $CapabilityMsg $i [expr $i+1]]
+        #capability code in hex
+        switch $type {
+             "01" { result_debug "Capability is Multiprotocol" } 
+             "02" { result_debug "capability is route-refresh"} 
+             "80" { result_debug "capability is route-refresh new"} 
+             "40" { result_debug "capability is graceful restart"} 
+             "41" { result_debug "capability is 4-byte As"} 
+             default { result_debug "Capability not-defined: if known define it" }
+        }      
+    
+        #puts "capability type [string range $CapabilityMsg $i [expr $i+1]]"
+        set length [format "%u" "0x[string range $CapabilityMsg [expr $i+2] [expr $i+3]]"]
+        result_debug "capability length is $length"
+        lappend capMessage [string range $CapabilityMsg $i [expr $i + $length*2 +3]]
+        result_debug "The capability message is [string range $CapabilityMsg $i [expr $i + $length*2 +3]] \n"
+        incr i [expr $length*2 +4]
+        #puts "current value of i is $i"
+        incr j
+        }
+    }
+    result_debug "the cap list is $capTypes"
+    return $capTypes
+}
+
+proc checkRestartBit { rawframe } {
+#check restart bit is set in open message
+foreach frame $rawframe {
+   set bgpMsgs [GetBGPMessages $frame]
+   set bgpMsgTypes [GetBGPMsgTypes $bgpMsgs]
+   set result 1
+if {[lsearch -glob $bgpMsgTypes "IP_BGPv4_OPEN"] >= 0} {
+      result_debug "BGP OPEN Packet : $bgpMsgs"
+      #set capList [GetBGPGRCapability $bgpMsgs]
+	set capList [GetBGPGRCapabilityFromZugspitz $bgpMsgs]
+if { [lindex $capList 1] <= "29" } {
+         result_debug "BGP OPEN Message doesn't have GR Capability advertisements"
+         result_debug "BGP OPEN Message Length :: [lindex $capList 1]"
+         set result 0
+      } elseif { [lindex $capList 2] != "64" } {
+# --- Check that BGP GR capability code is set properly
+          result_debug "BGP GR capability code is not set properly"
+         result_debug "BGP GR capability code :: [lindex $capList 2]"
+         set result 0
+      } elseif { [lindex $capList 4] != "0" } {
+         result_debug "BGP Restart capability is not set properly"
+         result_debug "BGP Restart capability :: [lindex $capList 4]"
+         set result 1
+      }
+}
+}
+}
+
+##################################################################
+# Procedure Name:Check_MaxPrefix_Log
+#
+# Description:
+#     This proc is used to check the max-prefix log. If the seesion is not torn down use -tear_down "0"
+#     
+#
+# Input args: 
+# Output args: None.
+# Return value: None
+# Typical usage:
+#		Check_MaxPrefix_Log -threshold 80 -max_prefix 2000 -peer "10.10.10.1" -tear_down "0"
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#     VerifySwitchOutput,VerifyTraffic)
+# Category: VerifySwitchOutput
+##################################################################
+
+
+proc Check_MaxPrefix_Log {args} {
+ parse_args Check_MaxPrefix_Log $args {
+        threshold "75"
+	max_prefix ""
+        afi "1"
+        safi "1"
+	peer ""
+	tear_down "1"
+	exceed_limit "1"
+}
+set parameterList ""
+
+#lappend parameterList "{The number of prefixes from a peer has reached the warning threshold} \
+	{Neighbor IP address.*$peer} inLine exist 2"
+lappend parameterList "{The maximum number of prefixes stored for a neighbor would be exceeded.} exist" 
+lappend parameterList "{Neighbor IP address:.*$peer} exist"
+lappend parameterList "{The number of prefixes from a peer has reached the warning threshold} \
+	{Number of prefixes.*[expr $threshold * $max_prefix / 100 ]} inLine exist 4"
+if {1} {
+if {$exceed_limit} {
+#lappend parameterList "{The maximum number of prefixes stored for a neighbor would be exceeded} \
+			{Neighbor IP address.*$peer} inLine exist 2"
+#lappend parameterList "{The maximum number of prefixes stored for a neighbor would be exceeded} \
+			{Configured max prefixes:.*$max_prefix} inLine exist 6"
+lappend parameterList "{The number of prefixes from a peer has reached the warning threshold.} exist" 
+lappend parameterList "{Neighbor IP address.*$peer} exist"
+lappend parameterList "{The number of prefixes from a peer has reached the warning threshold} exist"
+lappend parameterList "{Configured max prefixes:.*$max_prefix} exist"
+}
+
+if {$tear_down} {
+lappend parameterList "{The maximum number of prefixes stored for a neighbor would be exceeded} exist" 
+lappend parameterList "{Neighbor IP address.*$peer} exist"
+lappend parameterList "{The maximum number of prefixes stored for a neighbor would be exceeded} exist"
+lappend parameterList "{Defined max prefixes:.*$max_prefix} exist"
+lappend parameterList "{The maximum number of prefixes stored for a neighbor would be exceeded} exist"
+lappend parameterList "{Dropping connection:.*1} exist"
+}
+}
+CheckKeyValue "show log warning" $parameterList -time {s: 1 i: 4 d: 60 f: 60 r} -comment " with two messages in reaching threshold ($threshold%, 100%)"
+unset parameterList
+}
+
+
+

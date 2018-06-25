@@ -1,0 +1,173 @@
+#!/usr/bin/tclsh
+
+proc result_debug {out} {
+    puts "$out"
+}
+proc result_error {out} {
+    puts "$out"
+}
+proc result_ok {out} {
+    puts "$out"
+}
+global curAutoRoot
+global DUTs_info
+
+source ../Lib/mainLib.tcl
+package require Tclx
+
+load [lindex [glob "/usr/lib/libexpect*so*"] 0]
+
+set curLocation [pwd]
+set curDirList [split [string trim [string trim $curLocation ".."] "/"] "/"]
+set v 0;
+set pathList ""
+set curAutoRoot ""
+set skipCC 0
+foreach cd $curDirList {
+    if {$cd == "main" || $cd == "Lib" || $cd == "Util"} {
+        for {set x 0} {$x<$v} {incr x} {
+            lappend pathList [lindex $curDirList $x]
+        }
+        set curAutoRoot "/[join $pathList "/"]"
+    } else {
+        incr v;
+    }
+}
+puts "CURRENT PATH: $curAutoRoot"
+set cDir [file tail [pwd]]
+set LIB_PATH "./../Lib"
+lappend auto_path $LIB_PATH
+puts "DEBUG: Appending $LIB_PATH to autopath:$auto_path"
+
+gen_index "./../Lib"
+
+
+proc print_usage {} {
+    puts "\r"
+    puts {Usage: lconsoles.tcl -cfg <config file> }
+    puts {   <cfg>: Path of the config file name }
+    puts {   <power|p>: 1|0|2 1=poweron 2=poweroff-poweron}
+    puts {   <clear|c>: 1|0 Clear the consoles if locked}
+    puts "\r"
+}
+
+# checking command parameters
+if {$argc<1} {
+      puts "Not enough parameters"
+      print_usage
+      return
+}
+
+parse_args lconsoles $argv {
+    cfg    "null"
+    power 0
+    clear 0
+    p 0
+    c 0
+}
+if {$p == 0} {
+   set power 0
+} elseif {$p == 1} {
+   set power 1
+} elseif {$p == 2} {
+   set power 2
+} else {
+   set power 0
+}
+if {$c!=0} {
+   set clear 1
+}
+
+set cfgFile ""
+
+if {$cfg != "null"} {
+    if {[regexp -nocase "^\\.\\." $cfg] } {
+        set cfgFile $cfg
+        puts "matched .."
+    } elseif {[regexp -nocase "^cfg" $cfg] } {
+        puts "matched start with cfg"
+        set cfgFile [format %s/%s cfg $cfg]
+        set cfgFile [string trim $cfgFile];
+    } elseif {$cDir == "Util" || $cDir == "main"} {
+        puts "matched start Util Main"
+        set cfgFile [format %s/%s ../main/cfg $cfg]
+        set cfgFile [string trim $cfgFile];
+    } else {
+        puts "matched catch all"
+        set cfgFile $cfg
+    }
+}
+
+puts "Using config file: ($cfgFile)"
+
+if {[file exists $cfgFile] == 0} {
+    puts "Cannot find config file: $cfgFile\n"
+    puts stderr "Cannot find config file: $cfgFile"
+    return
+}
+
+puts "************** ABOUT TO source $cfgFile *****************"
+catch {source $cfgFile } reason
+
+if {$power==1} {
+    for {set i 1} {$i<11} {incr i} {
+        if {[info exists POWERCYCLE_DUT($i)]} {
+            puts "Powering on DUT DUT$i"
+            PowerOffDUT $i "on"
+        }
+    }
+}
+if {$power==2} {
+    for {set i 1} {$i<11} {incr i} {
+        if {[info exists POWERCYCLE_DUT($i)]} {
+            puts "Powering off DUT DUT$i"
+            PowerOffDUT $i "off"
+        }
+    }
+    exSleep 10
+    for {set i 1} {$i<11} {incr i} {
+        if {[info exists POWERCYCLE_DUT($i)]} {
+            puts "Powering on DUT DUT$i"
+            PowerOffDUT $i "on"
+        }
+    }
+}
+
+if {$clear} {
+    for {set i 1} {$i<11} {incr i} {
+        if {[info exists DUT${i}_CONNECT]} {
+            ClearConsoleDUT "[set DUT${i}_CONNECT]"
+        }
+    }
+}
+for {set i 1} {$i<11} {incr i} {
+    if {[info exists DUT${i}_CONNECT]} {
+        puts "Sending /usr/kerberos/bin/telnet \"[set DUT${i}_CONNECT]\""
+        if {[catch {exec /usr/bin/xterm -e \
+                 "./bash_lc ${cfgFile}_DUT$i \"[set DUT${i}_CONNECT]\"" &} reason]} {
+            puts "OOOPPPSSSSS"
+        }
+    }
+    if {[info exists DUT${i}_CONNECTB]} {
+        puts "Sending /usr/kerberos/bin/telnet \"[set DUT${i}_CONNECTB]\""
+        if {[catch {exec /usr/bin/xterm -e \
+                 "./bash_lc ${cfgFile}_DUT${i}B \"[set DUT${i}_CONNECTB]\"" &} reason]} {
+            puts "OOOPPPSSSSS"
+        }
+    }
+    if {[info exists DUT${i}_CONNECTC]} {
+        puts "Sending /usr/kerberos/bin/telnet \"[set DUT${i}_CONNECTC]\""
+        if {[catch {exec /usr/bin/xterm -e \
+                 "./bash_lc ${cfgFile}_DUT${i}C \"[set DUT${i}_CONNECTC]\"" &} reason]} {
+            puts "OOOPPPSSSSS"
+        }
+    }
+    if {[info exists DUT${i}_CONNECTD]} {
+        puts "Sending /usr/kerberos/bin/telnet \"[set DUT${i}_CONNECTD]\""
+        if {[catch {exec /usr/bin/xterm -e \
+                 "./bash_lc ${cfgFile}_DUT${i}D \"[set DUT${i}_CONNECTD]\"" &} reason]} {
+            puts "OOOPPPSSSSS"
+        }
+    }
+}
+exit;

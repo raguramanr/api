@@ -1,0 +1,1548 @@
+
+################################################################
+#  [CheckKeyValue]
+# 
+#  Execute a CLI command/take log from the file, checks the key/value pair (combination described below)
+#  for existance in the output. This proc takes 2 required args "command" and "parameterList"
+#  and other optional args as described below.
+#   
+#  Input Variables:
+#      - <command> - CLI command to execute
+#      - <parameterList> - a list of keys to look for values
+#                          Note: only support one key right now (Combination described in usage)
+#      - [testNo] - test number to be printed for reference in report.txt
+#      - [comment] - text for comment for reference purposes to be put in report.txt
+#      - [dut] - dut number (1,2,3,4..) on the command output is to be tested
+#      - [time] - time sensitive checkKeyValue 
+#                sTime seconds denotes wait time initially before starting the checks
+#                iTime seconds denotes interval time to wait in between checks
+#                dTime seconds denotes expected time that should be passed
+#                fTime seconds denotes the max time limit before the check fails
+#      - [nofeep] - runs the command in nofeep mode. (0 as default, 1 for nofeep)
+#      - [reportResults] - report error if failure, otherwise just return ok or error.
+#  Output Variables:
+#      - [time]
+#                rTime seconds denotes the time taken by the check for pass/fail.
+#
+#  Return Value:
+#      - returns "ok" if success "error" if failure
+#      
+#Usage:
+#   lappend parameterList "Key1 value" ;value right after key
+#   lappend parameterList "Key2" ;key exists
+#   lappend parameterList "Key2 notExist"
+#   lappend parameterList "Key3 value inLine" ;value somewhere in the line
+#   lappend parameterList "Key3 value inLine exist 3" ;value somewhere in the 3th line after key, subject to limitations
+#   lappend parameterList "Key3 value inLine notExist"
+#   For key with spaces
+#   lappend parameterList "{Last Member Query:} 2"
+#   CheckKeyValue "show ipconfig" $parameterList
+#   lappend parameterList "{AreaId : 0.0.0.0} {Summary Network *10001} inLine exist 6"
+#   set result [CheckKeyValue "show ospf ls sta " $parameterList -dut 1 -time {s: 200 i: 8 d: 252 f: 260 r}]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifySwitchOutput
+################################################################
+proc CheckKeyValue {command parameterList args} {
+   
+    global spawn_id FAILSUMMARY MAIN
+    global DUTs_info
+    global whichDutNow
+
+    if {![info exists FAILSUMMARY]} {
+        set FAILSUMMARY 0
+    }
+    set tmp "Tmp"
+    set pwd [pwd]
+    set pid _[pid]
+    append pid "_"
+    set random_number [random 10000]
+    append pid $random_number
+    set done 0
+
+    if {[regexp -nocase "clitest" $pwd]} {
+        global tmpPath
+        set tmp $tmpPath
+    }
+
+    parse_args CheckKeyValue $args {
+        testNo  "CheckKeyValue"
+        comment ""
+        dut     0
+        time    0
+        nofeep 0
+        reportResults 1
+        bootrom 0 
+        showError "true"
+        reportFailAsSkip 0
+    }
+
+    if {$dut!=0} {
+        set DUTName [format %s%d DUT $dut]
+        global ${DUTName}_CONNECT;
+        Login [set ${DUTName}_CONNECT];
+    }
+    if {$time != "0"} {
+        set sTime [lindex $time 1] ; # time to initally wait before starting
+        set iTime [lindex $time 3] ; # interval time to wait between checks
+        set dTime [lindex $time 5] ; # expected time that we should pass
+        set fTime [lindex $time 7] ; # max time we wait before failing the test
+        set rTime [lindex $time 8]
+        upvar $rTime retTime      
+        exSleep $sTime
+    } else {
+        set sTime 2; set iTime 1; set dTime 1; set fTime 1; 
+    }
+    set ttime     $sTime
+
+    # LK 09/25/2008 common fix to avoid x650 check key value failure due to
+    # brackets in prompt e.g X650-24x(SSns) , X650-24x(SS),X650-24x(10G8X)
+    #
+    ########Generic check on parameterList ###############
+
+    if {([regexp {\(SSns\)} $parameterList])} {
+        regsub -all {\(SSns\)} $parameterList {\\(SSns\\)} parameterList;
+    } elseif {([regexp {\(SS\)} $parameterList])} {
+        regsub -all {\(SS\)} $parameterList {\\(SS\\)} parameterList;
+    } elseif {([regexp {\(10G8X\)} $parameterList])} {
+        regsub -all {\(10G8X\)} $parameterList {\\(10G8X\\)} parameterList;
+    } elseif {([regexp {\(40G4X\)} $parameterList])} {
+        regsub -all {\(40G4X\)} $parameterList {\\(40G4X\\)} parameterList;
+    } elseif {([regexp {\(10G4X\)} $parameterList])} { 
+        regsub -all {\(10G4X\)} $parameterList {\\(10G4X\\)} parameterList;
+    } elseif {([regexp {\(SS128\)} $parameterList])} {
+        regsub -all {\(SS128\)} $parameterList {\\(SS128\\)} parameterList;
+    } elseif {([regexp {\(P\)} $parameterList])} {
+        regsub -all {\(P\)} $parameterList {\\(P\\)} parameterList;
+    }
+
+
+    if {([info exists DUTs_info(DUT${whichDutNow},platform)] ) } {
+        if {([regexp "650" $DUTs_info(DUT${whichDutNow},platform)])} {
+            regsub -all {\(SSns\)} $parameterList {\\(SSns\\)} parameterList;
+            regsub -all {\(SS\)} $parameterList {\\(SS\\)} parameterList;
+            regsub -all {\(10G8X\)} $parameterList {\\(10G8X\\)} parameterList;
+            regsub -all {\(40G4X\)} $parameterList {\\(40G4X\\)} parameterList;
+        } elseif { ([regexp "480" $DUTs_info(DUT${whichDutNow},platform)]) } {
+            regsub -all {\(SS\)} $parameterList {\\(SS\\)} parameterList;
+            regsub -all {\(10G4X\)} $parameterList {\\(10G4X\\)} parameterList;
+            regsub -all {\(SS128\)} $parameterList {\\(SS128\\)} parameterList;
+        }
+    } else {
+        set pList ""; 
+        lappend pList "{^SysName:} 1";
+        set SystemName [GetKeyValue "show switch" $pList]
+        unset pList; 
+
+        set pList ""; 
+        lappend pList "{^System Type:} 1";
+        set SystemType [GetKeyValue "show switch" $pList]
+        unset pList;
+
+        if {([regexp "650" $SystemName]) || ([regexp "650" $SystemType])} {
+            regsub -all {\(SSns\)} $parameterList {\\(SSns\\)} parameterList;
+            regsub -all {\(SS\)} $parameterList {\\(SS\\)} parameterList;
+            regsub -all {\(10G8X\)} $parameterList {\\(10G8X\\)} parameterList;      
+            regsub -all {\(40G4X\)} $parameterList {\\(40G4X\\)} parameterList; 
+        } elseif {([regexp "480" $SystemName]) || ([regexp "480" $SystemType])} {
+            regsub -all {\(SS\)} $parameterList {\\(SS\\)} parameterList;
+            regsub -all {\(10G4X\)} $parameterList {\\(10G4X\\)} parameterList;
+            regsub -all {\(SS128\)} $parameterList {\\(SS128\\)} parameterList;
+        }
+    }
+    if {([regexp -- {[\/]} $command]) && ([string match {for file operation:*} $comment]) } {
+        # Command is passed as a file, read the file instead
+        # of running the command
+        if {$reportResults == 1 || $reportFailAsSkip} {
+            report_start_test "Checking parameters $comment"
+        }
+        # No time feature supported for command passed as file.
+        set sTime 2; set iTime 1; set dTime 1; set fTime 1;       
+    } else {
+        if {$reportResults == 1 || $reportFailAsSkip} {
+            report_start_test "Checking <$command> parameters $comment"
+        }
+    }
+
+    set parameterList [_EnhancePioneerParameterList $parameterList]
+    set parameterList [_EnhanceStackingParameterList $parameterList]
+    foreach itemList $parameterList {
+        set key [lindex $itemList 0]
+        set valueWanted [lindex $itemList 1]
+        set dataArray($key,$valueWanted,found) "keyNotFound"  ;#might have the same key
+        set dataArray($key,$valueWanted,flag) "exist"
+        if {[lindex $itemList 3] == "notExist"} {set dataArray($key,$valueWanted,flag) "notExist"} 
+        if {[lindex $itemList 2] == "notExist"} {set dataArray($key,$valueWanted,flag) "notExist"} 
+        if {[lindex $itemList 1] == "notExist"} {set dataArray($key,$valueWanted,flag) "notExist"} 
+
+    }
+    #
+    # Start loop
+    #
+    while {!$done} {
+        if {([regexp -- {[\/]} $command]) && ([string match {for file operation:*} $comment]) } {
+            set fd_in [open "$command" "r"]
+        } else {
+            if {$showError== "false"} {
+                set numSend 1
+            } else {
+                set numSend 3
+            }
+            set fd_in [open "$tmp/tmp_$testNo$pid" "w"]
+            if {$nofeep} {
+                SendACmd "nofeep" NULL $fd_in
+                SendACmd "$command" NULL $fd_in
+                SendACmd "shswitch" NULL $fd_in
+            } else {
+                if {$bootrom == 1} {
+                    SendBootRomCmd "$command" NULL $fd_in
+                } else {
+                    SendACmd "$command" NULL $fd_in $showError $numSend
+                }
+            }
+            close $fd_in
+            set fd_in [open "$tmp/tmp_$testNo$pid" "r"]
+        }
+        set previousLine ""
+        while {[gets $fd_in line] != -1} {
+            set nextLineStart [tell $fd_in]
+            #   result_debug "----- Line=|$line|"
+            foreach itemList $parameterList {
+                set key [lindex $itemList 0]
+                set valueWanted [lindex $itemList 1]
+                if {[regexp -nocase -indices -- $key $line matchedRange] == 1} {
+                    #found the key
+                    result_debug "Key: |$key| line: |$line| matchedRange: |$matchedRange|"
+                    set searchOption [lindex $itemList 2]
+                    if {$searchOption == "inLine" } {
+                        #this is a quick hack, so it might be confusing
+                        set lineOption [lindex $itemList 4]
+                        if {$lineOption == "" } { set lineOption 0 }
+                        if {$lineOption > 0 } {
+                            #get the value on some line after the line where the key is found
+                            #this won't work if using the same key
+                            for { set i 0 } { $i < $lineOption } { incr i } {
+                                gets $fd_in tmpLine
+                            }
+                            result_debug "Wanted line ${lineOption} after key: |$tmpLine|" 
+                            #got needed line, backtrack so next key search works
+                            seek $fd_in $nextLineStart
+                        } elseif {$lineOption == -1 } { 
+                            result_debug "Wanted the line before key: |$line|" 
+                            set tmpLine $previousLine 
+                        } else {
+                            set tmpLine $line
+                        }
+                        #value can be anywhere in this line
+                        if {[regexp -nocase -- $valueWanted $tmpLine] == 1 } {
+                            #value looking for found
+                            if {$dataArray($key,$valueWanted,found) == $valueWanted } {
+                                result_debug "Multiple Key: |$key| valueFound inLine: |$valueWanted|"
+                            } else {
+                                set dataArray($key,$valueWanted,found) $valueWanted
+                                result_debug "Key: |$key| valueFound inLine: |$valueWanted|"
+                            }
+                        } else {
+                            if {$dataArray($key,$valueWanted,found) == "notExist" } {
+                                set dataArray($key,$valueWanted,found) "keyFoundValueNotFound"
+                                result_debug "Key: |$key| valueFound in Line: |$dataArray($key,$valueWanted,found)|"
+                            }
+                        }
+                    } elseif {$valueWanted == "exist"} {
+                        regexp -nocase -- $key $line pattern
+                        result_debug "Key: |$key| found with matched pattern |$pattern|"
+                        if {$dataArray($key,$valueWanted,found) == "exist"} {
+                            result_warning "Multiple key found!!"
+                        }           
+                        set dataArray($key,$valueWanted,found) "exist"             
+                    } elseif { $valueWanted == "notExist" } {
+                        regexp -nocase -- $key $line pattern
+                        result_debug "Key: |$key| found with matched pattern |$pattern|"
+                        set dataArray($key,$valueWanted,found) "exist"             
+                    } else {
+                        #value is right after key
+                        set keyEnd [expr [lindex $matchedRange 1] + 1]
+                        set lineAfterKey [string range $line $keyEnd end]
+                        #result_debug "lineAfterKey: |$lineAfterKey|"
+                        set valueFound [lindex $lineAfterKey 0]
+                        if { ([string tolower $valueWanted] == [string tolower $valueFound]) } {
+                            if {$dataArray($key,$valueWanted,found) == $valueFound } {
+                                result_warning "Multiple key found!!"
+                            }           
+                            set dataArray($key,$valueWanted,found) $valueFound
+                            result_debug "Key: |$key| valueFound: |$valueFound|"
+                        }
+                    }
+                } 
+            }      
+            set previousLine $line   
+        }   
+        close $fd_in
+        file delete "$tmp/tmp_$testNo$pid"
+        set returnCode "ok"
+        foreach itemList $parameterList {
+            set key [lindex $itemList 0]
+            set valueWanted [lindex $itemList 1]
+            set valueFound $dataArray($key,$valueWanted,found)
+            set flag $dataArray($key,$valueWanted,flag)
+            if {$flag == "exist"} {
+                if { ([string tolower $valueWanted] == [string tolower $valueFound])||$valueWanted=="" } {
+                    if {$reportResults == 1} {
+                        result_ok "Chk key <$key> with val <$valueWanted> pass"
+                    } else {
+                        result_debug "Chk key <$key> with val <$valueWanted> pass"
+                    }
+                } else {
+                    if {$ttime > $fTime} {
+                        if {$reportResults == 1} {
+                            if {$reportFailAsSkip} {
+                                result_skip "Chk key <$key> fail. Wanted <$valueWanted> BUTGOT <$valueFound>"
+                                if {$FAILSUMMARY != 0} {
+                                    lappend FAILSUMMARY "Chk key <$key> fail. Wanted <$valueWanted> BUTGOT <$valueFound>"
+                                }
+                            } else { 
+                                result_error "Chk key <$key> fail. Wanted <$valueWanted> BUTGOT <$valueFound>"
+                                if {$FAILSUMMARY != 0} {
+                                    lappend FAILSUMMARY "Chk key <$key> fail. Wanted <$valueWanted> BUTGOT <$valueFound>"
+                                }
+                            }
+                        } else {
+                            result_debug "Chk key <$key> fail. Wanted <$valueWanted> BUTGOT <$valueFound>"
+                        }
+                        set returnCode "error"
+                    } else {
+                        set returnCode "error"
+                    }
+                }
+            } elseif {$flag == "notExist"} {
+            if { $valueFound == "keyNotFound"  } { 
+                if {$reportResults == 1} {
+                    result_ok "Chk key <$key> with val <$valueWanted>, flag <$flag> pass"
+                } else {
+                    result_debug "Chk key <$key> with val <$valueWanted>, flag <$flag> pass"
+                }
+            } else {
+                if {$ttime > $fTime} {
+                    if {$reportResults == 1} {
+                        if {$reportFailAsSkip} {
+                            result_skip "Chk key <$key> with val <$valueWanted>, flag <$flag> fail. \
+                            Wanted <$valueWanted> BUTGOT <$valueFound>"
+                            if {$FAILSUMMARY != 0} {
+                                lappend FAILSUMMARY "Chk key <$key> with val <$valueWanted>, flag <$flag> fail. \
+                                Wanted <$valueWanted> BUTGOT <$valueFound>" 
+                            }
+                        } else {
+                            result_error "Chk key <$key> with val <$valueWanted>, flag <$flag> fail. \
+                            Wanted <$valueWanted> BUTGOT <$valueFound>"
+                            if {$FAILSUMMARY != 0} {
+                                lappend FAILSUMMARY "Chk key <$key> with val <$valueWanted>, flag <$flag> fail. \
+                                Wanted <$valueWanted> BUTGOT <$valueFound>"
+                            }
+                        }
+                    } else {
+                    result_debug "Chk key <$key> with val <$valueWanted>, flag <$flag> fail. Wanted <$valueWanted> BUTGOT <$valueFound>"
+                    }
+                    set returnCode "error"
+                } else {
+                set returnCode "error"
+                }
+            }   
+            } else {
+            result_error "Unexpected flag option"
+            set returnCode "error"
+            }
+        }
+
+        # we want to end the testing if
+        # 1) no failures
+        # 2) we were not timing this test
+        # 3) we exceeded the max time allowed
+        # otherwise, we want to increment the time
+        if {($returnCode == "ok") || ($time == "0") || ($ttime > $fTime)} {
+            set done 1
+        } else {
+            result_debug "sleeping for $iTime secs..."
+            result_debug "CheckKeyValue sleep: time= $ttime out of $fTime seconds"
+            exSleep $iTime
+            set ttime [expr $ttime + $iTime]
+        }
+        foreach itemList $parameterList {
+            set key [lindex $itemList 0]
+            set valueWanted [lindex $itemList 1]
+            set dataArray($key,$valueWanted,found) "keyNotFound"
+        }
+    }
+    set retTime [expr $ttime-$iTime]   ;# decr back last updated ttime for accuracy
+    if {$reportResults == 1 || $reportFailAsSkip} {
+        report_end_test
+    }
+    # -- JSON proc creation cli helper file --
+    AddToJsonHelperFile -time $time -dut $dut -comment $comment -status $returnCode \
+         -cmd $command  -parameterList $parameterList -type "check" -testNo $testNo
+    return $returnCode
+}
+
+################################################################
+#  [GetKeyValue]
+# 
+#  Execute a CLI command. The function will return a value specified by an
+#  index offset relative to the key found in the output. Optionally a line 
+#  offset can also be specified.
+#   
+#  Input Variables:
+#      - <command> - CLI command to execute
+#      - <parameterList> - a list of keys to look for values
+#                          Note: only support one key right now
+#  Output Variables:
+#      - none
+#
+#  Return Value:
+#      - return a list of values found, if a key is not found, then
+#        this function will return "KEY_NOT_FOUND[clock seconds]".
+#        A timestamp is attached so this will avoid a bad check by
+#        the user to compare two KEY_NOT_FOUNDs
+#      
+#  [Examples]
+#  1. Find a pattern 
+#     lappend parameterList "abc.*xyz 0"
+#     set foundPattern [GetKeyValue "show fdb" $parameterList]
+#     -> return a pattern matched with the given key
+#
+#  2. Find a value in the same line
+#     lappend parameterList "key 5"
+#     set value [GetKeyValue "show whatever" $parameterList]
+#     -> return a value 5 words to the right of the found key
+#
+#  3. Find a value in the same line
+#     lappend parameterList "key -2"
+#     set value [GetKeyValue "show this" $parameterList]
+#     -> return a value 2 words to the left of the found key
+#
+#  4. Find a value in a different line
+#     lappend parameterList "key 0 2"
+#     set value [GetKeyValue "show what" $parameterList]
+#     -> return a value 1st word in the line, and the line is 
+#        2 line below the found key
+#  5. Find a value in the same line whose position is not fixed
+#     lappend parameterList "key 2 0"
+#     set value [GetKeyValue "show what" $parameterList]
+#     -> return a value 2nd word in the line, and the line is 
+#        the line in which the key is found
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifySwitchOutput
+################################################################
+
+proc GetKeyValue {command parameterList {flag 0} {needWholeLine 0}} {
+
+    global spawn_id
+
+    set tmp "Tmp"
+    set pwd [pwd]
+    if {[regexp -nocase "clitest" $pwd]} {
+        global tmpPath
+        set tmp $tmpPath
+    }
+    set pid _[pid]
+    append pid "_"
+    set random_number [random 10000]
+    append pid $random_number
+    if {([regexp -- {[\/]} $command]) && ($flag == 0)} {
+        # Command is passed as a file, read the file instead
+        # of running the command
+        set fd_in [open "$command" "r"]
+        set jsoncmd "null"
+    } else {
+        set fd_in [open "$tmp/tmp_GetKeyValue$pid" "w"]
+        SendACmd "$command" NULL $fd_in false
+        set jsoncmd $command
+        close $fd_in
+        set fd_in [open "$tmp/tmp_GetKeyValue$pid" "r"]
+    }
+
+    set parameterList [_EnhanceStackingParameterList $parameterList]
+
+    foreach itemList $parameterList {
+        set key [lindex $itemList 0]
+        set orgKey $key
+        set originalKey $orgKey
+        if {[regexp -nocase {\\n} $key]} {
+            set key [lindex [split $orgKey \\] 0]
+        }
+        set slashnKey 0
+        while {[gets $fd_in line] != -1} {
+            #   result_debug "----- Line=|$line| and key |$key|"
+            if {[regexp -nocase -indices -- $key $line matchedRange] == 1} {
+                if {[regexp -nocase {\\n} $orgKey]} {
+                    set key [string trimleft [lindex [split $orgKey \\] 1] n]
+                    set orgKey $key
+                    set slashnKey 1
+                    continue
+                }
+                #found the key
+                set exactLine $line
+                set searchOption [lindex $itemList 2]
+                #           result_debug "Key: |$key| line: |$line| matchedRange: |$matchedRange|"
+                if {$searchOption >= 0 } {
+                    #get the value on some line after the line where the key is found
+                    for { set i 0 } { $i < $searchOption } { incr i } {
+                        gets $fd_in line2bSearched
+                    }
+                    if {$searchOption==0} {
+                        set line2bSearched $line
+                    }
+                    result_debug "Wanted ${searchOption}th line after key: |$key|" 
+                    set indexWanted [expr [lindex $itemList 1]]
+                } else {
+                    if {[lindex $itemList 1] > 0} {
+                        set keyEnd [expr [lindex $matchedRange 1] + 1]
+                        set line2bSearched [string range $line $keyEnd end]
+                        set indexWanted [expr [lindex $itemList 1] - 1]
+                        #result_debug "itemlist $itemList, the keyEnd $keyEnd, line2bSearched $line2bSearched, indexWanted $indexWanted"
+                    } elseif {[lindex $itemList 1] < 0} {
+                        set keyStart [expr [lindex $matchedRange 0] -1]
+                        set line2bSearched [string range $line 0 $keyStart]
+                        set indexWanted [expr [llength $line2bSearched] + [lindex $itemList 1]]
+                    } else {
+                        set keyStart [lindex $matchedRange 0]
+                        set keyEnd [lindex $matchedRange 1]
+                        set line2bSearched [string range $line $keyStart $keyEnd]
+                        set indexWanted 0
+                    }
+                }
+                #result_debug "line2bSearched: |$line2bSearched|"
+                if {$needWholeLine == 0} {
+                    set valueFound [lindex $line2bSearched $indexWanted]
+                    lappend foundList($originalKey) $valueFound
+                } else {
+                    lappend foundList($originalKey) $exactLine
+                }
+                # result_debug "Key: |$originalKey| valueFound: |$valueFound| and foundList $foundList($originalKey)"
+                if {$slashnKey} {
+                    break
+                }
+            }
+        }
+        seek $fd_in 0
+    }
+    close $fd_in
+    file delete "$tmp/tmp_GetKeyValue$pid"
+
+    set oldKey ""
+    foreach item $parameterList {
+        set key [lindex $item 0]
+        if {$key!=$oldKey} {
+            if {[info exists foundList($key)]} {
+                if {[llength $parameterList]==1} {
+                    set value2BeReturned $foundList($key)
+                } else {
+                    lappend value2BeReturned $foundList($key)
+                }
+            } else {
+                lappend value2BeReturned "KEY_NOT_FOUND[clock seconds]"
+            }
+            set oldKey $key
+        }
+    }
+
+    if {[info exists value2BeReturned] } { 
+        set retVal $value2BeReturned 
+    } else { 
+        set retVal "KEY_NOT_FOUND[clock seconds]" 
+    }
+    if {$jsoncmd != "null"} {
+        AddToJsonHelperFile -comment "GetKeyValue" -status $retVal \
+            -cmd $jsoncmd  -parameterList $parameterList -type "get"
+    }
+    return $retVal
+}
+
+################################################################
+#  [GetColumnValues]
+# 
+#  Execute a CLI command. The function will return a value specified by a
+#  lilst of start & end indexes found in the output. Mainly meant for table. 
+#  parses the table for given indexes and return in a list.
+#  It starts parsing from the next line after startKey and ends at the line 
+#  where stop key is encountered
+#
+#  Input Variables:
+#      - <command> - CLI command to execute
+#      - <parameterList> - a list of start & end indexes
+#                         (This way it supports multiple columns too)
+#      - <startkey> - Next line after key is the start of the table. Case sensitive.
+#      - <endkey>   - the key before which table parsing ends. Case Sensitive.
+#  Output Variables:
+#      - none
+#
+#  Return Value:
+#      - returns a list of values found for each index pair,
+#      
+#  [Examples]
+#     set foundOneColumnValues [GetColumnValues "show fdb" {{2 4}} $startKey $endKey]
+#     -> returns a List of values found in 2nd to 4th loc of each line after
+#        key is encountered
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: GetSwitchInfo
+#
+################################################################
+proc GetColumnValues {command ColumnList startkey {endkey " # "}} {
+
+   global spawn_id
+   
+   set tmp "Tmp"
+   set pwd [pwd]
+   if {[regexp -nocase "clitest" $pwd]} {
+       global tmpPath
+       set tmp $tmpPath
+   }
+   
+   set pid _[pid]
+   if {[regexp -- {[\/]} $command]} {
+      # Command is passed as a file, read the file instead
+      # of running the command
+      set fd_in [open "$command" "r"]
+   } else {
+      set fd_in [open "$tmp/tmp_GetColumnValues$pid" "w"]
+      SendACmd "$command" NULL $fd_in
+      close $fd_in
+
+      set fd_in [open "$tmp/tmp_GetColumnValues$pid" "r"]
+   }
+   set value "value"
+   set i 0
+   
+   set keyFound 0
+   while {[gets $fd_in line] != -1} {
+      if {[regexp -- $startkey $line] == 1} {
+         set keyFound 1
+         break
+      }
+   }
+
+   if {$keyFound == 0} {close $fd_in; file delete "$tmp/tmp_GetColumnValues$pid"; return "KEY_NOT_FOUND"}
+   set valueList "valueList"
+   
+   while {[gets $fd_in line] != -1} {
+
+      # break as the endkey encountered
+      if {[regexp -- $endkey $line]} {
+         break
+      }
+      
+      if {([string length $line]==0) || ([regexp -nocase "^\033" $line])} {
+         continue
+      }
+      #result_debug "----- Line=|$line|"
+ 
+      set i 1
+
+      foreach column $ColumnList {
+         set value [string range $line [lindex $column 0] [lindex $column 1]]
+         set value [string trimleft $value]
+         set value [string trimright $value]
+         #result_debug "the line:|$line| and vaule:|$value|"
+         lappend valueList$i "$value"
+         incr i
+      }
+   }
+   close $fd_in
+   file delete "$tmp/tmp_GetColumnValues$pid"
+   
+   set ColumnValues ""
+   for {set count 1} {$count <= [llength $ColumnList]} {incr count} {
+      if [info exists $valueList$count] {
+         lappend ColumnValues [expr $$valueList$count]
+      }
+   }
+   
+   if {[info exists ColumnValues] } {
+       AddToJsonHelperFile -comment "GetColumnyValue" -status \"$ColumnValues\" \
+           -cmd $command  -parameterList "" -type "get" 
+
+       return $ColumnValues
+   } else {
+       AddToJsonHelperFile -comment "GetColumnValue" -status "KEY_NOT_FOUND" \
+           -cmd $command  -parameterList "" -type "get"
+
+       return "KEY_NOT_FOUND"
+   }
+}
+
+
+################################################################## 
+# Procedure Name: CheckPortStat
+#   
+# Description: Get ports statistic - check the packets sent or received
+#              from the ports 
+#
+# Input args:
+#              command - ex "sh port 4 util"
+#              check list 
+#              comment
+#              factor 
+#                
+# Output args: none
+#
+# Typical usage: 
+#              [CheckPortStat $command $checklist]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+################################################################## 
+proc CheckPortStat {command checkList args} {
+
+   parse_args CheckPortStat $args {
+      comment ""
+      factor "0.01"
+   }
+
+   set port [lindex $command 2]
+   report_start_test "Checking <$command> statistics $comment"
+
+   global spawn_id
+   
+   set tmp "Tmp"
+   set pwd [pwd]
+   if {[regexp -nocase "clitest" $pwd]} {
+       global tmpPath
+       set tmp $tmpPath
+   }
+   
+   set pid _[pid]
+   set fd_in [open "$tmp/tmp_CheckPortStat$pid" "w"]
+   SendACmd "$command" NULL $fd_in
+   close $fd_in
+   
+   #get the maxIndex, so to get the last line with this min list length
+   set maxIndex 0
+   foreach indexItem $checkList {
+      set index [lindex $indexItem 0]
+      if {$index > $maxIndex} { set maxIndex $index }
+   }
+   set fd_in [open "$tmp/tmp_CheckPortStat$pid" "r"]   
+   set indexFound -1
+   while {[gets $fd_in line] != -1} {
+      set index1 [lsearch -exact $line "$port"]
+      if {$index1 >= 0} {
+         set indexFound $index
+         set lineFound $line
+         break
+      }
+   }
+   close $fd_in
+   file delete "$tmp/tmp_CheckPortStat$pid"
+   
+   if {$indexFound >= 0} {
+      result_debug "Found Line: |$lineFound|"
+      result_debug "port: [lindex $lineFound $indexFound]"
+      foreach item $checkList {
+         set index [lindex $item 0]
+         set valueWanted [lindex $item 2]
+         set compareFlag [lindex $item 1]
+         set valueFound [lindex $lineFound $indexFound]
+         switch $compareFlag {
+            "min" {
+               if {$valueWanted <= $valueFound } {
+                  result_ok "Checking minimum value passed at index $index. Is over $valueWanted. Got $valueFound"
+               } else {
+                  result_error "Checking minimum value failed at index $index. Wanted $valueWanted BUTGOT $valueFound"
+               }
+            }
+            "max" {
+               if {$valueWanted > $valueFound } {
+                  result_ok "Checking maximum value passed at index $index. Is under $valueWanted. Got $valueFound"
+               } else {
+                  result_error "Checking maximum value failed at index $index. Wanted $valueWanted BUTGOT $valueFound"
+               }
+            }
+            "range" {
+               set tolerance [expr double ($valueWanted) * $factor]
+               if {$valueWanted > $valueFound} {
+                   set val [expr abs ($valueWanted - $valueFound )];
+               } else {
+                   set val [expr abs ($valueFound - $valueWanted)];
+               }
+               if {$val <= $tolerance } {
+                  result_ok "Checking range value passed at index $index. Is in range $valueWanted +/- $tolerance. Got $valueFound"
+               } else {
+                  result_error "Checking range value failed at index $index. Wanted $valueWanted +/- $tolerance. BUT GOT $valueFound"
+               }
+            }
+            "exact" -
+            default {
+               if {$valueWanted == $valueFound } {
+                  result_ok "Checking exact value passed at index $index. Is exactly $valueWanted. Got $valueFound"
+               } else {
+                  result_error "Checking exact value failed at index $index. Wanted $valueWanted BUTGOT $valueFound"
+               }
+            }
+         }
+      }            
+   } else {
+     result_error "No data found for port $port"
+   }
+   report_end_test
+}
+
+################################################################## 
+# Procedure Name: CheckPortStatAvg
+#   
+# Description: Get ports statistic - check the packets sent or received
+#              from the ports average by sampling intervals
+#
+# Input args:
+#              command - ex "sh port 4 statistics"
+#              check list 
+#              - [comment] - text for comment for reference purposes to be 
+#			put in report.txt
+#              - [factor] - tolerance, default 0.1
+#              - [interval] - sampling period, default 5 secs
+#                
+# Output args: none
+#
+# Typical usage: 
+#              [CheckPortStat $command $checklist]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifyTraffic
+################################################################## 
+proc CheckPortStatAvg {command checkList args} {
+
+   parse_args CheckPortStatAvg $args {
+      comment ""
+      factor "0.1"
+      interval  "10"
+   }
+   #result_debug "the parsed vals comment $comment, factor $factor, interval $interval"
+
+   set port [lindex $command 2]
+   report_start_test "Checking <$command> statistics $comment"
+
+   global spawn_id
+   
+   set tmp "Tmp"
+   set pwd [pwd]
+   set pid _[pid]
+
+   if {[regexp -nocase "clitest" $pwd]} {
+       global tmpPath
+       set tmp $tmpPath
+   }
+   
+   
+   #get the maxIndex, so to get the last line with this min list length
+   set maxIndex 0
+   foreach indexItem $checkList {
+      set index [lindex $indexItem 0]
+      if {$index > $maxIndex} { set maxIndex $index }
+   }
+   set fd_in1 [open "$tmp/tmp_1CheckPortStat$pid" "w"]
+   set fd_in2 [open "$tmp/tmp_2CheckPortStat$pid" "w"]
+   global whichDutNow
+   set majmin [GetVersion DUT${whichDutNow} majmin]
+   if {$majmin>=11.3} {
+      SendACmd "$command no-refresh" NULL $fd_in1
+   } else {
+      SendACmd "$command" NULL $fd_in1
+   }
+   exSleep $interval
+   if {$majmin>=11.3} {
+      SendACmd "$command no-refresh" NULL $fd_in2
+   } else {
+      SendACmd "$command" NULL $fd_in2
+   }
+   close $fd_in1
+   close $fd_in2
+
+   set fd_in1 [open "$tmp/tmp_1CheckPortStat$pid" "r"]   
+   set fd_in2 [open "$tmp/tmp_2CheckPortStat$pid" "r"]   
+   set indexFound1 -1
+   while {[gets $fd_in1 line] != -1} {
+      set index1 [lsearch -exact $line "$port"]
+      if {$index1 >= 0} {
+         set indexFound1 $index
+         set lineFound1 $line
+	 break
+      }
+   }
+   close $fd_in1
+   set indexFound2 -1
+   while {[gets $fd_in2 line] != -1} {
+      if {[regexp -nocase "show ports" $line]} {continue};
+      set index2 [lsearch -exact $line "$port"]
+      if {$index2 >= 0} {
+         set indexFound2 $index
+         set lineFound2 $line
+	 break
+      }
+   }
+   close $fd_in2
+   file delete "$tmp/tmp_1CheckPortStat$pid"
+   file delete "$tmp/tmp_2CheckPortStat$pid"
+
+   if {$indexFound1 >= 0} {
+      result_debug "Found1 Line: |$lineFound1|"
+      result_debug "port1: [lindex $lineFound1 $indexFound1]"
+      set valueFound1 [lindex $lineFound1 $indexFound1]
+      result_debug "Found2 Line: |$lineFound2|"
+      result_debug "port2: [lindex $lineFound2 $indexFound2]"
+      set valueFound2 [lindex $lineFound2 $indexFound2]
+      set valueFound [expr ($valueFound2 - $valueFound1) / $interval]
+      foreach item $checkList {
+         set index [lindex $item 0]
+         set valueWanted [lindex $item 2]
+         set compareFlag [lindex $item 1]
+         switch $compareFlag {
+            "min" {
+               if {$valueWanted <= $valueFound } {
+                  result_ok "Checking minimum value passed at index $index. Is over $valueWanted. Got $valueFound"
+               } else {
+                  result_error "Checking minimum value failed at index $index. Wanted $valueWanted BUTGOT $valueFound"
+               }
+            }
+            "max" {
+               if {$valueWanted > $valueFound } {
+                  result_ok "Checking maximum value passed at index $index. Is under $valueWanted. Got $valueFound"
+               } else {
+                  result_error "Checking maximum value failed at index $index. Wanted $valueWanted BUTGOT $valueFound"
+               }
+            }
+            "range" {
+               set tolerance [expr double ($valueWanted) * $factor]
+               if {$valueWanted > $valueFound} {
+                   set val [expr abs ($valueWanted - $valueFound )];
+               } else {
+                   set val [expr abs ($valueFound - $valueWanted)];
+               }
+               if {$val <= $tolerance } {
+                  result_ok "Checking range value passed at index $index. Is in range $valueWanted +/- $tolerance. Got $valueFound"
+               } else {
+                  result_error "Checking range value failed at index $index. Wanted $valueWanted +/- $tolerance. BUT GOT $valueFound"
+               }
+            }
+            "exact" -
+            default {
+               if {$valueWanted == $valueFound } {
+                  result_ok "Checking exact value passed at index $index. Is exactly $valueWanted. Got $valueFound"
+               } else {
+                  result_error "Checking exact value failed at index $index. Wanted $valueWanted BUTGOT $valueFound"
+               }
+            }
+         }
+      }            
+   } else {
+     result_error "No data found for port $port"
+   }
+   report_end_test
+}
+
+
+################################################################## 
+# Procedure Name: CheckTopStats
+#   
+# Description: Check tasks information - task name, task id, CPU or etc  
+#
+# Input args:
+#              check list 
+#              comment
+#                
+# Output args: none
+#
+# Typical usage: 
+#              [CheckTopStats $checklist]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+################################################################## 
+proc CheckTopStats {checkList {comment ""}} {
+
+   global spawn_id
+   set pid _[pid]
+   set fd_in [open "Tmp/tmp_CheckTopStat$pid" "w"]
+   SendACmd "top" NULL $fd_in
+   close $fd_in
+
+   #get the maxIndex, so to get the last line with this min list length
+   set maxIndex 0
+   set task ""
+   foreach indexItem $checkList {
+      set task [lindex $indexItem 0]
+   }
+
+   set fd_in [open "Tmp/tmp_CheckTopStat$pid" "r"]   
+   set indexFound 0
+   set valueWanted 0
+   set valueFound 0
+   set lineFound ""
+   while {[gets $fd_in line] != -1} {
+      #result_debug "----- Line=|$line|"
+      regsub {H} $line {H } line
+      set index [lsearch -exact $line "$task"]
+      #get the last complete line, a cheap way of doing this
+      if {$index!=-1} {
+         set indexFound $index
+         set lineFound $line
+         regsub -all {[^A-Z^a-z^0-9^_^-^5;01H^:]} $lineFound " " lineFound
+         break
+      } else {
+         continue
+      }
+   }
+   close $fd_in
+   file delete "Tmp/tmp_CheckTopStat$pid"
+#   result_debug "the indexFound $indexFound and task $task"
+   
+   set index 6
+   set low 0
+   set high 0
+   if {$indexFound >= 0} {
+ #     result_debug "Found Line: |$lineFound|"
+ #     result_debug "port: [lindex $lineFound $indexFound]"
+     foreach item $checkList {
+        set task [lindex $item 0]
+        set valueWanted [lindex $item 1]
+        scan $valueWanted %d-%d low high
+        set valueFound [lindex $lineFound [expr $indexFound + $index]]
+        if {$valueFound=="PEND"||$valueFound==""} {
+           set valueFound 0
+        }
+        report_start_test "Checking top statistics for $task range $valueWanted"
+        result_debug "the valueFound $valueFound and valueWanted $valueWanted"
+        if {$valueFound>=$low&&$valueFound<=$high} {
+           result_ok "Checking range of $low and $high for $task is ok. Wanted $valueWanted, Got $valueFound"
+        } else {
+           result_error "Checking range of $low and $high for $task is wrong. Wanted $valueWanted, Got $valueFound"
+        }
+        report_end_test
+      }
+   } else {
+     result_error "No data found for top"
+   }
+}
+
+
+;#################################################################
+;#
+;# GetTableValues
+;#
+;# Retrieves column values from the table displayed by the
+;# specified command.  GetTableValues takes a list of "queries"
+;# (described below) used to match rows in the table.  For each
+;# matching row, the column values specified in the query are
+;# collected and returned.  If a query matches multiple rows,
+;# then the column values for each matching row are collected.
+;# See below for more details and an example.
+;#
+;# Input variables: Variables in []'s are optional.
+;#     command: Specifies the command, to be sent to the current
+;#              DUT, that will generate the table to be parsed.
+;#
+;#     queryList: A list of TCL array names specifying a series
+;#                of queries.  Each query array must have the
+;#                following structure.
+;#
+;#                query(searchKey) - Contains a regular experesion
+;#                that will be applied to each row in the table.
+;#                There are no restrictions on the searchKey, so
+;#                care should be exercised to retrieve the proper
+;#                rows and columns.
+;#
+;#                query(columnRanges) - Contains a list of column
+;#                ranges to be collected.  Column ranges can take
+;#                one of the following forms.
+;#
+;#                    X    Just column X.
+;#                    X-   All columns from X until the end.
+;#                    X-Y  All columns from X to Y inclusive.
+;#                    *    All columns from start to end.
+;#
+;#                All column indices are zero-based.  The '*' must
+;#                be the first, and only range specified in the
+;#                list.  Any ranges after the '*' will be ignored
+;#                and the '*' will be ignored if it's not the
+;#                first in the list.
+;#
+;#                Below is a diagram depicting this structure.
+;#
+;#                queryList == {query1 query2 ... queryN}
+;#
+;#                query1(searchKey) == <regexp1>
+;#                query1(columnRanges) ==
+;#                    {q1colRange1 q1colRange2 ... q1colRangeX}
+;#
+;#                query2(searchKey) == <regexp2>
+;#                query2(columnRanges) ==
+;#                    {q2colRange1 q2colRange2 ... q2colRangeY}
+;#                ...
+;#                queryN(searchKey) == <regexpN>
+;#                queryN(columnRanges) ==
+;#                    {qNcolRange1 qNcolRange2 ... qNcolRangeZ}
+;#
+;#                Where N is the number of queries, and X, Y,
+;#                and Z are the number of column ranges for each
+;#                respective query.
+;#
+;#     [-dutId <dut=1>]: The DUT on which to execute the command.
+;#
+;#     [-skipStart <lineNo=0>]: Tells GetTableValues to skip the
+;#                              first lineNo number of lines
+;#                              before parsing.  This is useful
+;#                              for skipping over table headings.
+;#                              If not specified, no lines are
+;#                              skipped.
+;#
+;#     [-stopLine <key="">]: Causes GetTableValues to stop parsing
+;#                           when it finds a line that matches
+;#                           key.  key is a regular expression
+;#                           that will be applied to each line.
+;#                           If not specified, parsing will
+;#                           continue until the end of the table.
+;#
+;#     [SendACmd options]: GetTableValues also accepts any options
+;#                         handled by SendACmd.  These options
+;#                         will be transparently passed along to
+;#                         SendACmd.
+;#
+;# Output variables:
+;#     queryList: A list of TCL array names specifying a series
+;#                of queries.  Data is returned by updating each
+;#                query array with the following structure.
+;#
+;#                query(columnData) - Contains a list of column
+;#                results.  Results are organized into sub-lists.
+;#                Each sub-list contains the values for one of the
+;#                columns specified in query(columnRanges).  The
+;#                sub-lists are in the same order as the specified
+;#                column indices, one sublist per column.  All
+;#                values are taken from rows that match
+;#                query(searchKey).
+;#
+;#                Below is a diagram depicting this structure.
+;#
+;#                queryList == {query1 query2 ... queryY}
+;#
+;#                query1(columnData) == {list1 list2 ... listN}
+;#                list1 == {l1val1 l1val2 ... l1valX}
+;#                list2 == {l2val1 l2val2 ... l2valX}
+;#                ...
+;#                listN == {lNval1 lNval2 ... lNvalX}
+;#
+;#                Where N is the total number of columns specified
+;#                by query(columnRanges) and X is the total
+;#                number of rows that match query(searchKey).
+;#
+;# Return value: None.
+;#
+;# Example: Assume the command "printThis" creates the following
+;# output.
+;#
+;# First  Second  Third            Fourth
+;# --------------------------------------
+;# 1      --a-X-  4.3.6.251            72
+;# 2      --a---  7.1.1.1             242
+;# 3      ---L--  12.98.62.35           0
+;# 4      r-a---  1.6.7.3              15
+;# --------------------------------------
+;#
+;# Then this code snippet:
+;#
+;# set aflag(searchKey) "a"
+;# set aflag(columnRanges) "1 3"
+;# set row3(searchKey) "^3"
+;# set row3(columnRanges) "2-3"
+;# set Xflag(searchKey) "X"
+;# set Xflag(columnRanges) "1-"
+;# set subnet1.6(searchKey) "1\.6\.[0-9]+\.[0-9]+"
+;# set subnet1.6(columnRanges) "*"
+;# set qList {aflag row3 Xflag subnet1.6}
+;# GetTableValues "printThis" $qList -skipStart 2 -stopLine "^-*"
+;#
+;# Will produce the following results:
+;#
+;# aflag(columnData) == {{--a-X- --a--- r-a---} {72 242 15}}
+;# row3(columnData) == {{12.98.62.35} {0}}
+;# Xflag(columnData) == {{--a-X-} {4.3.6.251} {72}}
+;# subnet1.6(columnData) == {{4} {r-a---} {1.6.7.3} {15}}
+;#
+;# Note: Even though the pattern for -stopLine matches two lines,
+;# the first match will be ignored because that line is skipped
+;# by -skipStart.
+;#
+;#################################################################
+proc GetTableValues {command queryList args} {
+    set otherArgs [parse_args -noComplain GetTableValues $args {
+        dutId     1
+        skipStart 0
+        stopLine  ""
+    }]
+
+    set skipLine 0
+
+    ;# Create a temporary file to hold the output of the command.
+    set tmpName "Tmp/tmp_GetTableRows_[pid]"
+    set fd_in [open $tmpName w+]
+    
+    ;# eval needs to be used to break up $otherArgs into
+    ;# separate arguments for SendACmd.  Otherwise, the list
+    ;# gets passed as a single argument.  Also, SendACmd and its
+    ;# first four arguments are quoted with curly-braces so that
+    ;# $command gets passed as a single argument.
+    eval {SendACmd $command NULL $fd_in true} $otherArgs
+    flush $fd_in
+
+    ;# Rewind the file and begin reading lines.
+    seek $fd_in 0
+    set stopped 0
+    while {[gets $fd_in rawLine] != -1} {
+        ;# Filter out all the screen control escape sequences.
+        ;# The ESC[0X;1H sequence moves the cursor to the start
+        ;# of line X.  Instead of just filtering these out, we
+        ;# substitute newlines, which allows us to split the
+        ;# "raw" line down into the real screen lines.
+        regsub -all -nocase {\[0[0-9]*;1H} $rawLine \n rawLine
+        regsub -all -nocase {\[2J} $rawLine {} rawLine
+        regsub -all -nocase {\[K} $rawLine {} rawLine
+
+        ;# Split the raw line into screen lines.  Sometimes,
+        ;# the first list element may be blank.  This is not a
+        ;# real blank line, just an artifact of the substitutions
+        ;# above, so we need to remove it.
+        set lineList [split $rawLine \n]
+        if {[lindex $lineList 0] == {}} {
+            set lineList [lrange $lineList 1 end]
+        }
+
+        ;# Process the "cooked" lines.
+        foreach line $lineList {
+            ;# Skip the first $skipStart lines.
+            if {$skipLine < $skipStart} {
+                incr skipLine
+                continue
+            }
+
+            ;# Check if we should stop.
+            if {$stopLine != "" && [regexp -- $stopLine $line]} {
+                set stopped 1
+                break
+            }
+
+            ;# Run the line through all the queries.
+            foreach queryName $queryList {
+                upvar $queryName query
+
+                ;# Initialize the columnData list.
+                if {![info exists query(columnData)]} {
+                    set query(columnData) {}
+                }
+
+                ;# See if this query matches.
+                if {![regexp -- $query(searchKey) $line]} {
+                    continue
+                }
+
+                ;# It matched, so extract the column values.
+                set resultPtr 0
+                foreach columnRange $query(columnRanges) {
+                    set matched ""
+                    set start ""
+                    set end ""
+
+                    ;# matched contains the matching string
+                    ;# start contains the first number in the range
+                    ;# end contains the second number in the range
+                    if {![regexp {^([0-9]+)-?([0-9]*)$|^\*$} $columnRange matched start end]} {
+                        continue
+                    }
+
+                    ;# Look for asterisk.
+                    if {$matched == "*"} {
+                        ;# Asterisk must be the first column specifier.
+                        if {$resultPtr != 0} {
+                            continue
+                        }
+                        set start 0
+                    }
+
+                    ;# Check for asterisk or open-ended range.
+                    if {$end == ""} {
+                        set end [expr [llength $line] - 1]
+                    }
+
+                    ;# Collect the column data.
+                    for {set i $start} {$i <= $end} {incr i; incr resultPtr} {
+                        ;# Get existing column data, if any, and tack next value
+                        ;# onto the end.
+                        set tmp [lindex $query(columnData) $resultPtr]
+                        lappend tmp [lindex $line $i]
+
+                        ;# Are we replacing an existing column value list?
+                        if {$resultPtr < [llength $query(columnData)]} {
+                            ;# Yes, replace the old list with the new one.
+                            set query(columnData) [lreplace $query(columnData) $resultPtr $resultPtr $tmp]
+                        } else {
+                            ;# No, tack column value list onto the end of the other
+                            ;# value lists.
+                            lappend query(columnData) $tmp
+                        }
+                    }
+
+                    ;# If asterisk is found, skip other column specifiers.
+                    if {$matched == "*"} {
+                        break
+                    }
+                } ;# foreach columnRange
+            } ;# foreach query
+        } ;# foreach line
+        
+        ;# -stopLine matched something, so stop parsing.
+        if {$stopped} {
+            break
+        }
+    } ;# while
+    close $fd_in
+    file delete $tmpName
+} ;# GetTableValues
+
+
+;#################################################################
+;#
+;# AllZeros
+;#
+;# Determines if all the values in a list are zero.
+;#
+;# Input variables: Variables in []'s are optional.
+;#     valueList: A list of numerical values.
+;#
+;# Output variables: None.
+;#
+;# Return value:
+;#     1 if all values in valueList are zero.
+;#     0 otherwise.
+;#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+;#################################################################
+proc AllZeros {valueList} {
+    foreach value $valueList {
+        if {$value != 0} {
+            return 0
+        }
+    }
+
+    return 1
+}
+
+
+proc _EnhanceStackingParameterList {parameter} {
+   global whichDutNow
+   global stacking
+   if {![info exists whichDutNow]} {
+      set whichDutNow 1
+   }
+   set platform [GetPlatform DUT${whichDutNow}]
+   set praramToReturn $parameter
+   if  {[regexp -nocase $platform "$stacking"]} {
+          global DUT${whichDutNow}_Stacking_msmb_slot DUT${whichDutNow}_Stacking_msma_slot
+         if {[regexp -nocase "msm-a" $parameter]} {
+                if [info exists DUT${whichDutNow}_Stacking_msma_slot] {
+                      regsub -all -nocase "msm-a" $parameter "slot-[set DUT${whichDutNow}_Stacking_msma_slot]" praramToReturn
+                }
+          } 
+         if {[regexp -nocase "msm-b" $praramToReturn] } {
+                if [info exists DUT${whichDutNow}_Stacking_msmb_slot] {
+                      regsub -all -nocase "msm-b" $praramToReturn "slot-[set DUT${whichDutNow}_Stacking_msmb_slot]" praramToReturn
+                 }
+          }
+
+         if {[regexp -nocase "BACKUP \\.\\*In \\*Sync\\. \\*MASTER" $praramToReturn]} {
+                if [info exists DUT${whichDutNow}_Stacking_msma_slot] {
+                      regsub -all -nocase "BACKUP \\.\\*In \\*Sync\\. \\*MASTER" $praramToReturn "MASTER \*BACKUP \.\*In \*Sync" praramToReturn
+                 }
+          }
+   }
+   return $praramToReturn
+}
+
+proc _EnhancePioneerParameterList {parameter} {
+   global DUTs_info
+   global whichDutNow
+   global pioneerPlatform
+   set praramToReturn $parameter
+   if {([info exists DUTs_info(DUT${whichDutNow},platform)] ) } {
+      if {[regexp -nocase $pioneerPlatform $DUTs_info(DUT$whichDutNow,platform)]} {
+#do nothing here replacement will be done in the end
+      } else {
+      return $praramToReturn
+      }
+   } else {
+        set pList "";
+        lappend pList "{^SysName:} 1";
+        set SystemName [GetKeyValue "show switch" $pList]
+        unset pList;
+
+         set pList "";
+         lappend pList "{^System Type:} 1";
+         set SystemType [GetKeyValue "show switch" $pList]
+         unset pList;
+
+       if {([regexp "BD-20808|BD-16808|BD-20804|BD-X8" $SystemName]) || ([regexp "BD-20808|BD-16808|BD-20804|BD-X8" $SystemType])} {
+#do nothing here replacement will be done in the end
+     } else {
+      return $praramToReturn
+     }
+   }
+   if {[regexp -nocase "msm-a" $parameter]} {
+         regsub -all -nocase "msm-a" $parameter "mm-a" praramToReturn
+   } 
+   if {[regexp -nocase "msm-b" $praramToReturn]} {
+         regsub -all -nocase "msm-b" $praramToReturn "mm-b" praramToReturn
+   }
+   return $praramToReturn
+}
+
+#################################################################
+#
+# WaitForValues
+#
+# Retrieve a value from a command's output using a key-value search pair, and
+# polls the output until that value stabilizes or a timer expires.
+#
+# Input variables: Variables in []'s are optional.
+#     cmd
+#       Command to be executed on the DUT.
+#
+#     searchList
+#       A list of key-value pairs to search for.  See the description for the
+#       GetKeyValue function for details on the format of key-value pairs.
+#
+#     [-comment <text>]
+#       Descriptive text to be included in the test transcript.  Default is
+#       blank.
+#
+#     [-dut <num>]
+#       DUT on which command should be executed.  Default is DUT 1.
+#
+#     [-reportResults <bool>]
+#       Indicates whether to report results as an official sub-test.  Default
+#       is true.
+#
+#     [-timer <time_struct>]
+#       Parameters for controlling initial delay, interval, and time-out.
+#       The structure is a TCL list or string with the following format:
+#
+#           start: <sec> interval: <sec> fail: <sec>
+#
+#       Where <sec> is a positive integer value measuring seconds.  The fail
+#       time must be longer than the start time.
+#
+#
+# Output variables: None.
+#
+# Return value:
+#       A list containing the values returned by GetKeyValue.
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifySwitchOutput
+#################################################################
+proc WaitForValues {cmd searchList args} {
+    # Validate the arguments.
+    if {$cmd == ""} {
+        error "WaitForValues: Invalid format for command $cmd.";
+    }
+    if {$searchList == ""} {
+        error "WaitForValues: Invalid format for search list $searchList.";
+    }
+
+    parse_args CheckKeyValue $args {
+        comment       ""
+        dut           1
+        reportResults 1
+        timer         ""
+    }
+
+    if {![IsInteger $dut] || $dut < 1} {
+        error "WaitForValues: Invalid format for DUT number, $dut.";
+    }
+    if {!([IsTrue $reportResults] || [IsFalse $reportResults])} {
+        error "WaitForValues: Invalid format for result reporting flag, $reportResults.";
+    }
+
+    set startTime 0;
+    set interval 1;
+    set failTime 1;
+
+    if {[llength $timer] == 6} {
+        set startTime [lindex $timer 1];
+        set interval [lindex $timer 3];
+        set failTime [lindex $timer 5];
+
+        if {![IsInteger $startTime] || $startTime < 0} {
+            error "WaitForValues: Invalid format for start time, $startTime.";
+        }
+        if {![IsInteger $interval] || $interval < 0} {
+            error "WaitForValues: Invalid format for interval, $interval.";
+        }
+        if {![IsInteger $failTime] || $failTime < $startTime} {
+            error "WaitForValues: Invalid format for failure time, $failTime, or failure time less than start time $startTime.";
+        }
+    }
+
+    # Set up the reporting functions.
+    if {$reportResults} {
+        set rStart report_start_test;
+        set rOk result_ok;
+        set rFail result_error;
+        set rEnd report_end_test;
+    } else {
+        set rStart result_debug;
+        set rOk result_debug;
+        set rFail result_debug;
+        set rEnd "";
+    }
+
+    $rStart "Waiting for $cmd to stabilize: $comment";
+
+    exSleep $startTime;
+
+    # Get the initial value set, and then start polling.  Each time through
+    # loop, the last iteration's $newValues becomes the current iteration's
+    # $values.
+    set values "";
+    set newValues [GetKeyValue $cmd $searchList];
+    set timer $startTime;
+    while {$values != $newValues} {
+        exSleep $interval;
+
+        set values $newValues;
+        set newValues [GetKeyValue $cmd $searchList];
+
+        incr timer $interval;
+        if {$timer >= $failTime} {
+            break;
+        }
+    }
+
+    if {$timer >= $failTime} {
+        $rFail "Results not stable after $timer seconds.";
+        result_debug "Second to last result = $values";
+        result_debug "Last result = $newValues";
+    } else {
+        $rOk "Results stabilized after $timer seconds.";
+        result_debug "Stable result = $newValues";
+    }
+    if {$rEnd != ""} {
+    	  $rEnd;
+    }
+    return $newValues;
+}
+

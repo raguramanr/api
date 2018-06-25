@@ -1,0 +1,1392 @@
+#!/usr/bin/tclsh
+
+package require Tclx
+
+proc print_usage {} {
+    puts "\r"
+    puts {Usage: QLoadImage.tcl -cfg <cfg.cfg> -platformList | -pl <platforms> -platformImageList | -pil <paths> -qId <regQID> -bootrom <bootrom> -partition | -p <pri|sec> -subversion <subversion>}
+    puts {      [<cfg>]: f48_std.cfg}
+    puts {      [<platformList> | <pl>]: list of platforms ie "Mariner Aspen Everest x460"       }
+    puts {      [<platformImageList> | <pil>]: list of images "/tftp2/bd10K-12.4.0.20.xos /tftp2/bd10K-12.4.0.20.xos"}
+    puts {      [<commonPath> | <cp>]: common path for images root /home/autotest-sc/images}
+    puts {      [qId]: regression Q ID if any -  SC_######_###### or RTP_######_######}
+    puts {      [reboot | r] : yes,y | no,n Default is no}                                                 
+    puts {         (Script verifies the platform before download image)}
+    puts {      [<bootrom>]: bootver (assume in root of your location share)}
+    puts {      [<partition | p] which partition to download to. Default is secondary}
+    puts {      [<xmod>]: a list of xmods the need to be downloaded. Just the name 'ssh' '8900diags'}
+    puts {      [<randomIndex>] default is unknown .  seed for result directory}
+    puts {      [<subversion>]: subversion variable if any, used for private testing}
+    puts {          }
+    puts {      -------------      Currently supported Platforms s of 1/1/2010 ------------------}
+    puts {           Mariner Aspen Aspennapa Cougar Lynx LynxG Manhattan Everest}
+    puts {           Manhattan10G Melange Melange10G Olympic Torino Voyager Pathfinder }
+    puts {           Panther Stacking Sonoma x650 x480 NWI Jaguar i386 x430 x870 viper}
+    puts {}
+    puts {          }
+    puts {         (Typical Usage:) }
+    puts {      (./QLoadImage.tcl -cfg exos1243.cfg -platformList "Aspen x480" -platformImageList "./aspen.xos ./summit.xos") | -reboot <yes|no> }
+    puts "\r"
+}
+
+set tftpServerLogin       "extreme"
+set tftpServerPasswd      "extreme"
+set tftpServerTftpboot    "/tftpboot"
+global xmod
+
+# checking command parameters
+if {$argc<2} {
+    puts "Not enough parameters"
+    print_usage
+    exit
+}
+
+set LIB_PATH "../Lib"
+lappend auto_path $LIB_PATH
+
+source ../Lib/parse_args.tcl
+source ../Lib/mainLib.tcl
+source ../Lib/downLoadCode.tcl
+puts "auto_path 111 ---------- $auto_path"
+##################################################################################
+#  Parse Args
+##################################################################################
+parse_args QLoadImage $argv {
+    cfg     "NULL"
+    platformList	"NULL"
+    platformImageList	"NULL"
+    pl                  "NULL"
+    pil                 "NULL"
+    relmanbuild         "NULL"
+    rmb                 "NULL"
+    commonPath          "NULL"
+    cp                  "NULL"
+    qId                 "NULL"
+    bootrom             "NULL"
+    partition           "NULL"
+    p                   "NULL"
+    xmod                "NULL"
+    subversion          "NULL"
+    randomIndex         "unknown"
+    in                  "sc"
+    unc                 "no"
+    reboot              "no"
+    r                   "NULL"
+    build               "NULL"
+}
+
+global DUTs_info whichDutNow
+
+
+puts "QLoadImage.tcl  -cfg $cfg \n \
+    -platformList $platformList \n \
+    -platformImageList $platformImageList \n \
+    -pl $pl \n \
+    -pil $pil \n \
+    -relmanbuild $relmanbuild \n \
+    -rmb $rmb \n \
+    -commonPath $commonPath \n \
+    -cp $cp \n \
+    -qId $qId \n \
+    -bootrom $bootrom \n \
+    -partition $partition \n \
+    -p $p \n \
+    -xmod $xmod \n \
+    -subversion $subversion \n \
+    -randomIndex $randomIndex \n \
+    -in $in \n \
+    -unc $unc \n \
+    -reboot $reboot \n \
+    -r $r \n \
+    -build $build"
+
+
+set module "QLoadImage"
+set harness "tcl"
+set TRYFAILSAFE true
+gen_index "../Lib"
+##################################################################################
+#  Source the config files
+##################################################################################
+set sourceFile ""
+#if [catch {source "../main/cfg/common.cfg"} rea] {
+#    puts "*** WARNING: Unable to source common.cfg:$rea............... ***"
+#    puts "*** WARNING: Application level variables may not be defined. ***"
+ #   exit -1
+#}
+if [catch {source "../Util/runReg.cfg"} rea] {
+    puts "*** WARNING: Unable to source queuing system runReg.cfg:$rea..... ***"
+    puts "*** WARNING: Application level variables may not be defined. ***"
+    exit -1
+}
+if [catch {source "../main/runReg.cfg"} rea] {
+    puts "*** WARNING: Unable to source queuing system main runReg.cfg:$rea..... ***"
+    puts "*** WARNING: Application level variables may not be defined. ***"
+    exit -1
+}
+if [catch {source "../main/cfg/common.cfg"} rea] {
+    puts "*** WARNING: Unable to source common.cfg:$rea............... ***"
+    puts "*** WARNING: Application level variables may not be defined. ***"
+    exit -1
+}
+if {$cfg != "null"} {
+    set sourceFile $cfg
+    if {([regexp -nocase "^short" $sourceFile]&&[regexp -nocase {/} $sourceFile]) || \
+    [regexp -nocase "^pt" $sourceFile]} {
+        set sourceFile [format %s/%s/%s $regType $module $sourceFile]
+        set sourceFile [string trim $sourceFile];
+        puts "Using config file: ($sourceFile)"
+    } elseif {![regexp -nocase "^cfg" $sourceFile] && ![regexp -nocase {/} $sourceFile]} {
+        if {[file exists $sourceFile]==0} {
+            set sourceFile [format %s/%s cfg $sourceFile]
+            set sourceFile [string trim $sourceFile];
+            puts "Using config file: ($sourceFile)"
+        }
+    }
+}
+if {[file exists $sourceFile] == 0} {
+    puts "Cannot find config file: $sourceFile\n"
+    exit
+}
+catch {source $sourceFile} reason
+
+set MAIN(cfg) [file tail $sourceFile]
+    set curAutoRoot [_setCurrentAutoDir]
+    set MAIN(autoRoot) $curAutoRoot;# More portable
+    set MAIN(feature_directory) "QLoadImage"
+# ------------------------------------------------------------------------
+# Set xterm title
+# ------------------------------------------------------------------------
+    SetTerminalTitle -add $qId
+# ------------------------------------------------------------------------
+# Translate shortened names (platformList  <-> pl  etc)
+# ------------------------------------------------------------------------
+
+# ------------------------------------------------------------------------
+# Translate shortened names (platformList  <-> pl  etc)
+# ------------------------------------------------------------------------
+if {$pl != "NULL"} {
+    set platformList $pl
+}
+if {$pil != "NULL"} {
+    set platformImageList $pil
+}
+
+ if {$cp != "NULL"} {
+        set commonPath $cp
+    }
+    if {$rmb != "NULL"} {
+        set relmanbuild $rmb
+    }
+    if {$relmanbuild != "NULL"} {
+        set build $relmanbuild
+    }
+
+# We will use bootPart as the partition that needs to be loaded for image to download
+#   targetPart is the location for the image to be downloaded to
+#   In other lib procs partition is the same as bootPart
+if {$p!="NULL"} {
+    set partition $p
+}
+if {[regexp -nocase "sec" $partition]} {
+    set bootPart primary
+    set targetPart secondary
+} elseif {[regexp -nocase "pri" $partition]} {
+    set bootPart secondary
+    set targetPart primary
+} else {
+    set bootPart primary
+    set targetPart secondary
+}
+# Reboot verify and short var setup
+if {$r!="NULL"} {
+    set reboot $r
+}
+set reboot [string tolower $reboot]
+if {[regexp -nocase "y" $reboot]} {
+    set reboot "yes"
+} elseif {[regexp -nocase "n" $reboot]} {
+    set reboot "no"
+} else {
+    set reboot no
+}
+
+
+    set MAIN(qId) $qId
+    set MAIN(reboot) $reboot
+    set MAIN(bootPart) $bootPart
+    set MAIN(targetPart) $targetPart
+    set MAIN(build) $build
+
+
+
+
+# ------------------------------------------------------------------------
+# Get DUT count info
+# ------------------------------------------------------------------------
+    _getTestBedNumNodes;# Define MAIN(DUTLIST)  MAIN(NODECOUNT)
+    set dut $MAIN(NODECOUNT)
+
+
+# ----- This is necessary to get an absolute path for logging
+set REG_PATH [pwd]
+set MAIN(REG_PATH) [pwd]
+set MAIN(feature_type) "QLoadImage";#
+
+# ------------------------------------------------------------------------
+# Load expect and source Libraries
+
+# ----- load {expect52.dll}
+load [lindex [glob "/usr/lib/libexpect*so*"] 0]
+log_user 0
+
+lappend auto_path [file join $env(HOME) "ixia/lib/mpexpr-1.0"]
+lappend auto_path [file join $env(HOME) "ixia/lib/ixTcl1.0"]
+lappend auto_path [file join $env(HOME) "ixia/lib/dp4.0"]
+
+ # -- Make sure directory structure exists in main folder
+    _createSupportDirectories -dirList "Report Result Tmp Log"
+
+gen_index .
+
+# ------------------------------------------------------------------------
+# Register with tracking db and check for conflicts
+# ------------------------------------------------------------------------
+    set MAIN(TrackInit) [OpenTrackingPort -cfg "[file tail $cfg]" -script_name "QLoadImage" ]
+
+# ------------------------------------------------------------------------
+
+############################################################
+
+set tStartTime [clock seconds]
+    set tStartDate [clock format [clock seconds] -format "%Y-%m-%d %I.%M.%S%p"]
+    set tStartDateString [clock format [clock seconds] -format "%Y-%m-%d_%I.%M.%S%p"]
+
+    set filesToDelete   ""
+    set imageNotFound   0
+    set romNotFound     0
+    set passCount       0
+    set failCount       0
+    set skipCount       0
+    set testDuration    0
+    set testHour        0
+    set testMin         0
+    set testSec         0
+    set resultDir        "NULL";# NULL forces creation of a new resultDir (also global resultDir)
+    set MAIN(RESULTPATH) "Result"
+    set MAIN(RESULTDIR)  "null";# all script results file will be posted here while running
+    set MAIN(REPORTDIR)  "null";# ResultDir is renamed to this at the very end.
+    set skipCopy        1
+    set numDUT  1
+    set ReportLoginError "no"
+    set at              "download"
+
+
+global currentTestNumber
+set MAIN(CURRENTTESTCASE) QLoadImage
+puts "QLoadImage.tcl CUR DIR: [pwd]"
+#let's create result directory
+get_result_dir $randomIndex
+# ------------------------------------------------------------------------
+# Setup input variables based on the args passed in.  
+# ------------------------------------------------------------------------
+
+
+    if {$relmanbuild != "NULL"} {
+        set flist [getCfgFamilies $MAIN(cfg)]
+        set flist [string trim $flist "\{|\}"]
+        set flist [split $flist " "]
+        puts "flist $flist"
+        set platformList ""
+        set platformImageList ""
+        foreach f $flist {
+            lappend platformList $f
+            set fp [RelManGetImagePath -buildtag $relmanbuild -family $f]
+            lappend platformImageList $fp
+            if {[regexp -nocase "invalid" $fp]} {
+                puts "Attempt to find family $f on the database go invalid path"
+                set errorInfo ""
+                puts stderr 1
+                flush stderr
+                exit 1
+            }
+        }
+    }
+
+
+
+if {$platformList == "NULL" && $pl == "NULL"} {
+    puts "*** WARNING: Both platform list variables can not be empty:$rea..... ***"
+    exit -1
+}
+if {$platformImageList == "NULL" && $pil == "NULL"} {
+    puts "*** WARNING: Both platform image path lists variables can not be empty:$rea..... ***"
+    exit -1
+}
+set xmodString ""
+
+  set xmodString ""
+    set MAIN(DOWNLOADXMODS) 0
+    if {$xmod != "NULL"} {
+        set xmodString "Xmods to Load: "
+        puts "We are loading xmods along with the xos images"
+        set MAIN(DOWNLOADXMODS) 1
+        foreach xm $xmod {
+            append xmodString "$xm "
+        }
+    }
+
+
+
+# ------------------------------------------------------------------------
+# Setup download specific variables.
+# ------------------------------------------------------------------------
+    if {[llength $platformList] < 1} {
+        puts "*** WARNING: The platform list is empty.  Enter ..... ***"
+        exit -1
+    }
+    if {[llength $platformImageList] < 1} {
+        puts "*** WARNING: The platform image path list is empty.  You must enter the ..... ***"
+        exit -1
+    }
+    if {[llength $platformImageList] != [llength $platformList]} {
+        puts "*** WARNING: The platform image path list MUST equal the platform list  ..... ***"
+        exit -1
+    }
+    foreach pFile $platformImageList {
+        if {![file exists $pFile]} {
+            puts "*** WARNING: File $pFile does not exist.  It cannot be downloaded  ..... ***"
+            exit -1
+        }
+    }
+    foreach p $platformList {
+        if {[lsearch $DEVREG(server,allPlatforms) $p] < 0 && [lsearch $IMAGEFAMILIES $p] < 0} {
+            puts "*** WARNING: $p is not a legal platform OR image family.  ..... ***"
+            exit -1
+        }
+    }
+
+
+# ------------------------------------------------------------------------
+# ------------------------------------------------------------------------
+puts "\n==========================================================================\n\
+       Load Image to test bed DUTs\n\
+       Platforms: $platformList\n\
+       PlatformImages: $platformImageList\n\
+       $xmodString\n\
+      =========================================================================="
+# ------------------------------------------------------------------------
+# ------------------------------------------------------------------------
+
+##############################################################################
+##  Get information about the DUT
+##############################################################################
+set fd_res [open_result_file "Setup"]
+
+################################################################################################################
+# --------------------------------------------------------
+    # Gather DUTs_info variables that are not Software Related
+    #   - loop to get the DUT count and build multitask procs
+    # --------------------------------------------------------
+    _initDUTs_infoArray;
+    set numDUT $MAIN(NODECOUNT);# _initDUTs_infoArray sets this
+    set getInfoList ""
+    set pduProcs ""
+    set pduList ""
+    foreach dut $MAIN(DUTLIST) {
+        set DUTs_info(DUT$dut,loginQuick)  10;# set expect timeout to 10 second
+        set DUTs_info(DUT$dut,qloadInitLogin) 1;
+        set DUTs_info(DUT$dut,imageBooted) "NULL"
+        puts "***** DUT${dut}_CONNECT=[set DUT${dut}_CONNECT] ***** "
+        puts "***** numDUT=$dut ***** "
+        _SetPartitionVars -dut $dut;# Get port info from cfg file
+        if {[Login [set DUT${dut}_CONNECT] -masterCheck 0 -CheckOperational 0] == 0} {
+            result_debug "\n!!\n!!\n!!\nCould not pre-check DUT $dut for download.\n\
+                  Lets see if powerCycle recovers it\n!!\n!!\n!!"
+            lappend pduList "$dut"
+            lappend pduProcs "PowerCycleDUT $dut YES false"
+            continue;# If device is hung. Hope for powercycler below.
+        }
+        set DUTs_info(DUT$dut,qloadInitLogin) 0;
+        SendACmd "disable log display"
+        #SendACmd "use image $MAIN(bootPart)"
+        lappend getInfoList  "_get_HW_DUTs_info -dut $dut -checkOperational 0"
+        set DUTs_info(DUT$dut,loginQuick)  10;
+    }
+    if {[llength $pduList] > 0} {
+        result_debug "-------------- No console on DUT $pduList --------------"
+        _setShowOutput -screen off -log off -res_fmt on
+        MultiTask $pduProcs
+        _setShowOutput -screen on -log on -res_fmt on
+    }
+    result_debug "-------------- Gather DUT Information --------------"
+    _setShowOutput -screen off -log off -res_fmt on
+    MultiTask $getInfoList
+    _setShowOutput -screen on -log on -res_fmt on
+    _printMultiTaskOutput;# show the output in order + in result file
+# ----------------------------------------------------------------------------
+# Prepare for download.
+#    - If PDU+noSkip global  on all DUTs don't check anything..straight to the setup script
+#    - If partial PDU or skip - unc all none PDU to bootPart. Then setup script
+#
+# ----------------------------------------------------------------------------
+    foreach dut $MAIN(DUTLIST) {
+        set DUTs_info(DUT$dut,loginQuick)  0;
+        if {$MAIN(bootPart) == $DUTs_info(DUT$dut,imageBooted)} {
+            set wayToBootPart($dut) "null"
+        } elseif {[regexp -nocase "sec" $MAIN(bootPart)]} {
+            set wayToBootPart($dut) "unconfigSw"
+        } elseif {[info exists POWERCYCLE_DUT(1)] && [info exists SWDEVSERVER] && $SWDEVSERVER} {
+            if {[regexp -nocase "$SKIPPCTOBOOTROM" $DUTs_info(DUT$dut,sysType)]} {
+                set wayToBootPart($dut) "unconfigSw"
+            } elseif {[info exists SKIPPCTOBOOTROMFLAG] && $SKIPPCTOBOOTROMFLAG} {
+                set wayToBootPart($dut) "unconfigSw"
+            } elseif {[info exists swidSwapList]} {
+                set wayToBootPart($dut) "setupScript"
+            } else {
+                set wayToBootPart($dut) "setupScript"
+            }
+        } else {
+            set wayToBootPart($dut) "unconfigSw"
+        }
+    }
+    # ----------------------------------------------------------------------------
+    #
+    # Run either setupscript or cli unconfigure switch if powercycle not available.
+    #
+    # ----------------------------------------------------------------------------
+    _multiRunSetupScript
+
+    # Old get_DUTs is going away once json version is available... and forked.
+    if {[set rc [get_DUTs_info]] != 0} {
+        result_error "Error $rc while calling get_DUTs_info.";
+        close_result_file;
+        return -1;
+    }
+
+    # ------------------------------------------------------------------------
+    # Verify that all DUTs are on the boot parition
+    #      Just in case powercycle to bootrom didn't work
+    # ------------------------------------------------------------------------
+    set reTryBoot ""
+    for { set i 1 } { $i <= $MAIN(NODECOUNT) } {incr i } {
+        if {$MAIN(bootPart) != $DUTs_info(DUT$i,imageBooted)} {
+            set wayToBootPart($i) "unconfigSw"
+            Login [set DUT${i}_CONNECT] -masterCheck 0 -CheckOperational 0
+            SendACmd "use image $MAIN(bootPart)"
+            lappend reTryBoot $i
+        }
+    }
+    if {[llength $reTryBoot] > 0} {
+        result_debug "DUTS $reTryBoot were not on the correct boot partition. Recover."
+        _multiRunSetupScript -dutListIn $reTryBoot
+    }
+
+close_result_file;
+
+
+
+set fd_res [open_result_file "QLoadImage"]
+###################################################################################################################################
+
+
+# Init arrays inwhich platforms (lower) are the keys.
+#
+# Then:  tftp image from the local regserver path to the tftp server.
+#
+# Note: for the queueing system /var/spool/regression/imagesQueued/<mod>/file
+# ------------------------------------------------------------------------
+set q 0;
+set goodImageHit 0;
+set goodXImageHit 0;
+
+# IMAGEFAMILYSYSTYPES($iFamily)  DEVREG(platImageType,$lowerPlat) IMAGEFAMILIES
+#  DEVREG(server,allPlatforms)
+# Initialize the TftpFile for all supported image Families
+foreach ifam $IMAGEFAMILIES {
+    set TftpFile($ifam)  "NULL"
+    set platType($ifam)  "NULL"
+    set XmodPathList($ifam) ""
+}
+
+# -------------------------------------------------------------------------
+# Figure out thePlat from the cfgs
+# -------------------------------------------------------------------------
+set xmodPlatforms ""
+set xmodPairs {}
+set xmodByPlat(null) ""
+for { set i 1 } { $i <= $MAIN(NODECOUNT) } {incr i } {
+    #  Determine if this platform requires the xmods #
+    #  The REQUIRED_XMOD variable is set in the common.cfg
+    #  In download we do not know which image is going to install
+    #  so we will ignore the versions and hope the user passed
+    #  in the xmods appropriately
+    #  REQUIRED_XMOD(8900diags,SysTypes) $manhattanBlade
+    #  REQUIRED_XMOD(8900diags,SupportStartRelease) "16.2"
+    #  REQUIRED_XMOD(8900diags,SupportEndRelease) "null"
+    set xmodDUT($i) 0
+    if {$MAIN(DOWNLOADXMODS)} {
+        # -- Loop through submitted platforms to match dut number SysName and hwList
+        #      This is required b/c we don't know which duts support the xmod
+        foreach thePlat $platformList {
+            set thePlatLower [string tolower $thePlat]
+            if {[lsearch $DEVREG(server,allPlatforms) $thePlat] >= 0} {
+                set imageFam $DEVREG(platImageType,[string tolower $thePlat])
+                puts "Convert platform $thePlat to image family $imageFam"
+            } elseif {[lsearch $IMAGEFAMILIES $thePlat] >= 0} {
+                set imageFam $thePlatLower
+            } else {
+                puts "Unrecognized image $thePlat: Should be $IMAGEFAMILIES\nOR\n$DEVREG(server,allPlatforms)\n"
+                exit;
+            }
+            result_debug "Searching for xmod download for $thePlat - family $imageFam"
+            if {![info exists xmodByPlat($imageFam)]} {
+                set xmodByPlat($imageFam) ""
+            }
+            if {[lsearch -exact -nocase $DEVREG(server,allPlatforms) $thePlat]>=0 ||
+                       [lsearch $IMAGEFAMILIES $thePlat] >= 0} {
+                if {[regexp -nocase "$IMAGEFAMILYSYSTYPES($imageFam)" "$DUTs_info(DUT${i},sysType)"]} {
+                    # On a DUT that matches rdureg alias, loop through passed xmods
+                    result_debug "XMOD check matched the platform $thePlat / family $imageFam"
+                    foreach xm $xmod {
+                        # check the hwList and systype to see if xmod should be loaded here
+                        if {[regexp -nocase $REQUIRED_XMOD($xm,SysTypes) \
+                              $DUTs_info(DUT${i},hwList)] ||
+                              [regexp -nocase $REQUIRED_XMOD($xm,SysTypes) \
+                              $DUTs_info(DUT${i},platform)]} {
+                            result_debug "Enable xmod vars $imageFam $xm"
+                            set xmodTftpFiles($imageFam,$xm) "NULL"
+                            lappend xmodPlatforms $imageFam
+                            lappend xmodByPlat($imageFam) [string trim $xm]
+                            lappend xmodPairs "$i $xm"
+                            set xmodDUT($i) 1
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+# ----------------------------------------------------------------------------
+# Match the plats and images and move them to the tftp server
+# ----------------------------------------------------------------------------
+set q 0
+foreach thePlat $platformList {
+    set thePlatLower [string tolower $thePlat]
+    if {[lsearch $DEVREG(server,allPlatforms) $thePlat] >= 0} {
+        set imageFam $DEVREG(platImageType,[string tolower $thePlat])
+        puts "Convert platform $thePlat to image family $imageFam"
+    } elseif {[lsearch $IMAGEFAMILIES $thePlat] >= 0} {
+        set imageFam $thePlat
+    } else {
+        puts "Unrecognized image $thePlat"
+        exit;
+    }
+    set Md5Sum($imageFam)    0
+    set platImage [lindex $platformImageList $q]
+    if {[regexp -nocase {\.xos$} [string trim $platImage]]} {
+        set platType($imageFam) xos
+        set xosFile($imageFam) [string trimright [lindex $platformImageList $q] ".xos"]
+    } elseif {[regexp -nocase {\.lst$} [string trim $platImage]]} {
+        set platType($imageFam) lst
+        set xosFile($imageFam) [string trimright [lindex $platformImageList $q] ".lst"]
+    }
+    set ImagePath($imageFam) [lindex $platformImageList $q]
+    if {$MAIN(DOWNLOADXMODS)} {
+        puts "In DUT xmod search"
+        foreach xm $xmod {
+            if {[info exists xmodByPlat($imageFam)]} {
+                if {[lsearch $xmodByPlat($imageFam) [string trim $xm]]>=0} {
+                    set xf $xosFile($imageFam)-${xm}.xmod
+                    lappend XmodPathList($imageFam) $xm
+                    lappend XmodPathList($imageFam) $xf
+                    result_debug "\n@@@\n@@@\nappending xmod XmodPathList($imageFam) \"$xm $xosFile($imageFam)-${xm}.xmod\""
+                }
+            } else {
+                puts "missed xmod by plat $xm info does not exist for $imageFam"
+            }
+        }
+    }
+    # ------------------------------------------------------------------
+    # If the file exists, tftp it from the regserver path to tftp server
+    # ------------------------------------------------------------------
+    if {[file exists $ImagePath($imageFam)]} {
+        set tftpFile [file tail $ImagePath($imageFam)]
+        set goodImageHit 1;
+        set pid [pid]
+        set TftpFile($imageFam) [format %d%d$imageFam%s $pid $q $tftpFile]
+        set fd_out [open "Tmp/tmp_$pid$tStartTime" "w"];
+        puts $fd_out "put $ImagePath($imageFam) $TftpFile($imageFam)"
+        puts $fd_out "quit"
+        close $fd_out
+        # If the tftp server is mounted to this regression server, just cp the file
+        if {$TFTPMOUNT != "NULL" && [file exists $TFTPMOUNT/default_do_not_erase]} {
+            if {[catch {exec cp -L $ImagePath($imageFam) $TFTPMOUNT/$TftpFile($imageFam)} reason]} {
+                puts "Error to TFTP: Cannot copy $ImagePath($imageFam) to \
+                     $TFTPMOUNT/$TftpFile($imageFam) ...$reason";
+                foreach TFTPServerIP $tftpServerList {
+                    puts "Putting $ImagePath($imageFam) onto tftp Server $TFTPServerIP \
+                           as $TftpFile($imageFam)"
+                    if {[catch {exec /usr/bin/tftp $TFTPServerIP < ./Tmp/tmp_$pid$tStartTime} reason]} {
+                        puts "error: $reason"
+                        result_error "Download via QLoadImage FAILED"
+                        exit -1
+                    }
+                }
+            } else {
+                puts "Copy $ImagePath($imageFam) to $TFTPMOUNT/$TftpFile($imageFam)"
+            }
+        } else {
+            foreach TFTPServerIP $tftpServerList {
+                puts "Putting $ImagePath($imageFam) onto tftp Server $TFTPServerIP as $TftpFile($imageFam)"
+                if {[catch {exec /usr/bin/tftp $TFTPServerIP < ./Tmp/tmp_$pid$tStartTime} reason]} {
+                    puts "error: $reason"
+                    result_error "Download via QLoadImage FAILED"
+                    exit -1
+                }
+            }
+        }
+        file delete ./Tmp/tmp_$pid$tStartTime
+    } else {
+        puts "ImagePath($imageFam) $ImagePath($imageFam) does not exist"
+        exit -1
+    }
+    # ------------------------------------------------------------------
+    # If the xmod is passed and file exists, tftp it from the regserver path to tftp server
+    # ------------------------------------------------------------------
+    set xmodSent ""
+    if {$MAIN(DOWNLOADXMODS)} {
+        puts "Look for xmod source file - list: $XmodPathList($imageFam)"
+        foreach {xm XmodPath} $XmodPathList($imageFam) {
+            puts "-- xm $xm : XmodPath = $XmodPath"
+            set tftpXFile [file tail $XmodPath]
+            set goodXImageHit 1;
+            set pid [pid]
+            set TftpXFile($imageFam) [format %d%d$imageFam%s $pid $q $tftpXFile]
+            set xmodTftpFiles($imageFam,$xm) $TftpXFile($imageFam)
+            set fd_out [open "Tmp/tmp_X$pid$tStartTime" "w"];
+            puts $fd_out "put $XmodPath $TftpXFile($imageFam)"
+            puts $fd_out "quit"
+            close $fd_out
+            # If the tftp server is mounted to this regression server, just cp the file
+            if {$TFTPMOUNT != "NULL" && [file exists $TFTPMOUNT/default_do_not_erase]} {
+                if {[catch {exec cp -L $XmodPath \
+                           $TFTPMOUNT/$TftpXFile($imageFam)} reason]} {
+                    puts "Error to TFTP: Cannot copy $XmodPath to \
+                               $TFTPMOUNT/$TftpXFile($imageFam) ...$reason";
+                    foreach TFTPServerIP $tftpServerList {
+                        puts "Putting $XmodPath onto tftp Server $TFTPServerIP \
+                                    as $TftpXFile($imageFam)"
+                        if {[catch {exec /usr/bin/tftp $TFTPServerIP \
+                                          < ./Tmp/tmp_X$pid$tStartTime} reason]} {
+                            puts "xmod tftp error: $reason"
+                            result_error "Download via QLoadImage FAILED"
+                            exit -1
+                        }
+                    }
+                } else {
+                    puts "Copy $XmodPath to $TFTPMOUNT/$TftpXFile($imageFam)"
+                }
+            } else {
+                foreach TFTPServerIP $tftpServerList {
+                    puts "Putting $XmodPath onto tftp Server \
+                               $TFTPServerIP as $TftpXFile($imageFam)"
+                    if {[catch {exec /usr/bin/tftp $TFTPServerIP \
+                                          < ./Tmp/tmp_X$pid$tStartTime} reason]} {
+                        puts "xmod tftp error: $reason"
+                        result_error "Download via QLoadImage FAILED"
+                        exit -1
+                    }
+                }
+            }
+            file delete ./Tmp/tmp_X$pid$tStartTime
+        }
+    } elseif {$MAIN(DOWNLOADXMODS) && [llength $xmodPlatforms] == 0} {
+        puts "XmodPath $XmodPath does not exist"
+        result_error "Download via QLoadImage FAILED"
+        exit -1
+    }
+    incr q
+}
+puts "@@@@\n@@@@\nALL FILE COPIES SHOULD BE DONE NOW\n@@@@\n@@@@"
+# -----------------------------------------------------------------------
+# Do some prep for download:
+#   Match image families passed in to DUT sysType
+# -----------------------------------------------------------------------
+for { set i 1 } { $i <= $MAIN(NODECOUNT) } {incr i } {
+    global DUT${i}_Stacking_msma_slot;# For determining if Stack
+    set DUTs_info(DUT$i,filetodownload) "NULL"
+    set DUTs_info(DUT$i,fileToVerify)   "NULL"
+    set DUTs_info(DUT$i,bpeFileToVerify) "NULL"
+    # image family of THIS DUT
+    set dutImageFamily [GetImageFamilyFromSysType $DUTs_info(DUT$i,sysType)]
+    # ---------------------------------------------------
+    # Special cases that change the imageFamily go here
+    # ---------------------------------------------------
+    if {[info exists DUT${i}_Stacking_msma_slot] && [set DUT${i}_Stacking_msma_slot] > 0} {
+        if {[regexp -nocase "480" $DUTs_info(DUT$i,hwList)]} {
+            set dutImageFamily summitx480
+        }
+    }
+
+    result_debug "\n#####--------! ! ! ! ! ! ! ! ! ! ! ! ! -------#######\n\
+                      Platform for DUT$i is $DUTs_info(DUT$i,platform) -- $DUTs_info(DUT$i,sysType)"
+    result_debug "\nAssigning DUT$i image to $dutImageFamily :\n\
+                      $TftpFile($dutImageFamily)"
+    result_debug "#####------------------------------------------#######"
+    #
+    # Set the per DUT main image download variables
+    #
+    if {$platType($dutImageFamily) == "lst"} {
+        set DUTs_info(DUT$i,filetodownload) $TftpFile($dutImageFamily)
+        if {[catch {exec tar -tf $ImagePath($dutImageFamily)} out]} {
+            puts "\n@@\n@@\nFailed to inspect the tar file\n$out\n@@\n@@"
+        } else {
+            set lines [split $out "\n"]
+            foreach line $lines {
+                if {[regexp -nocase "vpex" $line]} {
+                    puts "Setting BPE verify to [file tail $line]"
+                    set DUTs_info(DUT$i,bpeFileToVerify) [file tail $line]
+                } elseif {[regexp -nocase "xos" $line]} {
+                    puts "Setting lst xos to verify [file tail $line]"
+                    set DUTs_info(DUT$i,fileToVerify) [file tail $line]
+                } else {
+                    puts "No need to verify [file tail $line]"
+                }
+            }
+        }
+    } else {
+        set DUTs_info(DUT$i,filetodownload) $TftpFile($dutImageFamily)
+        set DUTs_info(DUT$i,fileToVerify) $TftpFile($dutImageFamily)
+    }
+    if {[lsearch $filesToDelete $TftpFile($dutImageFamily)] < 0} {
+        lappend filesToDelete $TftpFile($dutImageFamily)
+    }
+
+
+    if {$xmodDUT($i)} {
+        result_debug "\n\n#####------------------------------------------#######"
+        foreach xmPart $xmodPairs {
+            # if index 0 is not equal to this dut continue
+            if {[lindex $xmPart 0] != $i} {continue;}
+            set xm [lindex $xmPart 1]
+            # set xmodFile $xosFile($dutImageFamily)-${xm}.xmod
+            set xmodFile $xmodTftpFiles($dutImageFamily,$xm)
+            set DUTs_info(DUT$i,${xm}_imagename) $xmodFile
+            result_debug " XMOD $DUTs_info(DUT$i,${xm}_imagename)"
+            if {[lsearch $filesToDelete $xmodFile] < 0} {
+                lappend filesToDelete $xmodFile
+            }
+        }
+        result_debug "#####------------------------------------------#######"
+    }
+    lappend multiDownList "_qloadSingleDut -dut $i"
+}
+
+##############################################################################
+#  Open Result file after get_DUT_info
+##############################################################################
+;# create the report directory
+set optionalPath ""
+#create_report_directory yes $optionalPath
+create_report_directory $sourceFile yes $optionalPath "" $subversion $qId
+
+
+if {$imageNotFound||$romNotFound} {
+    set dlOK 1
+} else {
+    puts "\nDownload the tftpimage $multiDownList\n"
+    _setShowOutput -screen on -log off -res_fmt on
+    MultiTask $multiDownList
+    _setShowOutput -screen on -log on -res_fmt on
+    _printMultiTaskOutput;# show the output in order + in result file
+}
+
+#   _setMultiTaskVar DUTs_info(DUT$dut,dlReqD) 0
+#   _setMultiTaskVar DUTs_info(DUT$dut,qloadStatus) 1
+
+
+set passCheck 1
+
+for { set i 1 } { $i <= $MAIN(NODECOUNT) } {incr i } {
+    if {$DUTs_info(DUT$i,filetodownload) == "NULL"} {continue;}
+    set showSwitchOutput ""
+    Login [set DUT${i}_CONNECT] -masterCheck 0 -CheckOperational 0
+    lappend showSwitchOutput "{Slot.*$targetPart|Switch.*$targetPart|MM.*$targetPart|MSM.*$targetPart} \
+                  {$DUTs_info(DUT$i,fileToVerify)} inLine exists"
+    if {$xmodDUT($i)} {
+        foreach xmPart $xmodPairs {
+            # if index 0 is not equal to this dut break
+            if {[lindex $xmPart 0] != $i} {continue;}
+            set xm [lindex $xmPart 1]
+            #DUTs_info(DUT$i,${xm}_imagename)
+            lappend showSwitchOutput "{Slot.*$targetPart|Switch.*\
+               $targetPart|MM.*$targetPart|MSM.*$targetPart} \
+               {$DUTs_info(DUT$i,${xm}_imagename)} inLine exists"
+        }
+    }
+    if {$DUTs_info(DUT$i,bpeFileToVerify) != "NULL"} {
+        lappend showSwitchOutput "{Slot.*$targetPart|Switch.*\
+           $targetPart|MM.*$targetPart|MSM.*$targetPart} \
+           {$DUTs_info(DUT$i,bpeFileToVerify)} inLine exists"
+    }
+    if {[CheckKeyValue "show version image" $showSwitchOutput -time {s: 1 i: 3 d: 8 f: 8 r} -comment \
+              "check the partion file name is $DUTs_info(DUT$i,filetodownload)"]=="error"} {
+        set passCheck 0
+    }
+    SendACmd "enable log display"
+}
+
+if { $reboot == "yes" && $passCheck } {
+    for { set i 1 } { $i <= $dut } {incr i } {
+        Login [set DUT[set i]\_CONNECT]
+        EnableDebugMode
+        SendACmd "!rm -rf /scratch/intern/*"
+        if {[regexp -nocase "pri" $targetPart]} {
+            SendACmd "use image pri"
+        } else {
+            SendACmd "use image sec"
+        }
+    }
+    set rebootList ""
+    for { set i 1 } { $i <= $dut } {incr i } {
+        Login [set DUT[set i]\_CONNECT]
+        lappend rebootList "CheckReboot $i -masterCheck 0 -save no"
+    }
+    MultiTask $rebootList
+    result_ok "Checking the partition and image installed."
+
+    for { set i 1 } { $i <= $dut } {incr i } {
+        Login [set DUT[set i]\_CONNECT]
+        SendACmd "show switch"
+    }
+}
+# --------------------------------------------------------------------------------------------
+# Remove files from tftp -- removed as another point of failure and cronjob cleans tftpserver
+# --------------------------------------------------------------------------------------------
+
+# Remove files from tftp before exit
+foreach TFTPServerIP $tftpServerList {
+    login_linux $TFTPServerIP $tftpServerLogin $tftpServerPasswd
+    foreach dlFile $filesToDelete {
+        catch {SendACmd "/bin/rm $tftpServerTftpboot/$dlFile" NULL NULL true 1}
+    }
+    result_debug "Clear the current TftpServer expect session"
+    _ClearExpectSession
+}
+
+
+
+# Verify that the images downloaded correctly.
+
+sleep 5
+
+set tEndTime [clock seconds]
+set testDuration [expr $tEndTime-$tStartTime]
+set finaltime "$testDuration"
+set testSec  [expr $testDuration % 60]
+set testMin  [expr $testDuration / 60]
+set testHour [expr $testMin / 60]
+set testMin  [expr $testMin % 60]
+
+
+if {[llength $testMin] == 1 } {
+   set testMin [format "%02d" $testMin]
+}
+
+if {[llength $testSec] == 1 } {
+   set testSec [format "%02d" $testSec]
+}
+
+
+if {!$passCheck} {
+    result_error "Download via QLoadImage FAILED"
+    set Qloadstat "FAILED"
+    set Ccstat "ABORT"
+    set ttime "$testHour:$testMin:$testSec"
+    regsub -all {cfg/|} $cfg "" cfg  
+    set filetype "2Node"
+    if {[regexp -nocase "ipr" $cfg]  } {
+       set filetype "5Node"
+    }
+ 
+    set reportme [open "$filetype.txt" a+]
+    puts $reportme "[format "| %*s| %*s | %*s| %*s     |" 35 $cfg 15 $Qloadstat 20 $Ccstat 16 $ttime]"
+    puts $reportme "+-[string repeat - 35]+-[string repeat - 15]-+[string repeat - 20]-+[string repeat - 23]"
+    close $reportme
+    exit
+
+} else {
+    result_ok "Download via QLoadImage PASSED"
+    set Qloadstat "OK"
+    set dlOK 0
+}
+
+close_result_file
+
+#create_report_directory $sourceFile yes $optionalPath "" $subversion $qId
+gen_text_report "[get_result_dir { $randomIndex }]/report.exr" "stdout" "[file tail [pwd]]" $sourceFile
+
+#move the complete result directory to report directory
+move_result_directory
+
+puts "\n\n*** Time for Downloading $cfg Code = $testDuration seconds - Returning Download Status: $dlOK"
+puts "***    ( $testHour hours, $testMin minutes, $testSec seconds )\n\n"
+
+set errorInfo ""
+
+#####################################################################################################################
+;#########STarting checkConnection after successfull image download 
+####################################################################################################################
+#!/usr/bin/tclsh
+
+global curAutoRoot
+global MAIN env
+set skipCC 0
+global skipCC
+set MAIN(initFile) "NULL"
+set TRYFAILSAFE "true"
+#
+# EY-07-17-2012: Catch source command in case of failure.
+if {[catch {source ../Lib/mainLib.tcl} res]} {
+    puts "*** WARNING: Unable to source mainLib.tcl: ***";
+    puts "$res";
+    return -1;
+}
+if {[catch {source ../main/runReg.cfg} res]} {
+    puts "*** WARNING: Unable to source runReg.cfg: ***";
+    puts "$res";
+    return -1;
+}
+
+#
+# EY-07-17-2012: common.cfg is sourced later in the script.
+#source cfg/common.cfg
+
+package require Tclx
+
+
+
+if {$tcl_platform(platform) == "windows"} {
+      load "expect52.dll"
+} else {
+  load [lindex [glob "/usr/lib/libexpect*so*"] 0]
+}
+global cfg
+#set cfg "p2_stack_x460_G2_16mp_std.cfg"
+set curLocation [pwd]
+set curDirList [split [string trim [string trim $curLocation ".."] "/"] "/"]
+set v 0;
+set pathList ""
+set curAutoRoot ""
+foreach cd $curDirList {
+    if {$cd == "main" || $cd == "Lib" || $cd == "Util"} {
+        for {set x 0} {$x<$v} {incr x} {
+            lappend pathList [lindex $curDirList $x]
+        }
+        set curAutoRoot "/[join $pathList "/"]"
+    } else {
+        incr v;
+    }
+}
+
+set LIB_PATH "./../Lib"
+set auto_path_temp ""
+foreach var $auto_path {
+   set var1 [split $var "/"]
+   if {![regexp -nocase "ixia" $var1]} {
+      lappend auto_path_temp $var
+   }
+}
+
+set auto_path $auto_path_temp
+lappend auto_path $LIB_PATH
+puts "DEBUG: Appending $LIB_PATH to autopath:$auto_path"
+
+gen_index "./../Lib"
+set TrafficGen "ixia"
+
+# checking command parameters 
+if {$argc<1} {
+      puts "Not enough parameters"
+      #
+      # EY-07-17-2012: Return unique error code.
+      return -2;
+}
+global  TrafficGen
+
+set cfgFile ""
+set harness "tcl"
+set passCount 0
+set failCount 0
+set skipCount 0
+
+#
+# EY-07-17-2012: Clean-up error messages and return a unique error code.
+puts "PWD [pwd]"
+if [catch {source "cfg/common.cfg"} rea] {
+      puts "*** WARNING: Unable to source common.cfg:                    ***";
+      puts "$rea";
+      puts "*** WARNING: Application level variables may not be defined. ***"
+      return -3;
+}
+
+
+if {$cfg != "null"} {
+      if {![regexp -nocase "^cfg" $cfg] } {
+      	    set cfgFile [format %s/%s cfg $cfg]
+      	    set cfgFile [string trim $cfgFile];
+      } else {
+          set cfgFile $cfg
+      }
+}
+#Handle verbos short values
+if {$v != "null"} {
+    set verbose $v
+}
+set VERBOSE "no"
+switch -nocase -regexp $verbose {
+    y.* {
+        # VERBOSE will be a global used in SystemSetup
+        set VERBOSE yes
+    }
+    n.* {
+        set VERBOSE no
+    } default {
+        set VERBOSE no
+    }
+}
+
+set clean "yes"
+set c "null"
+set TrafficGen "ixia"
+set poweron 0
+set p "null"
+set verbose "no"
+set v "null"
+set defxsf 0
+set dx  0
+
+# Handle poweron short values
+if {$p != "null"} {
+    set poweron $p
+}
+# Handle clean short values
+if {$c != "null"} {
+    set clean $c
+}
+switch -nocase -regexp $clean {
+    y.* {
+        set clean yes
+    }
+    n.* {
+        set clean no
+    }
+    c.* {
+        set clean cli
+    } default {
+        set clean yes
+    }
+}
+
+puts "Using config file: ($cfgFile)"
+set sourceFile $cfgFile
+
+#
+# EY-07-17-2012: Clean-up error messages and return a unique error code.
+if {[file exists $cfgFile] == 0} {
+    puts "*** ERROR: Cannot find config file: $cfgFile";
+    return -4;
+}
+
+puts "************** ABOUT TO source $cfgFile *****************"
+
+#
+# EY-07-17-2012: Catch source command in case of failure.
+if {[catch {source $cfgFile } reason]} {
+    puts "*** ERROR occured while trying to source $cfgFile:";
+    puts "$reason";
+    return -5;
+}
+
+global configurationFile
+set configurationFile $cfgFile
+
+############ Modify by arun ###############
+source ../Lib/mapping.tcl
+
+###########################################
+
+# Open the initFile
+set MAIN(initFile) [GetInitFileName $curAutoRoot $cfg]
+catch {open $MAIN(initFile) "w"} MAIN(ifPipe)
+if {[regexp -nocase "denied" $MAIN(ifPipe)]} {
+    puts "@\n@\nNO INIT FILE WILL BE CREATED. ERROR OPENING FILE\n@\n@"
+    set MAIN(ifPipe) NULL
+}
+ 
+if {[info exists ixiaCh1] && $ixiaCh1 != "NO_IXIA"} {
+    puts "****** the ixia chassis is $ixiaCh1";
+    puts "****** the ixia path is $ixiaPath($ixiaCh1)";
+    set TrafficGen ixia
+} elseif {[info exists SPIRENTCH1]} {
+    puts "****** The Spirent Chassis is $SPIRENTCH1 ******"
+    foreach key [array names env] {
+        puts "$key=$env($key)"
+    }
+puts "\n\n"
+    set TrafficGen stc
+    set ::LABSERVER $stcLabserver($SPIRENTCH1)
+    set env(IXIA_HOME) null
+    lappend auto_path "/auto/ixia_5_70/lib/mpexpr-1.1/"
+    overWriteProcs $LIB_PATH [file join $LIB_PATH spirent]
+    source [file join $LIB_PATH ePTLib ePTUtils.tcl]
+    logcmd lappend auto_path $stcPath($SPIRENTCH1)
+puts "STC PATH $auto_path"
+puts "STC env path: $env(PATH)"
+    stcInit $LABSERVER
+    package require Mpexpr
+    puts "\n\nPackage Require SpirentTestCenter"
+    logcmd package require SpirentTestCenter
+    GenerateDUTPortMapping; # Add here temporarily b/c called in SystemSetup
+    ReservePorts
+}
+
+if {[info exists ixiaPath($ixiaCh1)] && $TrafficGen == "ixia"} {
+    SetIxiaEnv "$ixiaPath($ixiaCh1)"
+    puts "****** The ixia path is $ixiaPath($ixiaCh1)";
+}
+
+if {$tcl_platform(platform) == "windows"} {
+    lappend auto_path "C:/Program Files/Ixia/TclScripts/Lib/ixTcl1.0"
+} else {
+    lappend auto_path [file join $env(HOME) "ixia/lib/mpexpr-1.0"]
+    lappend auto_path [file join $env(HOME) "ixia/lib/ixTcl1.0"]
+    lappend auto_path [file join $env(HOME) "ixia/lib/dp4.0"]
+}
+
+# mode setup   
+set clean [string tolower $clean]
+switch $clean  {
+       yes      { puts "#\nClean checkConnection (with unconfig).\n#"}
+       no       { puts "#\ncheckConnection without unconfig. May fail if switch conflicting cfg.\n#" }
+       cli      { puts "#\ncheckConnection without unconfig. Send CLI to insure no conflicting cfg.\n#" }
+       default  { puts "No Match - default to clean"}
+}
+      
+# Create supporting directories if they don't exist.
+_createSupportDirectories -dirList "Report Result Tmp Tmp2 Log"
+
+############################################################
+
+set tStartTime [clock seconds]
+set tStartDate [clock format [clock seconds] -format "%Y-%m-%d %I.%M.%S%p"]
+set tStartDateString [clock format [clock seconds] -format "%Y-%m-%d_%I.%M.%S%p"]
+
+set testDuration 0
+set testHour 0
+set testMin 0
+set testSec 0
+
+set resultDir "NULL"
+
+set fd_res [open_result_file "checkConnection"]
+
+if {$poweron} {
+    set hitPower 0
+    for {set i 1} {$i <= 10} {incr i} {
+        if {[info exists POWERCYCLE_DUT($i)]} {
+            set hitPower 1
+            PowerOffDUT $i "on"
+        }
+    }
+    if {$hitPower} {
+        result_debug "Sleep "
+        exSleep 120
+    }
+}
+
+# ----------------------------------------------------------
+# Build setup script from cfg file
+# ----------------------------------------------------------
+set numDUT 1
+while { [info exists DUT${numDUT}_CONNECT] } {
+      set connect [set DUT${numDUT}_CONNECT]
+      set script [set DUT${numDUT}_SETUP]
+      puts "***** DUT${numDUT}_CONNECT=$connect ***** "
+      puts "***** numDUT=$numDUT ***** "
+      Login [set DUT${numDUT}_CONNECT] -masterCheck 0 -CheckOperational 0
+      SendACmd "disable log display"
+      lappend scriptList $script
+      lappend connectList $connect
+      if {[info exists DEFAULT_XSF_AUTO_CREATE] && $DEFAULT_XSF_AUTO_CREATE} {
+          lappend makeXsfList "CreateDefaultXsf -dut $numDUT"
+      }
+      incr numDUT 1
+}
+incr numDUT -1
+
+
+_initDUTs_infoArray;
+# --- Set any port partitioning CLI ---
+_SetPartitionVars;
+
+
+# ----------------------------------------------------------
+# Execute setup script if clean mode is "yes" - the default
+# ----------------------------------------------------------
+if {$clean == "yes"} {
+    if {[info exists DEFAULT_XSF_AUTO_CREATE] && $DEFAULT_XSF_AUTO_CREATE && $defxsf} {
+        result_debug "------------------  Create default.xsf of all DUTs  ------------------"
+        _setShowOutput -screen off -log off -res_fmt off
+        MultiTask $makeXsfList
+        _setShowOutput -screen on -log on -res_fmt on
+    }
+    # RunSetupScript $connectList $scriptList
+    set runSetupRetVal [RunSetupScript $connectList $scriptList]
+    if {$runSetupRetVal==-1} {
+	unset connectList
+	unset scriptList
+	puts stderr "testSkipped"
+	#
+        # EY-07-17-2012: Return unique error code.
+        close_result_file;
+        return -6;
+    } elseif { $runSetupRetVal=="REGROUTER_FAILED" } {
+	unset connectList
+	unset scriptList
+	puts stderr $returnFlag
+	flush stderr
+	return $runSetupRetVal
+    }
+    unset connectList
+    unset scriptList
+} elseif {$clean == "cli"} {
+    puts "\n#########################################################################"
+    puts "               S T A R T I N G     PARALLEL CLI CLEANUP"
+    puts "#########################################################################"
+    sleep 1
+    set cleancliList ""
+    for {set e 1} {$e<=$numDUT} {incr e} {
+        lappend cleancliList "allCleanup $e"
+    }
+    _setShowOutput -screen off -log off -res_fmt on
+    MultiTask $cleancliList
+    _setShowOutput -screen on -log on -res_fmt on
+    puts "\n#########################################################################"
+    puts "                F I N I S H E D    PARALLEL CLI CLEANUP"
+    puts "#########################################################################"
+    sleep 1
+}
+# ----------------------------------------------------------
+# Gather critical variables from all switches in the test bed
+# ----------------------------------------------------------
+if {[set rc [get_DUTs_info]] != 0} {
+    result_error "Error $rc while calling get_DUTs_info.";
+    close_result_file;
+    return -7;
+}
+# ----------------------------------------------------------
+# Verify all of the test bed connections
+# ----------------------------------------------------------
+#check connections between DUTs and Ixia
+if {$TrafficGen == "ixia"} {
+    if {![regexp -nocase "no_ixia" $ixiaCh1]} {
+        set returnFlag [SystemSetup]
+    } else {
+        set returnFlag "connectionOkay"
+    }
+} elseif {$TrafficGen == "stc"} {
+    set returnFlag [SystemSetup]
+} else {
+    result_error "Can't find Ixia OR Spirent Information"
+    set returnFlag "connectionBad"
+}
+# ----------------------------------------------------------
+# Verify Mgmt and Inband Networks
+# ----------------------------------------------------------
+global defaultRouter
+global bootpserver
+global tftpServerList
+global switchPort2DefaultRouter
+set tftpServer [lindex $tftpServerList 0]
+set netConFlag 1
+set numDUT 1
+set procList ""
+result_h2 "Network port validation"
+report_start_test "Network port validation"
+while { [info exists DUT${numDUT}_CONNECT] } {
+    lappend procList "VerifyMgmtConnections $numDUT"
+    incr numDUT 1
+}
+MultiTask $procList
+report_end_test
+incr numDUT -1
+
+# ----------------------------------------------------------
+# Close the temporary file that holds variables for dev
+# ----------------------------------------------------------
+if {([info exists MAIN(ifPipe)]) && ($MAIN(ifPipe) != "NULL")} {
+    close $MAIN(ifPipe)
+}
+if {[VerifyInitFile $MAIN(initFile)]} {
+   regsub -all "Tmp" $MAIN(initFile) "Tmp2" initFile2
+   catch {file copy -force $MAIN(initFile) $initFile2} why
+}
+if {[file exists $MAIN(initFile)]} {
+    file copy $MAIN(initFile) [get_result_dir { $randomIndex }]/initFile.txt
+} 
+if {$fd_res != ""} {
+    catch {flush $fd_res} result
+    if {$result != ""} { result_error "$result" }
+}
+
+set tEndTime [clock seconds]
+set testDuration [expr $tEndTime-$tStartTime]
+puts "Before : $testDuration"
+set testDuration [expr $testDuration+$finaltime]
+puts "After :  $testDuration"
+set testSec  [expr $testDuration % 60]
+set testMin  [expr $testDuration / 60]
+set testHour [expr $testMin / 60]
+set testMin  [expr $testMin % 60]
+# ----------------------------------------------------------
+# Close all result files and put them in the Report dir
+#   Print time summary
+# ----------------------------------------------------------
+create_report_directory $cfgFile yes "" "" "" "" ; # Creates the report_dir.txt in result
+save_test_report "[get_result_dir]/report.exr"
+gen_text_report "[get_result_dir]/report.exr" "stdout" "[file tail [pwd]]" $cfgFile
+close_result_file
+
+#######################################
+result_debug  "\n\n*** Time for check connections ( $testHour hours, $testMin minutes, \
+              $testSec seconds )\n\n"
+
+# ----------------------------------------------------------
+# Return Execution Status
+# ----------------------------------------------------------
+if { $returnFlag == "connectionOkay"} {
+     result_ok "[file tail $cfg] Check connection - PASS\n\n"
+     set Ccstat "OK"
+} else {
+    result_error "[file tail $cfg] Failed Connection Check\n        DUTs, Ixia or Mgmt Network"
+    result_error "Verify physical connections match with config setup file"
+    set Ccstat "FAILED"
+}
+
+set ttime "$testHour:$testMin:$testSec"
+regsub -all {cfg/|} $cfg "" cfg
+set filetype "2Node"
+if {[regexp -nocase "ipr" $cfg]  } {
+       set filetype "5Node"
+    }
+
+set reportme [open "$filetype.txt" a+]
+puts $reportme "[format "| %*s| %*s | %*s| %*s      |" 35 $cfg 15 $Qloadstat 20 $Ccstat 15 $ttime]"
+puts $reportme "+-[string repeat - 35]+-[string repeat - 15]-+[string repeat - 20]-+[string repeat - 23]"
+close $reportme
+
+puts "Passed here"
+gen_text_report "[get_result_dir]/report.exr" "[get_result_dir]/report.txt" "[file tail [pwd]]" $cfg;
+move_result_directory

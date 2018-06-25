@@ -1,0 +1,2802 @@
+
+#source ../../Lib/mainLib.tcl
+
+global env
+puts "pwd = [pwd]"
+#load ../../Lib/SnmpAPI.so snmpapi
+#if {[regexp -nocase "main" [pwd]]} {
+  #if running SnmpFunctionaltest 
+#  set load_dir "../Lib/SnmpAPI.so"
+#} else {
+  #if running Functionaltest 
+#  set load_dir "../../Lib/SnmpAPI.so"
+#}
+set load_dir "/usr/share/snmp/SnmpAPI.so"
+if { [catch {load $load_dir snmpapi} result] } {
+    puts "Error in loading the SnmpAPI.so, result=$result"
+    #result_error "Error in loading the SnmpAPI.so, result=$result"
+    exit
+} else {
+    puts "Successful in loading the SnmpAPI.so , result=$result" ;#exos
+    #result_ok "Successful in loading the SnmpAPI.so , result=$result" ;#exos
+}
+   
+#source ../../Lib/parse_args.tcl
+
+################################################################
+#  Procedure Name: snmpDebug
+#  
+#  Description:
+#     This procedure logs the debugging information if the global
+#     debugging option is enabled by specifiying SNMP_DEBUG
+#     variable to ON.
+#     The debugging information includes, the function name and
+#     executed API functions and its return values. It logs the
+#     debugging information in a file, if a file is provided.
+#     Otherwise logs in the standard output
+#
+#  Input Variables:
+#     logflag - LOG / DEBUG. If LOG is specified, irrespective
+#               of SNMP_DEBUG status (ON/OFF), the message will
+#               be logged in the file. If DEBUG is specified,
+#               if SNMP_DEBUG is ON, then only the messages are
+#               logged in the file. DEBUG flag traces a procedure
+#               entry and exit information. Whereas LOG specifies
+#               only the output of any SNMP API functions.
+#     output - Debugging string to be logged
+#     fd - File descriptor in which the debugging information
+#          to be logged
+# 
+#  Optional Args:
+#     None
+# 
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#     None
+#
+#  Possible Usage:
+#     snmpDebug "snmpGet: Sample output" $fd
+###############################################################
+
+proc snmpDebug {logflag output {fd NULL}} {
+
+   global SNMP_DEBUG
+
+   if {[info exists SNMP_DEBUG]} {
+      if { "$SNMP_DEBUG" == "ON" } {
+         if { $fd != "NULL" } {
+            puts $fd "> $output <"
+         } else {
+            puts "> $output <"
+         }
+      } else {
+         if {$logflag == "LOG" } {
+            if { $fd != "NULL" } {
+               puts $fd "> $output <"
+            }
+         }
+      }
+   } else {
+      if {$logflag == "LOG" } {
+         if { $fd != "NULL" } {
+            puts $fd "> $output <"
+         }
+      }
+   }
+}
+
+################################################################
+#  Procedure Name: snmpInit
+#  
+#  Description:
+#     This procedures sets the environmental variable MIBS to
+#     ALL. This environmental variable is required for SNMP
+#     set and get operations.
+#
+#  Input Variables:
+#     None
+# 
+#  Optional Args:
+#     None
+# 
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    0 - On failure 
+#    1 - On success
+#
+#  Possible Usage:
+#     snmpInit
+###############################################################
+
+proc snmpInit {{snmpConfFileName snmp.cfg}} {
+
+   # Set the environment variable MIBS to ALL. This is required
+   # for SNMP set or get operations
+
+   global env
+  
+   set func "snmpInit:"
+   set trapdFile "/var/net-snmp/snmptrapd.conf"
+   
+   set env(MIBS) ALL
+   set env(MIBDIRS) /usr/share/snmp/mibs
+   set env(SNMPCONFPATH) /usr/share/snmp
+ 
+   # Delete the /var/net-snmp/snmptrapd.conf file if exists
+   if {[file exists $trapdFile]} {
+      eval [file delete -force $trapdFile]
+   }
+
+   snmpDebug DEBUG "$func - End\n"  
+
+   return 1
+}
+
+################################################################
+#  Procedure Name: snmpDutInit
+#  
+#  Description:
+#     This procedure configures the default VLAN of a DUT with
+#     the given IP address
+#
+#  Input Variables:
+#     dut - IP address of the DUT management port 
+#     dutno - DUT number (DUT1, DUT2 ..etc)
+#     connect - IP address of the default VLAN
+#     fd - File descriptor for logging the command outputs   
+# 
+#  Optional Args:
+#     None
+# 
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    0 - On failure 
+#    1 - On success
+#
+#  Possible Usage:
+#     snmpDutInit -dut 10.0.0.1 -dutno DUT1 -connect 10.1.2.1 -fd $fd
+###############################################################
+
+proc snmpDutInit { args } {
+
+   set func "snmpDutInit"
+
+   parse_args snmpDutInit $args {
+       dut ""
+       connect ""
+       dutno ""
+       fd "NULL"
+   }
+   Login $dut -fd $fd
+   ConfigGatewayNetwork
+   SendACmd "enable snmp access"
+   result_debug "Sleep 5 seconds for port to comeup"
+   exSleep 5  
+   snmpDebug DEBUG "$func - End\n" $fd
+   return 1
+}
+
+################################################################
+#  Procedure Name: snmpOpenSession
+#
+#  Description: 
+#     This function calls the API function, snmpOpenSess to 
+#     open SNMP session with the specified DUT. If the optional
+#     arguments are not specified, the values specified in the
+#     configuration file is considered. 
+#   
+#  Input Variables:
+#     dut - IP address of the DUT specified in the configuration
+#           file.
+#     connect- IP address assigned to the default vlan in the DUT.
+#              This is used for SNMP communication.
+#
+#  Optional Args:
+#     version - SNMP version. Possible values can be 1,2 or 3
+#     community - Community string used for SNMP authentication
+#     retry - Number of retries for the SNMP operations
+#     timeout - Timeout in seconds for each SNMP operation
+#     sec - Type of the security. Possible values are
+#                * noAuthNoPriv
+#                * authNoPriv
+#                * authPriv
+#     authType - Authentication protocol (MD5 or SHA)
+#     auth     - Authentication string
+#     privType - Encryption method (DES). This argument should 
+#                be specified, if the sec option value is 
+#                authPriv
+#     priv - Privilege string. This argument should be specified, 
+#            if the sec option value is authPriv
+#
+#  Output Variables:
+#     None 
+#
+#  Return Value:
+#     0 - On failure
+#     sessionid - On success
+#
+#  Typical Usage:
+#  snmpOpenSession -connect 10.2.2.2  -dut DUT1
+#  snmpOpenSession -connect 10.1.2.3  -dut DUT2 -version 3 
+#                -sec authNoPriv -authType MD5 -auth "initialmd5"    
+################################################################
+
+proc snmpOpenSession { args } {
+
+   # These global variables are to be defined in cfg/snmp.cfg file
+
+   global DUTs_info
+   global SNMPV2_RWCOMMUNITY
+   global SNMPV3_USER_NAME
+   global SNMPV3_AUTH_PROTO
+   global SNMPV3_AUTH_STR
+   global SNMPV3_PRIV_STR
+   global SNMP_RETRY
+   global SNMP_TIMEOUT
+   global SNMPV3_SEC_TYPE
+
+   set func "snmpOpenSession:"
+
+   parse_args snmpOpenSession $args {
+          connect ""
+          dut ""
+          version ""
+          community ""
+          retry ""
+          timeout ""
+          sec ""
+          authType ""
+          auth ""
+          privType ""
+          priv ""
+          user ""
+          fd "NULL"
+   }
+
+   snmpDebug DEBUG "$func connect-$connect dut-$dut version-$version community-$community retry-$retry timeout-$timeout sec-$sec authType-$authType auth-$auth privType-$privType priv-$priv user-$user fd-$fd - Start" $fd
+
+   if {$dut == "" || $connect == ""} {
+      result_error "$func Must specify dut and connect information"
+      return 0
+   } 
+
+   if { $version == "" } {
+      set version $DUTs_info($dut,snmpVersion)
+   }
+
+   if {$community == ""} {
+      if {$version == 1 || $version == 2} {
+         if { [info exists SNMPV2_RWCOMMUNITY] == 0 } {
+            set community "private"
+         } else {
+            set community $SNMPV2_RWCOMMUNITY
+         }
+      }
+   }
+ 
+   if { $timeout == "" } {
+      if { [info exists SNMP_TIMEOUT] == 0} {
+         set timeout 10
+      } else {
+         set timeout $SNMP_TIMEOUT
+      }
+   }
+
+   if { $retry == "" } {
+      if { [info exists SNMP_RETRY] == 0} {
+         set retry 2
+      } else {
+         set retry $SNMP_RETRY
+      }
+   }
+
+   if {$version == 3} {
+      if {$sec == ""} {
+         if { [info exists SNMPV3_SEC_TYPE] == 0 } {
+            set sec "authNoPriv"
+         } else {
+            set sec $SNMPV3_SEC_TYPE
+         }
+      }
+     
+      if {$authType == ""} {
+         if { [info exists SNMPV3_AUTH_PROTO] == 0 } {
+            set authType "MD5"
+         } else {
+            if { ! ($SNMPV3_AUTH_PROTO == "MD5" ||
+                    $SNMPV3_AUTH_PROTO == "SHA") } {
+               result_error "SNMPV3_AUTH_PROTO must be either MD5 or SHA"
+               return 0
+            }
+            set authType $SNMPV3_AUTH_PROTO
+         }
+      } else {
+         if { ! ($authType == "MD5" ||
+                    $authType == "SHA") } {
+               result_error "authType must be either MD5 or SHA"
+               return 0
+         }
+      }
+     
+      if {$auth == ""} {
+         if { [info exists SNMPV3_AUTH_STR] == 0 } {
+            if { $authType == "MD5" } {
+               if { $sec == "authPriv" } {
+                  set auth "initialmd5Priv"
+               } else {
+                  set auth "initialmd5"
+               }
+            } elseif { $authType == "SHA" } {
+               if { $sec == "authPriv" } {
+                  set auth "initialshaPriv"
+               } else {
+                  set auth "initialsha"
+               }
+            }
+         } else {
+            set auth $SNMPV3_AUTH_STR
+         }
+      }
+    
+      if {$privType == "" } {
+          set privType DES
+      } else {
+         if {$privType != "DES"} {
+            result_error "privType should be DES"
+            return 0
+         }
+      }
+
+      if {$priv == "" } {
+         if { [info exists SNMPV3_PRIV_STR] == 0 } {
+            set priv "initialmd5Priv"
+         } else {
+            set priv $SNMPV3_PRIV_STR
+         }
+      }
+
+      if {$user == ""} {
+         if { [info exists SNMPV3_USER_NAME] == 0 } {
+            if { $sec == "authPriv" } {
+               set user $priv
+            } elseif { $sec == "authNoPriv" } {
+               set user $auth
+            } else {
+               set user "initial"
+            }
+         } else {
+             set user $SNMPV3_USER_NAME
+         }
+      }
+puts "\n inside open session....................."
+      if {$sec == "noAuthNoPriv" } {
+         snmpDebug DEBUG "$func connect-$connect version-$version user-$user sec-$sec. End\n" $fd
+         return [snmpOpenSess -dut $connect -version $version -user $user -sec $sec]
+      } elseif {$sec == "authNoPriv"} {
+         snmpDebug DEBUG "$func connect-$connect version-$version user-$user sec-$sec authType-$authType auth-$auth. End\n" $fd
+         set ses [snmpOpenSess -dut $connect -version $version -user $user -sec $sec -authType $authType -auth $auth]
+         return $ses
+      } else {
+         snmpDebug DEBUG "$func connect-$connect version-$version user-$user sec-$sec authType-$authType auth-$auth privType-$privType priv-$priv. End\n" $fd
+         return [snmpOpenSess -dut $connect -version $version -user $user -sec $sec -authType $authType -auth $auth -privType $privType -priv $priv]
+      }
+   } else {
+      snmpDebug DEBUG "$func connect-$connect version-$version community-$community"
+      return [snmpOpenSess -dut $connect -version $version -community $community]
+   }
+}
+
+################################################################
+#  Procedure Name: snmpUtilGetPID
+#
+#  Description:
+#    This procedure returns the process identifier of a specific
+#    process. If the process is not running, it returns -1 as 
+#    process id.
+#
+#  Input Variables:
+#    name - Name of the process
+#
+#  Optional Args:
+#    None
+#
+#  Output Variables:
+#     None
+#
+#  Return Variables:
+#    -1 - on failure
+#    Process ID - on success
+#
+#  Possible Usage:
+#    snmpUtilGetPID snmptrapd
+###############################################################
+proc snmpUtilGetPID { name } {
+   catch {set output [exec /bin/ps -e | grep $name]}
+   if {[info exists output]} {
+      foreach item [split $output "\n"] {
+         if { [regexp $name $item] && ![regexp "grep" $item] } {
+            return [lindex $item 0]
+         }
+      }
+  }
+
+  # Process id not found 
+  return -1
+}
+
+################################################################
+#  Procedure Name: snmpConfigureTrap
+#  
+#  Description:
+#     This procedure configures the trap receiver for SNMPv2 or
+#     SNMPv3 and enables or disable specific traps for a given
+#     DUT. It also checks whether snmptrapd daemon is running or
+#     not. If not running, it tries to start that daemon.
+#
+#  Input Variables:
+#     session - SNMP session identifier
+#     version - Trap version (1, 2 or 3)
+#     connect - DUT default vlan IP address
+#     dut - DUT IP address
+#     fd - File descriptor for logging the command outputs   
+# 
+#  Optional Args:
+#     None
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    0 - On failure 
+#    1 - On success
+#
+#  Possible Usage:
+#     snmpConfigureTrap -session $session_id -version 2 -dut \
+#            10.1.2.1 -connect 10.0.0.1 -fd $fd
+###############################################################
+
+proc snmpConfigureTrap { args } {
+   global TRAP_RECV_PORT
+   global TRAP_RECV_IPADDR
+   global SNMPV2_RWCOMMUNITY
+   global DUTs_info
+
+   set func "snmpConfigureTrap:"
+
+   parse_args snmpConfigureTrap $args {
+       version ""
+       session ""
+       dut ""
+       fd "NULL"
+   }
+ 
+   if { $session == "" || $version == "" || $dut == "" || $fd == "NULL" } {
+       result_error "$func session, version, dut and fd must be specified"
+       return 0
+   }
+   # result_error "$func version-$version session-$session dut-$dut fd-$fd - Start and $fd"
+   snmpDebug DEBUG "$func version-$version session-$session dut-$dut fd-$fd - Start" $fd
+
+   if { $version > 3 } {
+      error "$func invalid version $version. Valid values are 1,2 or 3"
+      return 0
+   }
+ 
+   # Determine the trap receiver address (regression PC address)
+   if {[info exists TRAP_RECV_IPADDR] == 1} {
+       snmpDebug LOG "$func $TRAP_RECV_IPADDR is configure as trap receiver in snmp.cfg file\n" $fd
+   } else {
+      set TRAP_RECV_IPADDR [GetLocalIpaddr]
+      snmpDebug LOG "$func Trap receiver address is $TRAP_RECV_IPADDR" $fd
+   }
+   # If trap port is configured, use it otherwise use default port
+   if {[info exists TRAP_RECV_PORT]} {
+      set trapPort $TRAP_RECV_PORT
+   } else {
+      snmpDebug LOG "TRAP_RECV_PORT NOT SET: setting trapPort 162" $fd
+      set trapPort 162
+   }
+      set trapPort 1620
+puts "\n trapPort : $trapPort"
+   snmpDebug LOG "$func Trap port number is $trapPort" $fd
+
+   # Check whether /usr/sbin/snmptrapd is running or not.
+   # If not running, start that
+   set trapdPID [snmpUtilGetPID snmptrapd]
+   if { $trapdPID != -1 } {
+      result_debug "$func /usr/sbin/snmptrapd is running with pid $trapdPID"
+      snmpDebug LOG "$func snmptrapd($trapdPID) is running" $fd
+   } else {
+      # snmptrapd is not running. So try and start that
+      snmpDebug LOG "$func snmptrapd is not running" $fd
+      
+      # Before starting, check whether snmptrapd executable exists or not
+      if {[file exists /usr/sbin/snmptrapd]} {
+         set output [exec /usr/sbin/snmptrapd udp:$trapPort]
+         set trapdPID [snmpUtilGetPID snmptrapd] 
+         if { $trapdPID == -1 } {
+             result_error "$func unable to start snmptrapd"
+             snmpDebug LOG "$func unable to start snmptrapd - End\n" $fd
+             return 0
+         }
+         snmpDebug LOG "$func snmptrapd started with pid $trapdPID" $fd
+      } else {
+         result_error "Unable to find out /usr/sbin/snmptrapd"
+         snmpDebug LOG "$func /usr/sbin/snmptrapd not exists - End\n" $fd
+         return 0
+      }
+   }
+
+   # Login to the switch to do the trap receiver configuration
+   Login $dut -fd $fd
+
+   # Disable link-up down traps. These traps can be enabled on need basis
+   SendACmd "enable snmp traps"
+
+   # Remove remnant trap file in regression pc, if any
+   if {[file exists /tmp/snmp_trap_$dut]} {
+      snmpDebug DEBUG "$func removing /tmp/snmp_trap_$dut file as cleanup" 
+      file delete -force /tmp/snmp_trap_$dut
+   }
+
+   # Determine whether to do v2 or v3 trap settings
+   if { $version == 1 || $version == 2} {
+      snmpDebug DEBUG "$func SNMP version is 2" $fd
+      if {[info exists SNMPV2_RWCOMMUNITY]} {
+         set commStr $SNMPV2_RWCOMMUNITY
+      } else {
+         set commStr "private"
+      }
+      SendACmd "configure snmp add trapreceiver $TRAP_RECV_IPADDR community $commStr port $trapPort"
+   } else {
+
+      # Modify the /var/net-snmp/snmptrapd.conf file to add this agent's
+      # and user so that snmptrapd can process the traps from this agent
+
+      set result [snmpGet -session $session -oid snmpEngineID.0]
+      snmpDebug LOG "$func snmpGet:$result" $fd
+      
+      if {[regexp {(.*STRING:)(.*)} $result res res1 res2]} {
+         if {[info exists res2]} {
+            set engineID [join 0x[string trim $res2] ""]
+            snmpDebug LOG "$func engineID is $engineID" $fd
+            set file_d [open /var/net-snmp/snmptrapd.conf {CREAT APPEND WRONLY}]
+            puts $file_d "createUser -e $engineID initialmd5 MD5 initialmd5 DES initialmd5"
+            # The configuration file is updated. So signal snmptrapd to re-read
+            # the configuration file
+            catch {set [exec /bin/kill -s SIGHUP $trapdPID]}
+         } else {
+             result_error "$func unable to obtain SNMPv3 EngineID. But got $result"
+             snmpDebug LOG "$func snmpGet: $result - End\n" $fd
+             return 0
+        }
+      } else {
+         result_error "$func unable to obtain SNMPv3 EngineID from $dut"
+         return 0
+      }
+      SendACmd "configure snmpv3 add target-params test_params user initialmd5 mp-model snmpv3 sec-model usm sec-level authnopriv"
+      SendACmd "configure snmpv3 add target-addr test_target param test_params ipaddress $TRAP_RECV_IPADDR transport-port $trapPort"
+   }
+ 
+   snmpDebug DEBUG "$func - End\n" $fd
+   CleanupsnmpTrapFiles "null"
+   return 1
+}
+
+################################################################
+#  Procedure Name: snmpUnconfigureTrap
+#  
+#  Description:
+#     This procedure deletes the configured trap receiver for SNMPv2 or
+#     SNMPv3
+#
+#  Input Variables:
+#     session - SNMP session identifier
+#     version - Trap version (1, 2 or 3)
+#     connect - DUT default vlan IP address
+#     dut - DUT IP address
+#     fd - File descriptor for logging the command outputs   
+# 
+#  Optional Args:
+#     None
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    0 - On failure 
+#    1 - On success
+#
+#  Possible Usage:
+#     snmpUnconfigureTrap -session $session_id -version 2 -dut \
+#            10.1.2.1 -connect 20.0.0.1 -fd $fd
+###############################################################
+
+proc snmpUnconfigureTrap { args } {
+   global TRAP_RECV_PORT
+   global TRAP_RECV_IPADDR
+   global SNMPV2_RWCOMMUNITY
+   global DUTs_info
+
+   set func "snmpUnconfigureTrap:"
+
+   parse_args snmpUnconfigureTrap $args {
+       version ""
+       session ""
+       connect ""
+       dut ""
+       fd "NULL"
+   }
+ 
+   if { $session == "" || $version == "" || $dut == "" || $connect == "" \
+                       || $fd == "NULL" } {
+       result_error "$func session, version, dut, connect and fd must be specified"
+       return 0
+   }
+    
+   snmpDebug DEBUG "$func version-$version session-$session dut-$dut fd-$fd - Start" $fd
+
+   if { $version > 3 } {
+      error "$func invalid version $version. Valid values are 1,2 or 3"
+      return 0
+   }
+ 
+   # Determine the trap receiver address (regression PC address)
+   if {[info exists TRAP_RECV_IPADDR] == 1} {
+       snmpDebug LOG "$func $TRAP_RECV_IPADDR is configure as trap receiver in snmp.cfg file\n" $fd
+   } else {
+      set TRAP_RECV_IPADDR [GetLocalIpaddr]
+      snmpDebug LOG "$func Trap receiver address is $TRAP_RECV_IPADDR" $fd
+   }
+
+   # If trap port is configured, use it otherwise use default port
+   if {[info exists TRAP_RECV_PORT]} {
+      set trapPort $TRAP_RECV_PORT
+   } else {
+      set trapPort 162
+   }
+   snmpDebug LOG "$func Trap port number is $trapPort" $fd
+
+   # Login to the switch to do the trap receiver configuration
+   Login $connect -fd $fd
+
+   # Determine whether to do v2 or v3 trap settings
+   if { $version == 1 || $version == 2} {
+      snmpDebug DEBUG "$func SNMP version is 2" $fd
+      if {[info exists SNMPV2_RWCOMMUNITY]} {
+         set commStr $SNMPV2_RWCOMMUNITY
+      } else {
+         set commStr "private"
+      }
+      SendACmd "configure snmp delete trapreceiver all"
+   }
+
+   # Delete the trap file
+#   set trapFile "/tmp/snmp_trap_$dut"
+#   snmpDebug DEBUG "Deleting the trap file /tmp/snmp_trap_$dut" $fd
+#   file delete -force $trapFile
+
+   # Disable link-up down traps. These traps can be enabled on need basis
+   #SendACmd "enable snmp traps port-up-down ports all"
+
+   snmpDebug DEBUG "$func - End\n" $fd
+   CleanupsnmpTrapFiles $dut 
+   return 1
+}
+
+################################################################
+#  Procedure Name: snmpHandleTraps
+#
+#  Description:
+#     The Net-snmp's 'snmptrapd' utility receives the trap 
+#     message from the SNMP agent and it logs the trap information 
+#     in a temporary file (/tmp/snmp_trap_<dut ip address>). 
+#     This procedure parses the temporary file for the given key 
+#     value. 
+#
+#  Input Variables:
+#
+#     paramList - List of key to be checked with the received 
+#                 trap log message
+#     dut  - DUT from which the trap message is expected.
+#
+#  Optional Args:
+#     time - Time sensitive check for the trap message generation.
+#            Starting time, interval and end time can be specified.
+#            The script initially waits for starting time and
+#            waits for interval time, until the end time is reached
+#            or the script passes.
+#     fd - File descriptor of open log file
+#
+#  Output Variables:
+#     None
+#
+#  Return Variables:
+#    0 - On failure
+#    1 - On success
+#
+#  Possible Usage:
+#    <Generate trap message ...>
+#    lappend paramList "{.*SNMPv2-MIB::snmpTrapOID.0.*linkup.*} exist"
+#    lappend paramList "{.*SNMPv2-MIB::snmpTrapOID.0.*ifAdmin.*} notExist"
+#    snmpHandleTraps $paramList -dut 20.0.0.3 -time {s: 10 i: 5 e: 30 }
+###############################################################
+proc snmpHandleTraps { paramList args } {
+   
+   set func "snmpHandleTraps:"
+   set found 0
+
+   parse_args snmpHandleTraps $args {
+       dut ""
+       time 0
+       fd "NULL"
+       type "positive_test"
+       comment  "snmpHandleTraps"
+   }
+
+   if { $dut == "" || [llength $paramList] == 0 } {
+       result_error "$func dut and paramList must be specified"
+       return 0
+   }
+
+   report_start_test "$comment"
+   snmpDebug DEBUG "$func dut-$dut time-$time fd-$fd" $fd
+
+   result_debug "\n-- Handling SNMP traps on DUT $dut --"
+
+##################  Handling SnmpTrap_newformat
+   package require fileutil
+
+   if { [catch { glob /tmp/snmp*$dut* } output] } { 
+     if {$type eq "negative_test"} {
+        result_ok " SNMP Trap files are not generated"
+     } else {
+        result_error " SNMP Trap files are not generated"
+     }
+     report_end_test
+     return 0
+   } else {
+     set trapFileH /tmp/snmp_trap_$dut
+     foreach file_name $output {
+	result_debug "the filename is $file_name"
+     if { $file_name eq [lindex $output 0] } {
+          ::fileutil::writeFile $trapFileH [::fileutil::cat $file_name]
+          eval [file delete $file_name]
+        } else {
+          ::fileutil::appendToFile $trapFileH [::fileutil::cat $file_name]
+          eval [file delete $file_name]
+        }
+     }  
+   }
+################
+   set trapFile $trapFileH
+   result_debug "\n <-------- trapFile Name : $trapFile ----->"
+   snmpDebug DEBUG "$func Trap file is $trapFile" $fd
+
+   if { $time != 0 } {
+      set sTime [lindex $time 1]
+      set iTime [lindex $time 3]
+      set eTime [lindex $time 5]
+      snmpDebug LOG "Starting at $sTime, interval $iTime and finish at $eTime sec" $fd
+      result_debug "waiting for $time seconds to receive trap"
+      exSleep $sTime
+      set elpTime $sTime
+   }
+  exSleep 10
+  set trap_fd 0 
+  while { 1 } {
+     if  {[ file exists $trapFile ] } {
+        snmpDebug DEBUG "$func - opening the trap file\n" $fd
+        if { [catch { open $trapFile r } trap_fd] } {
+           result_error "$func unable to open $trapFile : $trap_fd"
+           snmpDebug LOG "$func unable to open $trapFile : $trap_fd" $fd
+           eval [file delete -force $trapFile]
+           report_end_test
+           return 0
+        }
+        
+        # We have got the trap file. Its time to read its contents
+		set errList ""
+        set foundList ""
+        while { [gets $trap_fd line] >= 0 } {
+           snmpDebug DEBUG "$func Content of $trapFile : $line" $fd
+           foreach param $paramList {
+              set key [lindex $param 0]
+              set status [lindex $param 1]
+              if { [regexp -nocase $key $line] } {
+                 snmpDebug DEBUG "$func $key  MATCHED" $fd
+                 if {[string compare [string tolower $status] "notexist"] == 0 } {
+                    lappend errList "{$key} exist"
+		    result_error "Wanted $status for $key BUT Got matching line $line"
+                 } else {
+                    lappend foundList "$key"
+		    result_debug "Matching line for $key is $line"
+                 }
+              } else {
+                 snmpDebug DEBUG "$func $key NOT MATCHED" $fd
+                 if {[string compare [string tolower $status] "notexist"] == 0 } {
+                    lappend foundList "{$key notExist}"
+                 } else {
+                    lappend errList "{$key notExist}"
+                 }
+              }
+           }
+        }
+
+ 
+        if { $time != 0 && [llength $errList] != 0 } {
+           if {$elpTime < $eTime} {
+              result_debug "Sleep for $iTime seconds, already waited \
+                            $elpTime sec"
+	      result_debug "The error is $errList"
+              exSleep $iTime
+              set elpTime [expr $elpTime + $iTime]
+              snmpDebug DEBUG "$func elapsdtime $elpTime, endTime $eTime, \
+                               got trap, but not the needed one" $fd
+           } elseif {$elpTime >= $eTime} {
+              result_error "$func unable to get the trap even after \
+                            $eTime sec. FAIL"
+	      result_error "The error is $errList"
+              snmpDebug DEBUG "$func -  The error is $errList End\n" $fd
+              report_end_test
+              close $trap_fd
+              return 0
+           }
+        } else {
+           # Check we have any not matching entry, print them
+           if  {[llength $errList ] != 0} {
+              foreach result $errList {
+                 result_error "$result. FAIL"
+                 snmpDebug LOG "$result. FAIL" $fd
+              }
+				report_end_test
+				close $trap_fd
+				return 0
+			  }
+			set notfound 0
+			# Verify we have matchingentry for all the Keys in foundlist
+			#result_debug "Found list is $foundList"
+			foreach param $paramList {
+              set key [lindex $param 0]
+              set status [lindex $param 1]
+				if {$status == "exist"} {
+                if {[lsearch $foundList $key] >=0 } {
+                 result_ok "$key exist . PASS"
+                 snmpDebug LOG "$func result is Pass" $fd
+              } else {
+				  result_error "$key expected but not found"
+				  incr notfound
+			  }
+			 } 
+			}
+			
+			
+           snmpDebug DEBUG "$func - End\n" $fd
+           report_end_test
+           close $trap_fd
+		   if {$notfound > 0} {
+				return 0
+		   }
+           return 1
+        }
+        close $trap_fd
+     } else {
+        if { $time == 0 } {
+           result_error "$func Trap file $trapFile does not exist. FAIL"
+           snmpDebug DEBUG "$func Trap file $trapFile not exist - End\n" $fd
+           report_end_test
+           return 0
+        } elseif {$elpTime >= $eTime} {
+           result_error "Waited for $elpTime sec, but didn't get the \
+                         trap file. FAIL"
+           snmpDebug DEBUG "$func Trap file $trapFile not exist - End\n" $fd
+           report_end_test
+           return 0
+        } else {
+           result_debug "Sleep for $iTime seconds, already waited $elpTime sec"
+           exSleep $iTime
+           set elpTime [expr $elpTime + $iTime]
+           snmpDebug DEBUG "$func elapsdtime $elpTime, endTime $eTime, \
+                            not yet got the trap file" $fd
+        }
+     } 
+  }
+  snmpDebug DEBUG "$func - End\n" $fd
+  report_end_test
+  return 1
+}
+
+################################################################
+#  Procedure Name: snmpCreateVlan
+#  
+#  Description:
+#  This procedure creates a vlan with the specified vlan name
+#  in the given DUT.
+#
+#  Input Variables:
+#    session - Session identifier which identifies the connection
+#              with the DUT
+#    name   - Name of the VLAN to be created
+# 
+#  Optional Args:
+#    fd - File descriptor for logging the command outputs   
+# 
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    Logs the error message - On failure 
+#    vlan identifier - On success
+#
+#  Possible Usage:
+#    snmpCreateVlan -session $sessionid -name "TEST"
+###############################################################
+
+proc snmpCreateVlan { args } {
+    parse_args snmpCreateVlan $args {
+       session ""
+       name  ""
+       tag  ""
+       fd "NULL"
+    }
+ 
+    set func "snmpCreateVlan:" 
+
+    if { $session == "" || $name == "" } {
+       error "$func session and vlan name must be specified"
+       return
+    }   
+
+    snmpDebug DEBUG "$func session-$session vlanname: $name tag: $tag fd-$fd -Start" $fd
+
+    result_debug "\n-- Creating VLAN $name --"
+
+    set vlanIfIndex [snmpGet -session $session -oid extremeNextAvailableVirtIfIndex.0]
+
+    snmpDebug LOG "$func snmpGet-$vlanIfIndex" $fd
+
+    set res [snmpUtilGetVal int $vlanIfIndex]
+
+    if { $tag != "" } {
+         set result [snmpSet -session $session \
+                        -oid extremeVlanIfDescr.$res -type s -val $name\
+                        -oid extremeVlanIfVlanId.$res -type i -val $tag\
+                        -oid extremeVlanIfStatus.$res -type i -val 4]
+     } else {
+         set result [snmpSet -session $session \
+                        -oid extremeVlanIfDescr.$res -type s -val $name\
+                        -oid extremeVlanIfStatus.$res -type i -val 4]
+     }
+    snmpDebug LOG "$func snmpSet-$result" $fd
+    snmpDebug DEBUG "$func result-$res -End\n" $fd
+    return $res
+}
+
+################################################################
+#  Procedure Name: snmpDeleteVlan
+#  
+#  Description:
+#  This procedure deletes a vlan with the specified vlan name
+#  in the given DUT.
+#
+#  Input Variables:
+#    session - Session identifier which identifies the connection
+#              with the DUT
+#    name   - Name of the VLAN to be deleted
+# 
+#  Optional Args:
+#    fd - File descriptor for logging the command outputs   
+# 
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    Logs the error message - On failure 
+#    vlan identifier - On success
+#
+#  Possible Usage:
+#    snmpDeleteVlan -session $sessionid -name "TEST"
+###############################################################
+
+proc snmpDeleteVlan {args} {
+
+    parse_args snmpDeleteVlan $args {
+       session ""
+       vlanid  "0"
+       fd  "NULL"
+    }
+    
+    set func "snmpDeleteVlan:"
+    
+    if { $session == "" || $vlanid == 0} {
+       error "$func session and vlanid must be specified"
+       return 0
+    }
+ 
+    snmpDebug DEBUG "$func session-$session vlanid-$vlanid - Start" $fd
+
+    result_debug "\n-- Deleting VLAN --"
+
+    set result [snmpSet -session $session -oid extremeVlanIfStatus.$vlanid -type i -val 6]
+
+    snmpDebug LOG "$func snmpSet-$result - End\n" $fd
+
+    return 1
+}
+
+
+################################################################
+#  Procedure Name: snmpAddPortToVlan
+#  
+#  Description:
+#  This procedure adds ports to already created vlan. The ports
+#  can be specified as comma separated list like 1,3,5 or port 
+#  ranges can be specified as 1-5. 
+#
+#  Input Variables:
+#    session - Session identifier which identifies the connection
+#              with the DUT
+#    vlanid - Identifier of the already created vlan
+#    port - Port numbers to be added to the vlan 
+#
+#  Optional Args:
+#    tagid - Tag identifier. If the tagid is not specified, the
+#            port will be added as untagged.
+#    fd - File descriptor of open log file
+# 
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    Logs the error message - On failure 
+#    1 - On success
+#
+#  Possible Usage:
+#   snmpAddPortToVlan -session $sessionid -vlanid $vlan_id \
+#                                           -port 1,3,4,9-18 
+###############################################################
+
+proc snmpAddPortToVlan {args} {
+
+   parse_args snmpAddPortToVlan $args {
+      session ""
+      vlanid  "0"
+      port ""
+      tagid "untagged"
+      fd "NULL"
+   }
+ 
+   set func "snmpAddPortToVlan:"
+
+   if {$session == "" || $vlanid == 0 || $port == "" } {
+      error "$func session, vlanid and port must be specified"
+      return
+   }
+
+   snmpDebug DEBUG "$func session-$session vlanid-$vlanid port-$port tag-$tagid fd-$fd - Start" $fd
+
+   result_debug "\n-- Adding ports $port to VLAN --"
+   # Parse the given port numbers
+   set slotList ""
+   set portList [snmpUtilGetSlotPort $port slotList]
+   puts "slot list = $slotList"
+   puts "port list = $portList"
+
+   # The ports are to be added as tagged/untagged port
+   if {$tagid == "untagged"} { 
+       set tagVal 2
+   } else {
+       set tagVal 1
+   }
+   set len1 [llength $slotList]
+   set len2 [llength $portList]
+   if { $len1 != $len2 } {
+      error "$func session, portList and slotList are not of equal size"
+      return
+   } 
+   for { set i 0 } { $i < $len1 } { incr i } {
+       set slot [lindex $slotList $i]
+       set port [lindex $portList $i]
+       set hexStr [snmpUtilPortToHexStr $port]
+       snmpDebug LOG "$func Port added is $port : $hexStr" $fd
+       set result [snmpSet -session $session \
+                       -oid extremeVlanOpaqueControlPorts.$vlanid.$slot -type x -val $hexStr \
+                       -oid extremeVlanOpaqueControlOperation.$vlanid.$slot -type i -val $tagVal \
+                       -oid extremeVlanOpaqueControlStatus.$vlanid.$slot -type i -val 4]
+
+       snmpDebug LOG "$func snmpSet -$result" $fd
+   }
+
+   snmpDebug DEBUG "$func - End\n" $fd
+   return 1 
+}
+
+################################################################
+#  Procedure Name: snmpDelPortFromVlan
+#  
+#  Description:
+#  This procedure deletes ports from already created vlan. The 
+#  ports can be specified as comma separated list like 1,3,5 or port 
+#  ranges can be specified as 1-5. 
+#
+#  Input Variables:
+#    session - Session identifier which identifies the connection
+#              with the DUT
+#    vlanid - Identifier of the already created vlan
+#    port - Port numbers to be deleted from the vlan 
+#
+#  Optional Args:
+#    tagid - Tag identifier. The tagid must be specified to 
+#            delete a tagged port.
+#    fd - File descriptor of open log file
+# 
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    Logs the error message - On failure 
+#    1 - On success
+#
+#  Possible Usage:
+#   snmpDelPortFromVlan -session $sessionid -vlanid $vlan_id \
+#                                           -port 1,3,4,9-18 
+###############################################################
+
+proc snmpDelPortFromVlan {args} {
+   parse_args snmpDelPortFromVlan $args {
+      session ""
+      vlanid  "0"
+      port ""
+      tagid "3"
+      fd "NULL"
+   }
+
+   set func "snmpDelPortFromVlan:"
+   set tagid 3
+   if {$session == "" || $vlanid == 0 || $port == "" } {
+      error "$func session, vlanid and port must be specified"
+      return
+   }
+
+   snmpDebug DEBUG "$func session-$session vlanid-$vlanid port-$port \
+                    tagid - $tagid fd-$fd - Start" $fd
+
+   result_debug "\n-- Deleting ports $port from VLAN --"
+   set slotList ""
+   set portList [snmpUtilGetSlotPort $port slotList]
+   puts "slot list = $slotList"
+   puts "port list = $portList"
+
+   # The ports are to be added as tagged/untagged port
+   set len1 [llength $slotList]
+   set len2 [llength $portList]
+   if { $len1 != $len2 } {
+      error "$func session, portList and slotList are not of equal size"
+      return
+   } 
+   for { set i 0 } { $i < $len1 } { incr i } {
+       set slot [lindex $slotList $i]
+       set port [lindex $portList $i]
+       set hexStr [snmpUtilPortToHexStr $port]
+       snmpDebug LOG "$func Port added is $port : $hexStr" $fd
+       set result [snmpSet -session $session \
+                       -oid extremeVlanOpaqueControlPorts.$vlanid.$slot -type x -val $hexStr \
+                       -oid extremeVlanOpaqueControlOperation.$vlanid.$slot -type i -val $tagid \
+                       -oid extremeVlanOpaqueControlStatus.$vlanid.$slot -type i -val 4]
+
+       snmpDebug LOG "$func snmpSet -$result" $fd
+   }
+
+   snmpDebug DEBUG "$func - End\n"
+   return 1
+}
+
+################################################################
+#  Procedure Name: snmpCreateTag
+#  
+#  Description:
+#    This procedure creates a vlan tag with the specified values.
+#
+#  Input Variables:
+#    session - Session identifier which identifies the connection
+#              with the DUT
+#    tag -  Tag value to be created.
+#
+#  Optional Args:
+#    fd - File descriptor of open log file
+# 
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    Logs the error message - On failure 
+#    Vlan encapsulation interface index - On success
+#
+#  Possible Usage:
+#   snmpCreateTag -session $sessionid -tag 10
+###############################################################
+
+proc snmpCreateTag { args } {
+   parse_args snmpCreateTag $args {
+      session ""
+      tagid ""
+      fd "NULL"
+   }
+   
+   set func "snmpCreateTag:"
+
+   if { $session == "" || $tagid == "" } {
+       error "$func session and tagid value must be specified"
+       return
+   }
+ 
+   snmpDebug DEBUG "$func session-$session tagid-$tagid fd-$fd - Start" $fd
+
+   result_debug "\n-- Creating VLAN tag $tagid --"
+
+   set res [snmpGet -session $session -oid extremeNextAvailableVirtIfIndex.0]
+
+   snmpDebug LOG "$func snmpGet - $res" $fd
+  
+   set vlanEncapIfIndex [snmpUtilGetVal int $res]
+
+   snmpDebug LOG "$func vlanEncapIfIndex-$vlanEncapIfIndex" $fd
+   
+   set result [snmpSet -session $session -oid extremeVlanEncapsIfTag.$vlanEncapIfIndex -type i -val $tagid -oid extremeVlanEncapsIfType.$vlanEncapIfIndex -type i -val 1 -oid extremeVlanEncapsIfStatus.$vlanEncapIfIndex -type i -val 1]
+
+   snmpDebug LOG "$func snmpSet-$result" $fd 
+
+   snmpDebug LOG "$func return-$vlanEncapIfIndex - End\n" $fd 
+   return $vlanEncapIfIndex
+}
+
+#################################################################
+#  Procedure Name: snmpDeleteTag
+#  
+#  Description:
+#    This procedure deletes already created tag.
+#
+#  Input Variables:
+#    session - Session identifier which identifies the connection
+#              with the DUT
+#    tag -  Tag value to be deleted.
+#
+#  Optional Args:
+#    fd - File descriptor of open log file
+# 
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    Logs the error message - On failure 
+#    Vlan encapsulation interface index - On success
+#
+#  Possible Usage:
+#   snmpDeleteTag -session $sessionid -tagid 10
+###############################################################
+
+proc snmpDeleteTag { args } {
+   parse_args snmpDeleteTag $args {
+      session ""
+      tagid ""
+      fd "NULL"
+   }
+
+   set func "snmpDeleteTag:"
+
+   if { $session == "" || $tagid == "" } {
+       error "$func session and tagid value must be specified"
+       return
+   }
+
+   snmpDebug DEBUG "$func session-$session tag-$tagid fd-$fd - Start" $fd
+
+   result_debug "\n-- Deleting VLAN tag $tagid --"
+
+   set result [snmpSet -session $session -oid extremeVlanEncapsIfStatus.$tagid -type i -val 6]
+
+   snmpDebug LOG "$func snmpSet - $result" $fd
+   snmpDebug DEBUG "$func snmpSet - $result - End\n" $fd
+
+}
+
+#################################################################
+#  Procedure Name: snmpAddProtocolToVlan
+#  
+#  Description:
+#    This procedure associates a protocol to already created vlan.
+#
+#  Input Variables:
+#    session - Session identifier which identifies the connection 
+#              with the DUT
+#    vlanid - Identifier for already created vlan
+#    protoid - Protocol identifier (1-IP,2-ANY,3-ipx,4-decnet
+#		5-netbios,6-ipx_8022,7-ipx_snap,8-appletalk)
+#
+#  Optional Args:
+#    fd - File descriptor of open log file
+# 
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    Logs the error message - On failure 
+#    1 - On success
+#
+#  Possible Usage:
+#    set prot_indx [snmpCreateProtocol -session $sessionid \
+#                   -name "TEST" -type ETHER  -protoid 0x2]
+#    snmpAddProtocolToVlan -session $sessionid -vlanid $vlan_id\
+#                   -protoid $prot_indx
+###############################################################
+
+proc snmpAddProtocolToVlan { args } {
+   parse_args snmpAddProtocolToVlan $args {
+      session ""
+      vlanid ""
+      protoid ""
+      fd "NULL"
+   }
+
+   set func "snmpAddProtocolToVlan:"
+
+   if { $session == "" || $vlanid == "" || $protoid == "" } {
+       error "$func session,vlanid and protoid must be specified"
+       return
+   }
+
+   snmpDebug DEBUG "$func segssion-$session vlanid-$vlanid protoid-$protoid fd-$fd- Start" $fd
+
+   result_debug "\n-- Adding protocol with protoid $protoid to VLAN --"
+
+   set result [snmpSet -session $session -oid extremeVlanProtocolVlanStatus.$vlanid.$protoid -type i -val 4]
+
+   snmpDebug LOG "$func snmpSet - $result" $fd
+   snmpDebug DEBUG "$func snmpSet - $result - End\n" $fd
+  
+   return 1
+}
+
+#################################################################
+#  Procedure Name: snmpDelProtocolToVlan
+#  
+#  Description:
+#    This procedure deletes a protocol from a vlan.
+#
+#  Input Variables:
+#    session - Session identifier which identifies the connection 
+#              with the DUT
+#    vlanid - Identifier for already created vlan
+#    protoid - Protocol identifier (IP - 2, IPX - 3 NetBios - 4).
+#
+#  Optional Args:
+#    fd - File descriptor of open log file
+# 
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    Logs the error message - On failure 
+#    1 - On success
+#
+#  Possible Usage:
+#    snmpDelProtocolToVlan -session $sessionid -vlanid $vlan_id\
+#                   -protoid $prot_indx
+###############################################################
+
+
+proc snmpDelProtocolFromVlan { args } {
+   parse_args snmpDelProtocolFromVlan $args {
+      session ""
+      vlanid ""
+      protoid ""
+      fd "NULL"
+   }
+
+   set func "snmpDelProtocolToVlan:"
+
+   if { $session == "" || $vlanid == "" || $protoid == "" } {
+       error "$func session,vlanid and protoid must be specified"
+       return
+   }
+
+   snmpDebug DEBUG "$func session-$session vlanid-$vlanid protoid-$protoid fd-$fd- Start" $fd
+
+   result_debug "\n-- Deleting protocol with protoid $protoid from VLAN --"
+
+   set result [snmpSet -session $session -oid extremeVlanProtocolVlanStatus.$vlanid.$protoid -type i -val 6]
+
+   snmpDebug LOG "$func snmpSet - $result" $fd
+   snmpDebug DEBUG "$func snmpSet - $result - End\n" $fd
+   
+}
+
+#################################################################
+#  Procedure Name: snmpCheckFdb
+#  
+#  Description:
+#    This procedures checks whether the specified mac address 
+#    is learnt or not learnt through the given vlan and port id.
+#
+#  Input Variables:
+#    session - Session identifier which identifies the connection 
+#              with the DUT
+#    vlanid - Identifier for already created vlan
+#    port - Port number
+#    mac - Mac address to be checked for its existence or 
+#          non-existence.
+#
+#  Optional Args:
+#    testno -  Test case number used for logging
+#    comment - Test case comment to be logged in the text file.
+#    result - If the value is "exist", the mac address must be 
+#             present. If "notexist", mac address should not 
+#             be present in the FDB. Default is "exist" 
+#    val    - List of result in which the mac address to be
+#             searched.
+#    flag   - Flag indicating the MAC address is a static or dynamic entry
+#             possible values are "mgmt" for static. "learned" for dynamic.
+#    fd - File descriptor of open log file
+#  
+#
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    Logs the error message - On failure 
+#    Logs the success message - On success
+#
+#  Possible Usage:
+#    set mac "00:02:03:02:0A:0B"
+#    snmpCheckFdb -session $sessionid -vlanid $vlan_id -port 1\
+#             -mac $mac -result exist -testno $testNo \
+#             -comment "Check $mac through vlan $vlan_id port 1"
+###############################################################
+
+proc snmpCheckFdb { args } {
+  parse_args snmpCheckFdb $args {
+      session ""
+      result "exist"
+      mac ""
+      vlanid ""
+      port ""
+      testno "snmpCheckFdb"
+      comment "none"
+      fd "NULL"
+      val ""
+      flag "learned"
+  }
+
+  set func "snmpCheckFdb:"
+
+  if { $session == "" || $mac == "" || $vlanid == "" || $port == "" } {
+       error "$func session,mac,vlanid and port must be specified"
+       return 0
+  }
+
+  if { $result != "" } {
+     set result [string tolower $result]
+     if { !([string compare "exist" $result] == 0  ||
+          [string compare "notexist" $result] == 0) } {
+        error "$func $result is invalid argument should be exist or notexist"
+        return 0
+     }
+  }
+
+  set flag [string tolower $flag]
+  if { !([string compare "learned" $flag] == 0  ||
+         [string compare "mgmt" $flag] == 0     ||
+         [string compare "other" $flag] == 0) } {
+       error "$func $flag is invalid argument should be learned, mgmt or other"
+       return 0
+  }
+
+  snmpDebug DEBUG "$func session-$session result-$result mac-$mac vlanid-$vlanid port-$port - Start" $fd
+
+  result_debug "\n-- Checking FDB entry with MAC $mac, port $port --"
+
+  # Convert port id for multiple blade platforms
+  set portList [snmpUtilParsePortList $port]
+  set port [lindex $portList 0]
+
+  # MAC address needs to be formated according to the output of the SNMP
+  # 00:01:0A:0B:12:13 must be changed as 0:1:a:b:12:13
+
+  set mac [snmpUtilFormatMacAddr $mac]
+
+  snmpDebug LOG "$func formated mac address is - $mac" $fd
+
+  if {$val == ""} {
+     set output [snmpGetTable -session $session -oid extremeFdbMacFdbMacAddress]
+  } else {
+     set output $val
+  }
+  
+  report_start_test "$comment"
+
+  foreach line [split $output "\n"] {
+     if {[regexp -nocase $mac $line matchedRange] == 1} {
+        snmpDebug LOG "$func $mac and $line matched" $fd
+        set seqnum [snmpUtilGetIndex 2 $line]
+        set vlaninfo [snmpUtilGetIndex 1 $line]
+        if { $vlaninfo != $vlanid } {
+           snmpDebug LOG "$func I/P vlan id - $vlanid and O/P vlan id -$vlaninfo NOT matched" $fd
+           continue;
+        }
+        if {[info exists seqnum] == 1} {
+           set prt [snmpGet -session $session -oid \
+                    extremeFdbMacFdbPortIfIndex.$vlanid.$seqnum]
+           snmpDebug LOG "$func snmpGet-$prt" $fd
+
+           set portnum [snmpUtilGetVal int $prt]
+
+           set res [snmpGet -session $session -oid \
+                    extremeFdbMacFdbStatus.$vlanid.$seqnum]
+           snmpDebug LOG "$func snmpGet-$res" $fd
+
+           set flagval [snmpUtilGetVal inttext $res]
+
+           if {$flagval == $flag} {
+             set flagstat true
+           } else {
+             set flagstat false
+           }
+
+           if {$portnum == $port} {
+             if {[string compare "exist" $result] == 0 && $flagstat == "true"} {
+                  result_ok "FDB Entry exist with port $port vlanid $vlanid seqnum $seqnum, expected $result. PASS"   
+             } elseif {[regexp -nocase "notexist" $result] && $flagstat == "false"} {
+                  result_ok "$flag FDB Entry not exist with port $port vlanid $vlanid seqnum $seqnum, expected $result. PASS"
+             } else {
+                  result_error "FDB Entry exist with port $port vlanid $vlanid seqnum $seqnum, expected $result. FAIL"   
+             }
+             report_end_test
+             return
+          } else {
+             if {[regexp -nocase "notexist" $result]} {
+                    result_ok "portnum $portnum port $port not matching result $result. PASS"
+             } else {
+                     result_error "portnum $portnum port $port NOT matching result $result. FAIL"
+             }
+             report_end_test
+             snmpDebug DEBUG "$func - End\n" $fd
+             return
+          }
+       }
+     } else {
+         snmpDebug DEBUG "$func $mac and $line NOT matched" $fd
+     }
+  }
+
+  if {[string compare "exist" $result] == 0} {
+      result_error "FDB Entry not exist for $mac $vlanid $port, expected $result. FAIL"
+  } else {
+      result_ok "FDB Entry exist for $mac $vlanid $port, expected $result. PASS"
+  }
+
+  report_end_test
+  snmpDebug DEBUG "$func - End\n" $fd
+  return
+}
+
+################################################################
+#  Procedure Name: snmpCheckKeyValue
+#  
+#  Description:
+#    This procedure matches the given input value with the 
+#    output of SNMP operation.
+#
+#  Input Variables:
+#   
+#     paramList - Parameter containing the list of key values 
+#                 to be checked. If the check is to find out 
+#                 whether the value exists or not, then "exist"
+#                 key word can be given along with the match pattern.
+#                 Otherwise "notexist" can be specified. Default is
+#                 "exist"
+#     output    - The value with which the given key values to 
+#                 be matched. 
+#  Optional Args:
+#    testno - Test number to be put in report.txt file 
+#             for reference
+#    comment - User specified comment to be put in report.txt 
+#              file for reference.
+#    fd - File descriptor for logging the command outputs   
+# 
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    Logs the error message - On failure 
+#    Logs that the match is found - On success
+#
+#  Possible Usage:
+#   set result snmpGet . . .
+#   lappend paramList {{.*extremeFanNumber.1.* =.*1} exist}
+#   lappend paramList {{.*extremeFanNumber.4.* =.*4} notexist}
+#   snmpCheckKeyValue $paramList -output $result
+###############################################################
+
+proc snmpCheckKeyValue {paramList args} {
+   parse_args snmpCheckKeyValue $args {
+      output ""
+      testno ""
+      comment "snmpCheckKeyValue" 
+      fd "NULL" 
+   }
+
+   set func "snmpCheckKeyValue:"
+
+   snmpDebug DEBUG "$func output-$output testno-$testno - Start" $fd
+
+   result_debug "\n-- Checking for $paramList in $output --"
+
+   report_start_test "$comment"
+
+   set paramList [_EnhanceStackingParameterList $paramList]
+   set paramList [_EnhancePioneerParameterList $paramList]
+   foreach key $paramList {
+      set var [lindex $key 1]
+      if { $var != ""} {
+         set status [lindex $key 1]
+      } else {
+         set status "exist"
+      }
+
+      if {[regexp -nocase [lindex $key 0] $output match] == 1} {
+         if { $status != "exist"} {
+            result_error "$key not matched with $output. FAIL"
+         } else {
+#            result_ok "$key matched with $output. PASS" 
+            result_ok "$key matched with the output. PASS"
+         }
+      } else {
+         if {$status == "exist"} {
+            result_error "$key matched with $output. FAIL"
+         } else {
+#            result_ok "$key does not found in $output. PASS"
+            result_ok "$key does not found in the output. PASS"
+         }
+      }
+   }
+
+   report_end_test
+   snmpDebug DEBUG "$func - End\n" $fd
+   return
+}
+
+################################################################
+#  Procedure Name: snmpCreateProtocol
+#  
+#  Description:
+#    This procedure creates an user defined protocol type.
+#
+#  Input Variables:
+#    session - Session identifier which identifies the connection
+#              with the DUT
+#    protoid   - Protocol filter identifier
+#    protoidx  - Protocol filter identifier index
+#    name      - Name of the protocol filter
+#    encap     - Encapsulation type for the filter (1 to 5)
+#    id        - Protocol number of the protocol
+#    
+#  Optional Args:
+#    fd - File descriptor for logging the command outputs   
+# 
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    0 - On failure 
+#    1 - On success
+#
+#  Possible Usage:
+#    snmpCreateProtocol -session $sessionid -protoid 16 \
+#          -name "Proto1" -encap 1 -id 0x45
+###############################################################
+
+proc snmpCreateProtocol {args} {
+   parse_args snmpCreateProtocol $args {
+     session ""
+     protoid ""
+     protoidx "1"
+     name ""
+     encap ""
+     id ""
+     fd "NULL"
+  }
+
+  set func "snmpCreateProtocol:"
+ 
+  if { $session == "" || $protoid == "" || $name == "" || $encap == ""  || $id == "" } {
+      error "$func session, protoid, name, encap, id must be specified"
+      return 0
+  }
+  snmpDebug DEBUG "$func session-$session protoid-$protoid name-$name encap-$encap id-$id - Start" $fd
+
+  result_debug "\n-- Creating protocol $name, protoid - $protoid --"
+
+  if {$protoid > 7 } {
+     snmpDebug LOG "$func - Protocol id $protoid is not in valid range - End\n" $fd
+     return 0
+  }
+
+  if {$encap != 1} {
+     set result [snmpSet -session $session \
+            -oid extremeVlanProtocolName.$protoid.$protoidx -type s -val $name \
+            -oid extremeVlanProtocolDllEncapsType.$protoid.$protoidx -type i \
+              -val $encap \
+            -oid extremeVlanProtocolId.$protoid.$protoidx -type i -val $id  \
+            -oid extremeVlanProtocolStatus.$protoid.$protoidx -type i -val 1]
+  } else {
+     set result [snmpSet -session $session \
+            -oid extremeVlanProtocolName.$protoid.$protoidx -type s -val $name \
+            -oid extremeVlanProtocolDllEncapsType.$protoid.$protoidx -type i \
+              -val $encap \
+            -oid extremeVlanProtocolStatus.$protoid.$protoidx -type i -val 1] 
+  }
+
+  snmpDebug LOG "$func snmpSet-$result" $fd
+  snmpDebug DEBUG "$func -End\n" $fd
+  return $result 
+}
+
+################################################################
+#  Procedure Name: snmpDeleteProtocol
+#  
+#  Description:
+#  This procedure creates an user defined protocol type.
+#
+#  Input Variables:
+#    session - Session identifier which identifies the connection
+#              with the DUT
+#    protoid   - Protocol filter identifier
+#    protoidx  - Protocol filter identifier index
+# 
+#  Optional Args:
+#    fd - File descriptor for logging the command outputs   
+# 
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    Logs the error message - On failure 
+#    vlan identifier - On success
+#
+#  Possible Usage:
+#    snmpDeleteProtocol -session $sessionid -protoid 16
+###############################################################
+
+proc snmpDeleteProtocol {args} {
+  parse_args snmpDeleteProtocol $args {
+     session ""
+     protoid ""
+     protoidx "1"
+     fd "NULL"
+  }
+
+  set func "snmpDeleteProtocol:"
+
+  if { $session == "" || $protoid == "" } {
+     error "$func session and protoid must be specified"
+     return 0
+  }
+  
+  snmpDebug DEBUG "$func session-$session protoid-$protoid protoidindex \
+                   $protoidx- Start" $fd
+
+  result_debug "\n-- Deleting protocol with id $protoid --"
+
+  if {$protoid > 7 } {
+     snmpDebug LOG "$func - Protocol id $protoid is not in range - End\n" $fd
+     return 1
+  }
+
+  set result [snmpSet -session $session -oid  extremeVlanProtocolStatus.$protoid.$protoidx -type i -val 6]
+
+  snmpDebug LOG "$func snmpSet-$result" $fd
+  snmpDebug DEBUG "$func -End\n" $fd
+  return 1
+}
+
+#################################################################
+#  Procedure Name: snmpAssignIPAddrToVlan
+#  
+#  Description:
+#    This procedure associates a protocol to already created vlan.
+#
+#  Input Variables:
+#    session - Session identifier which identifies the connection 
+#              with the DUT
+#    vlanid - Identifier for already created vlan
+#    ipaddr - IP Address for the Vlan.
+#    mask   - Subnet Mask for the VLAN.
+#
+#  Optional Args:
+#    fd - File descriptor of open log file
+# 
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    Logs the error message - On failure 
+#    1 - On success
+#
+#  Possible Usage:
+#    set vlan_id [snmpCreateVlan -session $sessionid \
+#                   -name "VLAN1"]
+#    snmpAssignIPAddrToVlan -session $sessionid -vlanid $vlan_id\
+#                    -addr "10.0.0.1" -mask "255.0.0.0" -fd $fd_res
+###############################################################
+
+proc snmpAssignIPAddrToVlan { args } {
+   parse_args snmpAddProtocolToVlan $args {
+      session ""
+      vlanid ""
+      addr ""
+      mask ""
+      forwarding ""
+      fd "NULL"
+   }
+
+   set func "snmpAssignIPAddrToVlan:"
+
+   if { $session == "" || $vlanid == "" || $addr == "" || $mask == ""} {
+       error "$func session,vlanid addr and mask must be specified"
+       return 0
+   }
+
+   snmpDebug DEBUG "$func session-$session vlanid-$vlanid addr-$addr mask-$mask fd-$fd- Start" $fd
+
+   result_debug "\n-- Assigning IP address $addr/$mask to VLAN --"
+
+   if {$forwarding == ""} {
+     set forwarding 2
+   }
+   
+   set result [snmpSet -session $session -oid extremeVlanIpNetAddress.$vlanid \
+             -type a -val $addr -oid extremeVlanIpNetMask.$vlanid -type a \
+             -val $mask -oid extremeVlanIpStatus.$vlanid -type i -val 4 \
+             -oid extremeVlanIpForwardingState.$vlanid -type i -val $forwarding]
+
+   snmpDebug LOG "$func snmpSet - $result" $fd
+   snmpDebug DEBUG "$func snmpSet - $result - End\n" $fd
+  
+   return $result
+}
+
+#################################################################
+#  Procedure Name: snmpDelIPAddrFromVlan
+#  
+#  Description:
+#    This procedure deletes IpAddress from a vlan.
+#
+#  Input Variables:
+#    session - Session identifier which identifies the connection 
+#              with the DUT
+#    vlanid - Identifier for already created vlan
+#
+#  Optional Args:
+#    fd - File descriptor of open log file
+# 
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    Logs the error message - On failure 
+#    1 - On success
+#
+#  Possible Usage:
+#    snmpDelIPAddrFromVlan -session $sessionid -vlanid $vlan_id
+###############################################################
+
+
+proc snmpDelIPAddrFromVlan { args } {
+   parse_args snmpDelIPAddrFromVlan $args {
+      session ""
+      vlanid ""
+      fd "NULL"
+   }
+
+   set func "snmpDelIPAddrFromVlan:"
+
+   if { $session == "" || $vlanid == "" } {
+       error "$func session and vlanid must be specified"
+       return
+   }
+
+   snmpDebug DEBUG "$func session-$session vlanid-$vlanid fd-$fd" $fd 
+
+   result_debug "\n-- Deleting IP address from VLAN --"
+
+   set result [snmpSet -session $session -oid extremeVlanIpStatus.$vlanid -type i -val 6]
+
+   snmpDebug LOG "$func snmpSet - $result" $fd
+   snmpDebug DEBUG "$func snmpSet - $result - End\n" $fd
+   
+}
+
+#################################################################
+#  Procedure Name: snmpCleanUp
+#
+#  Description:
+#    This procedure deletes the default route configured in         
+#    each DUT.
+#  
+#  Input Variables:
+#    None.
+#     
+#  Optional Args:
+#    None.
+#     
+#  Output Variables:
+#     None
+#
+#  Return Variables:
+#     None
+#
+#  Possible Usage:
+#    snmpCleanUp
+###############################################################
+
+proc snmpCleanUp {} {
+   for {set numDUT 1; global DUT${numDUT}_CONNECT} \
+       {[info exists DUT${numDUT}_CONNECT] } \
+       {incr numDUT ; global DUT${numDUT}_CONNECT} {
+       
+             set dutAddr [set DUT${numDUT}_CONNECT]
+             Login $dutAddr
+             UnconfigGatewayNetwork
+             SendACmd "disable snmp access"
+   }
+}
+
+################################################################
+# ************* SNMP UTILITY FUNCTIONS ************************#
+################################################################
+
+################################################################
+#  Procedure Name: snmpUtilParsePortList
+#  
+#  Description:
+#     This procedure parses the port number of the format
+#     port1,port2-port10 and returns individual port numbers
+#     between a range of port numbers 
+#
+#  Input Variables:
+#    ports - Port numbers
+#    ifIndex/Index - Index required.
+# 
+#  Optional Args:
+#    None
+#
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    Empty list - on failure
+#    Port number list - on success
+#
+#  Possible Usage:
+#    snmpUtilParsePortList 1,4,5-20
+###############################################################
+
+proc snmpUtilParsePortList {ports {index "ifIndex"} } {
+
+   set func "snmpUtilParsePortList:"
+
+   result_debug "$func ports-$ports - Start"
+
+   if { $ports == "" } {
+      result_error "$func empty ports:$ports" 
+      return;
+   } 
+#for ifIndex the formula is (slot*1000) + port number
+#for port Index the formula is (slot -1)*128 + port number
+   if { $index == "ifIndex" } {
+   	set defBase 1000 
+        set portIndex 0
+   } else {
+   	set defBase 0 
+        set portIndex 1
+   }
+   set list ""
+
+   if {[regexp {([^,0-9\- :])+} $ports] == 1} {
+      result_error "$func port number $ports must be in the format <port> | <port1,port2..> | <port1,port2-port5>"
+      snmpDebug DEBUG "$func port number $ports format is incorrect - End\n"
+      return $list
+   }
+
+   foreach args [split $ports ","] {
+       set args [string trim $args]
+       if {[regexp "(.*:)(.*)-(.*:)(.*)" $args res1 res2 res3 res4 res5] == 1 } {
+           for {set i 2} { $i <=5 } {incr i 1} {
+              if { [info exists res$i] == 0 } {
+                   result_error "res$i does not exist"
+              } 
+           }
+              
+           set firstAppendStr $res2
+           set secondAppendStr $res4
+           if { $res2 != $res4 } {
+               result_error "invalid port format $ports"
+               return
+           }
+
+           set i 1
+           set val1 $res3 
+           set val2 $res5
+           if { $val1 > $val2 } {
+               set temp $val1
+               set val1 $val2
+               set val2 $temp
+           }
+               
+           for {set i $val1} { $i <= $val2 } { incr i 1} {
+                set card [string trim $firstAppendStr :]
+                if { $portIndex == 1 } {
+                     set port [expr ($card-1)*128 + $i]
+                } else {
+                     set port [expr $card * 1000 + $i]
+                }
+                lappend list "$port"
+           }
+       } elseif {[regexp "(.*:)(.*)" $args res1 res2 res3] == 1 } {
+           set card [string trim $res2 :]
+           if { $portIndex == 1 } {
+                 set port [expr ($card-1)*128 + $res3]
+            } else {
+                 set port [expr $card * 1000 + $res3]
+            }
+           lappend list "$port"
+       } elseif {[regexp ".*-.*" $args] == 1} {
+           set i 1
+           foreach arg [split $args "-"] {
+               if {$i == 1} {
+                   set val1  [string trim $arg]
+                   incr i 1
+               } else {
+                   set val2 [string trim $arg]
+               }
+           }
+           if { $val1 > $val2 } {
+                
+               set temp $val1
+               set val1 $val2
+               set val2 $temp
+           }
+               
+           for {set i $val1} { $i <= $val2 } { incr i 1} {
+               lappend list [expr $defBase + $i]
+           }
+       } else {
+           lappend list [expr $defBase + [string trim $args]]
+       }
+   }
+
+   snmpDebug DEBUG "$func return-$list - End\n"
+   return $list
+}
+
+################################################################
+#  Procedure Name: snmpUtilGetSlotPort
+#  
+#  Description:
+#     This procedure parses the port number of the format
+#     port1,port2-port10 and returns individual port numbers
+#     between a range of port numbers and their corresponding slot
+#     numbers in a separate list. 
+#
+#  Input Variables:
+#    ports - Port numbers
+#    sList - slot list
+# 
+#  Optional Args:
+#    None
+#
+#  Output Variables: 
+#     portList - list of ports
+#     slotList - list of slots (using upvar)
+#
+#  Return Variables:
+#    Empty list - on failure
+#    Port number list and slot list - on success
+#
+#  Possible Usage:
+#   set portlist [ snmpUtilGetSlotPort 1,4,5-20 $slotList]
+###############################################################
+
+proc snmpUtilGetSlotPort { ports sList } {
+   upvar $sList slotList
+   set portList ""
+   set func "snmpUtilGetSlotPort:"
+
+   puts "$func ports-$ports - Start"
+
+   set list ""
+
+   if {[regexp {([^,0-9\- :])+} $ports] == 1} {
+      puts "$func port number $ports must be in the format <port> | <port1,port2..> | <port1,port2-port5>"
+      return $list
+   }
+
+   foreach args [split $ports ","] {
+       set args [string trim $args]
+       if {[regexp "(.*:)(.*)-(.*:)(.*)" $args res1 res2 res3 res4 res5] == 1 } {
+           for {set i 2} { $i <=5 } {incr i 1} {
+              if { [info exists res$i] == 0 } {
+                   puts "res$i does not exist"
+
+              }
+           }
+
+           set firstAppendStr $res2
+           set secondAppendStr $res4
+           if { $res2 != $res4 } {
+               puts "invalid port format $ports"
+               return
+           }
+
+           set i 1
+           set val1 $res3
+           set val2 $res5
+           if { $val1 > $val2 } {
+               set temp $val1
+               set val1 $val2
+               set val2 $temp
+           }
+
+           for {set i $val1} { $i <= $val2 } { incr i 1} {
+                set card [string trim $firstAppendStr :]
+                lappend slotList $card
+                lappend portList $i
+           }
+       } elseif {[regexp "(.*:)(.*)" $args res1 res2 res3] == 1 } {
+           set card [string trim $res2 :]
+           lappend slotList $card
+           lappend portList $res3
+       } elseif {[regexp ".*-.*" $args] == 1} {
+           set i 1
+           foreach arg [split $args "-"] {
+               if {$i == 1} {
+                   set val1  [string trim $arg]
+                   incr i 1
+               } else {
+                   set val2 [string trim $arg]
+               }
+           }
+           if { $val1 > $val2 } {
+
+               set temp $val1
+               set val1 $val2
+               set val2 $temp
+           }
+           set card 1
+           for {set i $val1} { $i <= $val2 } { incr i 1} {
+                lappend slotList $card
+                lappend portList $i
+           }
+       } else {
+           set card 1
+           lappend slotList $card
+           lappend portList [string trim $args]
+       }
+   }
+   result_debug "slot list = $slotList"
+   result_debug "port list = $portList"
+   return $portList
+}
+
+################################################################
+#  Procedure Name: snmpUtilPortToHexStr
+#  
+#  Description:
+#     This procedure converts port numbers into hex string
+#     Ex. Port 5
+#         HEX STRING: 0800000000000000000000000000000000000000000000000000000000000000
+#
+#  Input Variables:
+#    port -  Port number(int)
+# 
+#  Optional Args:
+#    None
+#
+#  Output Variables: 
+#     
+#    Hex string
+#
+#  Return Variables:
+#    error - On failure 
+#    hex string  - On success
+#
+#  Possible Usage:
+#    set hexStr  [snmpUtilPortToHexStr $port]
+###############################################################
+proc snmpUtilPortToHexStr { port } {
+   set hexStr ""
+   if { $port <=0 } {
+      result_error "invalid port number : $port for hex string conversion"
+      return
+   }
+   set num [expr $port/4]
+   set rem [expr $port%4]
+   if { $num > 0 && $rem == 0 } {
+       while { $num >1 } {
+           append hexStr "0"
+           incr num -1
+       }
+      append hexStr "1"
+   } elseif {  $num > 0 && $rem != 0 } {
+       while { $num >0 } {
+           append hexStr "0"
+           incr num -1
+       }
+   }
+   set pbit ""
+   switch $rem {
+       "1"  { set pbit "8" }
+       "2"  { set pbit "4" }
+       "3"  { set pbit "2" }
+   }
+   append hexStr $pbit
+   set len [string length $hexStr]
+   set num [expr 64-$len]
+   while { $num >0 } {
+           append hexStr "0"
+           incr num -1
+   }
+  result_debug "Hex string = $hexStr"
+  return $hexStr
+}
+
+################################################################
+#  Procedure Name: snmpUtilGetVal
+#  
+#  Description:
+#     This procedure extracts the return value of SNMP get / set 
+#     commands.
+#
+#  Input Variables:
+#    type - Type of the return value (int | string)
+#    param  -  Output of SNMP set / get operation
+# 
+#  Optional Args:
+#    None
+#
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    error - On failure 
+#    extracted value - On success
+#
+#  Possible Usage:
+#    set output [snmpGet -session $session_id -oid $oid
+#    snmpUtilGetVal int $output
+###############################################################
+
+proc snmpUtilGetVal { type param } {
+ 
+   set func "snmpUtilGetVal:"
+
+   set res ""
+   if { $type == "int" } {
+      regexp {.*INTEGER.* ([0-9|-]*)} $param res1 res
+   } elseif { $type == "intsec" } {
+      regexp {.*INTEGER.* ([0-9]+)} $param res1 res
+   } elseif { $type == "counter" } {
+      regexp {.*Counter(32|64).* ([0-9]*)} $param res1 res2 res
+   } elseif { $type == "boolean" } {
+      regexp {.*INTEGER.* ([a-zA-Z]*)} $param res1 res
+   } elseif { $type == "inttext" } {
+      regexp {.*INTEGER.* (.*)\(.*\)} $param res1 res
+   } elseif { $type == "enum" } {
+      regexp {.*\((.*)\)} $param res1 res 
+   } elseif { $type == "timetick" } {
+      regexp {.*\(([0-9]+)} $param res1 res
+   } elseif { $type == "ipaddr" } {
+      regexp {.*IpAddress: (.*)} $param res1 res
+   } elseif { $type == "hex" } {
+      regexp -nocase {.*Hex-STRING: ([0-9|A-F|\ ]+)} $param res1 res
+   } elseif { $type == "str" } {
+      regexp -nocase {.*STRING: \"(.*)\"} $param res1 res
+   } elseif { $type == "mac" } {
+      regexp -nocase {.*STRING: ([0-9|A-F|:|\ ]+)} $param res1 res
+   } elseif { $type == "tick" } {
+      regexp {.*Timeticks.*\(.*\) ([0-9|\:|\.]+)} $param res1 res
+   } elseif { $type == "gauge" } {
+      regexp {.*Gauge(32|64).* ([0-9]*)} $param res1 res2 res
+   } elseif { $type == "negative" } {
+      regexp {.*INTEGER.* (\-[0-9]*)} $param res1 res 
+   } else {
+       result_error "$func Input $type is not supported"
+       return "error"
+   }
+   if {[info exists res] == 1} {
+      return $res
+   } else {
+      result_error "$func Input $param does not contain a $type value. res is $res res1 is $res1 FAIL"
+      return "error"
+   }
+}
+
+
+################################################################
+#  Procedure Name: snmpUtilGetIndex
+#  
+#  Description:
+#     This procedure extracts the SNMP index value from an oid
+#     depending on the position of the index (first or second)
+#
+#  Input Variables:
+#    pos - First or second index
+#    param - Oid
+# 
+#  Optional Args:
+#    None
+#
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    Logs the error message - on failure
+#    Extracted index value - on success
+#
+#  Possible Usage:
+#    set output [snmpGet -session $session_id -oid $oid
+#    snmpUtilGetIndex 1 $output
+###############################################################
+
+proc snmpUtilGetIndex { pos param } {
+
+   set func "snmpUtilGetIndex:"
+
+   if {$pos == 0 || $pos > 2} {
+       result_error "$func pos should be 1 or 2"
+   }
+
+   if {[regexp {.*[.]([0-9]+)[.]([0-9]+)} $param res res1 res2] == 0} {
+       result_error "$func index1.index2 not found in $param. FAIL"
+   }
+
+   if { $pos == 1 } {
+      if {[info exists res1]} {
+         return $res1
+      } else {
+         result_error "$func index1.index2 not found in $param. FAIL"
+      }
+   }
+
+   if { $pos == 2 } {
+      if {[info exists res2]} {
+         return $res2
+      } else {
+         result_error "$func index1.index2 not found in $param. FAIL"
+      }
+   }
+
+}
+
+################################################################
+#  Procedure Name: snmpUtilFormatMacAddr
+#  
+#  Description:
+#     This procedure formats the given MAC address to match
+#     the SNMP MAC address representation. In SNMP output,
+#     00:01:0A:0B:0C:1A MAC address is specified as
+#     0:1:a:b:c:1a
+#
+#  Input Variables:
+#    mac - MAC address that needs to be formated
+# 
+#  Optional Args:
+#    None
+#
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#     Formated mac address
+#
+#  Possible Usage:
+#     set mac "00:01:0A:0B:0C:1A"
+#     snmpUtilFormatMacAddr $mac
+###############################################################
+
+proc snmpUtilFormatMacAddr {mac} {
+   foreach addr [split $mac ":"] {
+      if { [regexp {(^[0])([0-9]|[A-Za-z])} $addr addr addr1 addr2] == 1 } {
+         append var [string tolower $addr2]
+      } else {
+         append var [string tolower $addr]
+      }
+      append var ":"
+   }
+   
+   return [string trim [string trim $var ":"]]
+}
+
+################################################################
+#  Procedure Name: snmpUtilGetVlanIfIndexFromName
+#  
+#  Description:
+#    This procedures retrieves the VLAN interface index for the
+#    given VLAN name
+#
+#  Input Variables:
+#    sessionid - SNMP session established with the DUT
+#    vlanname  - Name of the VLAN
+# 
+#  Optional Args:
+#    None
+#
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#     VLAN ifindex / ERROR 
+#
+#  Possible Usage:
+#     snmpUtilGetVlanIfIndexFromName $sessionid "Default"
+###############################################################
+proc snmpUtilGetVlanIfIndexFromName { sessionid vlanname } {
+   set result [snmpGetTable -session $sessionid -oid extremeVlanIfDescr]
+   foreach vlanInfo [split $result "\n"] {
+     if { [regexp -nocase $vlanname $vlanInfo] } {
+       regexp {.*[.]([0-9]+)} $vlanInfo res vlanIfIndex
+       if { [info exists vlanIfIndex] } {
+          result_debug "snmpUtilGetVlanIfIndexFromName - VLAN ifindex for $vlanname is $vlanIfIndex"
+          return $vlanIfIndex
+       }
+     }
+   }
+   result_debug "snmpUtilGetVlanIfIndexFromName - VLAN ifindex for $vlanname is ERROR"
+   return "ERROR"
+}
+
+################################################################
+#  Procedure Name: snmpUtilGetTagIndexFromTag
+#  
+#  Description:
+#    This procedures retrieves the Encap interface index for the
+#    given tag value
+#
+#  Input Variables:
+#    sessionid - SNMP session established with the DUT
+#    tag  - Tag value       
+# 
+#  Optional Args:
+#    None
+#
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#      tagIndex / ERROR 
+#
+#  Possible Usage:
+#     snmpUtilGetTagIndexFromTag $sessionid "2"
+###############################################################
+proc snmpUtilGetTagIndexFromTag { sessionid tag } {
+   set info "INTEGER: $tag"
+   set result [snmpGetTable -session $sessionid -oid extremeVlanEncapsIfTag]
+   result_debug "snmp get table operation receives $result"
+   foreach tagInfo [split $result "\n"] {
+     if { [regexp -nocase $info $tagInfo] } {
+       regexp {.*[.]([0-9]+)} $tagInfo res tagIndex
+       if { [info exists tagIndex] } {
+          result_debug "snmpUtilGetTagIndexFromTag - Tag index for Tag $tag is \
+                        $tagIndex"
+          return $tagIndex
+       }
+     }
+   }
+   result_debug "snmpUtilGetTagIndexFromTag- Tag index for Tag $tag is ERROR"
+   return "ERROR"
+}
+
+################################################################
+#  Procedure Name: snmpChangePortState
+#  
+#  Description:
+#  This procedure chhanfes the port status to enable or disable
+#  for the specified set of ports. 
+#
+#  Input Variables:
+#    session - Session identifier which identifies the connection
+#              with the DUT
+#    port - Port numbers to be added to the vlan 
+#    status - enable or disable 
+#
+#  Optional Args:
+#    fd - File descriptor of open log file
+# 
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    Logs the error message - On failure 
+#    1 - On success
+#
+#  Possible Usage:
+#   snmpChangePortState -session $sessionid -port 1,3,4,9-18 \
+#                       -status enable
+#   snmpChangePortState -session $sessionid -port 1,3,4,9-18 \
+#                       -status 1
+###############################################################
+
+proc snmpChangePortState {args} {
+
+   parse_args snmpChangePortState $args {
+      session ""
+      port ""
+      status ""
+      fd "NULL"
+   }
+ 
+   set func "snmpChangePortState:"
+
+   set state(1) "enable"
+   set state(2) "disable"
+
+   if {$session == "" || $port == "" || $status == ""} {
+      error "$func session, port and status must be specified"
+      return
+   }
+
+   if {$status == 1 || $status == 2} { 
+      set value $status
+   } elseif {$status == "enable"} {
+      set value 1
+   } elseif {$status == "disable"} {
+      set value 2
+   } else {
+      error "$func status should be either enable (1) or disable (2) "
+      return
+   }
+
+   snmpDebug DEBUG "$func session-$session port-$port change status to \
+                    $state($value) fd-$fd " $fd
+
+   # Parse the given port numbers
+   set portList [snmpUtilParsePortList $port]
+
+   # Change status for the ports
+   foreach element $portList {
+      snmpDebug LOG "$func $status Port $element" $fd
+      set result [snmpSet -session $session -oid ifAdminStatus.$element \
+                  -type i -val $value]
+      snmpDebug LOG "$func snmpSet -$result" $fd
+   }
+   snmpDebug DEBUG "$func - End\n" $fd
+   return 1 
+}
+
+#######################################################################################################################
+# Name: lldpSnmpWalk
+# Purpose: run the snmpWalk using the netSNMP package
+# input: DUT_IP
+#        mibfile name
+#        mibTable
+# output: return of the snmpwalk call
+#
+########################################################################################################################
+proc lldpSnmpWalk { DUT_IP mibfile mibTable args} {
+
+         result_debug "in snmpwalk: result"
+    if { [catch {exec /usr/bin/snmpwalk $DUT_IP -v2c -c private -m /usr/share/snmp/mibs/$mibfile $mibTable 2>>snmpLog} result]} {
+         result_error "error in snmpwalk: $result"
+	 set testVar [catch {exec cp snmpLog snmpLogError} result1]
+    } else {
+         result_debug "SNMPWALK : $result"
+         #set resArr [split $result \n]
+         #foreach line $resArr {
+         #    result_debug "LINE:: $line"
+         #}
+    }
+    return $result
+}
+#######################################################################################################################
+# Name: lldpSnmpGet
+# Purpose: run the snmpWalk using the netSNMP package
+# input: DUT_IP
+#        mibfile name
+#        mibTable
+# output: return of the snmpget call
+#
+########################################################################################################################
+proc lldpSnmpGet { DUT_IP mibfile mibTable args} {
+
+         result_debug "in snmpget: result"
+    if { [catch {exec /usr/bin/snmpget $DUT_IP -v2c -c private -m /usr/share/snmp/mibs/$mibfile $mibTable 2>>snmpLog} result]} {
+         result_error "error in snmpget: $result"
+    } else {
+         result_debug "SNMPGET : $result"
+         #set resArr [split $result \n]
+         #foreach line $resArr {
+         #    result_debug "LINE:: $line"
+         #}
+    }
+    return $result
+}
+#######################################################################################################################
+# Name: lldpSnmpSet
+# Purpose: run the snmpWalk using the netSNMP package
+# input: DUT_IP
+#        mibfile name
+#        mibTable
+# output: return of the snmpwalk call
+#
+########################################################################################################################
+proc lldpSnmpSet { DUT_IP mibTable type value args} {
+
+         flush stdout
+         flush stderr
+         result_debug "in snmpset: result"
+    if { [catch {exec /usr/bin/snmpset -c private -v2c $DUT_IP $mibTable $type $value 2>>snmpLog} result]} {
+         result_error "error in snmpset: $result"
+    } else {
+         result_debug "SNMPSET $result"
+         #set resArr [split $result \n]
+         #foreach line $resArr {
+         #    result_debug "LINE:: $line"
+         #}
+    }
+    sleep 1
+    return $result
+}
+
+###########################################################################################################
+# Name: getlldpPortOid
+# Purpose: return the SNMP Oid Index for the given port
+# The Oid will depend on the platforms
+# For summit Oid is same as port number
+# For chassis based platforms , the Oid is the relative port number of the port in the DUT taking into account all ports present 
+# e.g
+# starting with port=1, slot=1 as index , the port Oid for port 3:8 can be computed as 8 + All ports in slot 1and2
+# If any slot is absent its ports are not counted
+# input: Port
+# output: PortOid index 
+#    if {([regexp -nocase "BD-10808" $platform] ==  1) || ([regexp -nocase "Aspen|bd-88" $platform] == 1)}  {}
+#    elseif { ([regexp -nocase "SummitX450" $platform] == 1) || ([regexp -nocase "bd10Ki386" $platform] == 1)}  {}
+##############################################################################################################
+proc getlldpPortOid {port dut} {
+
+    global DUTs_info
+    global DUTs_Slot_info
+    set platform [GetPlatform $dut]
+    set version [GetVersion $dut majmin]
+    puts "The version is $version"
+    # Adding new code for 22.1 snmp index change
+    set newflag 0
+    if { $version >= 16.1 } {
+      set newflag 1
+    }
+    puts "The flag is $newflag"
+    puts "The port is $port"
+
+    set Oid 0
+
+    global chassis
+    global i386Chassis
+    global stackable
+    global i386Stackable
+
+    if { [regexp -nocase "$chassis|$i386Chassis|vpex" $platform] ==  1 }  {
+        # Get the slot and port number from port
+        set pSlot [split $port :]
+        set slot  [lindex $pSlot 0]
+        set portId  [lindex $pSlot 1]
+
+        set numSlots $DUTs_info($dut,numSlots)
+        result_debug " numSlots=$numSlots"
+        set numPorts 0
+        for {set j 1} {$j < $slot } {incr j} { 
+           set state [DutSlotStateRT 1 $j]
+            if {$newflag == 0} {
+               set numPorts [DutSlotNumPorts 1 $j]
+            } else {
+               set numPorts 128
+            }
+           result_debug " Slot=$j, numPorts=$numPorts, state=$state "
+           if { [regexp -nocase "Operational|Empty" $state] == 1 } {
+                set Oid [expr $Oid + $numPorts]
+                result_debug "Oid inside loop is $Oid"
+           }
+           #if { [string compare $state "Operational"] == 0 } {
+           #     set Oid [expr $Oid + $numPorts]
+           #}
+        }
+        set Oid [expr $Oid + $portId]
+        result_debug " Chassis  $platform :: slot=$slot, portId=$portId, Oid=$Oid"
+        return $Oid
+    } elseif { [regexp -nocase "$stackable|$i386Stackable" $platform] == 1}  {
+        result_debug " Stackable   $platform :: port=$port, Oid=$port"
+        return $port
+    }
+
+    result_error "UNKNOWN PLATFORM TYPE"
+    return $port
+}
+
+#############################################################
+# Name: lldpSnmpGetNext
+# Purpose: run the snmpgetnext using the netSNMP package
+# input: DUT_IP
+#        mibfile name
+#        mibTable
+# output: return of the snmpget call
+#
+############################################################
+proc lldpSnmpGetNext { DUT_IP mibfile mibTable args} {
+
+         result_debug "in snmpgetnext: result"
+    if { [catch {exec /usr/bin/snmpgetnext $DUT_IP -v2c -c private -m /usr/share/snmp/mibs/$mibfile $mibTable 2>>snmpLog} result]} {
+         result_error "error in snmpget: $result"
+    } else {
+         result_debug "SNMPGETNEXT : $result"
+         #set resArr [split $result \n]
+         #foreach line $resArr {
+         #    result_debug "LINE:: $line"
+         #}
+    }
+    return $result
+}
+
+
+############################################################
+# Name: lldpSnmpBulkGet
+# Purpose: run the snmpgetnext using the netSNMP package
+# input: DUT_IP
+#        mibfile name
+#        mibTable
+# output: return of the snmpget call
+#
+############################################################
+proc lldpSnmpBulkGet { DUT_IP mibfile mibTable args} {
+
+         result_debug "in snmpbulkget: result"
+    if { [catch {exec /usr/bin/snmpbulkget $DUT_IP -v2c -c private -m /usr/share/snmp/mibs/$mibfile $mibTable 2>>snmpLog} result]} {
+         result_error "error in snmpget: $result"
+    } else {
+         result_debug "SNMPBULKGET : $result"
+         #set resArr [split $result \n]
+         #foreach line $resArr {
+         #    result_debug "LINE:: $line"
+         #}
+    }
+    return $result
+}
+
+##################  Handling SnmpTrap_newformat
+############################################################
+# Name: CleanupsnmpTrapFiles
+# Purpose: For deleting snmp_trap generated by the DUT
+#          in /tmp/ loction
+# input: DUT_IP
+# output: none
+#
+############################################################
+proc CleanupsnmpTrapFiles { DUT_IP } {
+
+  global whichDutNow
+  global DUT${whichDutNow}_IP
+  
+  if { $DUT_IP == "null" } {
+      set DUT_IP [set DUT${whichDutNow}_IP]
+  }
+   result_debug "Deleting SNMP Trapfiles Generated By the DUT $DUT_IP"
+   if { ! [catch { glob /tmp/snmp_trap_UDP*$DUT_IP* } output] } { 
+     foreach file_name $output {
+	result_debug "Deleting the filename $file_name"
+        eval [file delete $file_name]
+     }
+   }  
+   return 1
+}
+

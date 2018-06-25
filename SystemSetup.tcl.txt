@@ -1,0 +1,3188 @@
+
+##################################################################    
+# Procedure Name: SystemSetup
+# Description:
+#     	Do ixia initialization, build portMapping, and optionally 
+#	check connections setup.
+#       Performs CheckConnection if CheckConnection is set
+#       otherwise basic cli setup on DUTs
+# Input args: none 
+# Return value: ConnectionOkay or Connectionbad
+# Output args: none 
+# Typical usage: 
+#	 SystemSetup
+# Category: SetupSwitch
+##################################################################
+proc SystemSetup {} {
+
+    ################################################################
+    set testNo "System Setup"
+    set title $testNo
+    ################################################################
+
+    # ----- Environment variables setup
+    global DUT1_CONNECT
+    global ixiaCh1
+    global SPIRENTCH1
+    global startCardNum
+    global portMappingList
+    global trunkPortList
+    global checkConnection
+    global switchPort2DefaultRouter
+    global ixiaPortMappingArray
+    global MAIN
+    global RELEASE_MASTER
+    global DUTs_info
+    global exos
+    global DUT
+    global env
+    global whichDutNow
+    global bcmPlatform bcmLynx;
+    global lastDUT
+    global numDUT 
+    global VERBOSE
+    global pioneerPlatform 
+    set useNewMethod 1
+    set MAIN(inbandFailCount) 0
+    set MAIN(mgmtFailCount) 0
+    # Hack added for Everest; remove later -GV
+    global skipEdpCheck
+    if [info exists skipEdpCheck] {
+        if {$skipEdpCheck} {
+            set useNewMethod 0
+        }
+    }
+    # End Hack
+    
+    # ------------------------------------------------------------------
+    # Change title if enable in common.cfg
+    # ------------------------------------------------------------------
+    SetTerminalTitle -add SystemSetup
+    UpdateTrackDBTxt "executing: SystemSetup";# tracking db location
+
+    # Check the real ixia libs that have loaded.
+    puts "This loaded Ixia_HOME directory is $env(IXIA_HOME)"
+    if ![info exist RELEASE_MASTER] {
+        set RELEASE_MASTER Release_Master
+    }  
+    set fd_res [open_result_file "$testNo"]
+    set time1 [clock seconds]
+    
+    result_h1 "$title"
+    report_start_test "$title"
+    
+    #generate mapping info for physical portId connected between DUT
+    set portDutListUsed [SetupDUTConnections]
+    
+    set firstSubStr "DUT"
+    set lastSubStr "_CONNECT"
+    for {set i 1} {$i <=$numDUT} {incr i 1} {
+    	global $firstSubStr$i$lastSubStr
+    	global $firstSubStr$i${lastSubStr}B ;#global variable for msm-b
+    	if [info exists $firstSubStr$i$lastSubStr] {
+    	    lappend DUTList $i
+    	}
+    }
+    set platform [GetPlatform DUT1]
+    Login $DUT1_CONNECT
+
+    set switchLicSet 1; # We only what to set the main switch vars once.
+    foreach testDUT $DUTList {
+
+        #------ adding this part of script to support eware duts
+        global eware_dut
+        if {[info exists eware_dut]} {
+            if {[lsearch $eware_dut $testDUT] == -1 } {
+                set loopVar 1
+            } else {
+                set loopVar 0
+            }
+        } else {
+            set loopVar 1
+        }
+        
+        #---- adding the loop for  exos duts
+        if {$loopVar} {
+            
+            # ----- Switch config 
+            Login  [expr $$firstSubStr$testDUT$lastSubStr]
+            
+            if {[CompareRelease [GetVersion DUT${testDUT}] 16.2.0.0]>=0} {
+                SendACmd "configure cli column 256"
+            }
+
+            # testing tftp connectivity
+            set returnFlagTftp "ok"
+            #if {$returnFlagTftp == "ok"} {
+            #  result_ok "tftp server connectivity test passed"
+            #} else {
+            #  result_error "tftp server connectivity test failed"
+            #}
+            
+            # Code Added to enable Ctrl+v+x+b reboot
+            EnableDebugMode
+            SendACmd "debug hal configure sysrq 1"
+            exSleep 2
+            DisableDebugMode
+            
+            # set regresession server time
+            set tm [exec date "+%m %d %Y %H %M %S"]
+            set timeCmd "configure time "
+            append timeCmd $tm
+            SendACmd $timeCmd
+            
+            #------ check added to skip license if not needed
+            set skipLicVar 1
+            global skipLicenceCheck
+            if [info exists skipLicenceCheck] {
+                if {$skipLicenceCheck} {
+                    set skipLicVar 0
+                }
+            }
+            #
+            # Licensing.
+            #    
+            if $skipLicVar {
+                # ------------------------------------------------
+                # Disable the 30 day trial license
+                # ------------------------------------------------
+                set parameterList ""
+                lappend parameterList "{30 days Trial} exist"
+                set result [CheckKeyValue "show license" $parameterList -reportResults 0]
+                if {$result == "ok"} {
+                    EnableDebugMode
+                    SendACmd "debug epm clear trial-license"
+                    CheckReboot
+                }
+                DisableDebugMode
+                
+                # ------------------------------------------------
+                # Restore License to Core if not at Core
+                # For lync L2-Edge
+                # ------------------------------------------------
+                # Set the license keys dynamically
+                set varout [_SetSwitchLicVars $testDUT 1]
+                set parameterList ""
+                # EY-06-08-2007: Check for L2(edge) license for Lynx platform.
+                if {[regexp $bcmLynx $DUTs_info(DUT$testDUT,platform)]} {
+                    lappend parameterList "L2.* exist";
+                } else {
+                    lappend parameterList "{core} exist";
+                }
+                if {[CheckKeyValue "show license" $parameterList]!="ok"} {
+                    if {1} {
+                        set parameterList ""
+                        lappend parameterList "{Enabled License Level:} 0 1"
+                        lappend parameterList "{Enabled License Level:} 1 1"
+                        set getLicense [GetKeyValue "show license" $parameterList]
+                        if {[lindex [lindex $getLicense 0] 1] != ""} {
+                            set temp [split [lindex $getLicense 0] " "]
+                            set currentLicense [concat [lindex $temp 0][lindex $temp 1]]
+                        } else {
+                            set temp [split [lindex $getLicense 0] " "]
+                            set currentLicense [lindex $temp 0]
+                        }
+                        if {[EnableLicense \
+                            [string tolower $currentLicense] core] == "error"} {
+                            if {![regexp $pioneerPlatform $DUTs_info(DUT$testDUT,platform)]} {
+                                return error
+                            }    
+                        }
+                    } else {
+                        if {![regexp $pioneerPlatform $DUTs_info(DUT$testDUT,platform)]} { 
+                           return error
+                        }    
+                    }
+                }
+                unset parameterList
+                # ------------------------------------------------
+                # Restore Feature Packs if they are supported on this platform
+                # ------------------------------------------------
+                if {![regexp -nocase "stack" $DUTs_info(DUT${testDUT},sysName)] && 
+                   $DUTs_info(DUT${testDUT},serial) != "null"} {
+                    set fvarout [_SetFeatureLicenses ${testDUT}]
+                }
+                ;# ------------- End Feature License -----------        
+            } ;# ------------ End of all Licensing -----------
+            
+            SendACmd "clear log st"
+            SendACmd "disable clipa"
+            SendACmd "disable idletime"
+            SendACmd "enable edp ports all"
+            SendACmd "enable ports all"
+            SendACmd "con edp advertisement-interval 15 holddown-interval 600"
+            
+            global stackable
+            if {[info exists DUTs_info(DUT${testDUT},coreFileTarget)]} {
+                SendACmd "configure debug core-dumps $DUTs_info(DUT${testDUT},coreFileTarget)"
+            }
+            if {[info exists MAIN(feature_directory)] && $MAIN(feature_directory) != "null"} {
+                CheckForPreviousCore $testDUT
+                if {[info exists $firstSubStr$testDUT${lastSubStr}B]} {
+                    result_debug "Renaming core on msm-b if any"
+                    Login  [expr $$firstSubStr$testDUT${lastSubStr}B] -masterCheck 0 -CheckOperational 0
+                    CheckForPreviousCore $testDUT backup
+                    Login  [expr $$firstSubStr$testDUT${lastSubStr}] -masterCheck 0 -CheckOperational 0
+                }
+            }
+        }
+        #Don't check for mariner now 
+        if { [isExosPlatform "DUT$testDUT"] != 1 } {
+            # ----- Switch config
+            Login  [expr $$firstSubStr$testDUT$lastSubStr]
+            SendACmd "clear log st"
+            SendACmd "clear fdb"
+            SendACmd "disable clipa"
+            SendACmd "disable idletime"
+            SendACmd "configure reboot-loop-protection threshold 10 3"
+            SendACmd "enable edp ports all"
+            EnableDebugMode
+            #         SendACmd "!echo dump_stack > /sys/module/watchdog/parameters/watchdog_warn_behavior"
+            #    SendACmd "configure reboot-loop-protection threshold 10 3"
+            
+            lappend parameterList "{Image *:.*by} $RELEASE_MASTER"
+            CheckKeyValue "show version" $parameterList -comment "- Show $RELEASE_MASTER"
+            unset parameterList
+            
+            set version [GetVersion "DUT$testDUT" "2"]
+            puts "DUT$testDUT version: $version"
+            if {($version >= 6.2) && ([regexp -nocase "godzilla" [GetPlatform]] != 1) } {
+                ##  CheckXMKStatus $testDUT
+            }
+            
+            lappend licenseKey "{License:} 1"
+            set licenseVal [GetKeyValue "show sw" $licenseKey]
+            if [regexp -nocase "summit24e3" $DUTs_info(DUT${testDUT},platform)] {
+                if ![regexp -nocase "advanced edge" $licenseVal] {
+                    SendACmd "enable license advanced-edge 7656871"
+                }
+            } elseif ![regexp -nocase "full l3" $licenseVal] {
+                # Enable full l3 license
+                SendACmd "enable license fullL3 7656871"
+            }
+            unset licenseKey
+            unset licenseVal
+        }
+    }
+
+    #Connect to ixia and setup connections
+    if { [SetupIxiaConnections] == "connectionBad" } {
+    	return connectionBad
+    }
+    
+    # Not initializing ixia or check connection
+    if {([info exists checkConnection] == 1) && $checkConnection == "NO_IXIA" } {
+        result_debug "Skipping ixia initialization and check connection"
+        ################################################
+        # Clean up
+        ################################################
+        set time2 [clock seconds]
+        result_p "*** Time for $testNo = [expr $time2-$time1] secs\n\n"
+        close_result_file
+        report_end_test
+        return "connectionOkay"
+    }
+    
+    # ----- Test variables setup
+    set numIxiaCd [GetNumIxiaCd]
+    if {$numIxiaCd == 0} {
+        result_debug "No ixia card found to be initialized"
+        return "connectionBad"
+    }
+    
+    # Check if desired to proceed
+    if {([info exists checkConnection] == 1) && $checkConnection == 0} {
+        foreach dut $DUTList {
+            # ----- Switch config 
+            Login  [expr $$firstSubStr$dut$lastSubStr]
+            SendACmd "clear log st"
+            SendACmd "disable clipa"
+        }
+        ################################################
+        # Clean up
+        ################################################
+        set time2 [clock seconds]
+        result_p "*** Time for $testNo = [expr $time2-$time1] secs\n\n"
+        close_result_file
+        report_end_test
+        return "connectionOkay"
+    }
+
+    # -----------------------------------------------------------------
+    # Verify MGMT and INBAND Connections
+    # -----------------------------------------------------------------
+    result_h2 "Network port validation"
+    report_start_test "Network port validation"
+    set mgmtList ""
+    foreach testDUT $DUTList {
+       lappend mgmtList "VerifyMgmtConnections $testDUT"
+    }
+    MultiTask $mgmtList
+    #Store results in init file
+    foreach testDUT $DUTList {
+        if {([info exists MAIN(ifPipe)]) && ($MAIN(ifPipe) != "NULL")} {
+            puts $MAIN(ifPipe) "set DUTs_info(DUT${testDUT},InbandNetConnected) $DUTs_info(DUT${testDUT},InbandNetConnected)"
+            puts $MAIN(ifPipe) "set DUTs_info(DUT${testDUT},MgmtNetConnected)   $DUTs_info(DUT${testDUT},MgmtNetConnected)"
+        }
+    }
+    #  --- update the tracking database if failures
+    _updateMgmtInbandStatus
+    report_end_test
+ 
+    set returnVal "connectionOkay"
+    set islDutFailList ""
+    set lastDUT 0
+    set portLearned 1
+    foreach testDUT $DUTList {
+        
+        set thisDutPorts ""
+        foreach portDutPair $portDutListUsed {
+            if {[lindex $portDutPair 1] == $testDUT} {
+                lappend thisDutPorts [lindex $portDutPair 0]
+            }
+        }
+        Login  [expr $$firstSubStr$testDUT$lastSubStr]
+        # Added By nellinivasu; to overcome ports still part of default vlan.
+        SendACmd "configure vlan default delete ports all"
+        # Next two lines required temporarily for "debug hal show compact-flash"
+        #logout
+        #Login  [expr $$firstSubStr$testDUT$lastSubStr]
+        set tagId [random 4094]
+        if {$tagId==1||$tagId==0} {set tagId 2}
+        SendACmd "create vlan ixiaVlan"
+        set output  [SendACmd "config vlan ixiaVlan tag $tagId"]          
+        result_debug "output :: $output"
+        if {[regexp -nocase "Error" $output]} {                
+            set tagId 3
+            SendACmd "config vlan ixiaVlan tag $tagId"
+        }
+        SendACmd "config vlan ixiaVlan add port all tag"
+        
+        exSleep 5
+        
+        #result_debug "Ports checked for $testDUT DUT are $thisDutPorts"
+        foreach portId $thisDutPorts {
+            set frameSent [SendFrame -txPortId $portId -tag $tagId -frameSize 68 -frameRate 100 -streamType "contPacket"]
+            #after 300
+            #set frameSent [SendFrame -txPortId $portId -tag $tagId -frameSize 68]
+            set sourceMac [GetSourceMacAddress $frameSent]
+            set sourceMacFdb($portId) [IxiaMacFormat2FdbFormat $sourceMac]
+            result_debug "FdbMac for port $portId: Source:|$sourceMacFdb($portId)| Dest:|[GetDestMacAddress $frameSent]|"
+            #LK commented below 2 second sleeep and StopPortsTransmit will be done after checkConnection is verified
+            #exSleep 2
+            #StopPortsTransmit $portId
+        }
+        exSleep 20
+        foreach portId $thisDutPorts {
+            if { [regexp -nocase "a" [MapDUTPortId $portId $testDUT] ] } {
+                lappend detectMACList "{$sourceMacFdb($portId) .*ixiaVlan.* d.*m} 1"
+            } else {
+                lappend checkMACList "$sourceMacFdb($portId) ixiaVlan [MapDUTPortId $portId $testDUT] exist"
+            }
+        }
+
+        if {[info exists detectMACList]} {
+            set DUTPortList [GetKeyValue "show fdb" $detectMACList]
+        }
+
+        
+
+        #if {[info exists DUTPortList] && [regexp "NOT" $DUTPortList] } {
+        #    puts "DEBUG DUTPortList: $DUTPortList"
+        #    set returnFlag "error"
+        #    result_error "Unable to detect one or more connections on DUT$testDUT"
+        #    result_debug "Please recheck all links"
+        #    set portLearned 0
+        #}
+
+        foreach portId $thisDutPorts {
+            if { [regexp -nocase "a" [MapDUTPortId $portId $testDUT] ] } {
+                set portIndex [lsearch -regexp $detectMACList "$sourceMacFdb($portId) .*ixiaVlan.* d.*m"]
+                #result_debug "Auto detecting portId: $portId DUTPort: [lindex $DUTPortList $portIndex]"
+                set replaceIndex [lsearch -regexp $portMappingList "$portId *A * $testDUT"]
+                if {$replaceIndex != -1} {
+                    set portMappingList [lreplace $portMappingList $replaceIndex $replaceIndex "$portId [lindex $DUTPortList $portIndex] $testDUT"]
+                }
+            }
+        }
+
+        result_debug "portMappingList: $portMappingList"
+        
+        if {([info exists checkMACList] == 1)} {
+            ################################################
+            set subTest "Checking DUT$testDUT Connections via MAC fdb Learning"
+            ################################################
+            result_h2 "$subTest"
+            report_start_test "$subTest"
+            set returnFlag [CheckFdb $checkMACList $fd_res $testNo]
+            unset checkMACList
+            report_end_test
+        } else {
+            set returnFlag "ok"
+        }
+        
+        ################################################
+        set subTest "Detecting DUT$testDUT Connections via MAC fdb Learning"
+        ################################################
+        result_h2 "$subTest"
+        report_start_test "$subTest"
+        SetupDUTConnections
+        set dutSpecificPortMappingList ""
+        foreach el $portMappingList {
+            if {[lindex $el 2]==$testDUT} {
+                lappend dutSpecificPortMappingList $el
+            }
+        }
+
+        if {[regexp "NOT" $dutSpecificPortMappingList] } {
+            set returnFlag "error"
+            result_error "Unable to detect one or more connections on DUT$testDUT"
+            result_debug "Please recheck all links"
+            if {[info exists MAIN(CCIMAINDEBUG)] && $MAIN(CCIMAINDEBUG)} {
+                imain_prompt -id "Failed FDB learning on DUT $testDUT"
+            }
+        }
+        foreach portId $thisDutPorts {
+            StopPortsTransmit $portId
+        }
+        SendACmd "delete vlan ixiaVlan"
+        report_end_test
+        
+        #EDP check whether it's working or not
+        set dut [expr $$firstSubStr$testDUT$lastSubStr]
+        if {$useNewMethod==1} {
+            set dutEdpInfo($testDUT) [isEdpWorking $dut $DUTList]
+            if {$dutEdpInfo($testDUT)<=0 } {
+                lappend islDutFailList $testDUT
+                set returnVal "connectionBad"
+                if {[info exists MAIN(CCIMAINDEBUG)] && $MAIN(CCIMAINDEBUG)} {
+                    imain_prompt -id "Failed Trunk Port EDP on DUT $testDUT"
+                }
+            }
+        }
+        
+        if { ($returnFlag != "ok") || ($returnFlagTftp != "ok") } {
+            set returnVal "connectionBad"
+        }
+    }
+    if {[info exist MAIN(ifPipe)] && ($MAIN(ifPipe) != "NULL")} {
+    	puts $MAIN(ifPipe) "set portMappingList \{$portMappingList\}"
+    }
+    ################################################
+    # Clean up
+    ################################################
+    foreach testDUT $DUTList {
+        Login  [expr $$firstSubStr$testDUT$lastSubStr]
+        global eware_dut
+        if {[info exists eware_dut]} {
+            if {[lsearch $eware_dut $testDUT] == -1 } {
+                SendACmd "disable edp ports all"
+                SendACmd "con edp advertisement-interval 60 holddown-interval 180"
+                SendACmd "disable dhcp vlan all"
+            } else {
+                SendACmd "disable edp ports all"
+                SendACmd "disable dhcp vlan all"
+            }
+        } else {
+            SendACmd "disable edp ports all"
+            SendACmd "con edp advertisement-interval 60 holddown-interval 180"
+            SendACmd "disable dhcp vlan all"
+        }
+        #_verifyCFCorruptionStatusOnLogin
+    }
+    # Gather portID info (generation platform speed etc) on a portid basis
+    if {$returnFlag == "ok"} {
+        #GetPortIdInfoStd 1
+    }
+    set numPortIdNeeded [GetHighestPortId]
+    # adding check for ixia to hub connection
+    set hubConnectionStatus "ok"
+    
+    set time2 [clock seconds]
+    result_p "*** Time for $testNo = [expr $time2-$time1] secs\n\n"
+    close_result_file
+    report_end_test
+    if {$hubConnectionStatus == "connectionBad"} {
+        set returnVal "connectionBad"
+    }
+    if {!$portLearned} {
+        set $returnVal "connectionBad"
+    }
+    if {$returnVal == "connectionBad"} {
+        if {[llength $islDutFailList] > 0} {
+            set MAIN(CCEdpDutResults) "EDP Failed on DUTs $islDutFailList"
+            report_start_test "Check Connections Failed EDP Check on DUTs ${islDutFailList}."
+            set tlstat [_verifyTrunkPortsActive $islDutFailList]
+            #set pIdStat [_verifyPortMappingPortsActive]
+            if {$tlstat} {
+                report_start_test "EDP Ports are active.  The cfg file trunkPortList may be incorrect"
+                result_ok "All ports are active.  The cfg file trunkPortList may be incorrect"
+            } else {
+                report_start_test "EDP Ports are down. May be a SW issue. Recheck cfg file too."
+                result_error "Some of the trunk links are down. May be a SW issue. Recheck cfg file too."
+            }
+            report_end_test
+            report_end_test
+        }
+        if {![info exists VERBOSE] || $VERBOSE == "yes"} {
+            dumpAllSwitchInfo;
+        }
+    }
+    return $returnVal
+}
+
+##################################################################    
+# Procedure Name: GetNumIxiaCd
+# Description:
+#     	Get the number of ixia cards in testbed by a given total 
+#	number of ports
+# Input args: {totalPorts} 
+# Output args: none 
+# Return value: integer
+# Typical usage: 
+#	 set numIxiaCd [GetNumIxiaCd $maxPorts]
+# Category: Utility
+##################################################################
+proc GetNumIxiaCd { {totalPorts 0} } {
+    global portMappingList
+    global startCardNum
+    
+    # get the last ixia port number from cfg port list, if no port is specified
+    if {$totalPorts == 0 } {
+	set totalPorts [lindex [lindex $portMappingList [expr [llength $portMappingList] -1 ]] 0]
+    }
+    
+    set result 1
+    set cardNum $startCardNum
+    set numPortPerCd [findNumPortPerIxiaCard $cardNum]
+    while { $totalPorts > $numPortPerCd } {
+	incr result
+	set totalPorts [expr $totalPorts - $numPortPerCd]
+	if {![card get 1 [expr $cardNum+1]]} {
+	    incr cardNum
+	}
+	set numPortPerCd [findNumPortPerIxiaCard $cardNum]
+    }
+    return $result
+}
+
+##################################################################    
+# Procedure Name: GetHighestPortId
+# Description:
+#     	Get the highest ixia portId based on portMappingList 
+# Input args: none 
+# Output args: none 
+# Return value: integer
+# Typical usage: 
+#	 set numPortIdNeeded [GetHighestPortId]
+# Category: Utility
+##################################################################
+proc GetHighestPortId { } {
+    global portMappingList
+    set maxPortId 0
+    foreach portList $portMappingList {
+	set portId [lindex $portList  0]
+	if {$portId > $maxPortId} {set maxPortId $portId}
+    }
+    return $maxPortId
+}
+
+##################################################################    
+# Procedure Name: GetATrunkPort
+# Description:
+#     	Return the index-th port number on firstSw that links to secondSw.
+# Input args: firstSw secondSw {index} 
+# Output args: none 
+# Return value: integer or a : separated integer set
+# Typical usage: 
+#	  SendACmd  "conf ebgp add port [GetATrunkPort 1 3]"
+# Category: Utility
+##################################################################
+proc GetATrunkPort {firstSw secondSw {index 1} } {
+    global DUT MAIN
+    global DUTs_info
+    
+    set portList [GetTrunkPortList $firstSw $secondSw]
+    #use the first switch id to get the default blade
+    if {$index > [llength $portList]} { return "PORT_NOT_FOUND" }
+    if {$index < 1} { return "PORT_NOT_FOUND" }
+    # add support for non ethernet wan ports
+    #Each port added adds { {1 2 1 6:1 F48T} {fSw sSw index port hdWare} }
+    set tempList [GetTrunkPortList $secondSw $firstSw]
+    if {[info exists MAIN(PRINTTopoInfo)]} {
+        if {$MAIN(PRINTTopoInfo)} {
+            result_debug "INFO: DUT$firstSw [lindex $portList [expr $index -1]] goes to DUT$secondSw [lindex $tempList [expr $index -1]]"
+        }
+    }
+    lappend DUT(trunk,usageList) "$firstSw $secondSw $index [lindex $portList [expr $index -1]] \
+	    [GetSlotNumType $firstSw [lindex $portList [expr $index -1]]]"
+    return [lindex $portList [expr $index -1]]
+}
+
+##################################################################    
+# Procedure Name: GetTrunkPortList
+# Description:
+#     	Return the list of all trunk port numbers on firstSw that link to secondSw.
+# Input args: firstSw secondSw 
+# Output args: none 
+# Return value: list of integers or list of : separated integer set
+# Typical usage: 
+#	  set portList [GetTrunkPortList $firstSw $secondSw]
+# Category: Utility
+##################################################################
+proc GetTrunkPortList {firstSw secondSw} {
+    global trunkPortList
+    
+    set returnList ""
+    if {![info exists trunkPortList]} {
+	return $returnList
+    }
+    
+    foreach s2sConnectPair $trunkPortList {
+	if {[lindex $s2sConnectPair 0] == $firstSw && \
+		[lindex $s2sConnectPair 1] == $secondSw} {
+	    lappend returnList [lindex $s2sConnectPair 2]
+	}
+    }
+    
+    return $returnList
+}
+
+##################################################################    
+# Procedure Name: SetupIxiaConnections
+# Description:
+#     	Check number of ixia ports, build ixiaPortMappingArray, and 
+#	initialize each port.
+# Input args: none 
+# Output args: none 
+# Return value: connectionBad in failure
+# Typical usage: 
+#	 SetupIxiaConnections
+# Category: SetupSwitch
+##################################################################
+proc SetupIxiaConnections {} {
+    global ixiaCh1
+    global SPIRENTCH1 ixiaPath
+    global startCardNum
+    global startPortNum
+    global ixiaMappingList
+    global ixiaPortMappingArray
+    global portMappingList
+    global MAIN
+    global ixiaNoReset
+    
+    if { ![info exist startCardNum] } {
+	result_error "startCardNum not defined "
+	return -1
+    }
+    if { [llength [split $startCardNum :]] == 2 }  {
+	set startPortNum [lindex [split $startCardNum :] 1]
+	set startCardNum [lindex [split $startCardNum :] 0]
+	if { ($startPortNum < 1) || ($startCardNum < 1) } {
+	    result_error "startCardNum not defined properly $startCardNum"
+	    return -1
+	}
+    } elseif { [llength [split $startCardNum :]] == 1 }  {
+	if { ![info exist startPortNum] } {
+	    # If dot1x is running, this will not be called,
+	    # otherwise set default startPortNum to be 1
+	    set startPortNum 1
+	}
+    } else {
+	result_error "startCardNum not defined properly $startCardNum"
+	return -1
+    } 
+    
+    
+    # ----- Ixia initialization
+    getTECardSpeed
+
+    #package require IxTclHal
+    #package require Mpexpr
+    #clean up any previous mess
+    #cleanUp
+    #ixInitialize $ixiaCh1
+    set chid1 [getChassisID $ixiaCh1]
+    set numPortIdNeeded [GetHighestPortId]
+    set numPortIdFound 0
+    set portIdList ""
+    foreach item $portMappingList {
+	lappend portIdList [lindex $item 0]
+        if {($numPortIdNeeded >= 11) && ([lindex $item 0] == 8)} {
+            lappend portIdList 9
+        }
+    }
+    result_debug "Total ports needed: $numPortIdNeeded"
+    if {([info exists ixiaMappingList] == 0) || [regexp -nocase "AUTO" $ixiaMappingList] } {
+	result_debug "Auto detecting connections startCard:$startCardNum startPort:$startPortNum"
+	for {set card $startCardNum } {$card <= 16 } {incr card } {
+	    if {[card get 1 $card]!=0} {continue}  ;# only go on if card is correct, 10G fails w/o it
+	    set portCount [card cget -portCount]
+	    #   puts "cardType: [card cget -type]"
+	    set skipFlag 0
+	    for {set port $startPortNum } {$port <= $portCount} {incr port} {
+		incr numPortIdFound
+		#      puts "numPortIdFound: $numPortIdFound $card $port"
+		if {[lsearch -exact $portIdList $numPortIdFound]!=-1} {
+		    set skipFlag 1
+		    set ixiaPortMappingArray($numPortIdFound) "1 $card $port"
+		    #RTP-SQA added for fast init
+		    if {[info exist MAIN(ifPipe)] && ($MAIN(ifPipe) != "NULL")} {
+                puts $MAIN(ifPipe) "set ixiaPortMappingArray($numPortIdFound) \"1 $card $port\""
+		    }
+		} elseif {$numPortIdFound<=$numPortIdNeeded} {
+		    set port [expr $port-1]
+		}
+	    }
+	    
+	    if {$skipFlag==0} {
+		set card [expr $card-1]
+	    } else {
+		set startPortNum 1
+	    }
+	    
+	    if {$numPortIdFound >= $numPortIdNeeded} { break }
+	}
+	if {$numPortIdFound < $numPortIdNeeded } {
+	    result_error "Not enough connections detected"
+	    result_error "Wanted $numPortIdNeeded but only got $numPortIdFound"
+	    return "connectionBad"
+	}
+    } else {
+	result_debug "Using user-defined connection pattern"
+	GenerateIxiaPortMapping
+    }
+    result_debug "================Ixia port mapping==================="
+    result_debug "            portId       \[ChasisId, Card, Port\]"
+    for {set portId 1 } {$portId <= $numPortIdNeeded } { incr portId } {
+	if {[lsearch -exact $portIdList $portId]!=-1} {
+	    set rxPort [MapIxiaPortId $portId chas card port]
+	    result_debug "              $portId      ->            \[$chas, $card, $port\]"
+	}
+    }
+    if {![info exists ixiaNoReset]} {
+        IxiaPortsInit
+    }
+}
+
+##################################################################    
+# Procedure Name: SetupDUTConnections
+# Description:
+#     	Generate mapping info for physical portId connection between 
+#	DUT and Ixia.
+# Input args: none 
+# Output args: none
+# Return value: list of portId->DUTPort integers
+# Typical usage: 
+#	 SetupDUTConnections
+# Category: SetupSwitch
+##################################################################
+proc SetupDUTConnections {} {
+    global portMappingList
+    
+    #generate mapping info for physical portId connected between DUT and Ixia
+    GenerateDUTPortMapping
+    result_debug "================DUT port mapping==================="
+    result_debug "            portId           DUTPort"
+    
+    foreach port $portMappingList {
+        set portNum [lindex $port 0]
+        set dutNum [lindex $port 2]
+        if {$dutNum == "" } {set dutNum 1}
+        lappend portListUsed $portNum
+        lappend portDutListUsed "$portNum $dutNum"
+        
+        set DUTPort [MapDUTPortId $portNum $dutNum]
+        result_debug "              $portNum      ->        $DUTPort on DUT$dutNum"
+    }
+    #also need to see how it maps port range
+    #result_debug "              1-22,23      ->    [MapDUTPortId 1-22,23]"
+    result_debug ""
+    return $portDutListUsed
+}
+
+##################################################################    
+# Procedure Name: CheckXMKStatus
+# Description:
+#     	This function checks and reports for 2nd OS running on dual 
+#	cpu with 256MB or more
+# Input args: dut 
+# Output args: none 
+# Return value: None
+# Typical usage: 
+#	 CheckXMKStatus $dutNo
+# Category: VerifySwitchOutput
+##################################################################
+proc CheckXMKStatus {dut} {
+
+    lappend parameterList "{Total DRAM Size:} 1"
+    set memory [GetKeyValue "show memory" $parameterList]
+    puts "memory: $memory"
+    
+    SendACmd "show switch"
+    SendACmd "nofeep"
+    
+    set flag [CheckXMK]
+    puts "Flag: $flag"
+    set dualCPU 1
+    switch -- [GetPlatform "DUT$dut"] {
+	Summit48i -
+	Summit24i {
+	    set dualCPU "0"     		   
+	} 
+    }
+    if {$dualCPU } {
+	report_start_test "Checking 2nd OS (xmk) status on 2nd CPU"
+	if {$memory >= 256 } {
+	    if {$flag == "xmk"} {
+		result_ok "2nd OS is running on 2nd CPU"
+	    } else {
+		result_error "2nd OS is not running on 2nd CPU"
+	    }
+	} else {
+	    if {$flag == "xmk"} {
+		result_error "2nd OS is running on 2nd CPU, but should not"
+	    } else {
+		result_ok "2nd OS is not running on 2nd CPU"
+	    }      
+	}
+	report_end_test
+    } else {
+	report_start_test "Checking for no 2nd OS (xmk) on single CPU"
+	if {$flag == "xmk"} {
+	    result_error "2nd OS is running on, but should not"
+	} else {
+	    result_ok "2nd OS is not running"
+	}      
+	report_end_test    
+    }
+    SendACmd "shswitch"
+}
+
+##################################################################    
+# Procedure Name: CheckXMK
+# Description:
+#     	This function checks if 2nd OS is running on 2nd CPU by nofeep
+#	command "xmk".
+# Input args: none 
+# Output args: none 
+# Return value: verybadifgethere if failure
+# Typical usage: 
+#	 set flag [CheckXMK]
+# Category: VerifySwitchOutput
+##################################################################
+proc CheckXMK {} {
+
+    send "xmk\r"
+    expect {
+	timeout {
+	    return "TIMEOUT"
+	}
+	"2\\-> " {
+	    send "vx\r"
+	    return "xmk"
+	}
+	"\\-> " {
+	    return "noxmk"
+	}
+    }
+    return "verybadifgethere"
+}
+
+##################################################################    
+# Procedure Name: AddTestbedInfoToDUTs_info
+# Description:
+#     	This function appends test bed specific information to DUTs_info array
+#        
+#
+# Input args: none
+# Output args: none
+# Return value: none
+# Typical usage: 
+#	 AddTestbedInfoToDUTs_info
+# Category: Setup
+##################################################################
+proc AddTestbedInfoToDUTs_info {} {
+   
+    global ixiaCh1 defaultRouter tftpServerList startCardNum switchPort2DefaultRouter \
+	    POWERCYCLE_IP POWERCYCLE_PORTS tftpShareName portMappingList trunkPortList \
+	    checkConnection connectionTimeout SPIRENTCH1 MAIN
+    global numDUT DUTs_info
+    
+    if {[info exists ixiaCh1]} {
+	set DUTs_info(ixiaip) $ixiaCh1   
+    }
+    if {[info exists SPIRENTCH1]} {
+        set DUTs_info(SPIRENTCH1) $SPIRENTCH1
+    }
+    if {[info exists tftpServerList]} {
+	set DUTs_info(tftpserverlist) $tftpServerList   
+    }
+    if {[info exists defaultRouter]} {
+	set DUTs_info(defaultRouter) $defaultRouter
+    }
+    if {[info exists POWERCYCLE_IP]} {
+	set DUTs_info(powercycle_ip) $POWERCYCLE_IP
+    }
+    if {[info exists POWERCYCLE_PORTS]} {
+	set DUTs_info(powercycle_ports) $POWERCYCLE_PORTS
+    }
+    if {[info exists tftpShareName]} {
+	set DUTs_info(tftpsharename) $tftpShareName
+    }
+    if {[info exists startCardNum]} {
+	set DUTs_info(startcardnum) $startCardNum
+    }
+    if {[info exists portMappingList]} {
+	set DUTs_info(portmappinglist) $portMappingList
+    }
+    if {[info exists trunkPortList]} {
+	set DUTs_info(trunkportlist) $trunkPortList
+    }
+    if {[info exists switchPort2DefaultRouter]} {
+	set DUTs_info(switchport2defaultrouter) $switchPort2DefaultRouter
+    }
+    if {[info exists checkConnection]} {
+	set DUTs_info(checkconnection) $checkConnection
+    }
+    if {[info exists connectionTimeout]} {
+	set DUTs_info(connectiontimeout) $connectionTimeout
+    }
+    
+    for {set i 1} {$i <= $numDUT} {incr i 1} {
+	global DUT${i}_CONNECT
+	global DUT${i}_IP
+	global DUT${i}_DefaultBlade
+	global DUT${i}_SETUP
+	set DUTs_info(DUT$i,connect) [set DUT${i}_CONNECT]
+	set DUTs_info(DUT$i,ip) [set DUT${i}_IP]
+	set DUTs_info(DUT$i,defaultblade) [set DUT${i}_DefaultBlade]
+	set DUTs_info(DUT$i,setup) [set DUT${i}_SETUP]
+    }
+    # Gather information about the slots / platform and assign to portIds
+    #   The portId info comes from SystemSetup, so this must be run first
+    if {![info exists MAIN(skipIxInit)] || !$MAIN(skipIxInit)} {
+        GetPortIdInfoStd
+    }
+}
+
+
+proc isExosPlatform { DUT } {
+    global DUTs_info
+    global supportedPlatform i386Platform
+    
+    #    if {$DUTs_info($DUT,platform)=="BD-Mariner"||$DUTs_info($DUT,platform)=="BD-10808"||$DUTs_info($DUT,platform)=="BD-PC"||$DUTs_info($DUT,platform)=="Summit-PC"||$DUTs_info($DUT,platform)=="Aspen"} 
+    # SK: Removed above line as we need liberal regexp than hard equate
+    if {[regexp -nocase "$supportedPlatform|$i386Platform" $DUTs_info($DUT,platform)] || \
+        [regexp -nocase "$supportedPlatform|$i386Platform" $DUTs_info($DUT,sysType)]} {
+        return 1
+    } else {
+        result_debug "\n-------------------------\n$DUTs_info($DUT,sysType) OR $DUTs_info($DUT,platform) NOT EXOS platform\n---------
+----------------"
+        return 0
+    }
+}
+
+proc isEdpWorking {DUT DUTList} {
+    global DUTs_info
+    global whichDutNow
+    global trunkPortList
+    global lastDUT
+    global checkHubConnection
+    global bcmNWI	
+    
+    if {[llength $DUTList] > 1 && [info exists trunkPortList]} {
+        for {set i 0} {$i<[llength $trunkPortList]} {incr i} {
+            set trunkPair [lindex $trunkPortList $i]
+            set localDUT [lindex $trunkPair 0]
+            set remoteDUT [lindex $trunkPair 1]
+            if {$remoteDUT==0} continue;
+            global eware_dut
+            if {[info exists eware_dut]} {
+                if {[lsearch $eware_dut $whichDutNow] == -1 } {
+                    set loopVar 1
+                } else {
+                    set loopVar 0
+                }
+            } else {
+                set loopVar 1
+            }
+            
+            if {$loopVar} {
+                
+                if {$localDUT==$whichDutNow} {
+                    if {$localDUT<$remoteDUT} {
+                        global stackable i386Stackable ewareStackable
+                        if {[regexp -nocase "$stackable|$i386Stackable|$ewareStackable|$bcmNWI" \
+                                 [GetPlatform DUT$remoteDUT]]} {
+                            lappend edpList "{[lindex $trunkPair 2] .* 00:00:$DUTs_info(DUT$remoteDUT,sysMAC) *1:[lindex [lindex $trunkPortList [expr $i+1]] 2]} exist"
+                        } else {
+                            lappend edpList "{[lindex $trunkPair 2] .* 00:00:$DUTs_info(DUT$remoteDUT,sysMAC) *[lindex [lindex $trunkPortList [expr $i+1]] 2]} exist"
+                        }
+                    } else {
+                        global stackable i386Stackable ewareStackable
+                        if {[regexp -nocase "$stackable|$i386Stackable|$ewareStackable|$bcmNWI" \
+                                 [GetPlatform DUT$remoteDUT]]} {
+                            lappend edpList "{[lindex $trunkPair 2] .* 00:00:$DUTs_info(DUT$remoteDUT,sysMAC) *1:[lindex [lindex $trunkPortList [expr $i-1]] 2]} exist"
+                        } else {
+                            lappend edpList "{[lindex $trunkPair 2] .* 00:00:$DUTs_info(DUT$remoteDUT,sysMAC) *[lindex [lindex $trunkPortList [expr $i-1]] 2]} exist"
+                        }
+                    }
+                }
+            } else {
+                if {$localDUT==$whichDutNow} {
+                    if {$localDUT<$remoteDUT} {
+                        global stackable i386Stackable ewareStackable
+                        if {[regexp -nocase "$stackable|$i386Stackable|$ewareStackable|$bcmNWI" \
+                                 [GetPlatform DUT$remoteDUT]]} {
+                            lappend edpList "{port.*[lindex $trunkPair 2]} {EDP is enabled} inLine"
+                            lappend edpList "{port.*[lindex $trunkPair 2]} {Remote-ID\=00:00:$DUTs_info(DUT$remoteDUT,sysMAC)} inLine exist 2"
+                            lappend edpList "{port.*[lindex $trunkPair 2]} {Remote-Port\=1:[lindex [lindex $trunkPortList [expr $i+1]] 2]} inLine exist 3"
+                        } else {
+                            lappend edpList "{port.*[lindex $trunkPair 2]} {EDP is enabled} inLine"
+                            lappend edpList "{port.*[lindex $trunkPair 2]} {Remote-ID\=00:00:$DUTs_info(DUT$remoteDUT,sysMAC)} inLine exist 2"
+                            lappend edpList "{port.*[lindex $trunkPair 2]} {Remote-Port\=[lindex [lindex $trunkPortList [expr $i+1]] 2]} inLine exist 3"
+                        }
+                    } else {
+                        global stackable i386Stackable ewareStackable
+                        if {[regexp -nocase "$stackable|$i386Stackable|$ewareStackable|$bcmNWI" \
+                                   [GetPlatform DUT$remoteDUT]]} {
+                            lappend edpList "{port.*[lindex $trunkPair 2]} {EDP is enabled} inLine"
+                            lappend edpList "{port.*[lindex $trunkPair 2]} {Remote-ID\=00:00:$DUTs_info(DUT$remoteDUT,sysMAC)} inLine exist 2"
+                            lappend edpList "{port.*[lindex $trunkPair 2]} {Remote-Port\=1:[lindex [lindex $trunkPortList [expr $i-1]] 2]} inLine exist 3"
+                        } else {
+                            lappend edpList "{port.*[lindex $trunkPair 2]} {EDP is enabled} inLine"
+                            lappend edpList "{port.*[lindex $trunkPair 2]} {Remote-ID\=00:00:$DUTs_info(DUT$remoteDUT,sysMAC)} inLine exist 2"
+                            lappend edpList "{port.*[lindex $trunkPair 2]} {Remote-Port\=[lindex [lindex $trunkPortList [expr $i-1]] 2]} inLine exist 3"
+                        }
+                    }
+                }
+            }
+            
+        }
+        Login $DUT
+        #SK: Doing file based CheckKeyValue to avoid dual edp port all, in case it does not work
+        set fd_edp [open "Tmp/tmp_edp[pid]" "w"]
+        if {[info exists eware_dut]} {
+            if {[lsearch $eware_dut $whichDutNow] == -1 } {
+                set output [SendACmd "show edp ports all" NULL $fd_edp]
+                # Build regular expression pattern for EDP neighbor MAC address.
+                set key {^[0-9]+}
+            } else {
+                set key {[a-z]+}
+                set output [SendACmd "show edp" NULL $fd_edp]
+            }
+        } else  {
+            # Build regular expression pattern for EDP neighbor MAC address.
+            set key {^[0-9]+}
+            set output [SendACmd "show edp ports all" NULL $fd_edp]
+        }
+        close $fd_edp
+        
+        # Check connection of DUT with HUB and if doesn't exist return connectionBad
+        if {([info exists checkHubConnection] == 1) && $checkHubConnection == 0} {
+            #do nothing skip the hub connection check
+        } else {
+            set DUT_Cnt [llength $DUTList]
+            set retHubConnVal 0 
+            for {set i $lastDUT} {$i<[llength $trunkPortList]} {incr i} {
+                set trunkPair [lindex $trunkPortList $i]
+                set localDUT [lindex $trunkPair 0]
+                if {$lastDUT==$localDUT} continue;
+                set remoteDUT [lindex $trunkPair 1]
+                set localDUTPort [lindex $trunkPair 2]
+                if {$remoteDUT!=0} continue;
+                for {set j 1} {$j<=$DUT_Cnt} {incr j} {	
+                    if {$j==$localDUT} continue; 
+                    set DUT_HUBPortMap [GetATrunkPort $j $remoteDUT] 
+                    set DUT_Mac [GetDUTMac DUT$j]
+                    global stackable i386Stackable
+                    if {[regexp -nocase "$stackable|$i386Stackable" [GetPlatform DUT$j]]} {
+                        lappend edpList "{$localDUTPort .*$DUT_Mac *1:$DUT_HUBPortMap } exist"
+                    } else {
+                        lappend edpList "{$localDUTPort .*$DUT_Mac *$DUT_HUBPortMap } exist"
+                    }
+                }
+                set lastDUT $localDUT
+                break;	
+            }
+        }
+        if {[regexp -line $key $output]!=1} {
+            result_debug "EDP not working ..."
+            file delete "Tmp/tmp_edp[pid]"
+            return -1
+        } else {
+            set output [CheckKeyValue "Tmp/tmp_edp[pid]" $edpList  -comment "for file operation: Check edp info"]
+            file delete "Tmp/tmp_edp[pid]"
+            if {$output=="ok"} {
+                return 1
+            } else {
+                return 0
+            }
+        }
+    } else {
+        return 1
+    }
+}
+proc CheckForPreviousCore {numDUT {msmType "primary"}} {
+   global DUTs_info MAIN
+
+   set date [clock format [clock seconds] -format "%m%d%I%p"]
+   if {[info exists MAIN(feature_directory)] && $MAIN(feature_directory) != "null"} {
+       set mod $MAIN(feature_directory)
+   } else {
+       set modStringList [split [file tail [pwd]] "/"]
+       set modListLength [llength $modStringList]
+       set mod [lindex $modStringList [expr $modListLength - 1]]
+   }
+
+   if {[CompareRelease [GetVersion DUT${numDUT}] 11.1.0.21]>=0} {
+    if { $msmType == "primary" } {
+      result_debug " Memory Card Present : [regexp -nocase \"present\" $DUTs_info(DUT${numDUT},memoryCard)]"
+      if {[regexp -- "present" $DUTs_info(DUT${numDUT},memoryCard)]} {
+         set coreBuf [SendACmd "ls /usr/local/ext"]
+      } else {
+         set coreFileList ""
+         lappend coreFileList "core\.\[a-z\]+\.\[0-9\]+ 0"
+         if {[CompareRelease [GetVersion DUT${numDUT}] 11.4.0.1]>=0} {
+            set coreBuf [SendACmd "ls /usr/local/tmp"]
+         } else {
+            EnableDebugMode
+            set coreBuf [GetKeyValue "!ls /scratch" $coreFileList 1]
+         }
+      }
+    } else {
+      EnableDebugMode ; # Required for executing !mv and !rm command
+      # if MSM-A has memeory card, please make sure MSM-B also has memeory card.
+      if {[regexp -- "present" $DUTs_info(DUT${numDUT},memoryCard)]} {
+         set coreBuf [SendACmd "ls /usr/local/ext"]
+      } else {
+         set coreFileList ""
+         lappend coreFileList "core\.\[a-z\]+\.\[0-9\]+ 0"
+         if {[CompareRelease [GetVersion DUT${numDUT}] 11.4.0.1]>=0} {
+            set coreBuf [SendACmd "ls /usr/local/tmp"]
+         } else {
+            EnableDebugMode
+            set coreBuf [GetKeyValue "!ls /scratch" $coreFileList 1]
+         }
+      }
+    }
+
+
+      if {[regexp -nocase "core.*" $coreBuf]} {
+         report_start_test "NOTE: found core dump on memoryCard, mv to different name"
+         result_debug "NOTE: found core dump on memoryCard, mv to different name"
+         foreach coreFile $coreBuf {
+            result_debug "coreFile:|$coreFile,[regexp -nocase "core" $coreFile]|"
+            if {[regexp -nocase "core" $coreFile]} {
+               regsub -all {core} $coreFile Kore newCore
+               set newCoreFile ${mod}_${date}_$newCore
+               set newProcFile ${mod}_${date}_process_traces.tgz
+               
+              if { $msmType == "primary" } { 
+               if {[regexp -- "present" $DUTs_info(DUT${numDUT},memoryCard)]} {
+                  report_start_test "NOTE: found core dump on memoryCard, mv to different name"
+                  SendACmd "show log" 
+                  SendACmd "mv /usr/local/ext/$coreFile /usr/local/ext/$newCoreFile"
+                  report_start_test "NOTE: moving process traces"
+                  SendACmd "mv /usr/local/ext/process_traces.tgz /usr/local/ext/$newProcFile"
+                  report_end_test;
+                  report_end_test;
+               } else {
+                  if {[CompareRelease [GetVersion DUT${numDUT}] 11.4.0.1]>=0} {
+                     report_start_test "NOTE: found core dump on internal, mv to different name"
+                     SendACmd "mv /usr/local/tmp/$coreFile /usr/local/tmp/$newCoreFile"
+                     report_start_test "NOTE: moving process traces"
+                     SendACmd "mv /usr/local/tmp/process_traces.tgz /usr/local/tmp/$newProcFile"
+                     report_end_test;
+                     report_end_test;
+                  } else {
+                     report_start_test "NOTE: found core dump on scratch, mv to different name"
+                     SendACmd "!mv /scratch/$coreFile /scratch/$newCoreFile"
+                     report_start_test "NOTE: moving process traces"
+                     SendACmd "!mv /scratch/process_traces.tgz /scratch/$newProcFile"
+                     report_end_test;
+                     report_end_test;
+                  }
+               }
+              } else {
+               # if MSM-A has memeory card, please make sure MSM-B also has memeory card.
+               if {[regexp -- "present" $DUTs_info(DUT${numDUT},memoryCard)]} {
+                  report_start_test "NOTE: found core dump on memoryCard, mv to different name"
+                  SendACmd "!mv /mnt/a/$coreFile /mnt/a/$newCoreFile"
+                  report_start_test "NOTE: moving process traces"
+                  SendACmd "!mv /mnt/a/process_traces.tgz /mnt/a/$newProcFile"
+                  report_end_test;
+                  report_end_test;
+               } else {
+                  if {[CompareRelease [GetVersion DUT${numDUT}] 11.4.0.1]>=0} {
+                     report_start_test "NOTE: found core dump on internal, mv to different name"
+                     SendACmd "!mv /scratch/intern/$coreFile /scratch/intern/$newCoreFile"
+                     report_start_test "NOTE: moving process traces"
+                     SendACmd "!mv /scratch/intern/process_traces.tgz /scratch/intern/$newProcFile"
+                     report_end_test;
+                     report_end_test;
+                  } else {
+                     report_start_test "NOTE: found core dump on scratch, mv to different name"
+                     SendACmd "!mv /scratch/$coreFile /scratch/$newCoreFile"
+                     report_start_test "NOTE: moving process traces"
+                     SendACmd "!mv /scratch/process_traces.tgz /scratch/$newProcFile"
+                     report_end_test;
+                     report_end_test;
+                  }
+               }
+              }
+            }
+         }
+      }
+   }
+}
+
+
+proc ChangeTraceFileName {} {
+   global DUTs_info MAIN
+   global whichDutNow
+   global currentTestNumber
+
+   if { ![info exists currentTestNumber] } {
+        set tempCurrentTestNumber "main"
+   } else {
+        set currentTestNumber [string trim $currentTestNumber]
+        if {[regexp {(.*) *;.*} $currentTestNumber match match1]} {
+           set tempCurrentTestNumber $match1
+        } else {
+           set tempCurrentTestNumber $currentTestNumber
+        }
+        set tempCurrentTestNumber [string trim $tempCurrentTestNumber]
+   }
+
+
+   set date [clock format [clock seconds] -format "%m%d%I%p"]
+   if {[info exists MAIN(feature_directory)] && $MAIN(feature_directory) != "null"} {
+       set mod $MAIN(feature_directory)
+   } else {
+       set modStringList [split [file tail [pwd]] "/"]
+       set modListLength [llength $modStringList]
+       set mod [lindex $modStringList [expr $modListLength - 1]]
+   }
+
+   EnableDebugMode ; # Required for executing !mv and !rm command
+   if {[info exists DUTs_info(DUT${whichDutNow},coreFileTarget)] && \
+           $DUTs_info(DUT${whichDutNow},coreFileTarget) == "memorycard" } {
+      set traceBuf [SendACmd "ls /usr/local/ext"]
+   } else {
+      set traceBuf [SendACmd "ls /usr/local/tmp"];
+   }
+
+   if {[regexp -nocase "trace.*" $traceBuf]} {
+      report_start_test "NOTE: found traces, mv to different name"
+      foreach traceFile $traceBuf {
+         result_debug "traceFile:|$traceFile,[regexp -nocase trace $traceFile]|"
+         if {[regexp -nocase "trace" $traceFile]} {
+            #regsub -all {trace} $traceFile grace newTrace
+            #set newTraceFile ${newTrace}_${mod}_${date}
+            #set newTraceFile ${newTrace}_${mod}_${tempCurrentTestNumber}
+            set newTraceFile ${traceFile}_${mod}_${tempCurrentTestNumber}
+
+            if {([info exist DUTs_info(DUT${whichDutNow},memoryCard)]) && ( [regexp -- "present" $DUTs_info(DUT${whichDutNow},memoryCard)])} {
+               result_debug "NOTE: found traces on memoryCard, mv to different name"
+               report_start_test "NOTE: moving traces"
+               SendACmd "mv /usr/local/ext/$traceFile /usr/local/ext/$newTraceFile"
+               report_end_test;
+            } else {
+               if {[CompareRelease [GetVersion DUT${whichDutNow}] 11.4.0.1]>=0} {
+                  result_debug "NOTE: found traces on /usr/local/tmp, mv to different name"
+                  report_start_test "NOTE: moving process traces"
+                  SendACmd "mv /usr/local/tmp/$traceFile /usr/local/tmp/$newTraceFile"
+                  report_end_test;
+               } else {
+                  report_start_test "NOTE: moving traces"
+                  SendACmd "!mv /scratch/$traceFile /scratch/$newTraceFile"
+                  report_end_test;
+               }
+            }
+         }
+      }
+      report_end_test;
+   }
+}
+
+proc ChangeCoreFileName {} {
+   global DUTs_info MAIN
+   global whichDutNow
+   global currentTestNumber
+   global numDUT
+   global spawn_id
+   global spawn_ids
+   global enableAbortTestCondition
+
+   for {set i 1} {$i <= $numDUT} {incr i} {
+        global DUT${i}_CONNECT DUT${i}_CONNECTB
+   }
+
+   #find out the ipAddr of this session if it is MSM-A or MSM-B
+   global hostname
+   foreach name $hostname {
+      if { $spawn_id == $spawn_ids($name) } {
+           set ipAddr $name
+      }
+   }
+   result_debug "hostname : $hostname , ipAddr : $ipAddr"
+   exSleep 60 ; # Delay after process died as DUT takes some time to reboot
+
+   # Verifying whether process died on master/backup.
+   if { [info exists DUT${whichDutNow}_CONNECTB] } {
+      if { $ipAddr == [set DUT${whichDutNow}_CONNECTB] } {
+          result_debug "Backup ip address : [set DUT${whichDutNow}_CONNECTB] , ipAddr : $ipAddr"
+          Login [set DUT${whichDutNow}_CONNECT] -masterCheck 0 -CheckOperational 0
+          set showSwitchOutput ""
+          lappend showSwitchOutput "{Current State:} {In *Sync} inLine exists"
+          CheckKeyValue "show switch" $showSwitchOutput -time {s: 1 i: 5 d: 150 f: 200 r} -comment "check both MSMs up in sh switch output"
+
+         SendACmd "show log warning"
+         SendACmd "clear log"
+         lappend getKey "{Current State:} 1"
+         set stateA [GetKeyValue "show switch" $getKey]
+         result_debug "stateA : $stateA"
+         if {[string tolower $stateA] == "master"} {
+             # Calling run msm-failover as reboot happened due to process died. 
+             # can not use MakeMSMBMaster.
+             SendACmd "run msm-failover"
+             exSleep 90
+             Login [set DUT${whichDutNow}_CONNECTB] 
+             CheckOperational
+         } else {
+             Login [set DUT${whichDutNow}_CONNECTB] 
+             CheckOperational
+         }
+      } else {
+          result_debug "Master ip address : [set DUT${whichDutNow}_CONNECT] , ipAddr : $ipAddr"
+          Login [set DUT${whichDutNow}_CONNECTB] -masterCheck 0 -CheckOperational 0
+          set showSwitchOutput ""
+          lappend showSwitchOutput "{Current State:} {In *Sync} inLine exists"
+          CheckKeyValue "show switch" $showSwitchOutput -time {s: 1 i: 5 d: 150 f: 200 r} -comment "check both MSMs up in sh switch output"
+
+         SendACmd "show log warning"
+         SendACmd "clear log"
+         lappend getKey "{Current State:} 1"
+         set stateA [GetKeyValue "show switch" $getKey]
+         result_debug "stateA : $stateA"
+         if {[string tolower $stateA] == "backup"} {
+             # Calling run msm-failover as reboot happened due to process died. 
+             # can not use MakeMSMAMaster.
+             SendACmd "run msm-failover"
+             exSleep 90
+             Login [set DUT${whichDutNow}_CONNECT]
+             CheckOperational
+         } else {
+             Login [set DUT${whichDutNow}_CONNECT]
+             CheckOperational
+         }
+      }
+   } else {
+          result_debug "Backup not exist. Dut ip address : [set DUT${whichDutNow}_CONNECT] , ipAddr : $ipAddr"
+          Login [set DUT${whichDutNow}_CONNECT]
+   }
+
+   result_debug "Processing core files" 
+   if { ![info exists currentTestNumber] } {
+       set tempCurrentTestNumber "main"
+   } else {
+         set currentTestNumber [string trim $currentTestNumber]
+         set tempCurrentTestNumber $currentTestNumber
+         if {[regexp {(.*) *;.*} $currentTestNumber match match1]} {
+           set tempCurrentTestNumber $match1
+         } else {
+           set tempCurrentTestNumber $currentTestNumber
+         }
+   }
+   set date [clock format [clock seconds] -format "%m%d%I%p"]
+   if {[info exists MAIN(feature_directory)] && $MAIN(feature_directory) != "null"} {
+       set mod $MAIN(feature_directory)
+   } else {
+       set modStringList [split [file tail [pwd]] "/"]
+       set modListLength [llength $modStringList]
+       set mod [lindex $modStringList [expr $modListLength - 1]]
+   }
+
+   #Login $DUTs_info(DUT$whichDutNow,connect) -masterCheck 1
+   EnableDebugMode ; # Required for executing !mv and !rm command
+   SendACmd "show log warning"
+   SendACmd "clear log"
+
+   if {([info exist DUTs_info(DUT${whichDutNow},memoryCard)]) && ([regexp -- "present" $DUTs_info(DUT${whichDutNow},memoryCard)])} {
+      set coreBuf [SendACmd "ls /usr/local/ext"]
+   } else {
+      if {[CompareRelease [GetVersion DUT${whichDutNow}] 11.4.0.1]>=0} {
+         set coreBuf [SendACmd "ls /usr/local/tmp"]
+      } else {
+         set coreFileList ""
+         lappend coreFileList "core\.\[a-z\]+\.\[0-9\]+ 0"
+         set coreBuf [GetKeyValue "!ls /scratch" $coreFileList 1]
+      }
+   }
+
+   if {[regexp -nocase "core.*" $coreBuf]} {
+      report_start_test "NOTE: found core, mv to different name"
+      foreach coreFile $coreBuf {
+         result_debug "coreFile:|$coreFile,[regexp -nocase core $coreFile]|"
+         if {([regexp -nocase "core" $coreFile]) && (![regexp -nocase "core.*\.gz_" $coreFile]) && (![regexp -nocase "core\.nvram.*_" $coreFile])} {
+            set newCoreFile ${coreFile}_${mod}_${tempCurrentTestNumber}
+
+            if {([info exist DUTs_info(DUT${whichDutNow},memoryCard)]) && ( [regexp -- "present" $DUTs_info(DUT${whichDutNow},memoryCard)])} {
+               result_debug "NOTE: found core on memoryCard, mv to different name"
+               report_start_test "NOTE: moving core"
+               SendACmd "mv /usr/local/ext/$coreFile /usr/local/ext/$newCoreFile"
+               report_end_test;
+            } else {
+               if {[CompareRelease [GetVersion DUT${whichDutNow}] 11.4.0.1]>=0} {
+                  result_debug "NOTE: found core at /usr/local/tmp, mv to different name"
+                  report_start_test "NOTE: moving core"
+                  SendACmd "mv /usr/local/tmp/$coreFile /usr/local/tmp/$newCoreFile"
+                  report_end_test;
+               } else {
+                  report_start_test "NOTE: moving core"
+                  SendACmd "!mv /scratch/$coreFile /scratch/$newCoreFile"
+                  report_end_test;
+               }
+            }
+         }
+      }
+      report_end_test;
+   }
+  if { ([info exists enableAbortTestCondition] ) && ($enableAbortTestCondition =="coreDump") } {
+    exit
+  }
+}
+proc EnableBGPServiceProviderEdgeLicence { {duts ""} } {
+   global DUTs_info
+
+   if {$duts==""} {
+      set duts 1 
+   }
+   set dutList [split $duts ,]
+   foreach dut $dutList {
+      set DUTName [format %s%d DUT $dut]
+      global ${DUTName}_CONNECT
+      Login [set ${DUTName}_CONNECT]
+
+   if { [CompareRelease [GetVersion DUT${dut}] 12.1] >=0 && \
+        [regexp -nocase "X450e|X250e" $DUTs_info(DUT${dut},platform)] } {
+      set licenseInfo [SendACmd "show licenses"]
+     if {[regexp -nocase "ServiceProviderEdge" $licenseInfo] !=1} {
+         result_debug "Platform is not enabled with ServiceProviderEdge license"
+            if { [info exist DUTs_info(DUT${dut},bgp)] } {
+                 SendACmd "enable license $DUTs_info(DUT${dut},bgp)"
+                 set licenseInfo [SendACmd "show licenses"]
+                 if {[regexp -nocase "ServiceProviderEdge" $licenseInfo] !=1} {
+                     result_debug "Platform is not enabled with BGP ServiceProviderEdge license."
+	             close_result_file
+	             report_end_test
+                     return -code return testSkipped
+                  }
+             } else {
+                    result_error "ServiceProviderEdge licence key for bgp does not exist in cfg file. Please add the same and restart regression"
+	             close_result_file
+	             report_end_test
+                     return -code return testSkipped
+             }
+      } else {
+         result_debug "$DUTName is enabled with ServiceProviderEdge license"
+      }
+    } else {
+         result_debug "$DUTName is not X450e|X250e or release <12.1 does not require ServiceProviderEdge license"
+    }
+   }
+
+}
+##################################################################    
+# Procedure Name: _SetSwitchLicVars
+# Description:
+#     	Internal proc to set the main license vars for a switch
+#        
+#
+# Input args: nDUT - which DUT
+#             setLic - 1|0   1 sets the switch licenses
+#  
+# Output args: none
+# Return value: none
+# Typical usage: 
+#	 SetFeatureLicenses
+# Category: Setup
+##################################################################
+proc _SetSwitchLicVars {nDUT setLic} {
+    global DUTs_info
+    set ser $DUTs_info(DUT${nDUT},serial)
+    set genFilePath ""
+    if {![info exists DUTs_info(DUT${nDUT},serial)] || $ser == "null"} {
+        return -1
+    }
+    if {[file exists keygen]} {
+        set genFilePath "./"
+    } elseif {[file exists ../main/keygen]} {
+        set genFilePath "../main/"
+    } elseif {[file exists ../../main/keygen]} {
+        set genFilePath "../../main/"
+    } else {
+        result_error "@@\n!!\nYour TCL sandbox is not configured to allow \n\
+                      realtime licensing!\nset skipLicVar 0 in your cfg file\n and\
+                      set your licenses to core manually\nOR \
+                      email sqaauto to have this enabled if possible\n!!\n@@"
+        return -3
+    }
+    if {![regexp -nocase "stack" $DUTs_info(DUT${nDUT},sysName)] && \
+        $ser != "null"} {
+        result_debug "\n@@@\nSetting $nDUT license VARS\n$DUTs_info(DUT${nDUT},sysType)\n@@@"
+        # Device X670V-48x Serial Number - 1114G-01914 
+        set key [exec ${genFilePath}keygen 2 -d 3 -n $ser]
+        set keyList [split [string trim $key] " "]
+        set key [lindex $keyList [expr [llength $keyList] - 1]]
+        set DUTs_info(DUT${nDUT},advancededge_core) "$key"
+        set key [lindex $keyList [expr [llength $keyList] - 1]]
+        set DUTs_info(DUT${nDUT},unknown_core) "$key"
+        set key [exec ${genFilePath}keygen 4 -d 1 -n $ser]
+        set keyList [split [string trim $key] " "]
+        set key [lindex $keyList [expr [llength $keyList] - 1]]
+        set DUTs_info(DUT${nDUT},advancedcore_edge) "$key"
+        set key [exec ${genFilePath}keygen 2 -d 4 -n $ser]
+        set keyList [split [string trim $key] " "]
+        set key [lindex $keyList [expr [llength $keyList] - 1]]
+        set DUTs_info(DUT${nDUT},advancededge_advancedcore) "$key"
+        set key [exec ${genFilePath}keygen 3 -d 4 -n $ser]
+        set keyList [split [string trim $key] " "]
+        set key [lindex $keyList [expr [llength $keyList] - 1]]
+        set DUTs_info(DUT${nDUT},core_advancedcore) "$key"
+        set key [exec ${genFilePath}keygen 1 -d 2 -n $ser]
+        set keyList [split [string trim $key] " "]
+        set key [lindex $keyList [expr [llength $keyList] - 1]]
+        set DUTs_info(DUT${nDUT},edge_advancededge) "$key"
+        set key [exec ${genFilePath}keygen 1 -d 3 -n $ser]
+        set keyList [split [string trim $key] " "]
+        set key [lindex $keyList [expr [llength $keyList] - 1]]
+        set DUTs_info(DUT${nDUT},edge_core) "$key"
+
+        if {$setLic} {
+            # ------------------------------------------------
+            # Restore License to Core if not at Core
+            # For lync L2-Edge
+            # ------------------------------------------------
+            global bcmLynx pioneerPlatform
+            set parameterList ""
+            if {[regexp $bcmLynx $DUTs_info(DUT$nDUT,platform)]} {
+                lappend parameterList "L2.* exist";
+            } else {
+                lappend parameterList "{core} exist";
+            }
+            if {[CheckKeyValue "show license" $parameterList -reportResults 0]!="ok"} {
+                set parameterList ""
+                lappend parameterList "{Enabled License Level:} 0 1"
+                lappend parameterList "{Enabled License Level:} 1 1"
+                set getLicense [GetKeyValue "show license" $parameterList]
+                if {[lindex [lindex $getLicense 0] 1] != ""} {
+                    set temp [split [lindex $getLicense 0] " "]
+                    set currentLicense [concat [lindex $temp 0][lindex $temp 1]]
+                } else {
+                    set temp [split [lindex $getLicense 0] " "]
+                    set currentLicense [lindex $temp 0]
+                }
+                if {[EnableLicense \
+                          [string tolower $currentLicense] core] == "error"} {
+                    if {![regexp $pioneerPlatform $DUTs_info(DUT$nDUT,platform)]} {
+                        return error
+                    }
+                }
+            }
+            unset parameterList
+        }
+        return 1
+    } else {
+        return -2
+    }
+}
+##################################################################    
+# Procedure Name: SetFeatureLicenses
+# Description:
+#     	Using info from DUTs_info, set all featurepack licenses
+#        
+#
+# Input args: nDUT - which DUT
+#    
+# Output args: none
+# Return value: none
+# Typical usage: 
+#	 SetFeatureLicenses
+# Category: Setup
+##################################################################
+proc _SetFeatureLicenses {nDUT} {
+    global DUTs_info pioneerChassis gnssChassis bcmPlatform gnssPlatform
+    set ser $DUTs_info(DUT${nDUT},serial)
+    set genFilePath ""
+
+    if {![info exists DUTs_info(DUT${nDUT},serial)]} {
+        return -1
+    }
+    if {[file exists keygen]} {
+        set genFilePath "./"
+    } elseif {[file exists ../main/keygen]} {
+        set genFilePath "../main/"
+    } elseif {[file exists ../../main/keygen]} {
+        set genFilePath "../../main/"
+    } else {
+        return -3
+    }
+    if {![regexp -nocase "stack" $DUTs_info(DUT${nDUT},sysName)] && \
+        $ser != "null"} {
+        # Set all feature pack licenses in DUTs_info for test usage
+        result_debug "\n@@@\nSetting $nDUT feature license VARS for $DUTs_info(DUT${nDUT},sysName)\n@@@"
+        #High Speed Port Enable
+        set key [exec ${genFilePath}keygen -y 3 -c 3 -v 24 -n $ser]
+        set keyList [split [string trim $key] " "]
+        set key [lindex $keyList [expr [llength $keyList] - 1]]
+        set DUTs_info(DUT${nDUT},port_speed) "$key"
+        #MPLS
+        set key [exec ${genFilePath}keygen -p 4 -n $ser]
+        set keyList [split [string trim $key] " "]
+        set key [lindex $keyList [expr [llength $keyList] - 1]]
+        set DUTs_info(DUT${nDUT},mpls_license) "$key"
+        #BGP
+        set key [exec ${genFilePath}keygen -p 16 -n $ser]
+        set keyList [split [string trim $key] " "]
+        set key [lindex $keyList [expr [llength $keyList] - 1]]
+        set DUTs_info(DUT${nDUT},bgp) "$key"
+        #Network Timing 
+        set key [exec ${genFilePath}keygen -p 3 -n $ser]
+        set keyList [split [string trim $key] " "]
+        set key [lindex $keyList [expr [llength $keyList] - 1]]
+        set DUTs_info(DUT${nDUT},nettiming_license) "$key"
+        #TRILL 
+        set key [exec ${genFilePath}keygen -p 12 -n $ser]
+        set keyList [split [string trim $key] " "]
+        set key [lindex $keyList [expr [llength $keyList] - 1]]
+        set DUTs_info(DUT${nDUT},trill_license) "$key"
+        #3rdParty 
+        set key [exec ${genFilePath}keygen -p 9 -n $ser]
+        set keyList [split [string trim $key] " "]
+        set key [lindex $keyList [expr [llength $keyList] - 1]]
+        set DUTs_info(DUT${nDUT},40_100_optics_license) "$key"
+        #AVB 
+        set key [exec ${genFilePath}keygen -p 10 -n $ser]
+        set keyList [split [string trim $key] " "]
+        set key [lindex $keyList [expr [llength $keyList] - 1]]
+        set DUTs_info(DUT${nDUT},avb_license) "$key"
+        #X440G2 Quad 10Gig 
+        set key [exec ${genFilePath}keygen -p 13 -n $ser]
+        set keyList [split [string trim $key] " "]
+        set key [lindex $keyList [expr [llength $keyList] - 1]]
+        set DUTs_info(DUT${nDUT},x440quad_license) "$key"
+        #X440G2 Dual 10Gig 
+        set key [exec ${genFilePath}keygen -p 14 -n $ser]
+        set keyList [split [string trim $key] " "]
+        set key [lindex $keyList [expr [llength $keyList] - 1]]
+        set DUTs_info(DUT${nDUT},x440dual_license) "$key"
+        #OPENFLOW 
+        set key [exec ${genFilePath}keygen -p 11 -n $ser]
+        set keyList [split [string trim $key] " "]
+        set key [lindex $keyList [expr [llength $keyList] - 1]]
+        set DUTs_info(DUT${nDUT},openflow_license) "$key"
+        #SSH 
+        set key [exec ${genFilePath}keygen -p 32 -n $ser]
+        set keyList [split [string trim $key] " "]
+        set key [lindex $keyList [expr [llength $keyList] - 1]]
+        set DUTs_info(DUT${nDUT},ssh_license) "$key"
+        #HQOS 
+        set key [exec ${genFilePath}keygen -p 2 -n $ser]
+        set keyList [split [string trim $key] " "]
+        set key [lindex $keyList [expr [llength $keyList] - 1]]
+        set DUTs_info(DUT${nDUT},hqos_license) "$key"
+        #Direct Attach 
+        set key [exec ${genFilePath}keygen -p 7 -n $ser]
+        set keyList [split [string trim $key] " "]
+        set key [lindex $keyList [expr [llength $keyList] - 1]]
+        set DUTs_info(DUT${nDUT},direct_attach_license) "$key"
+        #FlowVSR 
+        set key [exec ${genFilePath}keygen -p 8 -n $ser]
+        set keyList [split [string trim $key] " "]
+        set key [lindex $keyList [expr [llength $keyList] - 1]]
+        set DUTs_info(DUT${nDUT},flowvsr_license) "$key"
+        #Dev 
+        set key [exec ${genFilePath}keygen -p 1 -n $ser]
+        set keyList [split [string trim $key] " "]
+        set key [lindex $keyList [expr [llength $keyList] - 1]]
+        set DUTs_info(DUT${nDUT},dev_license) "$key"
+    } else {
+        return -2
+    }
+    # --------------------------------------------------------------------------
+    # Start setting
+    # --------------------------------------------------------------------------
+    set parameterList ""
+    for {set z 0} {$z<8} {incr z} {
+        lappend parameterList "{Enabled Feature Packs:} $z 1"
+    }
+    lappend parameterList "{Enabled Port Speed:} 0 1" ;# 870 690 portspeed
+    set getFeature [GetKeyValue "show license" $parameterList]
+    if {![regexp -nocase "stack" $DUTs_info(DUT${nDUT},sysName)] && \
+        $ser != "null"} {
+        # Device $sysT Serial Number - 1114G-01914
+        #PortSpeed
+        if {[regexp -nocase "x870" $DUTs_info(DUT${nDUT},sysType)] && \
+            ![regexp -nocase "24" $getFeature]} {
+            result_debug "\nSet Port Speed License"
+            SendACmd "enable license $DUTs_info(DUT${nDUT},port_speed)"
+        }
+        #MPLS
+        if {[regexp -nocase "vm|x620|x690|x870|x590|x770|x670|x480|x460|e4g|bd|g2" $DUTs_info(DUT${nDUT},sysType)] && \
+            ![regexp -nocase "mpls" $getFeature]} {
+            result_debug "\nSet MPLS License"
+            SendACmd "enable license $DUTs_info(DUT${nDUT},mpls_license)"
+        }
+        #BGP
+        if {[regexp -nocase "vm|x620|x870|x690|x770|x670|x480|x460|e4g|bd|x440|650|450g2" $DUTs_info(DUT${nDUT},sysType)] && \
+            ![regexp -nocase "service" $getFeature]} {
+            result_debug "\nSet Service Provider License"
+            SendACmd "enable license $DUTs_info(DUT${nDUT},bgp)"
+        }
+        #Network Timing - CANNOT BE ENABLED WITH AVB gPTP
+        #if {[regexp -nocase "x870|x770|x670g2|x460|e4g" $DUTs_info(DUT${nDUT},sysType)] && \
+        #    ![regexp -nocase "timing" $getFeature]} {
+        #    SendACmd "enable license $DUTs_info(DUT${nDUT},nettiming_license)"
+        #}
+        #3rdParty
+        if {(![regexp -nocase "party" $getFeature] && \
+            ![regexp -nocase "x150|x250|x350|x450|e4g|460" $DUTs_info(DUT${nDUT},sysType)]) ||
+            (![regexp -nocase "party" $getFeature] && \
+            [regexp -nocase "g2" $DUTs_info(DUT${nDUT},sysType)])} {
+            result_debug "\nSet 3rdParty Optics License"
+            SendACmd "enable license $DUTs_info(DUT${nDUT},40_100_optics_license)"
+        }
+        #AVB - Not compatible with networktiming
+        if {[regexp -nocase "x620|x770|x670|x460|x440|x430|x450g2" $DUTs_info(DUT${nDUT},sysType)]  && \
+            ![regexp -nocase "avb" $getFeature]} {
+            #SendACmd "enable license $DUTs_info(DUT${nDUT},avb_license)"
+        }
+        #X440G2 Quad 10Gig license
+        if {[regexp -nocase "X440G2" $DUTs_info(DUT${nDUT},sysType)]  && \
+            ![regexp -nocase "quad" $getFeature]} {
+            SendACmd "enable license $DUTs_info(DUT${nDUT},x440quad_license)"
+        }
+        #X440G2 Dual 10Gig license
+        if {[regexp -nocase "X440G2" $DUTs_info(DUT${nDUT},sysType)]  && \
+            ![regexp -nocase "dual" $getFeature]} {
+            SendACmd "enable license $DUTs_info(DUT${nDUT},x440dual_license)"
+        }
+        ##OPENFLOW
+        #if {![regexp -nocase "openflow" $getFeature]} {
+        #    result_debug "\nSet OpenFlow License"
+        #    SendACmd "enable license $DUTs_info(DUT${nDUT},openflow_license)"
+        #}
+        if {[regexp -nocase "$pioneerChassis|$gnssChassis" $DUTs_info(DUT${nDUT},sysType)] && \
+            ![regexp -nocase "qos" $getFeature]} {
+            #HQOS
+            result_debug "Set HQOS License"
+            SendACmd "enable license $DUTs_info(DUT${nDUT},hqos_license)"
+        }
+        #Direct Attach
+        if {[regexp -nocase "$bcmPlatform" $DUTs_info(DUT${nDUT},sysType)]  && \
+            ![regexp -nocase "direct" $getFeature]} {
+            result_debug "Set Direct Attach License"
+            SendACmd "enable license $DUTs_info(DUT${nDUT},direct_attach_license)"
+        }
+        #FlowVSR
+        if {[regexp -nocase "$gnssPlatform" $DUTs_info(DUT${nDUT},sysType)]  && \
+            ![regexp -nocase "vsr" $getFeature]} {
+            result_debug "Set Flow VSR License"
+            SendACmd "enable license $DUTs_info(DUT${nDUT},flowvsr_license)"
+        }
+    } else {
+        result_debug "Can't set feature licenses on Stacks yet"
+        return -3
+        # SKIP STACK FOR NOW.. ALL SLOTS NEED TO BE SET INDIVIDUALLY
+        #     DEFER TO LATER
+        #MPLS
+        set goMPLS 1
+        foreach hw $DUTs_info(DUT${nDUT},hwList) {
+            if {![regexp -nocase "x770|x670|x480|x460|e4g|empty" $hw]} {
+                set goMPLS 0
+                break
+            }
+        }
+        if {$goMPLS && ![regexp -nocase "mpls" $getFeature]} {
+            SendACmd "enable license $DUTs_info(DUT${nDUT},mpls_license)"
+        }
+        #BGP
+        set goBGP 1
+        foreach hw $DUTs_info(DUT${nDUT},hwList) {
+            if {![regexp -nocase "x770|x670|x480|x460|e4g|x440|empty" $hw]} {
+                set goBGP 0
+                break
+            }
+        }
+        if {$goBGP && ![regexp -nocase "service" $getFeature]} {
+            SendACmd "enable license $DUTs_info(DUT${nDUT},bgp)"
+        }
+        #Network Timing
+        set goTiming 1
+        foreach hw $DUTs_info(DUT${nDUT},hwList) {
+            if {![regexp -nocase "x770|x670g2|x460|e4g|empty" $hw]} {
+                set goTiming 0
+                break
+            }
+        }
+        # Timing cannot be enabled same time as AVB
+        #if {$goTiming && ![regexp -nocase "timing" $getFeature]} {
+        #    SendACmd "enable license $DUTs_info(DUT${nDUT},nettiming_license)"
+        #}
+        #3rdParty
+        set go3rd 1
+        foreach hw $DUTs_info(DUT${nDUT},hwList) {
+            if {[regexp -nocase "x450|x350|x250|x150" $hw]} {
+                set go3rd 0
+                break
+            }
+        }
+        if {$go3rd && ![regexp -nocase "part" $getFeature]} {
+            SendACmd "enable license $DUTs_info(DUT${nDUT},40_100_optics_license)"
+        }
+        #AVB
+        set goAVB 1
+        foreach hw $DUTs_info(DUT${nDUT},hwList) {
+            if {![regexp -nocase "x770|x670|x460|x440|x430|empty" $hw]} {
+                set goAVB 0
+                break
+            }
+        }
+        # Don't install AVB. Not compatible with NetworkTiming
+        #if {$goAVB && ![regexp -nocase "avb" $getFeature]} {
+        #    SendACmd "enable license $DUTs_info(DUT${nDUT},nettiming_license)"
+        #}
+        #OPENFLOW
+        if {![regexp -nocase "openflow" $getFeature]} {
+            SendACmd "enable license $DUTs_info(DUT${nDUT},openflow_license)"
+        }
+        #Direct Attach
+        if {![regexp -nocase "direct" $getFeature]} {
+            SendACmd "enable license $DUTs_info(DUT${nDUT},direct_attach_license)"
+        }
+    }
+}
+####################################################################
+#
+####################################################################
+proc CheckConnectionsTraffic {dutList fd_res testNo} {
+    global portDutListUsed SOURCEMACFDB portMappingList DUTPortMappingArray MACCHECKED
+
+    set allPortIdList ""
+    set MACCHECKED ""
+    set initportMappingList $portMappingList
+    set initportDutListUsed $portDutListUsed
+    array set initDUTPortMappingArray [array get DUTPortMappingArray]
+    
+    set tagId [random 4094]
+    foreach dut $dutList {
+        global DUT${dut}_CONNECT
+        Login  [set DUT${dut}_CONNECT]  -masterCheck 0 -CheckOperational 0
+        # Turn off flooding and broadcast
+        SendACmd "enable edp port all"
+        SendACmd "enable lldp port all"
+        SendACmd "disable flooding all_cast port all"
+        SendACmd "configure vlan default delete ports all"
+        if {$tagId==1||$tagId==0} {set tagId 2}
+        SendACmd "create vlan ixiaVlan"
+        SendACmd "disable igmp"
+        SendACmd "disable igmp snooping"
+        set output  [SendACmd "config vlan ixiaVlan tag $tagId"]          
+        result_debug "output :: $output"
+        if {[regexp -nocase "Error" $output]} {                
+            set tagId 3
+            SendACmd "config vlan ixiaVlan tag $tagId"
+        }
+        SendACmd "config vlan ixiaVlan add port all tag"
+        # Make a list of all portIds in use
+        foreach portDutPair $portDutListUsed {
+            if {[lindex $portDutPair 1] == $dut} {
+                lappend allPortIdList [lindex $portDutPair 0]
+            }
+        }
+    }    
+    exSleep 5
+    set initallPortIdList $allPortIdList
+    # Check the traffic - Check a second time on first failure.
+    global SKIPBROADCOMFDB
+    set SKIPBROADCOMFDB 1
+    set loopCount 1
+    set repErrorAsSkip 1
+    while {$loopCount <= 2} {
+        report_start_test "Check Test Bed Connections Attempt $loopCount"
+        # Start all traffic to all duts
+        foreach pId $allPortIdList {
+            set frameSent [SendFrame -txPortId $pId -tag $tagId -frameSize 68 \
+                 -frameRate 100 -streamType "contPacket" -destMac ff:ff:ff:ff:ff:ff]
+            set sourceMac [GetSourceMacAddress $frameSent]
+            set SOURCEMACFDB($pId) [IxiaMacFormat2FdbFormat $sourceMac]
+        }
+        exSleep 30
+        foreach pId $allPortIdList {
+            StopPortsTransmit $pId
+        }
+    
+        array set VerifyCCReturn ""
+        array set VerifyEDPReturn ""
+        foreach dut $dutList {
+            puts "CHECK TRAFFIC Logging into DUT $dut"
+            Login [set DUT${dut}_CONNECT]
+            set VerifyCCReturn($dut) [_verifyCCFdb $dut $repErrorAsSkip $fd_res $testNo]
+            set VerifyLLDPReturn($dut) [_verifyTestBedLLDP [set DUT${dut}_CONNECT] $dutList $repErrorAsSkip]
+        }
+
+        set returnFlag ok
+        puts "";
+        foreach dut $dutList {
+            #puts "EDP DUT$dut Found: $VerifyEDPReturn($dut)"
+            #if {!$VerifyEDPReturn($dut)} {
+            #    set returnFlag error
+            #}
+            puts "LLDP DUT$dut Found: $VerifyLLDPReturn($dut)"
+            if {!$VerifyLLDPReturn($dut)} {
+                set returnFlag error
+            }
+            puts "Check FDB DUT$dut : $VerifyCCReturn($dut)"
+            if {$VerifyCCReturn($dut) != "ok"} {
+                set returnFlag error
+            }
+        }
+        if {$returnFlag == "error"} {
+            result_debug "HIT ERROR ON PASS $loopCount"
+            set portMappingList $initportMappingList
+            set portDutListUsed $initportDutListUsed
+            set allPortIdList $initallPortIdList
+            array set DUTPortMappingArray [array get initDUTPortMappingArray]
+            incr loopCount
+            exSleep 60
+            report_end_test
+        } else {
+            set loopCount 10
+            report_end_test
+        }
+        incr repErrorAsSkip -1
+    }
+    #
+    # Clean up the traffic settings
+    #
+    foreach dut $dutList {
+        Login  [set DUT${dut}_CONNECT]
+        # Turn on flooding and broadcast
+        SendACmd "disable edp port all"
+        SendACmd "enable igmp"
+        SendACmd "enable igmp snooping"
+        SendACmd "enable lldp port all"
+        SendACmd "configure lldp transmit-interval 30"
+        SendACmd "enable flooding all_cast port all"
+        SendACmd "configure vlan default delete ports all"
+        SendACmd "delete vlan ixiaVlan"
+    }
+    return $returnFlag
+}
+######################################################################
+# Single DUT Verify MAC
+######################################################################
+proc _verifyCCFdb {testDUT repErrorAsSkip fd_res testNo} {
+    global portDutListUsed SOURCEMACFDB portMappingList SKIPBROADCOMFDB FAILSUMMARY MACCHECKED
+    
+    set thisDutPorts ""
+    set DUTPortList ""
+    set portLearned 1
+    set returnFlag "ok"
+    set SKIPBROADCOMFDB 1
+    foreach portDutPair $portDutListUsed {
+        if {[lindex $portDutPair 1] == $testDUT} {
+            lappend thisDutPorts [lindex $portDutPair 0]
+        }
+    }
+
+    foreach portId $thisDutPorts {
+        if { [regexp -nocase "a" [MapDUTPortId $portId $testDUT] ] } {
+            lappend detectMACList "{$SOURCEMACFDB($portId) .*ixiaVlan.* d.*m} 1"
+        } else {
+            lappend checkMACList "$SOURCEMACFDB($portId) ixiaVlan [MapDUTPortId $portId $testDUT] exist"
+        }
+    }
+    if {[info exists detectMACList]} {
+        set DUTPortList [GetKeyValue "show fdb" $detectMACList]
+    }
+
+    if {[info exists DUTPortList] && [regexp "NOT" $DUTPortList] } {
+        puts "DEBUG DUTPortList: $DUTPortList"
+        set returnFlag "error"
+        if {$repErrorAsSkip} {
+            result_skip "Unable to detect one or more connections on DUT$testDUT"
+        } else {
+            result_error "Unable to detect one or more connections on DUT$testDUT"
+            set fout [SendACmd "show fdb"]
+            lappend FAILSUMMARY "MAC not found on DUT$testDUT : $fout"
+        }
+        result_debug "Please recheck all links"
+        set portLearned 0
+    }    
+    foreach portId $thisDutPorts {
+        if { [regexp -nocase "a" [MapDUTPortId $portId $testDUT] ] } {
+            set portIndex [lsearch -regexp $detectMACList "$SOURCEMACFDB($portId) .*ixiaVlan.* d.*m"]
+            result_debug "@@@@@@@@@@@@@ Auto detecting portId: $portId DUTPort: [lindex $DUTPortList $portIndex]"
+            result_debug "Search portMappingList for: $portId *A * $testDUT"
+            set replaceIndex [lsearch -regexp $portMappingList "$portId *A * $testDUT"]
+            if {$replaceIndex != -1} {
+                set portMappingList [lreplace $portMappingList $replaceIndex $replaceIndex \
+                                        "$portId [lindex $DUTPortList $portIndex] $testDUT"]
+            }
+        }
+    }
+    result_debug "portMappingList: $portMappingList"
+    
+    if {([info exists checkMACList] == 1)} {
+        ################################################
+        set subTest "Checking DUT$testDUT Connections via MAC fdb Learning"
+        ################################################
+        result_h2 "$subTest"
+        report_start_test "$subTest"
+        set returnFlag [CheckFdbNoError $checkMACList $repErrorAsSkip $testDUT $fd_res $testNo]
+        unset checkMACList
+        report_end_test
+    } else {
+        set returnFlag "ok"
+    }
+    
+    ################################################
+    set subTest "Detecting DUT$testDUT Connections via MAC fdb Learning"
+    ################################################
+    result_h2 "$subTest"
+    report_start_test "$subTest"
+    SetupDUTConnections
+    set dutSpecificPortMappingList ""
+    foreach el $portMappingList {
+        if {[lindex $el 2]==$testDUT} {
+            lappend dutSpecificPortMappingList $el
+        }
+    }
+    if {[regexp "NOT" $dutSpecificPortMappingList] } {
+        set returnFlag "error"
+        result_skip "Unable to detect one or more connections on DUT$testDUT"
+        result_debug "Please recheck all links"
+    }
+    report_end_test
+    return $returnFlag
+}
+##################################################################
+# Procedure Name: CheckFdbNoError
+# Description:
+#       This proc is a wrapper function of
+#               CheckKeyValue "show fdb" $parameterList.
+#       Check fdb table, by passing in a list instead of a file
+#           -reportFailAsSkip 1
+# Input args: {checkMACList} {fd} {testNo}
+#       checkMACList is a list of mac, vlan, and ports
+# Output args: None
+# returns "ok" if success "error" if failure
+# Typical usage:
+#       set returnFlag [CheckFdb $checkMACList $fd_res $testNo]
+# Category: VerifySwitchOutput
+##################################################################
+
+proc CheckFdbNoError {checkMACList reportFailAsSkip testDUT fd_res testNo} {
+   global DUTs_info whichDutNow pioneerPlatform FAILSUMMARY MACCHECKED
+   set c 1
+   foreach checkMAC $checkMACList {
+      set mac  [lindex $checkMAC 0]       ;# mac
+      set vlan [lindex $checkMAC 1]       ;# vlan
+      set port [lindex $checkMAC 2]       ;# ports
+      set wantResult [lindex $checkMAC 3]
+      if {$wantResult == "notExist"} {
+         lappend parameterList "{$mac .*$vlan.* d .* $port} $wantResult"
+      } else {
+         lappend parameterList "{$mac .*$vlan.*d.*m} $port"
+      }
+   }
+   set retValue [CheckKeyValue "show fdb" $parameterList -reportFailAsSkip $reportFailAsSkip]
+   if { $retValue == "ok" } {
+       return $retValue
+   } elseif {[regexp -nocase $pioneerPlatform $DUTs_info(DUT$whichDutNow,platform)]} {
+       set retValue "ok"
+       set fdbCheck "ok"
+       foreach checkMAC $checkMACList {
+            set mac  [lindex $checkMAC 0]       ;# mac
+            set vlan [lindex $checkMAC 1]       ;# vlan
+            set port [lindex $checkMAC 2]       ;# ports
+            set wantResult [lindex $checkMAC 3]
+            set parameterList ""
+            if {$wantResult == "notExist"} {
+                 lappend parameterList "{$mac.*$vlan.*$port} $wantResult"
+            } else {
+                  lappend parameterList "{$mac.*$vlan.*$port} exist"
+            }
+            set retValue [CheckKeyValue "show fdb hardware $mac $vlan slot all" -reportFailAsSkip 1 $parameterList]
+            if { $retValue != "ok" } {
+              set fdbCheck "error"
+            }
+      }
+      return $fdbCheck
+   } else {
+       return $retValue
+   }
+}
+##########################################################
+# Check mgmt and inband connections
+##########################################################
+proc VerifyMgmtConnections {numDUT {chk_fp "yes"}} {
+    global DUT${numDUT}_CONNECT 
+    global DUT${numDUT}_IP
+    global DUT${numDUT}_IP_FP
+    global DUT${numDUT}_DefaultBlade 
+    global switchPort2DefaultRouter tftpServerList
+    global DUTs_info netConFlag
+    global FAILSUMMARY MAIN
+
+    set tftpServer [lindex $tftpServerList 0]
+    if {![info exists netConFlag]} {
+        result_debug "The netConFlag flag does not exists"
+        set netConFlag 1
+    }
+
+    set connect [set DUT${numDUT}_CONNECT]
+    set dut_ip [set DUT${numDUT}_IP]
+    set def_blade [set DUT${numDUT}_DefaultBlade]
+    if { $def_blade != 0 } {
+        set port $def_blade:$switchPort2DefaultRouter
+    } else {
+        set port $switchPort2DefaultRouter
+    }
+    result_h2 "Checking Network port for DUT$numDUT"
+    report_start_test "Checking Network port for DUT$numDUT"
+
+    Login $connect  -masterCheck 0 -CheckOperational 0
+    SendACmd "conf default del po all"
+    ConfigGatewayNetwork
+    set ret [CheckCLIPing "ping vr vr-mgmt $tftpServer"]
+    exSleep 1
+    UnconfigGatewayNetwork
+    if { $ret == 1 } {
+        result_ok "Network connection for DUT$numDUT is PASS"
+        _setMultiTaskVar  DUTs_info(DUT${numDUT},MgmtNetConnected) 1
+    } else {
+        result_warning "Network connection for DUT$numDUT is FAIL"
+        _setMultiTaskVar  DUTs_info(DUT${numDUT},MgmtNetConnected) 0
+        set netConFlag 0
+    }
+    report_end_test
+
+    if {$chk_fp == "yes"} {
+        # Validate InBandNetwork Connection
+        result_h2 "Checking InBand Network port for DUT$numDUT"
+        report_start_test "Checking InBand Network port for DUT$numDUT"
+        if {![info exist DUT${numDUT}_IP_FP]} {
+            result_ok "No InBand Network Configured for DUT$numDUT - PASS"
+            set DUTs_info(DUT${numDUT},InbandNetConnected) 0
+            _setMultiTaskVar  DUTs_info(DUT${numDUT},InbandNetConnected) 0
+        } else {
+            ConfigInBandNetwork;
+            global SERVER1
+            exSleep 1
+            set ret [CheckCLIPing "ping vr vr-default $SERVER1"]
+            exSleep 5
+            if { $ret == 1 } {
+                result_ok "InBand Network connection for DUT$numDUT is PASS"
+                set DUTs_info(DUT${numDUT},InbandNetConnected) 1
+                _setMultiTaskVar  DUTs_info(DUT${numDUT},InbandNetConnected) 1
+            } else {
+                result_warning "InBand Network connection for DUT$numDUT is FAIL"
+                set DUTs_info(DUT${numDUT},InbandNetConnected) 0
+                _setMultiTaskVar  DUTs_info(DUT${numDUT},InbandNetConnected) 0
+                SendACmd "show vlan"
+                set netConFlag 0
+            }
+            UnconfigInBandNetwork;
+        }
+        report_end_test
+    }
+}
+proc GeneralSetup {testDUT} {
+    global DUTs_info MAIN
+    global DUT
+    global env
+    global whichDutNow
+    global bcmPlatform bcmLynx;
+    global lastDUT
+    global numDUT
+    global pioneerPlatform
+    global FAILSUMMARY stackable
+    #------ adding this part of script to support eware duts
+    global eware_dut
+    set firstSubStr "DUT"
+    set lastSubStr "_CONNECT"
+
+    # ----- Switch config
+    global ${firstSubStr}${testDUT}${lastSubStr}
+    Login  [expr $$firstSubStr$testDUT$lastSubStr]
+
+    # testing tftp connectivity
+    set returnFlagTftp "ok"
+    #if {$returnFlagTftp == "ok"} {
+    #  result_ok "tftp server connectivity test passed"
+    #} else {
+    #  result_error "tftp server connectivity test failed"
+    #}
+
+    Login  [expr $$firstSubStr$testDUT$lastSubStr]
+    EnableDebugMode
+    SendACmd "debug hal configure sysrq 1"
+    exSleep 2
+    DisableDebugMode
+
+    # set regresession server time
+    set tm [exec date "+%m %d %Y %H %M %S"]
+    set timeCmd "configure time "
+    append timeCmd $tm
+    SendACmd $timeCmd
+
+    #------ check added to skip license if not needed
+    set skipLicVar 1
+    global skipLicenceCheck
+    if [info exists skipLicenceCheck] {
+        if {$skipLicenceCheck} {
+            set skipLicVar 0
+        }
+    }
+    #
+    # Licensing.
+    #
+    if $skipLicVar {
+        # ------------------------------------------------
+        # Disable the 30 day trial license
+        # ------------------------------------------------
+        set parameterList ""
+        lappend parameterList "{30 days Trial} exist"
+        set result [CheckKeyValue "show license" $parameterList -reportResults 0]
+        if {$result == "ok"} {
+            EnableDebugMode
+            SendACmd "debug epm clear trial-license"
+            CheckReboot
+        }
+
+        # ------------------------------------------------
+        # Restore License to Core if not at Core
+        # For lync L2-Edge
+        # ------------------------------------------------
+        # Set the license keys dynamically
+        set varout [_SetSwitchLicVars $testDUT 1]
+        set parameterList ""
+        # EY-06-08-2007: Check for L2(edge) license for Lynx platform.
+        if {[regexp $bcmLynx $DUTs_info(DUT$testDUT,platform)]} {
+            lappend parameterList "L2.* exist";
+        } else {
+            lappend parameterList "{core} exist";
+        }
+        if {[CheckKeyValue "show license" $parameterList]!="ok"} {
+            if {1} {
+                set parameterList ""
+                lappend parameterList "{Enabled License Level:} 0 1"
+                lappend parameterList "{Enabled License Level:} 1 1"
+                set getLicense [GetKeyValue "show license" $parameterList]
+                if {[lindex [lindex $getLicense 0] 1] != ""} {
+                    set temp [split [lindex $getLicense 0] " "]
+                    set currentLicense [concat [lindex $temp 0][lindex $temp 1]]
+                } else {
+                    set temp [split [lindex $getLicense 0] " "]
+                    set currentLicense [lindex $temp 0]
+                }
+                if {[EnableLicense \
+                    [string tolower $currentLicense] core] == "error"} {
+                    if {![regexp $pioneerPlatform $DUTs_info(DUT$testDUT,platform)]} {
+                        return error
+                    }
+                }
+            } else {
+                if {![regexp $pioneerPlatform $DUTs_info(DUT$testDUT,platform)]} {
+                   return error
+                }
+            }
+        }
+        unset parameterList
+        # ------------------------------------------------
+        # Restore Feature Packs if they are supported on this platform
+        # ------------------------------------------------
+        if {![regexp -nocase "stack" $DUTs_info(DUT${testDUT},sysName)] &&
+           $DUTs_info(DUT${testDUT},serial) != "null"} {
+            set fvarout [_SetFeatureLicenses ${testDUT}]
+        }
+        ;# ------------- End Feature License -----------
+    } ;# ------------ End of all Licensing -----------
+
+    SendACmd "clear log st"
+    SendACmd "disable clipa"
+    SendACmd "disable idletime"
+    SendACmd "enable edp ports all"
+    SendACmd "enable lldp ports all"
+    SendACmd "enable ports all"
+    SendACmd "disable auto-provision"
+    SendACmd "con edp advertisement-interval 15 holddown-interval 600"
+    SendACmd "con lldp transmit-interval 5"
+    EnableDebugMode
+
+    if {[info exists DUTs_info(DUT${testDUT},coreFileTarget)]} {
+        SendACmd "configure debug core-dumps $DUTs_info(DUT${testDUT},coreFileTarget)"
+    }
+    if {[info exists MAIN(feature_directory)] && $MAIN(feature_directory) != "null"} {
+        CheckForPreviousCore $testDUT
+        if {[info exists $firstSubStr$testDUT${lastSubStr}B]} {
+            result_debug "Renaming core on msm-b if any"
+            Login  [expr $$firstSubStr$testDUT${lastSubStr}B] -masterCheck 0 -CheckOperational 0
+            CheckForPreviousCore $testDUT backup
+            Login  [expr $$firstSubStr$testDUT${lastSubStr}] -masterCheck 0 -CheckOperational 0
+        }
+    }
+    if { [isExosPlatform "DUT$testDUT"] != 1 } {
+        # ----- Switch config
+        Login  [expr $$firstSubStr$testDUT$lastSubStr]
+        SendACmd "clear log st"
+        SendACmd "clear fdb"
+        SendACmd "disable clipa"
+        SendACmd "disable idletime"
+        SendACmd "disable auto-provision"
+        SendACmd "configure reboot-loop-protection threshold 10 3"
+        SendACmd "enable edp ports all"
+
+        lappend parameterList "{Image *:.*by} $RELEASE_MASTER"
+        CheckKeyValue "show version" $parameterList -comment "- Show $RELEASE_MASTER"
+        unset parameterList
+
+        set version [GetVersion "DUT$testDUT" "2"]
+        puts "DUT$testDUT version: $version"
+    }
+}
+##################################################################    
+# Procedure Name: _verifyTestBedLLDP
+# Description:
+#        
+# Input args: none 
+# Return value: 1 or 0
+# Output args: none 
+# Typical usage: 
+#        _verifyTestBedLLDP
+# Category: SetupSwitch
+##################################################################
+proc _verifyTestBedLLDP {DUT DUTList {repErrorAsSkip 0}} {
+    global DUTs_info
+    global whichDutNow
+    global trunkPortList
+    global lastDUT
+    global checkHubConnection
+    global FAILSUMMARY
+
+    Login $DUT
+    set lldpList ""
+    if {[llength $DUTList] > 1 && [info exists trunkPortList]} {
+        for {set i 0} {$i<[llength $trunkPortList]} {incr i} {
+            set trunkPair [lindex $trunkPortList $i]
+            set localDUT [lindex $trunkPair 0]
+            set remoteDUT [lindex $trunkPair 1]
+            if {$remoteDUT==0} continue;
+            if {$localDUT==$whichDutNow} {
+                if {$localDUT<$remoteDUT} {
+                    lappend lldpList "{[lindex $trunkPair 2] .* $DUTs_info(DUT$remoteDUT,sysMAC) *\
+                             [lindex [lindex $trunkPortList [expr $i+1]] 2]} exist"
+                } else {
+                    lappend lldpList "{[lindex $trunkPair 2] .* $DUTs_info(DUT$remoteDUT,sysMAC) *\
+                             [lindex [lindex $trunkPortList [expr $i-1]] 2]} exist"
+                }
+            }
+        }
+
+        # Check connection of DUT with HUB and if doesn't exist return connectionBad
+        if {([info exists checkHubConnection] == 1) && $checkHubConnection == 0} {
+            #do nothing skip the hub connection check
+            puts "NO HUB CHECK"
+        } else {
+            set DUT_Cnt [llength $DUTList]
+            set retHubConnVal 0 
+            for {set i $lastDUT} {$i<[llength $trunkPortList]} {incr i} {
+                set trunkPair [lindex $trunkPortList $i]
+                set localDUT [lindex $trunkPair 0]
+                puts "trunkPair $trunkPair localDUT $localDUT"
+                if {$lastDUT==$localDUT} continue;
+                set remoteDUT [lindex $trunkPair 1]
+                set localDUTPort [lindex $trunkPair 2]
+                if {$remoteDUT!=0} continue;
+                for {set j 1} {$j<=$DUT_Cnt} {incr j} {
+                    if {$j==$localDUT} continue; 
+                    set DUT_HUBPortMap [GetATrunkPort $j $remoteDUT] 
+                    set DUT_Mac [GetDUTMac DUT$j]
+                    global stackable i386Stackable
+                    puts "$localDUTPort .*$DUT_Mac *$DUT_HUBPortMap"
+                    lappend lldpList "{$localDUTPort .*$DUT_Mac *$DUT_HUBPortMap } exist"
+                }
+                set lastDUT $localDUT
+                break;
+            }
+        }
+        set fd_lldp [open "Tmp/tmp_lldp[pid]" "w"]
+        # Build regular expression pattern for LLDP neighbor MAC address.
+        set key {^[0-9]+}
+        set output [SendACmd "show lldp neighbor" NULL $fd_lldp]
+        close $fd_lldp        
+        if {[regexp -line $key $output]!=1} {
+            if {$repErrorAsSkip} {
+                result_skip "LLDP did not find neighbors ..."
+            } else {
+                result_error "LLDP did not find neighbors ..."
+                set fout [SendACmd "show lldp"]
+                lappend FAILSUMMARY "LLDP did not find neighbors DUT $whichDutNow"
+            }
+            file delete "Tmp/tmp_lldp[pid]"
+            return -1
+        } else {
+            if {$repErrorAsSkip} {
+                set output [CheckKeyValue "Tmp/tmp_lldp[pid]" $lldpList -reportFailAsSkip 1 \
+                     -comment "for file operation: Check LLDP info"]
+            } else {
+                set output [CheckKeyValue "Tmp/tmp_lldp[pid]" $lldpList \
+                     -comment "for file operation: Check LLDP info"]
+            }
+            file delete "Tmp/tmp_lldp[pid]"
+            if {$output=="ok"} {
+                return 1
+            } else {
+                set fout [SendACmd "show lldp"]
+                lappend FAILSUMMARY "LLDP did not find ALL neighbors DUT $whichDutNow "
+                return 0
+            }
+        }
+    } else {
+        return 1
+    }
+}
+##################################################################    
+# Procedure Name: SystemSetup2
+# Description:
+#       Do ixia initialization, build portMapping, and optionally 
+#       check connections setup.
+#       Performs CheckConnection if CheckConnection is set
+#       otherwise basic cli setup on DUTs
+# Input args: none 
+# Return value: ConnectionOkay or Connectionbad
+# Output args: none 
+# Typical usage: 
+#        SystemSetup
+# Category: SetupSwitch
+##################################################################
+proc SystemSetup2 {} {
+
+    ################################################################
+    set testNo "System Setup and Verification"
+    set title $testNo
+    ################################################################
+
+    # ----- Environment variables setup
+    global DUT1_CONNECT
+    global ixiaCh1
+    global startCardNum
+    global portMappingList
+    global trunkPortList
+    global checkConnection
+    global switchPort2DefaultRouter
+    global ixiaPortMappingArray
+    global MAIN
+    global RELEASE_MASTER
+    global DUTs_info
+    global exos
+    global DUT
+    global env
+    global whichDutNow
+    global bcmPlatform bcmLynx;
+    global lastDUT
+    global numDUT 
+    global pioneerPlatform 
+    global defaultRouter
+    global bootpserver
+    global tftpServerList
+    global MGMT_REG
+    global FAILSUMMARY
+    global VERBOSE
+     
+
+    set useNewMethod 1
+    set SKIPBROADCOMFDB 1
+    set FAILSUMMARY ""
+    lappend FAILSUMMARY "\n@@@@@@@@@@@@@@   Start FAIL SUMMARY   @@@@@@@@@@@@@@@"
+
+    UpdateTrackDBTxt "executing: SystemSetup";# tracking db location
+
+    # Hack added for Everest; remove later -GV
+    global skipEdpCheck
+    if [info exists skipEdpCheck] {
+        if {$skipEdpCheck} {
+            set useNewMethod 0
+        }
+    }
+    # End Hack
+
+    if ![info exist RELEASE_MASTER] {
+        set RELEASE_MASTER Release_Master
+    }  
+    set fd_res [open_result_file "$testNo"]
+    set time1 [clock seconds]
+    
+    result_h1 "$title"
+    report_start_test "$title"
+    
+    #generate mapping info for physical portId connected between DUT
+    global portDutListUsed
+    set portDutListUsed [SetupDUTConnections]
+    
+    set firstSubStr "DUT"
+    set lastSubStr "_CONNECT"
+    for {set i 1} {$i <=$numDUT} {incr i 1} {
+        global $firstSubStr$i$lastSubStr
+        global $firstSubStr$i${lastSubStr}B ;#global variable for msm-b
+        if [info exists $firstSubStr$i$lastSubStr] {
+            lappend DUTList $i
+        }
+    }
+    set platform [GetPlatform DUT1]
+    Login $DUT1_CONNECT
+    if {[regexp -nocase "stack" $platform] } {
+       result_ok "Its a stacking platfornm.Checking slots to be operational"
+       CheckOperational
+    }
+    set returnFlag ok
+    set platform [GetPlatform DUT1]
+    Login $DUT1_CONNECT
+    if {[regexp -nocase "stack" $platform] } {
+       result_ok "Its a stacking platfornm.Checking slots to be operational"
+       CheckOperational
+    }
+
+    # -----------------------------------------------------------------
+    # Verify MGMT and INBAND Connections
+    # -----------------------------------------------------------------
+    result_h2 "Network port validation"
+    report_start_test "Network port validation"
+    global tftpServer netConFlag
+    set tftpServer [lindex $tftpServerList 0]
+    set netConFlag 1
+    set mgmtList ""
+    foreach testDUT $DUTList {
+        lappend mgmtList "VerifyMgmtConnections $testDUT"
+    }
+    MultiTask $mgmtList
+
+    result_debug "MGMT Check Flag $netConFlag"
+    report_end_test
+    if {$netConFlag == 0} {
+        foreach dut $DUTList {
+            # ----- Switch config
+            Login  [expr $$firstSubStr$dut$lastSubStr]  -masterCheck 0 -CheckOperational 0
+            SendACmd "clear log st"
+            SendACmd "disable clipa"
+        }
+        set MGMT_REG(useTelnetGlobalFlag) 0
+        set MGMT_REG(useTelnetLocalFlag) 0
+        set MGMT_REG(currentConnectionType) "console"
+        set MGMT_REG(telnetNeedsConfig) 0
+        set MGMT_REG(forceConsole) 1
+        ################################################
+        # Clean up
+        ################################################
+        set time2 [clock seconds]
+        result_p "*** Time for $testNo = [expr $time2-$time1] secs\n\n"
+        close_result_file
+        report_end_test
+        set SKIPBROADCOMFDB 0
+        return "connectionBad"
+    } elseif {[info exists MGMT_REG(useTelnetGlobalFlag)] && $MGMT_REG(useTelnetGlobalFlag)} {
+        puts "@@@\n@@@\n@@@ Go to TELNET mode\n@@@\n@@@\n@@@"
+        set MGMT_REG(useTelnetGlobalFlag) 1
+        set MGMT_REG(useTelnetLocalFlag) 1
+        set MGMT_REG(currentConnectionType) "telnet"
+        set MGMT_REG(telnetNeedsConfig) 1
+        set MGMT_REG(forceConsole) 0
+    } else {
+        ################################################
+        # The mgmt port is good, Let do everything via
+        #   the mgmt interface
+        ################################################
+        set MGMT_REG(useTelnetGlobalFlag) 0
+        set MGMT_REG(useTelnetLocalFlag) 0
+        set MGMT_REG(currentConnectionType) "console"
+        set MGMT_REG(telnetNeedsConfig) 0
+        set MGMT_REG(forceConsole) 1
+    }
+    # -----------------------------------------------------------------
+    # Gather info about the test bed, Set Licensing if required
+    # -----------------------------------------------------------------
+    set genList ""
+    foreach testDUT $DUTList {
+        lappend genList "GeneralSetup $testDUT"
+    }
+    MultiTask $genList
+
+    # -----------------------------------------------------------------
+    # Start IXIA Verification
+    # -----------------------------------------------------------------
+    #Connect to ixia and setup connections
+    if { [SetupIxiaConnections] == "connectionBad" } {
+        set SKIPBROADCOMFDB 0
+        return connectionBad
+    }
+    
+    # Not initializing ixia or check connection
+    if {([info exists checkConnection] == 1) && $checkConnection == "NO_IXIA" } {
+        result_debug "Skipping ixia initialization and check connection"
+        ################################################
+        # Clean up
+        ################################################
+        set time2 [clock seconds]
+        result_p "*** Time for $testNo = [expr $time2-$time1] secs\n\n"
+        close_result_file
+        report_end_test
+        set SKIPBROADCOMFDB 0
+        return "connectionOkay"
+    }
+    
+    # ----- Test variables setup
+    set numIxiaCd [GetNumIxiaCd]
+    if {$numIxiaCd == 0} {
+        result_debug "No ixia card found to be initialized"
+        set SKIPBROADCOMFDB 0
+        return "connectionBad"
+    }
+    
+    # Check if desired to proceed
+    if {([info exists checkConnection] == 1) && $checkConnection == 0} {
+        foreach dut $DUTList {
+            # ----- Switch config 
+            Login  [expr $$firstSubStr$dut$lastSubStr]  -masterCheck 0 -CheckOperational 0
+            SendACmd "clear log st"
+            SendACmd "disable clipa"
+            EnableDebugMode
+        }
+        ################################################
+        # Clean up
+        ################################################
+        set time2 [clock seconds]
+        result_p "*** Time for $testNo = [expr $time2-$time1] secs\n\n"
+        close_result_file
+        report_end_test
+        set SKIPBROADCOMFDB 0
+        return "connectionOkay"
+    }
+    
+    set returnVal "connectionOkay"
+    set lastDUT 0
+
+    # -----------------------------------------------------------------
+    # Verify ixia and trunk ports
+    # -----------------------------------------------------------------
+    set ccOut ok
+    if {[CheckConnectionsTraffic $DUTList fd_res testNo] != "ok"} {
+        set ccOut error
+    }
+
+    if {[info exist MAIN(ifPipe)] && ($MAIN(ifPipe) != "NULL")} {
+        puts $MAIN(ifPipe) "set portMappingList \{$portMappingList\}"
+    }
+    
+    # In case EDP did not work at all
+    if {$useNewMethod==0} {
+        result_debug "Using the old Ixia traffic based trunk port validation..."
+        puts "|[llength $DUTList]|[info exists trunkPortList]|"
+        if {[llength $DUTList] > 1 && [info exists trunkPortList]} {
+            foreach trunkPair $trunkPortList {
+                set firstDUT [lindex $trunkPair 0]
+                set secondDUT [lindex $trunkPair 1]
+                #trunk port specification, no need to check
+                if {$secondDUT == 0 } { continue }
+                set portNumber [lindex $trunkPair 2]
+                Login [expr $$firstSubStr$firstDUT$lastSubStr]
+                SendACmd "create vlan ixiaVlan"
+                SendACmd "config vlan ixiaVlan tag $tagId"
+                SendACmd "config vlan ixiaVlan add port $portNumber tag"
+
+                #now we have to find the corresponding index
+                set secondDUTPort "PORT_NOT_FOUND"
+                set index 1
+                while { [GetATrunkPort $firstDUT $secondDUT $index] != "PORT_NOT_FOUND" } {
+                    if { [GetATrunkPort $firstDUT $secondDUT $index] == $portNumber} {
+                        set secondDUTPort [GetATrunkPort $secondDUT $firstDUT $index]
+                        break
+                    }
+                    incr index
+                }
+                # Add support for non ethernet wans
+                #Each port added adds { {1 2 1 6:1 F48T} {fSw sSw index port hdWare} }
+                unset   DUT(trunk,usageList)
+                lappend DUT(trunk,usageList) "$firstDUT $secondDUT $index $portNumber\
+                        [GetSlotNumType $firstDUT $portNumber]"
+                lappend DUT(trunk,usageList) "$secondDUT $firstDUT $index $secondDUTPort\
+                        [GetSlotNumType $secondDUT $secondDUTPort]"
+                puts "##########################\r"
+                puts "trunk $DUT(trunk,usageList) ##############"
+
+                #need to get a portId that belongs to the firstDUT
+                set ixiaCdPort [lindex [lindex $portMappingList 0] 0]
+                foreach port $portMappingList {
+                    if {[lindex $port 2] == $firstDUT } {
+                        set ixiaCdPort [lindex $port 0]
+                        break
+                    }
+                }
+                SendACmd "config vlan ixiaVlan add port [MapDUTPortId $ixiaCdPort $firstDUT] tag"
+
+                Login [expr $$firstSubStr$secondDUT$lastSubStr]
+                SendACmd "create vlan ixiaVlan"
+                SendACmd "config vlan ixiaVlan tag $tagId"
+                SendACmd "config vlan ixiaVlan add port $secondDUTPort tag"
+
+                set frameSent [SendFrame -txPortId $ixiaCdPort -tag $tagId -frameSize 68]
+                after 300
+                set frameSent [SendFrame -txPortId $ixiaCdPort -tag $tagId -frameSize 68]
+                set sourceMac [GetSourceMacAddress $frameSent]
+                set srcMacFdb [IxiaMacFormat2FdbFormat $sourceMac]
+                result_debug "FdbMac for port $ixiaCdPort:|$srcMacFdb|[GetDestMacAddress $frameSent]|"
+                lappend checkMAC "$srcMacFdb ixiaVlan $secondDUTPort exist"
+
+                ################################################
+                set subTest "Checking Trunking #$index between DUT$firstDUT and DUT$secondDUT via MAC fdb Learning"
+                ################################################
+                result_h2 "$subTest"
+                report_start_test "$subTest"
+
+                set returnFlag [CheckFdb $checkMAC $fd_res $testNo]
+                unset checkMAC
+                report_end_test
+
+                if { $returnFlag != "ok" } {
+                    set returnVal "connectionBad"
+                }
+                Login [expr $$firstSubStr$firstDUT$lastSubStr]
+                SendACmd "delete ixiaVlan"
+
+                Login [expr $$firstSubStr$secondDUT$lastSubStr]
+                SendACmd "delete ixiaVlan"
+            }
+        }
+    }
+    
+    ################################################
+    # Clean up EDP
+    ################################################
+    foreach testDUT $DUTList {
+        Login  [expr $$firstSubStr$testDUT$lastSubStr] -masterCheck 0 -CheckOperational 0
+        global eware_dut
+        if {[info exists eware_dut]} {
+            if {[lsearch $eware_dut $testDUT] == -1 } {
+                SendACmd "disable edp ports all"
+                SendACmd "con edp advertisement-interval 60 holddown-interval 180"
+                SendACmd "disable dhcp vlan all"
+            } else {
+                SendACmd "disable edp ports all"
+                SendACmd "disable dhcp vlan all"
+            }
+        } else {
+            SendACmd "disable edp ports all"
+            SendACmd "con edp advertisement-interval 60 holddown-interval 180"
+            SendACmd "disable dhcp vlan all"
+        }
+        #_verifyCFCorruptionStatusOnLogin
+    }
+    
+    # -----------------------------------------------------------------
+    # End SystemSetup and Return Value
+    # -----------------------------------------------------------------
+    set time2 [clock seconds]
+    result_p "*** Time for $testNo = [expr $time2-$time1] secs\n\n"
+    close_result_file
+    report_end_test
+    if {$ccOut == "error"} {
+        set returnVal "connectionBad"
+    }
+    if {$returnVal == "connectionBad"} {
+        if {![info exists VERBOSE] || $VERBOSE == "yes"} {
+            dumpAllSwitchInfo;
+        }
+        lappend FAILSUMMARY "\n@@@@@@@@@@@@@@   END FAIL SUMMARY   @@@@@@@@@@@@@@@"
+        foreach fmsg $FAILSUMMARY {
+            result_debug "\n$fmsg"
+        }
+    }
+    return $returnVal
+}
+##################################################################
+# Procedure Name: VerifyInitFile
+# Desc: make sure the init file is good, if not delete
+#
+# Return 1 if there is a valid existing init file. else 0
+#
+##################################################################
+proc VerifyInitFile {initFile} {
+    if {[file exists $initFile] && [file size $initFile] > 0} {
+        if {[catch {source $initFile} reason]} {
+            result_debug "\n!!!\nThere was a TCL error when sourcing\n$initFile\nError: $reason\n!!!"
+            regsub -all "Tmp" $initFile "Tmp2" initFile2
+            regsub -all "DUTINFO" $initFile2 "BADBADBAD" initFile3
+            if {[catch {file rename -force $initFile $initFile3} why]} {
+                puts "Failed to rename the init file $initFile as a failure: $reason"
+            }
+            return 0
+        }
+        return 1
+    }
+    return 0
+}
+##################################################################
+# Procedure Name: GetInitFileName
+# Desc: Create a test bed variable storage init file name
+#
+# Typical Usage: set initFile [GetInitFileName $curAutoRoot $cfg]
+# Return: filename
+#
+##################################################################
+proc GetInitFileName {cPath cfg {mTmp "Tmp"}} {
+    global DUT1_CONNECT
+    # Use console in case there is an internal change in the cfg
+    regsub -all {[ ]+} $DUT1_CONNECT {_} console;
+    set cfgp [file tail $cfg]
+    set cfgp [string trim $cfgp]
+    set cfgp [file rootname $cfgp]
+    set initFile "${cPath}/main/${mTmp}/DUTINFO_${cfgp}_${console}.txt"
+    regsub -all {[ ]+} $initFile {} initFile;
+    return $initFile
+}
+##################################################################
+# Procedure Name: _verifyPortMappingPortsActive
+# Desc:  Verify that every port in the portMappingList is up
+#       on all DUTs
+#
+# Args  in: none
+#       out: 1|0
+#
+# Typical usage:
+#   if {[_verifyPortMappingPortsActive]} {
+#
+##################################################################
+proc _verifyPortMappingPortsActive {} {
+    global portMappingList whichDutNow MAIN
+
+    set initDut $whichDutNow
+
+    for {set nDUT 1; global DUT${nDUT}_CONNECT} { [info exists DUT${nDUT}_CONNECT] } \
+                                             {incr nDUT ; global DUT${nDUT}_CONNECT} {
+        Login [set DUT${nDUT}_CONNECT] -CheckOperational 0 -masterCheck 0 ;
+    }
+
+    set allDUTs ""
+    foreach portDef $portMappingList {
+        set lDut [lindex $portDef 2]
+        if {[lsearch $allDUTs $lDut] < 0} {
+            lappend allDUTs $lDut
+        }
+        set lPort [lindex $portDef 1]
+        if {$lPort == "A"} {
+            result_debug "Portmapping list is still in automatic State"
+            Login [set DUT${initDut}_CONNECT] -CheckOperational 0 -masterCheck 0 ;
+            return
+        }
+        lappend paramList($lDut) "{$lPort .*E *A} exist"
+        lappend dutPortList($lDut) [string trim $lPort]
+    }
+    set res 1
+    # ----------------------------------------------------------------
+    # Add recovery loop option if ports are down
+    # ----------------------------------------------------------------
+    set tryToRecoverCount 1
+    set recoveryType(1) ""
+    set fixDutList ""
+    while {$tryToRecoverCount <= 3} {
+        foreach d $allDUTs {
+            Login [set DUT${d}_CONNECT] -CheckOperational 0 -masterCheck 0 ;
+            set portStr [join $dutPortList($d) ","]
+            set dutPortStr($d) $portStr
+            set val [CheckKeyValue "show ports $portStr configuration no-refresh" $paramList($d) \
+                -time {s: 1 i: 10 d: 60 f: 60 r} -reportResults 0]
+            if {$val != "ok"} {
+                set res 0
+                # ----------------------------------------------------
+                # Define what platforms qualify to attempt to recover
+                #   ports that are down.
+                #   4/2017 - VPEX slots are the only candidate
+                # ----------------------------------------------------
+                if {[CheckForBpePorts -dut $d -dutPortString $portStr -match "any"]} {
+                    set recoveryType($d) "bpeSlot"
+                    lappend fixDutList $d
+                } else {
+                    set recoveryType($d) ""
+                }
+            }
+        }
+        if {!$res && [llength $fixDutList] > 0 && $tryToRecoverCount < 3} {
+            #last condition tryToRecoverCount < 3 means don't try to recover last time.
+            foreach d $fixDutList {
+                switch $recoveryType($d) {
+                    "bpeSlot"  {
+                        if {[PowerCycleBpes -DUT $d] < 0} {
+                            # could not power cycle
+                            Login [set DUT${initDut}_CONNECT] -CheckOperational 0 -masterCheck 0 ;
+                            return $res;
+                        }
+                        set res 1
+                    }
+                }
+                Login [set DUT${d}_CONNECT] -CheckOperational 0 -masterCheck 0 ;
+                CheckOperational
+            }
+            incr tryToRecoverCount
+            continue;
+        } else {
+            Login [set DUT${initDut}_CONNECT] -CheckOperational 0 -masterCheck 0 ;
+            return $res;
+        }
+    }
+    Login [set DUT${initDut}_CONNECT] -CheckOperational 0 -masterCheck 0 ;
+    return $res
+}
+##################################################################
+# Procedure Name: _verifyTrunkPortsActive
+# Desc:  Verify that every port in the trunkPortList is up
+#       on all DUTs
+#
+# Args  in: none
+#       out: 1|0
+#
+# Typical usage:
+#   if {[_verifyTrunkPortsActive "1 3"]} {
+#
+##################################################################
+proc _verifyTrunkPortsActive {{dutList NULL}} {
+    global trunkPortList whichDutNow MAIN
+    set initDut $whichDutNow
+    global DUT${whichDutNow}_CONNECT
+
+    if {$dutList == "NULL"} {
+        set dutList $MAIN(DUTLIST)
+    }
+    foreach nDUT $dutList {
+        global DUT${nDUT}_CONNECT
+        Login [set DUT${nDUT}_CONNECT] -CheckOperational 0 -masterCheck 0 ;
+    }
+
+    set allDUTs ""
+    foreach portDef $trunkPortList {
+        set lDut [lindex $portDef 0]
+        if {[lsearch $allDUTs $lDut] < 0} {
+            lappend allDUTs $lDut
+        }
+        set lPort [lindex $portDef 2]
+        lappend paramList($lDut) "{$lPort .*E *A} exist"
+        lappend dutPortList($lDut) $lPort
+    }
+    set res 1
+    foreach d $dutList {
+        Login [set DUT${d}_CONNECT] -CheckOperational 0 -masterCheck 0 ;
+        set portStr [join $dutPortList($d) ","]
+        set val [CheckKeyValue "show ports $portStr configuration no-refresh" $paramList($d) \
+            -time {s: 1 i: 10 d: 21 f: 21 r}]
+        if {$val != "ok"} {
+            set res 0
+        }
+    }
+    Login [set DUT${initDut}_CONNECT] -CheckOperational 0 -masterCheck 0 ;
+    return $res
+}
+###################################################################
+# proc _smallCheckConnections
+#
+#   Run a scaled back check Connections to create a new initFile
+#
+#
+#
+###################################################################
+proc _smallCheckConnections {} {
+    global MAIN ixiaCh1 TrafficGen SPIRENTCH1 stcLabserver
+    global ixiaPath auto_path LIB_PATH stcPath LABSERVER
+
+    if {![info exists MAIN(autoRoot)] || ![info exists MAIN(cfg)]} {
+        puts "Can't create the init file"
+        return;
+    }
+
+    set MAIN(initFile) [GetInitFileName $MAIN(autoRoot) $MAIN(cfg)]
+    catch {open $MAIN(initFile) "w"} MAIN(ifPipe)
+    if {[regexp -nocase "denied" $MAIN(ifPipe)]} {
+        puts "@\n@\nNO INIT FILE WILL BE CREATED. ERROR OPENING FILE\n@\n@"
+        set MAIN(ifPipe) NULL
+        return;
+    }
+
+    if {0} {
+        if {[info exists ixiaCh1] && $ixiaCh1 != "NO_IXIA"} {
+            puts "****** the ixia chassis is $ixiaCh1";
+            puts "****** the ixia path is $ixiaPath($ixiaCh1)";
+            set TrafficGen ixia
+        } elseif {[info exists SPIRENTCH1]} {
+            puts "****** The Spirent Chassis is $SPIRENTCH1 ******"
+            set TrafficGen stc
+            set ::LABSERVER $stcLabserver($SPIRENTCH1)
+            set env(IXIA_HOME) null
+            lappend auto_path "/auto/ixia_5_70/lib/mpexpr-1.1/"
+            overWriteProcs $LIB_PATH [file join $LIB_PATH spirent]
+            source [file join $LIB_PATH ePTLib ePTUtils.tcl]
+            logcmd lappend auto_path $stcPath($stcLabserver($SPIRENTCH1))
+            stcInit $LABSERVER
+            package require Mpexpr
+            puts "\n\nPackage Require SpirentTestCenter"
+            logcmd package require SpirentTestCenter
+            GenerateDUTPortMapping; # Add here temporarily b/c called in SystemSetup
+            ReservePorts
+        }
+
+        if {[info exists ixiaPath($ixiaCh1)] && $TrafficGen == "ixia"} {
+            SetIxiaEnv "$ixiaPath($ixiaCh1)"
+            puts "****** The ixia path is $ixiaPath($ixiaCh1)";
+        }
+    }
+    # ----------------------------------------------------------
+    # Gather critical variables from all switches in the test bed
+    # ----------------------------------------------------------
+    if {[set rc [get_DUTs_info]] != 0} {
+        result_error "Error $rc while calling get_DUTs_info.";
+        close_result_file;
+        return -7;
+    }
+
+    # ----------------------------------------------------------
+    # Verify all of the test bed connections
+    # ----------------------------------------------------------
+    # check connections between DUTs and Ixia
+
+    if {$TrafficGen == "ixia"} {
+        if {![regexp -nocase "no_ixia" $ixiaCh1]} {
+            set returnFlag [SystemSetup]
+        } else {
+            set returnFlag "connectionOkay"
+        }
+    } elseif {$TrafficGen == "stc"} {
+        set returnFlag [SystemSetup]
+    } else {
+        result_error "Can't find Ixia OR Spirent Information"
+        set returnFlag "connectionBad"
+    }
+
+    # Close the init file
+    if {([info exists MAIN(ifPipe)]) && ($MAIN(ifPipe) != "NULL")} {
+        close $MAIN(ifPipe)
+    }
+
+}
+##################################################################################
+# Procedure: _mgmtConnection
+#
+#
+#
+##################################################################################
+proc _mgmtConnection {numDUT} {
+    global DUT${numDUT}_CONNECT
+    global DUT${numDUT}_IP
+    global DUT${numDUT}_IP_FP
+    global DUT${numDUT}_DefaultBlade
+    global switchPort2DefaultRouter tftpServer
+    global DUTs_info netConFlag MGMT_REG
+
+    set connect [set DUT${numDUT}_CONNECT]
+    set dut_ip [set DUT${numDUT}_IP]
+    set def_blade [set DUT${numDUT}_DefaultBlade]
+    if { $def_blade != 0 } {
+        set port $def_blade:$switchPort2DefaultRouter
+    } else {
+        set port $switchPort2DefaultRouter
+    }
+    set MGMT_REG(forceConsole) 1;
+    Login $connect  -masterCheck 0 -CheckOperational 0
+    ConfigGatewayNetwork
+}
+##################################################################################
+# Procedure: _ConfigMgmtNetworkAll
+#
+#
+#
+#
+##################################################################################
+proc _ConfigMgmtNetworkAll {} {
+    global whichDutNow MGMT_REG
+    set mgmtList ""
+
+    set initDut $whichDutNow
+    for {set nDUT 1; global DUT${nDUT}_CONNECT} { [info exists DUT${nDUT}_CONNECT] } \
+                                             {incr nDUT ; global DUT${nDUT}_CONNECT} {
+        lappend mgmtList "_mgmtConnection $nDUT"
+    }
+    _setShowOutput -screen off -log off -res_fmt on
+    MultiTask $mgmtList
+    _setShowOutput -screen on -log on -res_fmt on
+    set MGMT_REG(telnetNeedsConfig) 0
+    set connect [set DUT${initDut}_CONNECT]
+    Login $connect  -masterCheck 0 -CheckOperational 0
+    
+}
+##################################################################################
+# Procedure: _GetFailingPortIds
+#
+#
+#
+#
+##################################################################################
+proc _GetFailingPortIds {} {
+    global MAIN portMappingList
+
+    set badPortIds ""
+    foreach m $portMappingList {
+        if {[regexp -nocase "key_not_found" $m]} {
+            lappend badPortIds "portId[lindex $m 0]"
+        }
+    }
+    if {[llength $badPortIds] > 0} {
+        set MAIN(CCPortIdResults) "Ixia portIds failed: $badPortIds"
+    } else {
+        set MAIN(CCPortIdResults) ""
+    }
+    return $MAIN(CCPortIdResults)
+}
+##################################################################################
+#
+#
+#
+#
+#
+#
+##################################################################################
+proc _updateMgmtInbandStatus {} {
+    global MAIN DUTs_info DUT1_IP_FP DUT2_IP_FP
+
+    set bL ""
+    if {![info exist DUT1_IP_FP] } {
+        lappend bL "NoInband"
+    }
+    if {![info exist DUT2_IP_FP] && [lsearch $bL "NoInband"] < 0} {
+        lappend bL "NoInband"
+    }
+    if {(!$DUTs_info(DUT1,InbandNetConnected) || !$DUTs_info(DUT2,InbandNetConnected)) && \
+            [lsearch $bL "InbandIssue"] < 0} {
+        lappend bL "InbandIssue"
+    }
+    if {(!$DUTs_info(DUT1,MgmtNetConnected) || !$DUTs_info(DUT2,MgmtNetConnected)) && \
+           [lsearch $bL "MgmtIssue"] < 0} {
+        lappend bL "MgmtIssue"
+    }
+    # --- update the tracking db ---
+    if {[llength $bL] > 1} {
+        set o [join $bL " "]
+        _setTrackDBIssue "$o"
+    } else {
+        _setTrackDBIssue "$bL"
+    }
+}

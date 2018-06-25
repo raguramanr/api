@@ -1,0 +1,533 @@
+###################################################################
+#     Verify MSM A is the Master
+###################################################################
+proc VerifyMsmAMaster {} {
+    global DUTx_CONNECTA
+
+    global DUT1_Stacking_msma_slot
+    global DUT1_Stacking_msmb_slot
+
+    # Verify MSM A = Master
+    ###########################################################
+    set subTest "Verify MSM A is the Master"
+    ###########################################################
+    result_h2 "$subTest"
+    report_start_test "$subTest"
+
+    # Login
+    Login $DUTx_CONNECTA -masterCheck 0
+    if { [info exists DUT1_Stacking_msma_slot] } {
+	set result [VerifyMsmAMasterStacking]
+    } else {
+	lappend checkKeyList "{Current State: *MASTER} exist"
+	set result [CheckKeyValue "show switch" $checkKeyList -comment "$subTest" \
+		-time {s: 1 t: 2 d: 30 f: 40 r}]
+	unset checkKeyList
+    }
+
+    report_end_test
+    return $result
+}
+
+###################################################################
+#     Verify MSM B is the Master
+###################################################################
+proc VerifyMsmBMaster {} {
+    global DUTx_CONNECTB
+
+    global DUT1_Stacking_msma_slot
+    global DUT1_Stacking_msmb_slot
+
+    # Verify MSM B = Master
+    ###########################################################
+    set subTest "Verify MSM B is the Master"
+    ###########################################################
+    result_h2 "$subTest"
+    report_start_test "$subTest"
+
+    Login $DUTx_CONNECTB -masterCheck 0
+    if { [info exists DUT1_Stacking_msma_slot] } {
+	set result [VerifyMsmBMasterStacking]
+    } else {
+	# Login
+	lappend checkKeyList "{Current State: *MASTER} notExist"
+	lappend checkKeyList "{Current State: *.* *MASTER} exist"
+	set result [CheckKeyValue "show switch" $checkKeyList -comment "$subTest" \
+		-time {s: 1 t: 2 d: 30 f: 40 r}]
+	unset checkKeyList
+    }
+
+    report_end_test
+    return $result
+}
+
+proc VerifyMsmAMasterStacking { } {
+
+    global DUT1_Stacking_msma_slot
+
+    lappend checkKeyList "{Slot: *Slot-$DUT1_Stacking_msma_slot} exist"
+    lappend checkKeyList "{Current State: *MASTER} exist"
+    set result [CheckKeyValue "show switch" $checkKeyList -time {s: 1 t: 2 d: 30 f: 40 r}]
+    unset checkKeyList
+
+    return $result
+}
+
+proc VerifyMsmBMasterStacking { } {
+
+    global DUT1_Stacking_msmb_slot
+
+    lappend checkKeyList "{Slot: *Slot-$DUT1_Stacking_msmb_slot} exist"
+    lappend checkKeyList "{Current State: *MASTER} exist"
+    set result [CheckKeyValue "show switch" $checkKeyList -time {s: 1 t: 2 d: 30 f: 40 r}]
+    unset checkKeyList
+
+    return $result
+}
+
+###################################################################
+#     MakeMSMAMaster
+###################################################################
+proc MakeMSMAMaster { } {
+    global DUTx_CONNECTA
+    global DUTx_CONNECTB
+    
+    if {[Login $DUTx_CONNECTA -masterCheck 1]} {
+       if {[CheckOperational]} {
+          return "ok"
+       } else {
+          return error
+       }
+    } else {
+       return "error"
+    }
+}
+
+###################################################################
+#     MakeMSMBMaster
+###################################################################
+proc MakeMSMBMaster { } {
+    global DUTx_CONNECTA
+    global DUTx_CONNECTB
+    
+    if {[Login $DUTx_CONNECTB -masterCheck 1]} {
+       if {[CheckOperational]} {
+          return "ok"
+       } else {
+          return error
+       }
+    } else {
+       return "error"
+    }
+}
+
+###################################################################
+#     SetupMsmTestAB
+###################################################################
+proc SetupMsmTestAB { } {
+    global DUTx
+    global DUTx_CONNECTA
+    global DUTx_CONNECTB
+    
+    Login $DUTx_CONNECTA -masterCheck 0
+    set getKeyList "{{Current State:} 1}" 
+    set stateA_A [GetKeyValue "show switch" $getKeyList]
+    set getKeyList "{{Current State:} 2}" 
+    set stateB_A [GetKeyValue "show switch" $getKeyList]
+    
+    Login $DUTx_CONNECTB -masterCheck 0
+    set getKeyList "{{Current State:} 1}" 
+    set stateA_B [GetKeyValue "show switch" $getKeyList]
+    set getKeyList "{{Current State:} 2}" 
+    set stateB_B [GetKeyValue "show switch" $getKeyList]
+    
+    Login $DUTx_CONNECTA -masterCheck 0
+    if { $stateA_A=="MASTER" && $stateB_A=="BACKUP" && \
+	    $stateA_B=="MASTER" && $stateB_B=="BACKUP" } {
+	set result [CheckOperational]
+	if { $result == 0 } {
+	    MyCheckReboot
+	} else {
+	    Login $DUTx_CONNECTB -masterCheck 0
+	    set result [CheckOperational]
+	    if { $result == 0 } {
+		Login $DUTx_CONNECTA -masterCheck 0
+		MyCheckReboot -msm "B"
+	    }
+	}
+	return $result
+    } else { 
+	if {$stateA_A=="MASTER"} {
+	    Login $DUTx_CONNECTA -masterCheck 0
+	    SendACmd "config sys-recovery-level all"
+	    MyCheckReboot
+	} else {
+	    Login $DUTx_CONNECTB -masterCheck 0
+	    SendACmd "config sys-recovery-level all"
+	    MyCheckReboot -masterCheck 0
+	}
+	return "error"
+    }
+}
+
+###################################################################
+#     SetupMsmTestBA
+###################################################################
+proc SetupMsmTestBA { } {
+    global DUTx
+    global DUTx_CONNECTA
+    global DUTx_CONNECTB
+    
+    Login $DUTx_CONNECTA -masterCheck 0
+    set getKeyList "{{Current State:} 1}" 
+    set stateA_A [GetKeyValue "show switch" $getKeyList]
+    set getKeyList "{{Current State:} 2}" 
+    set stateB_A [GetKeyValue "show switch" $getKeyList]
+    
+    Login $DUTx_CONNECTB -masterCheck 0
+    set getKeyList "{{Current State:} 1}" 
+    set stateA_B [GetKeyValue "show switch" $getKeyList]
+    set getKeyList "{{Current State:} 2}" 
+    set stateB_B [GetKeyValue "show switch" $getKeyList]
+    set getKeyList "{{Current State:} 4}" 
+    set stateB1_B [GetKeyValue "show switch" $getKeyList]
+    
+    if { $stateA_A=="BACKUP" && $stateB_A=="MASTER" && \
+	    $stateA_B=="BACKUP" && 
+    ( $stateB_B=="MASTER" || $stateB1_B=="MASTER") } {
+	set result [CheckOperational]
+	if { $result == 0 } {
+	    MyCheckReboot
+	} else {
+	    Login $DUTx_CONNECTA -masterCheck 0
+	    set result [CheckOperational]
+	    if { $result == 0 } {
+		Login $DUTx_CONNECTB -masterCheck 0
+		MyCheckReboot -msm "A"
+	    }
+	}
+	return $result
+    } else { 
+	if {$stateA_A=="MASTER"} {
+	    Login $DUTx_CONNECTA -masterCheck 0
+	    SendACmd "config sys-recovery-level all"
+	} else {
+	    Login $DUTx_CONNECTB -masterCheck 0
+	    SendACmd "config sys-recovery-level all"
+	}
+	MyCheckReboot -msm "A"
+	return "error"
+    }
+}
+
+###################################################################
+#     KillXOSProcess
+###################################################################
+proc KillXOSProcess { msm processName } {
+    global DUTx_CONNECTA
+    global DUTx_CONNECTB
+    global validstring
+    Login [set DUTx_CONNECT[set msm]] -masterCheck 0
+    
+    #####################################
+    set subTest "Kill $processName"
+    #####################################
+    result_h2 "$subTest"
+    report_start_test "$subTest"
+    set validstring(KillMSMProcess) "Crit:DM.Critical" 
+    
+    lappend pidList "$processName 1"
+    set pid [GetKeyValue "show process $processName detail slot $msm" $pidList]
+    regsub -all {main} $pid "" pid;
+    if { $pid != "" } {
+	EnableDebugMode
+	if { [CheckCmdLegal "!kill -9 $pid"] == "illegal" } {
+	    set rtnCode 0
+	    result_error "can not kill process $processName!"
+	} else {
+	    set rtnCode 1
+	    result_ok "Process $processName killed"
+	}
+        # Need sleep here because of delay between killing process and msm rebooting
+        exSleep 30
+    } else {
+	set rtnCode 1
+	result_ok "Process $processName gone already!"
+    }
+    unset validstring(KillMSMProcess) 
+    report_end_test
+    return $rtnCode
+}
+
+###################################################################
+#   explicitFailOver
+###################################################################
+proc ExplicitFailOver { msm } {
+    global DUTx_CONNECTA
+    global DUTx_CONNECTB
+    global hostname
+    global spawn_ids
+    global spawn_id
+    
+    #####################################
+    set subTest "run msm-failover force on MSM $msm"
+    #####################################
+    result_h2 "$subTest"
+    report_start_test "$subTest"
+    set pid _[pid]
+    Login [set DUTx_CONNECT$msm] -masterCheck 0
+    # can not use SendACmd
+#    send "run msm-failover force\r"
+    SendACmd "run msm-failover force"
+    exSleep 20 ;# do not return immediately, as new slave is still rebooting, hits bootrom
+    report_end_test 1
+}
+
+
+################################################################## 
+# Procedure Name: MyCheckReboot
+#   
+# Description: Reboots the current Login DUT, saves the current config
+#
+# Input args: duts, save
+# Output args: none
+# Typical usage:
+#             CheckReboot -save no -msm A
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 VerifySwitchOutput,VerifyTraffic)
+# Category: Setup
+##################################################################
+proc MyCheckReboot {args} {
+    global DUT
+    global DUTs_info
+    global DUTx_CONNECTA
+    global DUTx_CONNECTB
+    global DUT1_Stacking_msma_slot
+    global DUT1_Stacking_msmb_slot
+    
+    parse_args MyCheckReboot $args {
+	save "yes"
+	maxWait 90
+	msm ""
+	masterCheck 1
+    }
+    DBug 1 "the CheckReboot args vals: save $save, maxWait $maxWait, msm $msm"
+
+    set msm [string tolower $msm]
+    if {$msm != "" } {
+	if { [info exists DUT1_Stacking_msma_slot] } {
+	    result_debug "Rebooting slot [set DUT1_Stacking_msm${msm}_slot] ..."
+	    result_debug "send reboot slot [set DUT1_Stacking_msm${msm}_slot]"
+	    send "reboot slot [set DUT1_Stacking_msm${msm}_slot] \n"
+	} else {
+	    result_debug "Rebooting msm $msm ..."
+	    result_debug "send reboot msm$msm"
+	    send	"reboot msm $msm\n"
+	}
+    } else {
+	result_debug "send reboot"
+	send	"reboot\n"
+    }
+    set msm [string toupper $msm]
+
+    expect "y - save"
+    if {[regexp -nocase "^n" $save]} {
+	send "n\n"
+    } else {
+	send "y\n"
+    }
+    expect "#"
+    #   send "\n"
+    #   expect " #"
+    result_debug "Rebooting switch ..."
+    if {$msm != "" } {
+	if { [info exists DUT1_Stacking_msma_slot] } {
+	    set wait 120
+	} else {
+	    set wait 60
+	}
+	result_debug "wait $wait before switch to other port..."
+	exSleep $wait
+	set status [Login [set DUTx_CONNECT[set msm]] -masterCheck 0]
+	if {$status} {
+	    return "ok"
+	} else {
+	    report_start_test "Failed to connect to switch after reboot"
+	    result_error "Failed to connect to switch after reboot"
+	    report_end_test
+	    return "error"
+	}
+    } else {
+	set status [MyWaitForReboot $maxWait "after sending reboot command to the DUT" $masterCheck]
+	if {$status == "error"} {
+	    report_start_test "Failed to connect to switch after reboot"
+	    result_error "Failed to connect to switch after reboot"
+	    report_end_test
+	} else {
+	    SendACmd "config default delete port all"
+	    SendACmd "disable clipaging"
+         #EnableDebugMode
+         #SendACmd "!echo dump_stack > /sys/module/watchdog/parameters/watchdog_warn_behavior"
+	}
+	return $status
+    }
+}
+
+################################################################## 
+# Procedure Name: MSMFailoverCapable
+#   
+# Description: Determine if msm-failover is ok to be run on the DUT
+#
+# Input args: None
+#
+# Output args: 1/0
+#
+# Typical usage:
+#             if { [MSMFailoverCapable] } { ExplicitFailOver "A" }
+#
+# Category: Setup
+##################################################################
+proc MSMFailoverCapable { } {
+
+    global DUTx
+    global DUTx_CONNECTA
+    global DUTx_CONNECTB
+    global DUT1_CONNECT DUT1_CONNECTB DUT2_CONNECT DUT2_CONNECTB
+    global chassis
+
+    if {[regexp -nocase "$chassis" [GetPlatform]] == 1 && [info exists DUT1_CONNECTB]} {
+	set DUTx 1
+	set DUTx_CONNECTA $DUT1_CONNECT
+	if {[info exists DUT1_CONNECTB]} {
+	    set DUTx_CONNECTB $DUT1_CONNECTB
+	} elseif {[info exists DUT1_CONNECT_BACKUP]} { 
+	    set DUTx_CONNECTB $DUT1_CONNECT_BACKUP
+	}
+	result_ok "DUT1 is used for MSM FailOver test"
+    } elseif {[regexp -nocase "$chassis" [GetPlatform DUT2]] == 1 && [info exists DUT2_CONNECTB]} {
+	set DUTx 2
+	set DUTx_CONNECTA $DUT2_CONNECT
+	if {[info exists DUT1_CONNECTB]} {
+	    set DUTx_CONNECTB $DUT2_CONNECTB
+	} elseif {[info exists DUT2_CONNECT_BACKUP]} { 
+	    set DUTx_CONNECTB $DUT2_CONNECT_BACKUP
+	}
+	result_ok "DUT2 is used for MSM FailOver test"
+    } else {
+	result_ok "neither DUT1 nor DUT2 can not be used for MSM Fail Over test"
+	return 0
+    }
+    return 1
+}
+################################################################## 
+# Procedure Name: findslotsystemdump
+#   
+# Description: clear debug system-dump on all slots plus MSM/MM
+#
+# Input args: None
+#
+# Output args: None
+#
+# Typical usage:
+#             findslotsystemdump
+#
+# Category: Verify
+##################################################################
+proc findslotsystemdump {} {
+    global DUT1_CONNECT
+    global DUT2_CONNECT
+    global DUT3_CONNECT
+    global DUT4_CONNECT
+    global DUT5_CONNECT
+    global chassis
+    global DUTs_info
+    global bladeType
+    global platform
+    global stacking
+    global gnssPlatform
+    
+    for {set k 1} {$k <= 5} {incr k} {
+        if {![info exists DUT${k}_CONNECT]} {
+            continue;
+        }
+        set platform [GetPlatform DUT${k}]
+        Login [set DUT${k}_CONNECT]
+        result_debug "platform : $platform"
+        if {[regexp -nocase "$stacking" $DUTs_info(DUT${k},platform)]} {
+            set slotName $DUTs_info(DUT${k},hwList)
+            puts "slotName value is $slotName"
+            set Slot 1
+            # Clear system dumps for each stackable in the stack
+            foreach i $slotName {
+                puts "I value is : $i"
+                if {"$i" != "Empty"} {
+                    result_debug "slot is $Slot"
+                    lappend parameterList "{core_dump_info|failure:} notExist"
+                    if { [CheckKeyValue "show debug system-dump slot $Slot" $parameterList \
+                                      -comment "Check core in slot-$Slot DUT$k"] != "ok" } {
+                        SendACmd "clear debug system-dump slot $Slot"
+                        result_debug "system-dump cleared on slot-$Slot DUT$k"
+                    }
+                    unset parameterList
+                }
+                incr Slot
+            }
+        } elseif {[regexp -nocase "BD-X8|$chassis" $DUTs_info(DUT${k},platform)]} {
+            set slotName $DUTs_info(DUT${k},hwList)
+            puts "slotName value is $slotName"
+            set Slot 1
+            # Clear all of the line card system dumps if they exist
+            foreach i $slotName {
+                puts "I value is : $i"
+                if {"$i" != "Empty"} {
+                    result_debug "slot is $Slot"
+                    lappend parameterList "{core_dump_info|failure:} notExist"
+                    if { [CheckKeyValue "show debug system-dump slot $Slot" $parameterList \
+                                      -comment "Check core in slot-$Slot DUT$k"] != "ok" } {
+                        SendACmd "clear debug system-dump slot $Slot"
+                        result_debug "system-dump cleared on slot-$Slot DUT$k"
+                    }
+                    unset parameterList
+                }
+                incr Slot
+            }
+            # Check to see if MSM-A or MM-A exit
+            lappend msm_key "{M(S)?M-A} Operational inLine Exist"
+            if {[CheckKeyValue "show slot" $msm_key -reportResults 0 \
+                               -comment "Checking MSM availability"] == "ok" } {
+                # Check to see if there is a system-dump on msm/mm a
+                lappend parameterList "{core_dump_info|failure:} notExist"
+                if { [CheckKeyValue "show debug system-dump msm a" $parameterList \
+                                   -comment "Check core in MSM-A DUT$k"] != "ok" } {
+                    SendACmd "clear debug system-dump msm a"
+                    result_debug "system-dump cleared on MSM-A DUT$k"
+                }
+            }
+            unset msm_key
+            # Check to see if MSM-B or MM-B exit
+            lappend msm_key "{M(S)?M-B} Operational inLine Exist"
+            if {[CheckKeyValue "show slot" $msm_key -reportResults 0 \
+                               -comment "Checking MSM availability"] == "ok" } {
+                # Check to see if there is a system-dump on msm/mm b
+                lappend parameterList "{core_dump_info|failure:} notExist"
+                if { [CheckKeyValue "show debug system-dump msm b" $parameterList \
+                                    -comment "Check core in MSM-B DUT$k"] != "ok" } {
+                    SendACmd "clear debug system-dump msm b"
+                    result_debug "system-dump cleared on MSM-B DUT$k"
+                }
+            }
+        } else {
+            # Stackable case
+            set parameterList ""
+            lappend parameterList "{core_dump_info|failure:} notExist"
+            if {[CheckKeyValue "show debug system-dump" $parameterList \
+                               -comment "Check core in DUT$k"] != "ok"} {
+                SendACmd "clear debug system-dump"
+                result_debug "system-dump cleared on DUT$k"
+            }
+            unset parameterList
+            result_debug "Stand Alone switch is $k"
+        }
+    }
+}

@@ -1,0 +1,440 @@
+                                                                                       # Changes related to protocol (arp, ip, arpip) dependency.
+##################################################################    
+# Description:
+#     This proc can be used to send bi-directional ARP request. 
+#     It runs only "2Way" arp for protocol=arp,
+#     It runs only "2Way" ip for protocol="ip"
+#     It runs both "2Way" arp->ip for protocol="arpip"
+#     STRICTLY DOES NOT CHECK PROPER IP-OPTIONS TO DESTIN, TTL etc
+# Input args: txPortId, rxPortId, protocol, dIpAddr, sIpAddr, replySendHwAddr,
+#              filePt, numFrames, tag, inSaMac, inDaMac
+# Output args: None.
+# Typical usage:
+# CheckBiForwarding -txPortId $txPort -checkPortList $checkPortList \
+#                     -protocol "ip" -sGIpAddr "50.1.2.3" -dGIpAddr "60.1.2.3" \
+#                     -dIpAddr "60.${pp}.${pp}.1" -sIpAddr "50.${pp}.${pp}.1" \
+#                     -rxPortId $rxPort -filePt $fd_res -numFrames $nIpFrames
+# Category: VerifyTraffic
+##################################################################    
+proc CheckBiForwarding {args} {
+   parse_args CheckBiForwarding $args {
+     txPortId "1"
+     rxPortId "2"
+     protocol "ip"
+     sTag      "none"
+     dTag      "none"     
+     inSaMac "00:a1:f1:00:00:01"
+     inDaMac "FF:FF:FF:FF:FF:FF"
+     sIpAddr "127.0.0.1"
+     dIpAddr "127.0.0.1"
+     sGIpAddr "0.0.0.0"
+     dGIpAddr "0.0.0.0"
+     frameSize "64"
+     percentage "100"
+     sPort "0"
+     dPort "0"
+     numFrames "1"
+     tcpSynFlag "false"
+     tcpFinFlag "false"
+     tcpRstFlag "false"
+     tcpAckFlag "false"
+     tcpPushFlag "false"
+     tcpUrgFlag "false"
+     icmpType "0"
+     icmpCode "0"
+     ttlDecr "1"
+     checkPortList {"20 forwarded"}
+     filePt "NULL"
+     applyFilter "0"
+     udfEnable "false"
+     udfInitval "00"
+     udfOffset "0"
+     udfCountertype "c8"
+     udfContinuousCount "false"
+     ipOptions ""
+	 
+	 
+   }
+
+   global TrafficGen
+   switch -exact -- $TrafficGen {
+		ixia -
+                ixvm {
+		   
+   #get the maximum card being used in the test, ignore the passed parameter
+   set maxPorts [lindex [lindex $checkPortList [expr [llength $checkPortList] -1]] 0]
+   set numIxiaCd [GetNumIxiaCd $maxPorts]
+   global TrafficGen
+   global numDUT
+
+   if { $sGIpAddr == "0.0.0.0" } { set sGIpAddr $dIpAddr }
+   if { $dGIpAddr == "0.0.0.0" } { set dGIpAddr $sIpAddr }
+   global startCardNum
+   set pPattern "abcd"   
+     
+   #map portId to Ixia port
+   if {$rxPortId == $txPortId} {
+      result_error "Invalid port specification: txPortId=rxPortId"
+      return
+   }
+
+   MapIxiaPortId $txPortId txChas txCard txPort
+   if {$rxPortId == 0} {
+      #then just choose some random port different the txPort
+      MapIxiaPortId $txPortId rxChas rxCard rxPort
+      if {$txPort == 1} {set rxPort 2} else {set rxPort 1}
+   } else {
+      MapIxiaPortId $rxPortId rxChas rxCard rxPort
+   }
+   
+   #setup tag
+   if { $sTag == "none" } {
+      set wTag "false"
+      set tagValue $sTag
+   } else {
+      set wTag "true"
+      set tagValue $sTag
+   }	
+   if { $dTag != "none" } {
+      lappend wTag "true"
+      lappend tagValue $dTag
+   } else {
+      lappend wTag "false"
+      lappend tagValue $dTag
+   }
+
+   if { $protocol == "arp" } { report_start_test "Message $protocol L2 forwarding check on Txport $txPortId"
+   } elseif {(($protocol== "arpip") || \
+              ($protocol=="ip"))} {report_start_test "Message $protocol L3 forwarding check on Txport $txPortId"
+   } else {
+      report_start_test "Message $protocol L3 forwarding check on Txport $txPortId"
+   }
+   
+   #set to user input, will be overwritten when using learn_arp function
+   set testResult "good" 
+   #generate ARP protocol server, if rxPort is set, protocol=arp
+   if { ($rxPortId > 0) && (($protocol == "arp")||($protocol == "arpip")) } {
+     global one2oneArray
+     # Create mapping
+     if {$TrafficGen != "ept"} {
+     map new -type					one2one
+     map config -type 				one2one
+     }
+     map add $txChas $txCard $txPort $rxChas $rxCard $rxPort 
+     stream setDefault
+     #needs this to generate arp
+     protocol setDefault
+     protocol config -ethernetType  				ethernetII
+     protocol config -name					ip
+
+   
+     if {$TrafficGen != "ept"} {
+     ip setDefault
+     ip config -sourceIpAddr					$sIpAddr
+     ip config -destDutIpAddr					$sGIpAddr
+     ip set							$txChas $txCard $txPort
+
+     #Other port be configured for arp response too
+     ip setDefault
+     ip config -sourceIpAddr					$dIpAddr
+     ip config -destDutIpAddr				        $dGIpAddr
+     ip set							$rxChas $rxCard $rxPort
+     } else {  
+     ip config -sourceIpAddr					$sIpAddr
+     ip config -destDutIpAddr					$sGIpAddr
+     ip config -sourceIpAddr					$dIpAddr
+     ip config -destDutIpAddr				        $dGIpAddr
+     }     
+     set destMacAddrTx [SendArpRequest $txPortId $sIpAddr $sGIpAddr $sTag]
+
+     if {$destMacAddrTx == "NO_ARP_REPLY"} {
+        result_debug "Expect an arp reply, but got none on port $txPortId"
+        set testResult "bad"
+     } else {
+        lappend destMacAddrList $destMacAddrTx
+        result_debug "Got an arp reply on Tx port $txPortId. MAC: |$destMacAddrTx|"
+     }
+     set destMacAddrRx [SendArpRequest $rxPortId $dIpAddr $dGIpAddr $dTag]
+     if {$destMacAddrRx == "NO_ARP_REPLY"} {
+        result_error "Expect an arp reply, but got none on port $rxPortId"
+        set testResult "bad"
+     } else {
+        lappend destMacAddrList $destMacAddrRx
+        result_debug "Got an arp reply on Rx port $rxPortId. MAC: |$destMacAddrRx|"
+     }
+
+     if {$protocol=="arp"} {report_end_test; return}
+     if {( ($protocol=="arpip") && ($testResult == "bad")  )} {report_end_test; return}
+
+   }
+   
+     if {[regexp -nocase "ip|tcp|udp|icmp" $protocol] && ![regexp -nocase "arpip" $protocol] } {
+     if {$numDUT<= 2 } {
+      # Portid 1-8, 12-24 are on DUT1 and 9-12 are on DUT2
+     if {($txPortId>=9) && ($txPortId<=12)} {
+        set destMacAddrList [GetDUTMac "DUT2"]
+     } else {
+        set destMacAddrList [GetDUTMac "DUT1"]
+     }
+      } else {
+       set quo [expr $txPortId%2]
+       set DUTNUM [expr [expr $txPortId/2]+$quo]
+         set destMacAddrList [GetDUTMac "DUT$DUTNUM"]
+         }
+       if {$numDUT<= 2 } {
+     if {($rxPortId>=9) && ($rxPortId<=12)} {
+        lappend destMacAddrList [GetDUTMac "DUT2"]
+     } else {
+        lappend destMacAddrList [GetDUTMac "DUT1"]
+     }
+      } else {
+
+     set quo [expr $rxPortId%2]
+       set DUTNUM [expr [expr $rxPortId/2]+$quo]
+        puts "DUTNUM ==> $DUTNUM"
+         lappend destMacAddrList [GetDUTMac "DUT$DUTNUM"]
+     } 
+    }   
+
+  # Send an ip packet for ipf learning across both switches in order for fast path fwding in actual ip send
+  if {(($txPortId>=9)&&($txPortId<=12))||(($rxPortId>=9)&&($rxPortId<=12))} {
+    set frameSent [ixiaConf_2Ports_ip -numIxiaCd $numIxiaCd -startCardNum $startCardNum \
+                 -txChas $txChas -txCard $txCard -txPort $txPort -frameSize $frameSize \
+                 -rxChas $txChas -rxCard $rxCard -rxPort $rxPort \
+                 -pDstPort $dPort -pSrcPort $sPort -direction "2Way" \
+                 -type $icmpType -code $icmpCode -applyFilter $applyFilter \
+                 -tcpSynFlag $tcpSynFlag -tcpFinFlag $tcpFinFlag -tcpRstFlag $tcpRstFlag -tcpAckFlag $tcpAckFlag \
+                 -tcpPushFlag $tcpPushFlag -tcpUrgFlag $tcpUrgFlag \
+                 -dataPattern $pPattern -wTag $wTag -tagNo $tagValue -ipProtocol $protocol \
+                 -dMacAddr $destMacAddrList  -sIpAddr $sIpAddr -ipOptions $ipOptions \
+                 -udfEnable $udfEnable -udfInitval $udfInitval -udfOffset $udfOffset -udfCountertype $udfCountertype -udfContinuousCount $udfContinuousCount \
+                 -dIpAddr $dIpAddr -numFrames 1]
+  }
+  # Send an ip packet
+ set frameSent [ixiaConf_2Ports_ip -numIxiaCd $numIxiaCd -startCardNum $startCardNum \
+               -txChas $txChas -txCard $txCard -txPort $txPort -frameSize $frameSize \
+               -rxChas $txChas -rxCard $rxCard -rxPort $rxPort -percentage $percentage \
+               -pDstPort $dPort -pSrcPort $sPort -direction "2Way" \
+               -type $icmpType -code $icmpCode -applyFilter $applyFilter \
+               -tcpSynFlag $tcpSynFlag -tcpFinFlag $tcpFinFlag -tcpRstFlag $tcpRstFlag -tcpAckFlag $tcpAckFlag \
+               -tcpPushFlag $tcpPushFlag -tcpUrgFlag $tcpUrgFlag \
+               -dataPattern $pPattern -wTag $wTag -tagNo $tagValue -ipProtocol $protocol \
+               -dMacAddr $destMacAddrList  -sIpAddr $sIpAddr -ipOptions $ipOptions \
+               -udfEnable $udfEnable -udfInitval $udfInitval -udfOffset $udfOffset -udfCountertype $udfCountertype -udfContinuousCount $udfContinuousCount \
+               -dIpAddr $dIpAddr -numFrames $numFrames]
+
+   if {$numFrames >= 10} {
+     ixiaCheckTxDone $txChas $txCard $txPort $numFrames $txPortId
+     ixiaCheckTxDone $rxChas $rxCard $rxPort $numFrames $txPortId
+   }
+
+   result_debug "FrameSentIP: $frameSent"
+   #retrieve data from ixia
+   #find how many expected packets was received
+   foreach checkPort $checkPortList {
+      set portId [lindex $checkPort 0]
+      MapIxiaPortId $portId chasisId card port
+      set doesItForward($portId) 0
+      if {$applyFilter} {
+         set framesReceived [lindex [ixiaUserDefinedStat1 $portId $filePt] 1]
+      } else {
+         stat get statAllStats $chasisId $card $port
+         set framesReceived [stat cget -framesReceived]
+      }
+      result_debug "actual Frames Received on port $portId is $framesReceived and sent frames=$numFrames"
+      if {$framesReceived >= $numFrames} {
+         set doesItForward($portId) 1
+      }
+   }
+
+   #now check received data against checkList to see if matched
+   foreach checkPort $checkPortList {
+      set portId [lindex $checkPort 0]
+      set portFlag [lindex $checkPort 1]
+      switch -- $portFlag \
+         "forwarded" {
+            set shouldForward 1
+          } "notForwarded" {
+            set shouldForward 0
+          } default {
+            set shouldForward $portFlag
+          }
+ 
+      if { ($doesItForward($portId) == $shouldForward) } {
+         result_debug "Forwarding on port $portId checked Okay. Was $portFlag"
+      } else {
+         result_error "Forwarding criteria failed on port $portId."
+        #result_debug "numPacketReceived= $numPacketReceived($portId) BUT expectedPackets= $expectedPacket"
+         set testResult "bad"
+      }
+   }
+   if {$testResult == "good"} {
+     result_ok "Check data forwarding passed"
+   }  else {
+     result_error "Check data forwarding failed"
+  }  
+
+  report_end_test 
+}
+	}
+}
+
+##################################################################    
+# Description:
+#     This proc can be used to send bi-directional MAC frame. 
+# Input args: txPortId, rxPortId, protocol, sourceMac, DesrMac, 
+#              filePt, numFrames, tag, tagPriority
+# Output args: None.
+# Typical usage:
+# CheckMACBiForwarding -txPortId $txPort -checkPortList $checkPortList \
+#                  -tag "10 10" -rxPortId $rxPort -filePt $fd_res \
+#                  -numFrames 10000 -tagPriority 4;
+# Category: VerifyTraffic
+##################################################################    
+proc CheckMACBiForwarding {args} {
+   parse_args SendFrame $args {
+      txPortId "1"
+      rxPortId "0"
+      protocol "mac"
+      sourceMac "default"
+      destMac "default"
+      numFrames "1"
+      frameSize "68"
+      frameSizeType "sizeFixed"
+      dataPattern "1234"
+      streamType "stopStream"
+      fcsError "good"
+      saMode "idle"
+      daMode "idle"
+      percentage "100"
+      checkPortList {"20 forwarded"}
+      tag "none"     
+      tagPriority "0"	   
+      filePt "NULL"
+      applyFilter "0"
+   }
+   global TrafficGen
+   report_start_test "Message MAC forwarding check on Txport $txPortId"
+     
+   MapIxiaPortId $txPortId txChasisId txCard txPort
+   if {$rxPortId == 0} {
+      set sendLearn "false"
+      set rxPort [MapIxiaPortId $txPortId rxChasisId rxCard rxPo]
+   } else {
+      set sendLearn "true"
+      MapIxiaPortId $rxPortId rxChasisId rxCard rxPort
+   }
+   set numIxiaCd [GetNumIxiaCd $txPortId]
+   
+   if {$tag != "none" } { 
+      set wTag "true"
+   } else {
+      set wTag "false"
+   }
+   
+   set testResult "good"
+
+   SendFrame -txPortId $txPortId
+   SendFrame -txPortId $rxPortId 
+   
+   set portList ""
+   foreach checkPort $checkPortList {
+      set portIdThis [lindex $checkPort 0]
+      lappend portList $portIdThis
+   }
+   ClearPortsStats $portList
+   StartPortsCapture $portList
+
+    global TrafficGen
+    switch -exact -- $TrafficGen {
+        stc -
+        ixia -
+        ixvm {
+	result_debug "LEARNING?? $sendLearn" 
+   set frameSent [ixiaConf_2Ports -numIxiaCd $numIxiaCd \
+                  -txChas $txChasisId -txCard $txCard -txPort $txPort -direction "2Way" \
+                  -rxChas $rxChasisId -rxCard $rxCard -rxPort $rxPort -sendLearn $sendLearn \
+                  -protocol $protocol -numFrames $numFrames -frameSize $frameSize -frameSizeType $frameSizeType \
+                  -dataPattern $dataPattern -streamType $streamType -fcsError $fcsError \
+                  -inSaMac $sourceMac -saMode $saMode -inDaMac $destMac -daMode $daMode \
+                  -percentage $percentage -wTag $wTag -tagNo $tag -tagPriority $tagPriority]
+                  
+  if {$streamType != "contPacket" && $numFrames > 100} {
+     ixiaCheckTxDone $txChasisId $txCard $txPort $numFrames $txPortId
+     ixiaCheckTxDone $rxChasisId $rxCard $rxPort $numFrames $txPortId
+   }
+        }
+    }
+
+   result_debug "FrameSent: $frameSent"
+   #retrieve data from ixia
+   #find how many expected packets was received
+   foreach checkPort $checkPortList {
+      set framesConfirmed 0
+      set portId [lindex $checkPort 0]
+      MapIxiaPortId $portId chasisId card port
+      set doesItForward($portId) 0
+      switch -exact -- $TrafficGen {
+          stc -
+          ixia -
+          ixvm {
+      if {$applyFilter} {
+         set framesReceived [lindex [ixiaUserDefinedStat1 $portId $filePt] 1]
+      } else {
+         stat get statAllStats $chasisId $card $port
+         set framesReceived [stat cget -framesReceived]
+      }
+          }
+      }
+      # check if these frames include the data pattern
+      set rawPortDataList [GetCapturedFrames $portId]
+      foreach frame $rawPortDataList {
+        set frame [string map { " " "" } $frame]
+        set lndatPat [string length $dataPattern]
+        set firstChar 24
+        set lastChar [expr $firstChar + $lndatPat]
+        set lastChar [expr $lastChar -1]
+        set dataPt1 [string range $frame $firstChar $lastChar]
+        set cmpRes [string compare $dataPt1 $dataPattern]
+        if {$cmpRes == "0"} {
+          incr framesConfirmed
+        }
+      }
+
+      result_debug "actual Frames Received on port $portId is $framesReceived and sent frames=$numFrames confirmed=$framesConfirmed"
+      if {($framesConfirmed >= $numFrames) && ($framesReceived >= $numFrames)} {
+         set doesItForward($portId) 1
+      }
+   }
+   StopPortsCapture $portList
+
+   #now check received data against checkList to see if matched
+   foreach checkPort $checkPortList {
+      set portId [lindex $checkPort 0]
+      set portFlag [lindex $checkPort 1]
+      switch -- $portFlag \
+         "forwarded" {
+            set shouldForward 1
+          } "notForwarded" {
+            set shouldForward 0
+          } default {
+            set shouldForward $portFlag
+          }
+ 
+      if { ($doesItForward($portId) == $shouldForward) } {
+         result_debug "Forwarding on port $portId checked Okay. Was $portFlag"
+      } else {
+         result_error "Forwarding criteria failed on port $portId."
+        #result_debug "numPacketReceived= $numPacketReceived($portId) BUT expectedPackets= $expectedPacket"
+         set testResult "bad"
+      }
+   }
+   if {$testResult == "good"} {
+     result_ok "Check data forwarding passed"
+   }  else {
+     result_error "Check data forwarding failed"
+  }  
+
+  
+  report_end_test  
+}

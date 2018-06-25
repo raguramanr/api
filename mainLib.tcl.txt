@@ -1,0 +1,2071 @@
+# mainLib.tcl 
+#
+#   Library of procedures shared by utilities in main directory.
+#     i.e. main.tcl, automate.tcl, runall_monitor.tcl, runRegAll.tcl
+#
+#
+##############################################################################
+global skipFileFilled
+set skipFileFilled 0
+
+
+# Based on regType and regSubType, retrieve the module list as
+# defined by regTypeArray() in config file modulesToBeConfigured.cfg
+proc getRegressionModuleList { regType regSubType platform_id } {
+
+    # The regressionModules are defined in modulesToBeSummarized.cfg.  The list
+    # is accessed as $regType($regSubType)
+    global regTypeArray
+    global validRegTestTypeSubType
+
+    set regressionModules [list]
+    set errorString "ERROR: You have entered regType:$regType  regSubType:$regSubType \
+	    \nThe valid regType/regSubType combinations are: $validRegTestTypeSubType"
+
+    puts "ENTERING...."
+    # check to see if the regression test type exists in our array
+    if {[info exists regTypeArray($regType)]} {
+
+	puts "[set regTypeArray($regType)]"
+	uplevel 1 {set moduleList [set regTypeArray($regType)]}
+	uplevel 1 {set arrayName [set moduleList]($regSubType)}
+	uplevel 1 {global $arrayName}
+	
+	if {[uplevel 1 {info exists arrayName}]} {
+	    set regressionModules [uplevel 1 {set $arrayName}]
+	} else {
+	    puts $errorString
+	    puts "ERROR: [set moduleList]($regSubType) was not found...exiting"
+	}
+
+    } else {
+	puts $errorString
+	puts "ERROR: regTypeArray($regType) was not found...exiting"
+    }
+
+    return [reorderRegressionModules $regressionModules $platform_id]
+    #return $regressionModules
+}
+
+# Reorder the modules to be run so that they can be distributed across testbeds.
+proc reorderRegressionModules { regressionModules platform_id} {
+
+    global regSubType
+    global platform
+
+    switch $regSubType {
+	standard {set numNodes 2}
+	ipRoute1 {set numNodes 5}
+	uploadanddownload {set numNodes 1}
+	upgradedowngrade {set numNodes 1}
+	default {return $regressionModules}
+    }
+
+    set allPlatformIds     [GetAllPlatformIds $numNodes]
+    # Get ids of platforms that are actually running
+    #set runningPlatformIds [GetRunningPlatformIds $numNodes]
+    # Get ids of platforms of this specific of a specific name and num nodes
+    set platformTypeIds [GetPlatformTypeIds $numNodes $platform]
+    #set numPlatforms [llength $allPlatformIds]
+    set numPlatforms [llength $platformTypeIds]
+    set numFeatures [llength $regressionModules]
+    if { $numPlatforms <= 0 } {
+    set numPlatforms 1 
+    }
+    set skip [expr round($numFeatures/$numPlatforms)]
+    #set startNum [expr $skip*[lsearch $allPlatformIds $platform_id]]
+    set startNum [expr $skip*[lsearch $platformTypeIds $platform_id]]
+
+    if { $startNum > 0 } {
+        result_debug "\n***         Modify Regression Module Order Start > 0                 ***"
+        result_debug "Found $numPlatforms $platform Types - Starting at module index $startNum"
+        result_debug "curPlatformId=$platform_id PlatformTypeIds=$platformTypeIds"
+        result_debug "NumFeatures=$numFeatures Skip=$skip"
+        result_debug "***                                                                  ***"
+	set newListBegin [lrange $regressionModules $startNum end]
+	set newListEnd [lrange $regressionModules 1 [expr $startNum-1] ]
+	set newList "[lindex $regressionModules 0] $newListBegin $newListEnd"
+    } else {
+        result_debug "\n***                Modify Regression Module Order                    ***"
+        result_debug "Found $numPlatforms $platform Types - Starting at module index $startNum"
+        result_debug "curPlatformId=$platform_id PlatformTypeIds=$platformTypeIds"
+        result_debug "NumFeatures=$numFeatures Skip=$skip"
+        result_debug "***                                                                  ***"
+	set newList $regressionModules
+    }
+
+    puts "\nnewList=$newList; \nlen = [llength $newList]"
+
+    return $newList
+}
+
+# Send a mail message to a user
+proc sendMailNotification {user subject message} {
+
+    global autowebLink 
+
+    puts "sendMailNotification: $user $subject $message"
+    set tempMsgFile   "/tmp/runRegMsg.txt.[pid]"
+   
+    
+    ;# Add link to autoweb (as defined in modulesToBeSummarized.cfg)"
+    if {[info exists autowebLink]} {
+        set message "$message\nAUTOWEB: $autowebLink"
+    } else {
+        set message "$message\n"
+    }
+    exec echo $message > $tempMsgFile
+    catch {exec dos2unix -f $tempMsgFile} a
+    exec cat -t $tempMsgFile > tempMsgFile_[pid].txt
+    exec mail -s \"$subject\" $user < tempMsgFile_[pid].txt
+    exec rm -f $tempMsgFile
+    exec rm -f tempMsgFile_[pid].txt
+}
+
+
+# Based on regType regSubType platform and blade, this proc generates
+# a bat file name to run. This bat file was created with automate.tcl.
+# Both runall_monitor and automate use this to create a consistent
+# bat file name.
+proc genRerunBatFileName {regType regSubType platform blade} {
+    
+    set rerunBatFileName [format "pt_%s_%s" $regType $regSubType]
+    
+    if {($platform != "") || ($platform != "null")} {
+	set rerunBatFileName [format "$rerunBatFileName\_%s" $platform]
+    }
+
+    if {($blade != "") || ($blade != "null")} {
+	set rerunBatFileName [format "$rerunBatFileName%s" $blade]
+    }
+
+    append rerunBatFileName ".bat"
+
+    set rerunBatFileName [string tolower $rerunBatFileName]
+
+    puts "genRerunBatFileName: $rerunBatFileName"
+    
+    return $rerunBatFileName
+}
+
+
+proc gen_index {dir} {
+    global SWDEVSERVER
+    set old_dir [pwd]
+    cd $dir
+    if {[file exists tclIndex]} {
+        set tTime [file mtime tclIndex]
+        set cTime [clock seconds]
+        set range 1000
+        set rnum [expr {int(rand()*$range)}]
+        if {[expr $cTime - $tTime] < $rnum && [info exists SWDEVSERVER] && $SWDEVSERVER} {
+            #only do this on rdureg and citreg for now.
+            cd $old_dir
+            return
+        }
+        catch {exec chmod 777 tclIndex} result
+        if {[catch {open tclIndex r+} fd_out]} {
+           cd $old_dir
+           return -1
+        }
+        #flock $fd_out 
+    }
+
+    auto_mkindex .
+    cd $old_dir
+}
+
+proc getBuildNumber { build } {
+    if {[regexp -nocase {^[0-9].[0-9].[0-9]b[0-9]+_[a-z]+[_.][0-9a-z]+.*xtr} $build]} {
+        set build [string range $build 0 [expr [string length $build]-5]]
+        set brVerStr [lindex [split $build _] end]
+        set brVerStr [format %d.%d.%d [string range $brVerStr 0 0] \
+                [string range $brVerStr 1 1] [string range $brVerStr 2 end]]
+        set build [lreplace [split $build _] end end $brVerStr]
+        regsub -all " " $build "_" build
+
+    } elseif {[regexp -nocase {^v[0-9]+b[0-9]+_[a-z]+[_.][0-9a-z]+.*xtr} $build]} {
+        set build [string range $build 1 [expr [string length $build]-5]]
+        set build [format %d.%d.%d%s [string range $build 0 0] \
+                [string range $build 1 1] [string range $build 2 2] \
+                [string range $build 3 end]]
+        set brVerStr [lindex [split $build _] end]
+        set brVerStr [format %d.%d.%d [string range $brVerStr 0 0] \
+                [string range $brVerStr 1 1] [string range $brVerStr 2 end]]
+        set build [lreplace [split $build _] end end $brVerStr]
+        regsub -all " " $build "_" build  
+
+    } elseif {[regexp -nocase {^v[0-9]+b[0-9]+_[0-9a-z].*} $build]} {
+        set build $build
+        set build [format %d.%d.%d%s [string range $build 1 1] \
+                [string range $build 2 2] [string range $build 3 3] \
+                [string range $build 4 end]]
+        set brVerStr [lindex [split $build _] end]
+        set brVerStr [format %d.%d.%d [string range $brVerStr 0 0] \
+                [string range $brVerStr 1 1] [string range $brVerStr 2 end]]
+        set build [lreplace [split $build _] end end $brVerStr]
+        regsub -all " " $build "_" build  
+
+    } elseif {[regexp -nocase {^v[0-9]+b([0-9]+)-([0-9a-z].*)-([0-9]+)} \
+            $build match bld br rel]} {
+        set build $build
+        set build [format %d.%d.%db%d_br_%s_0.0.%d [string range $build 1 1] \
+                [string range $build 2 2] [string range $build 3 3] $bld $br $rel]
+
+    } elseif {[regexp -nocase {^[0-9]+[et].*} $build]} {
+        set release ""
+        set buildNum ""
+        set prefix ""
+        scan $build %de%db%d release prefix buildNum
+        if {[string length $release]==2} {
+            set f [string index $release 0]
+            set s [string index $release 1]
+            set build [format %d.%de.%db%d $f $s $prefix $buildNum]
+        } else {
+            puts "ERROR: Wrong build $build"
+            return 0
+        }
+
+    } elseif {![regexp -nocase {[._^-]} $build]} {
+        set release ""
+        set buildNum ""
+        set retVal [scan $build %db%d release buildNum]
+        if {([string length $release]==3) && $retVal==2} {
+            set f [string index $release 0]
+            set s [string index $release 1]
+            set t [string index $release 2]
+            set build [format %d.%d.%db%d $f $s $t $buildNum]
+        } elseif {$retVal==1} {
+            set retVal [scan $build %dtrb%d release buildNum]
+            if {([string length $release]==3) && $retVal==2} {
+                set f [string index $release 0]
+                set s [string index $release 1]
+                set t [string index $release 2]
+                set build [format %d.%d.%dtrb%d $f $s $t $buildNum]
+            }
+        } else {
+            puts "ERROR: Wrong build $build"
+            return 0
+        }
+   } else {
+        if {[regexp -nocase "xtr" $build]} {
+            set buildList [split $build .]
+            set release [lindex $buildList 0]
+            if {[string index $release 0]=="v"} {
+                set buildName [string range $release 1 end]
+                set retVal [scan $buildName %db%d release buildNum]
+                if {([string length $release]==3) && $retVal==2} {
+                    set f [string index $release 0]
+                    set s [string index $release 1]
+                    set t [string index $release 2]
+                    set build [format %d.%d.%db%d $f $s $t $buildNum]
+                } elseif {$retVal==1} {
+                    set retVal [scan $buildName %dtrb%d release buildNum]
+                    if {([string length $release]==3) && $retVal==2} {
+                        set f [string index $release 0]
+                        set s [string index $release 1]
+                        set t [string index $release 2]
+                        set build [format %d.%d.%dtrb%d $f $s $t $buildNum]
+                    }
+                }
+            } else {
+                puts "ERROR: Wrong build $build"
+                return 0
+            }
+        } else {
+            set build $build
+        }
+    }
+    set build [string tolower $build]
+    return $build
+}
+#############################################################
+# Procedure: CalculateDebug
+#    This procedure checks for a debug file in the 
+#    Functionaltests/Module directory.  A specific format
+#    is expected in the debug file.  From this debug file
+#    a proc is created in the showDebugInfo<Module> format.
+#    The showDebugInfo<Module> proc is interpretted by
+#    showDebugInfo in fmt_add (result.tcl)
+#    
+#    
+#    Initially this is just for the queuing system, but
+#    can be expanded to be a standard part of the auto infra
+#
+#
+#############################################################
+proc CalculateDebug {modName fileName} {
+   global DUTs_info;
+   global debugLevel;
+   global debugStart;
+   global showErrorData;
+
+   #
+   # Start the creation of the proc data
+   #
+   set debugOverRide 0
+   # Check to see if there is a cli debug file in the feature directory
+   if {[file exists $fileName]} {
+      source $fileName
+      if {$debugOverRide} {
+#         set debugLevel 1
+         set showErrorData 1
+      }
+      set procText "global DUTs_info\nglobal whichDutNow\nglobal time1\nglobal FAILLOCK";
+      set procText "$procText\nglobal DEBUGFAILLOCK"
+      set procText "$procText\nset initDutAddr \"\[set DUTs_info(DUT\${whichDutNow},connect)\]\"\n";
+      set procText "$procText\n   set DEBUGFAILLOCK 1\n\n";
+      set procText "$procText\n   EnableDebugMode\n\n";
+      set procText "$procText   if \{\$level>0\} \{\n"
+      set procText "$procText       if \{\[info level\]<15\} \{\n"
+      foreach dut $dutList {
+         set procText "$procText          if \{\[info exists DUTs_info(DUT$dut,connect)\]\} \{\n"
+         set procText "$procText             Login \$DUTs_info(DUT$dut,connect)\n";
+         foreach command $debugCliList {
+            set procText "$procText             SendACmd \" $command \"\n"; 
+         }
+         set procText "$procText          \}\n";
+      }
+      set procText "$procText      \}\n";
+      set procText "$procText\n   Login \$initDutAddr\n";
+      if {[info exists faillock] && $faillock == "yes"} {
+          set procText "$procText\n   set FAILLOCK \"yes\"\n";
+          set procText "$procText\n   result_debug \"HIT DEBUG MODE USER LOCK ON FAILURE\"\n";
+          if {[info exists time1]} {
+              set procText "$procText\n   set time2 \[clock seconds\]\n";
+              set procText "$procText\n   result_p \"Time = \[expr \$time2-\$time1\] secs\n\"\n";
+          }
+          set procText "$procText\n   close_result_file\n";
+          set procText "$procText\n   report_end_test\n";
+          set procText "$procText\n   error \"User Lock on Failure is set\"\n";
+      }
+      set procText "$procText   \}\n";
+      set plist [info procs]
+      if { [lsearch $plist showDebugInfo$modName] >= 0 } {
+         rename showDebugInfo$modName "";
+      }
+      proc "showDebugInfo$modName" "level" "$procText";
+      puts "\n\n################### Debug Procedure Enabled ###################\n\
+                 showDebugInfo$modName level \n$procText\n\n"
+      return;
+   } else {
+      return;
+   }
+}
+# -----------------------------------------------------------------------
+# A procedure to categorize platform names for indexes in completetest.lst
+# -----------------------------------------------------------------------
+proc CompleteTestsSkipPlatforms {platform tests_to_s} {
+    array set tests_to_skip $tests_to_s
+    # Get the current platform type that this test bed is running then define
+    #   plat = the OR'd string of all the platforms in the family
+    global gnssPlatform bcmPlatform i386Platform pioneerPlatform bcmx440
+    set plat bcmPlatform
+    if {[regexp -nocase $gnssPlatform $platform]} {
+        set plat gnssPlatform
+    }
+    if {[regexp -nocase $pioneerPlatform $platform]} {
+        set plat pioneerPlatform 
+    }
+    if {[regexp -nocase $bcmPlatform $platform]} {
+        set plat bcmPlatform
+    }
+    # In some cases test_to_skip is at a lower level than product families
+    #   ie, olympic verses mariner instead of all gnssPlatforms.  For these
+    #   scenerios limit the plat variable to the lower platform setting
+    if {[info exists tests_to_skip(mariner)]} {
+        if {[regexp -nocase "bd-10808" $platform]} {
+            set plat mariner
+        }
+    }
+    if {[info exists tests_to_skip(olympic)]} {
+        if {[regexp -nocase "bd-89|bd-128" $platform]} {
+            set plat olympic
+        }
+    }
+    if {[info exists tests_to_skip(torino)]} {
+        if {[regexp -nocase "bd-128" $platform]} {
+            set plat torino
+        }
+    }
+    if {[info exists tests_to_skip(pioneer)]} {
+        if {[regexp -nocase "bd-16808" $platform]} {
+            set plat pioneer 
+        }
+    }
+    if {[info exists tests_to_skip(SummitX450)]} {
+        if {[regexp -nocase "X450|x250|x150|x350|x650|SummitX406|NWI|x480" $platform]} {
+            set plat SummitX450
+        }
+    }
+    if {[info exists tests_to_skip(bcmx440)]} {
+        if {[regexp -nocase $bcmx440 $platform]} {
+            set plat bcmx440
+        }
+    }
+    if {[info exists tests_to_skip(Aspen)]} {
+        if {[regexp -nocase "Aspen|BD-88|XCM" $platform]} {
+            set plat Aspen
+        }
+    }
+    if {[info exists tests_to_skip(Everest)]} {
+        if {[regexp -nocase "BD-X8" $platform]} {
+            set plat Everest
+        }
+    }
+    if {[regexp -nocase $i386Platform $platform]} {
+        set plat i386Platform
+    }
+    if {[info exists tests_to_skip(Summit-PC)]||[info exists tests_to_skip(BD-PC)]} {
+        if {[regexp -nocase "Summit-PC|BD-PC" $platform]} {
+            set plat $platform
+        }
+    }
+    return $plat
+}
+# -----------------------------------------------------------------------
+# A procedure to categorize platform names for indexes in completetest.lst
+# -----------------------------------------------------------------------
+proc CompleteTestsDebugPlatforms {platform tests_to_run_d} {
+    array set tests_to_run_debug $tests_to_run_d
+    # Get the current platform type that this test bed is running then define
+    #   plat = the OR'd string of all the platforms in the family
+    global gnssPlatform bcmPlatform i386Platform pioneerPlatform bcmx440
+    set plat bcmPlatform
+    if {[regexp -nocase $gnssPlatform $platform]} {
+        set plat gnssPlatform
+    }
+    if {[regexp -nocase $pioneerPlatform $platform]} {
+        set plat pioneerPlatform 
+    }
+    if {[regexp -nocase $bcmPlatform $platform]} {
+        set plat bcmPlatform
+    }
+    # In some cases test_to_skip is at a lower level than product families
+    #   ie, olympic verses mariner instead of all gnssPlatforms.  For these
+    #   scenerios limit the plat variable to the lower platform setting
+    if {[info exists tests_to_run_debug(mariner)]} {
+        if {[regexp -nocase "bd-10808" $platform]} {
+            set plat mariner
+        }
+    }
+    if {[info exists tests_to_run_debug(olympic)]} {
+        if {[regexp -nocase "bd-89|bd-128" $platform]} {
+            set plat olympic
+        }
+    }
+    if {[info exists tests_to_run_debug(torino)]} {
+        if {[regexp -nocase "bd-128" $platform]} {
+            set plat torino
+        }
+    }
+    if {[info exists tests_to_run_debug(pioneer)]} {
+        if {[regexp -nocase "bd-16808" $platform]} {
+            set plat pioneer 
+        }
+    }
+    if {[info exists tests_to_run_debug(SummitX450)]} {
+        if {[regexp -nocase "X450|x250|x150|x350|x650|SummitX406|NWI|x480" $platform]} {
+            set plat SummitX450
+        }
+    }
+    if {[info exists tests_to_run_debug(Aspen)]} {
+        if {[regexp -nocase "Aspen|BD-88|XCM" $platform]} {
+            set plat Aspen
+        }
+    }
+    if {[info exists tests_to_run_debug(Everest)]} {
+        if {[regexp -nocase "BD-X8" $platform]} {
+            set plat Everest
+        }
+    }
+    if {[regexp -nocase $i386Platform $platform]} {
+        set plat i386Platform
+    }
+    if {[info exists tests_to_run_debug(Summit-PC)]||[info exists tests_to_run_debug(BD-PC)]} {
+        if {[regexp -nocase "Summit-PC|BD-PC" $platform]} {
+            set plat $platform
+        }
+    }
+    return $plat
+}
+# -----------------------------------------------------------------------
+# A procedure to return clean lists from the completetests.lst file
+# -----------------------------------------------------------------------
+proc GetCompleteTestsLists {args} {
+    global skipFileFilled;
+    global DUTs_info
+    global efence
+
+    parse_args GetCompleteTestsLists $args {
+        sourcefile "completetests.lst" 
+        platform   "null"
+        lst        "dev"
+        pId        "null"
+        test       "null"
+        inVersion  "null"
+        inHwList   "null"
+        debugFile  "0"
+        debugSkip  "0"
+        debugSkipCom  "0"
+        debugOut   "0"
+        debugCom   "0"
+        debug      "0"
+    }
+    if {$inVersion != "null"} {
+        set DUTs_info(DUT1,version) $inVersion
+    } else {
+        set DUTs_info(DUT1,version) 12.4.1.7
+    }
+    if {$inHwList != "null"} {
+        set DUTs_info(DUT1,hwList) $inHwList
+    } else {
+        set DUTs_info(DUT1,hwList) ""
+    }
+    if {$test != "null"} {
+        set originalDir [pwd]
+        if {[file isdirectory ../Functionaltest/$test]} {
+            cd "../Functionaltest/$test"
+        } elseif {[file isdirectory ../../Functionaltest/$test]} {
+            cd "../../Functionaltest/$test"
+        } else {
+            puts "Can not find the test directory [pwd] $test"
+        }
+    }
+    set inPlatform $platform
+    #---------------------------------------------------------------------
+    # Set variables
+    # --------------------------------------------------------------------
+    set initFile 0
+    # ============= Create Tmp directory if it does not exist ============
+    if {![file isdirectory Tmp]} {
+        if {[catch {file mkdir Tmp} reason]} {
+            puts "Error: Can not create Tmp dir...$reason"
+            return 0
+        }
+    }
+    # ============= open test_to_run tempfile for reading ================
+    if {[file isfile $sourcefile]} {
+        if {[set fd_src [FileOpen $sourcefile r]]==-1} {
+            puts "Can't open $sourcefile"
+            return -1
+        }
+    } else {
+        puts "!!!!!!! NO SOURCE FILE FOUND !!!!!!!"
+        return "error";
+    }
+    # --------------------------------------------------------------------
+    # open a tmp file to hold lists with all white space removed (all except)
+    # --------------------------------------------------------------------
+    if {[set fd_tmp [FileOpen "Tmp/${pId}test_to_run.tmp" w]]==-1} {
+        return $fd_tmp
+    }
+    # read one line/test per loop
+    while {[gets $fd_src line] != -1} {
+        set line [string trim $line \t]
+        set line [string trim $line " "]
+        if {![regexp -nocase {^set} $line]} {
+            regsub -all \t $line "" line
+            regsub -all " " $line "" line
+        }
+        if {$debug || $debugFile} {
+            puts $line
+        }
+        puts $fd_tmp $line
+    }
+    close $fd_tmp
+    close $fd_src
+    source Tmp/${pId}test_to_run.tmp
+    if {[catch {file delete -force "Tmp/${pId}test_to_run.tmp"} reason]} {
+        puts "ERROR: proc calculateTestToRun{1} Can't delete \
+            Tmp/${pId}test_to_run.tmp: $reason"
+        return 0
+    }
+    if {$test != "null"} {
+        cd "$originalDir"
+    }
+    # --------------------------------------------------------------------
+    # Debug list gather debug list for this platform
+    #    it the -test option is used, that means this is called from
+    #    gettests.tcl so return at the end
+    # --------------------------------------------------------------------
+    set platform [CompleteTestsDebugPlatforms $inPlatform [array get tests_to_run_debug]]
+    set debug_cases {all gnssPlatform pioneerPlatform bcmPlatform SummitX450 Aspen mariner olympic}
+    set debugIndexList ""
+    set possibleDebugList ""
+    if {($lst == "debug" && [info exists tests_to_run_debug($platform)]) || \
+        ($lst == "debug" && [info exists tests_to_run_debug(all)])} {
+        if {[info exists tests_to_run_debug($platform)]} {
+            lappend debugIndexList $platform
+        }
+        if {[info exists tests_to_run_debug(all)]} {
+            lappend debugIndexList all
+        }
+        foreach dIndex $debugIndexList {
+            foreach iList $tests_to_run_debug($dIndex) {
+                foreach listValue $iList {
+                    set listValue [string trim [lindex [split [string trimleft $listValue] ";"] 0]]
+                    if {$listValue == ""} {
+                        continue
+                    }
+                    if {[regexp -nocase {^#} $listValue]} {
+                        if {$debugSkipCom || $debug} {
+                            puts "Skip removed $listValue"
+                        }
+                        continue
+                    }
+                    lappend possibleDebugList $listValue
+                }
+            }
+        }
+        if {$test != "null"} {
+            if {$debugOut || $debug} {
+                foreach testout $possibleDebugList {
+                    puts $testout
+                }        
+            }
+            return $possibleDebugList
+        }        
+    }
+    # --------------------------------------------------------------------
+    # Append to list all possible skip list conditions
+    # --------------------------------------------------------------------
+    set platform [CompleteTestsSkipPlatforms $inPlatform [array get tests_to_skip]]
+    set possibleSkipIndexList ""
+    if {[info exists tests_to_skip($platform)]} {
+        foreach iList $tests_to_skip($platform)] {
+            foreach listValue $iList {
+                set listValue [string trim [lindex [split [string trimleft $listValue] ";"] 0]]
+                if {$listValue == ""} {
+                    continue
+                }
+                if {[regexp -nocase {^#} $listValue]} {
+                    if {$debugSkipCom || $debug} {
+                        puts "Skip removed $listValue"
+                    }
+                    continue
+                }
+                lappend possibleSkipIndexList $listValue
+            }
+        }
+    }
+    # Special Case to Handle Queens Platforms which are bcmPlatforms, but have less features
+    if {[regexp -nocase "8500" $DUTs_info(DUT1,hwList)]} {
+        if {[info exists tests_to_skip(queens)]} {
+            foreach iList $tests_to_skip(queens)] {
+                foreach listValue $iList {
+                    set listValue [string trim [lindex [split [string trimleft $listValue] ";"] 0]]
+                    if {$listValue == ""} {
+                        continue
+                    }
+                    if {[regexp -nocase {^#} $listValue]} {
+                        if {$debugSkipCom || $debug} {
+                            puts "Skip removed $listValue"
+                        }
+                        continue
+                    }
+                    lappend possibleSkipIndexList $listValue
+                }
+            }
+        }
+    }
+    if {[info exists efence]} {
+        if {[info exists tests_to_skip(efence)]} {
+            foreach iList $tests_to_skip(efence)] {
+                foreach listValue $iList {
+                    set listValue [string trim [lindex [split [string trimleft $listValue] ";"] 0]]
+                    if {$listValue == ""} {
+                        continue
+                    }
+                    if {[regexp -nocase {^#} $listValue]} {
+                        if {$debugSkipCom || $debug} {
+                            puts "Skip removed $listValue"
+                        }
+                        continue
+                    }
+                    lappend possibleSkipIndexList $listValue
+                }
+            }
+        }
+    }
+
+    # ------------------------------------------------------------------------------
+    # Create the tests to run list
+    #    -Order from quick pass all to dev based on the possibleTestsToRunList
+    #    list below
+    #    -Get all indexes for each possible list and loop through each
+    #    -Do not loop through build indexes that are greater than the current running
+    #    -On each loop, don't append the test case if it is in the skip list
+    # ------------------------------------------------------------------------------
+    set new_tests_to_run ""
+    switch $lst {
+        "quick" {
+            set possibleTestsToRunList {tests_to_run_quick tests_to_run}
+        }
+        "pass" {
+            set possibleTestsToRunList {tests_to_run_quick tests_to_run_pass tests_to_run}
+        }
+        "passlist" {
+            set possibleTestsToRunList {tests_to_run_pass tests_to_run}
+        }
+        "all" {
+            set possibleTestsToRunList {tests_to_run_quick tests_to_run_pass \
+                              tests_to_run_all tests_to_run tests_to_run_debug}
+        }
+        "alllist" {
+            set possibleTestsToRunList {tests_to_run_all tests_to_run}
+        }
+        "dev" {
+            set possibleTestsToRunList {tests_to_run_quick tests_to_run_pass \
+                              tests_to_run_all tests_to_run_dev tests_to_run_debug tests_to_run}
+        }
+        "alldevdebug" {
+            set possibleTestsToRunList {tests_to_run_all tests_to_run_dev \
+                              tests_to_run_debug tests_to_run}
+        }
+        "devonly" {
+            set possibleTestsToRunList {tests_to_run_dev tests_to_run}
+        }
+        "devlist" {
+            set possibleTestsToRunList {tests_to_run_dev tests_to_run_debug \
+					 tests_to_run}
+        }
+        "debugonly" {
+            set possibleTestsToRunList {tests_to_run_debug tests_to_run}
+        }
+    }
+    foreach possibleList $possibleTestsToRunList {
+        foreach index [array names $possibleList] {
+            # The debug list has different text indexes from the debug_cases list above
+            #   For this reason, the version check below is invalid and will cause a failure
+            #   the condition below verifies that the index is legal add sets a variable to
+            #   avoid the version check 
+            if {$possibleList == "tests_to_run_debug" && [lsearch -exact $debug_cases "$index"] >= 0 } {
+                if {$debug} {
+                    puts "hit debut ok"
+                }
+                set debugListOK 1
+            } else {
+                set debugListOK 0
+            }
+            if { ($debugListOK) || ("$index" == "all") || ("$index" == "null") \
+		               || [CompareRelease $index [GetVersion DUT1 ]] <= 0 } {
+                foreach iList [set ${possibleList}($index)] {
+                    foreach listValue $iList {
+                        set listValue [string trim [lindex [split [string trimleft $listValue] ";"] 0]]
+                        if {$listValue == ""} {
+                            if {$debugCom || $debug} {
+                                puts "Skip blank line"
+                            }
+                            continue
+                        }
+                        if {[regexp -nocase {^#} $listValue]} {
+                            if {$debugCom || $debug} {
+                                puts "Skip Comment $listValue"
+                            }
+                            continue
+                        }
+                        if {[lsearch -exact $possibleSkipIndexList "$listValue"] >= 0} {
+                            if {$debugSkip || $debug} {
+                                puts "Skip Comment $listValue"
+                            }
+                            continue
+                        }
+                        if {$debug} {
+                            puts "Appending $listValue"
+                        }
+                        lappend new_tests_to_run $listValue
+                    }
+                }
+            }
+        }
+    }
+    if {$debugOut || $debug} {
+        foreach testout $new_tests_to_run {
+            puts $testout
+        }        
+    }
+    return $new_tests_to_run
+}
+
+proc mainSort {indexList} {
+
+    set allFlag FALSE
+    set nullFlag FASLSE
+    upvar $indexList newIndexList
+    
+    # check if 'all' index exists
+    # if found remove and set flag
+    set allIndex [lsearch $newIndexList all]
+    puts "newIndexList $newIndexList"
+    if {$allIndex != -1} {
+        set newIndexList [lreplace $newIndexList $allIndex $allIndex]
+        set allFlag TRUE
+        puts "all found"
+    }
+    
+    # check if 'null' index exists
+    # if found remove and set flag
+    set nullIndex [lsearch $newIndexList null]
+    if {$nullIndex != -1} {
+        set newIndexList [lreplace $newIndexList $nullIndex $nullIndex]
+        set nullFlag TRUE
+        puts "null found"
+    }
+    
+    # Now sort the list
+    set newIndexList [lsort -dic $newIndexList]
+    
+    # Now add back all and null if they existed in the first place
+    if {$allFlag == "TRUE"} {
+        set newIndexList [linsert $newIndexList 0 all]
+    }
+    if {$nullFlag == "TRUE"} {
+        set index [llength $newIndexList]
+        set newIndexList [linsert $newIndexList $index null]
+    }
+
+}
+
+
+
+################################################################## 
+# Procedure Name: parseTestCaseFromLine
+#   
+# Description: Parses out testcase from a line.  Line normally comes 
+#              from completetest.lst and takes any one of the following 
+#              forms...
+#                   1.init
+#
+#                   1.1.1.1
+#                   1.1.1.2          ;# PD2-232530474 closed
+#                   1.1.1.4  ;#assert
+#
+# Input args: line - line to parse
+#
+# Output args:  None
+#
+#  Typical Usage:
+#
+##################################################################
+proc parseTestCaseFromLine { line } {
+
+    set tc ""
+
+    set line [string trim $line]
+
+    set result [regexp {^([a-zA-Z0-9_\.-]+)\ *} $line ignore tc]
+    
+    return $tc
+
+}
+
+################################################################## 
+# Procedure Name: calcExecTime
+#   
+# Description: Adds up total execution time
+#
+# Input args: durationList - List containing durations from previous
+#                            run. Durations are in seconds.
+#                FORMAT: { {1.1.1 10} {1.1.2 11} {testcase duration} }
+#             targetList - List of testcases to sum up
+#                FORMAT: { 1.init 1.1.1 1.1.2 1.2.1 }
+#             stopOnMissing - Stop immediately and return 0 if can't find an target
+#                             in duration list
+#             defaulTimeSec - Default estimate of duration if 
+#                             a testcase does not have a duration in 
+#                             durationList
+#
+# Output args:  total duration in seconds
+#
+##################################################################
+proc calcExecTime { durationList targetList {stopOnMissing 0} {defaultTimeSec 0} } {
+
+    set totalDuration 0
+
+    foreach tc $targetList {
+	set found 0
+	;# Find testcase tc in durationList
+	foreach tcDurationSet $durationList {
+	    set testCaseId  [lindex $tcDurationSet 0]
+	    set testCaseDur [lindex $tcDurationSet 1]
+	    if [regexp $tc $testCaseId] {
+		;# Found It...update totalDuration and break to get next tc
+		;# puts "DEBUG: FOUND IT: $tc $testCaseId ($testCaseDur)"
+		set totalDuration [expr $totalDuration + $testCaseDur];
+		set found 1
+		break;
+	    }
+	}
+	if {$found == 0} {
+	    if { $stopOnMissing } {
+		puts "ERROR: Could not find target $tc EXITING"
+		return 0
+	    } else {
+		puts "WARNING: Could not find target $tc"
+	    }
+	    ;# We didn't find it.  Use a default duration
+	    set totalDuration [expr $totalDuration + $defaultTimeSec];
+	    puts "Warning: No duration for $tc.  Using default of $defaultTimeSec"
+	}
+    }
+    return $totalDuration
+}
+
+################################################################## 
+# Procedure Name: parseExecTimeFile
+#   
+# Description: Reads a file containing execution times, and builds a list
+#              then returns it to calling procedure
+#
+# Input args: filename - Filename of file containing execution time history.
+#
+# Output args:  List of testcase duration in format... {{tc1 dur1} {tc2 dur2}}
+#
+##################################################################
+proc parseExecTimeFile { filename } {
+
+    set durationList ""
+    set fdin [open $filename "r+"]
+    
+    while {[gets $fdin line] != -1} {
+	set result [regexp "testcase:(.*)\ *duration:(.*)" $line ignore tcNum tcDur]
+	if { $result } {
+	    lappend durationList "$tcNum $tcDur"
+	}
+    }
+    if {[llength $durationList] == 0} {
+	puts "WARNING: No testcases found."
+    }
+ 
+    return $durationList
+}
+
+
+################################################################## 
+# Procedure Name: parseExecTimeFile
+#   
+# Description: Combine the testList array into a single list that contains ONLY 
+#              testcase numbers. Strips out all comments
+#
+# Input args: testList - List of tests that we want to determine duration of
+#
+# Output args:  Simple list of testcases. {1.init 1.1.2 1.1.3.......cleanup} 
+#
+##################################################################
+proc combineAndStripTestList { testList } {
+    
+    upvar $testList tl
+
+    set totalDuration 0
+    set newTcList ""
+
+    ;# Get array names for this test list.
+    set arrayIndexes [array names tl]
+
+    ;# Write ALL testcases to a file for parsing.  We use the same method
+    ;# used by executeTestsToRun{} to pull out each testcase number.
+    ;# We dump all testcases to a file, then parse each line by line
+    set pID [pid]
+    set tmpFileName "Tmp/calcExecDuration_$pID"
+    set fdin [open  $tmpFileName "w+"]
+    foreach testListArray $arrayIndexes {	
+	;# Dump list into temp file
+	puts $fdin $tl($testListArray)
+    }
+
+    ;# SEEK to top of file.
+    seek $fdin 0 start
+    while {[gets $fdin line] != -1} {
+	
+	set tc [parseTestCaseFromLine $line]
+	if {$tc != ""} {
+	    lappend newTcList $tc
+	}
+    }
+    ;# clean up
+    close $fdin
+    catch {file delete -force "$tmpFileName"} reason
+
+    return $newTcList
+}
+
+
+################################################################## 
+# Procedure Name: parseExecTimeFile
+#   
+# Description: Print seconds in a more readable hour/min/sec format
+#
+# Input args: numSec - Total time in seconds to convert
+#
+# Output args:  formatted output dividing input into hours/min/sec
+#               i.e. 6 hours, 59 minutes, 32 seconds
+#
+##################################################################
+proc formatSeconds { numSec } {
+
+    if {! [string is integer -strict $numSec] } {
+	return "NA"
+    }
+
+    set testSec  [expr $numSec % 60]
+    set testMin  [expr $numSec / 60]
+    set testHour [expr $testMin / 60]
+    set testMin  [expr $testMin % 60]
+
+    return "$testHour hours, $testMin minutes, $testSec seconds"
+
+}
+
+proc GetRegPath { regType regSubType } {
+
+    set thisDir [pwd]
+    cd  ".."
+    set regPath [pwd]
+    cd  $thisDir
+    switch $regType {
+	functional {
+	    set regPath "$regPath/Functionaltest" 
+	}
+	ixscriptmate { 
+	    set regPath "$regPath/ixScriptMate" 
+	}
+	cli { 
+	    if { $regSubType == "uploadanddownload" } {
+		set regPath "../CLItest/uploadanddownload"
+	    } else {
+		set regPath "../CLItest/upgradedowngrade"
+	    }
+	}
+	scalability { 
+	    set regPath "$regPath/Scalabilitytest" 
+	}
+	snmp { 
+	    set regPath "$regPath/SnmpFunctionaltest" 
+	}
+	xml { 
+	    set regPath "$regPath/XML_API" 
+	}
+        fit {
+            set regPath "$regPath/FeatureInteraction"
+        }
+
+	default { 
+	    set regPath "$regPath/Functionaltest" 
+	}
+    }
+    
+    return "$regPath"
+}
+
+proc DetermineCfgRegTypeSubTypeFromPlatform { platform } {
+
+    global regplatform
+
+    if { ![info exists regplatform($platform)] } {
+        puts "Error: Could not find \"$platform\" name. Verify spelling and try again"
+        exit
+    }
+
+    set cfg         [lindex $regplatform($platform) 2]
+    set regType     [lindex $regplatform($platform) 3]
+    set regSubType  [lindex $regplatform($platform) 4]
+
+    if { $regType  == "" } {
+        set regType "functional"
+    }
+
+    if { $regSubType == "" } {
+        set regSubType "standard"
+    }
+
+    if { [regexp -nocase "rout" $regSubType] } {
+        set regSubType "routing"
+    }
+
+    return "$cfg $regType $regSubType"
+}
+
+
+##################################################################
+# Procedure Name: CreateRegLogFilter
+#
+# Description: Create Log filter for Regression for critical error 
+#              only. First checking is done for existance.
+#
+# Input args: At present no input argument
+#
+# Output args: At present no output argument  
+#   
+##################################################################
+proc CreateRegLogFilter {} {
+
+global numDUT
+global validstring
+
+set validstring(1) "not"
+set validstring(2) "must"
+
+for {set dut 1} {$dut <= $numDUT} {incr dut} {
+   global DUT${dut}_CONNECT
+   Login [set DUT${dut}_CONNECT]
+   if {![regexp -nocase -all [CheckCmdIllegal "show log config filter Regression" NULL CheckCmdIllegal 0] "legal"]} { 
+       SendACmd "create log filter Regression"
+       SendACmd "conf log filter Regression add events all severity error"
+       SendACmd "conf log filter Regression add events all severity critical"
+       SendACmd "conf log target console filter Regression"
+       SendACmd "conf log target nvram filter Regression"
+       SendACmd "enable log display"
+     }
+}
+unset validstring(1)
+unset validstring(2)
+}
+###############################################################################
+# Procedure Name: _SetPartitionVars
+#
+###############################################################################
+proc _SetPartitionVars {args} {
+    global DEFAULT_XSF_AUTO_CREATE DEFAULT_XSF_CLI_COMMON DEFAULT_XSF
+    global DUTs_info
+    parse_args _SetPartitionVars $args {
+        dut "1"
+    }
+
+    if {![info exists DEFAULT_XSF($dut)]} {
+        return
+    }
+    foreach cli $DEFAULT_XSF($dut) {
+        if {[regexp -nocase "partit" $cli]} {
+            puts "Found DUT $dut parition cli $cli"
+            lappend DUTs_info(DUT$dut,partitionCli) "$cli"
+        }
+        if {[regexp -nocase "reboo" $cli]} {
+            global DUT${dut}_Stacking_msma_slot
+            if {[info exists DUT${dut}_Stacking_msma_slot]} {
+                puts "Found reboot Stack default.xsf - extend DUT $dut unc sw time 300 seconds"
+                set DUTs_info(DUT$dut,UncSwAdditionalTime) 300
+            } else {
+                puts "Found reboot in default.xsf - extend DUT $dut unc sw time 120 seconds"
+                set DUTs_info(DUT$dut,UncSwAdditionalTime) 120
+            }
+        }
+    }
+}
+
+###############################################################################
+# Procedure Name: CreateDefaultXsf 
+#
+# Description: Create  default.xsf which is used in following cases
+#
+# default.xsf =default.xsf file is executed if the switch comes up in an
+# unconfigured state because the configuration file is missing, or the configuration
+# file cannot be determined due to a corrupt NVRAM or other problems.
+# This returns the switch to some basic configuration. When default.xsf is executed,
+# the show switch command shows default.xsf as the booted configuration file.
+#
+# Input args: dut
+#
+# Output args: At present no output argument
+###############################################################################
+proc CreateDefaultXsf {args} {
+    global DEFAULT_XSF_AUTO_CREATE DEFAULT_XSF_CLI_COMMON DEFAULT_XSF
+    global DEFAULT_XSF_ADD_MGMT DEFAULT_XSF_USER defaultRouter
+    parse_args CreateDefaultXsf $args {
+        dut "1"
+        standby "null"
+    }
+
+    if {[info exists DEFAULT_XSF_AUTO_CREATE] && !$DEFAULT_XSF_AUTO_CREATE} {
+        return 1;
+    }
+    # We are least going to set the basic from the common.cfg
+    set hitDefault 0
+    # Select the console variable - a DUT (normal) or a STDBY
+    set mode "dut"
+    if {$standby != "null" && [regexp -nocase "\[0-9]" $standby]} {
+        set mode "standby"
+        set DUTName [format %s%d STDBY $standby]
+        global ${DUTName}_CONNECT ${DUTName}_IP ${DUTName}_MASK
+        if {![info exists ${DUTName}_CONNECT]} {
+            result_warning "Skipping Standby $standby . Please set ${DUTName}_CONNECT in cfg"
+            return;
+        }
+        if {[info exists DEFAULT_XSF_ADD_MGMT] && $DEFAULT_XSF_ADD_MGMT && \
+                ![info exists ${DUTName}_IP]} {
+            result_warning "Skipping Standby $standby . Please set ${DUTName}_IP in cfg"
+            return;
+        }
+
+    } else {
+        set DUTName [format %s%d DUT $dut]
+        global ${DUTName}_CONNECT ${DUTName}_IP ${DUTName}_MASK
+    }
+
+    Login [set ${DUTName}_CONNECT] -CheckOperational 0
+    SendACmd ""
+    EnableDebugMode
+    #
+    # check to see if there is an existing default.xsf.  Save it. Copy back if failure
+    #
+    set parameterList ""
+    set parameterList "default.xsf"
+    if {[regexp -nocase "ok" [CheckKeyValue "ls" $parameterList -reportResults 0]]} {
+        set hitDefault 1
+        SendACmd "mv default.xsf default.auto"
+    }
+    #
+    # Add all common.cfg COMMON cli to the new default.xsf. Create a list to check against later
+    #
+    set parameterList ""
+    foreach cc $DEFAULT_XSF_CLI_COMMON {
+        lappend parameterList "{$cc} exist"
+        SendACmd "!echo \"$cc\" >> /usr/local/cfg/default.xsf"
+    }
+    #
+    # Add all test bed cfg file 'all dut' cli to the default.xsf. Add to parameterlist for check
+    #
+    if {[info exists DEFAULT_XSF_USER]} {
+        foreach uc $DEFAULT_XSF_USER {
+            lappend parameterList "{$uc} exist"
+            SendACmd "!echo \"$uc\" >> /usr/local/cfg/default.xsf"
+        }        
+    }
+    #
+    # Add mgmt ipa and ipr. Add cli to parameterList for checking at the end
+    #
+    if {[info exists DEFAULT_XSF_ADD_MGMT] && $DEFAULT_XSF_ADD_MGMT} {
+        if [info exist ${DUTName}_MASK] {
+            set ipMask [set ${DUTName}_MASK]
+        } else {
+            set ipMask 24
+        }
+        lappend parameterList "{configure mgmt ipaddress [set ${DUTName}_IP]/$ipMask} exist"
+        SendACmd "!echo \"configure mgmt ipaddress [set ${DUTName}_IP]/$ipMask\" >> /usr/local/cfg/default.xsf"
+        lappend parameterList "{configure iproute add default $defaultRouter vr vr-mgmt} exist"
+        SendACmd "!echo \"configure iproute add default $defaultRouter vr vr-mgmt\" >> /usr/local/cfg/default.xsf"
+    }
+    #
+    # Add DUT specific cli from the test bed cfg to file and verification parameterList
+    #
+    if {$mode == "dut"} {
+        if {[info exists DEFAULT_XSF($dut)]} {
+            set defcli [concat $DEFAULT_XSF_CLI_COMMON $DEFAULT_XSF($dut)]
+            foreach c $DEFAULT_XSF($dut) {
+                lappend parameterList "{$c} exist"
+                SendACmd "!echo \"$c\" >> /usr/local/cfg/default.xsf"
+            }
+            regsub -all {[()]} $parameterList {\\&} parameterList
+        }
+    }
+    #
+    # Check that all cli are in the new default.xsf.  If not mv default.auto back to default.xsf
+    #
+    if {![regexp -nocase "ok" [CheckKeyValue "!cat /usr/local/cfg/default.xsf" $parameterList -reportResults 0]] \
+         && $hitDefault} {
+        result_debug "Failed to make default.xsf"
+        SendACmd "mv default.auto default.xsf"
+    }
+    #
+    # logout to avoid multiTask first login expect session issues
+    #
+    logout 
+}
+##################################################################
+# Procedure Name: CreateDefaultXsfAllDuts 
+#
+#
+#
+##################################################################
+proc CreateDefaultXsfAllDuts {} {
+    global whichDutNow
+    set makeXsfList ""
+
+    set initDut $whichDutNow
+    for {set nDUT 1; global DUT${nDUT}_CONNECT} { [info exists DUT${nDUT}_CONNECT] } \
+                                             {incr nDUT ; global DUT${nDUT}_CONNECT} {
+        lappend makeXsfList "CreateDefaultXsf -dut $nDUT"
+    }
+    for {set nSBY 1; global STDBY${nSBY}_CONNECT} { [info exists STDBY${nSBY}_CONNECT] } \
+                                             {incr nSBY ; global STDBY${nSBY}_CONNECT} {
+        lappend makeXsfList "CreateDefaultXsf -dut \"null\" -standby $nSBY"
+    }
+    _setShowOutput -screen off -log off -res_fmt on
+    MultiTask $makeXsfList
+    _setShowOutput -screen on -log on -res_fmt on
+    set connect [set DUT${initDut}_CONNECT]
+    Login $connect  -masterCheck 0 -CheckOperational 0
+}
+##################################################################
+# Procedure Name: CreateAutoexecXsf 
+#
+# Description: Create  autoexec.xsf which is used in following cases
+#
+# autoexec.xsf = autoexec.xsf is executed after the configuration has been loaded.
+#
+# Input args: At present no input argument
+#
+# Output args: At present no output argument
+##################################################################
+proc CreateAutoexecXsf {} {
+
+global numDUT
+global switchPort2DefaultRouter;
+global defaultRouter;
+global tftpServerList;
+global DUT1_IP
+set tftpServerIP [lindex $tftpServerList 0];
+
+
+ if { ([CompareRelease [GetVersion DUT${numDUT}] 12.1]>=0 ) } {
+
+        for {set dut 1} {$dut <= $numDUT} {incr dut} {
+           global DUT${dut}_CONNECT
+           global DUT${dut}_IP;
+           global DUT${dut}_MASK;
+           set ipAddr [set DUT${dut}_IP]
+           if [info exist DUT${dut}_MASK] {
+                   set ipMask [set DUT${dut}_MASK]
+            } else {
+                   set ipMask 24
+           }
+           set virtualRouter [GetVrString $dut];
+           set fd_cli [open "Tmp/autoexec_$ipAddr.xsf" "w"]
+           if {[regexp -nocase $switchPort2DefaultRouter "mgmt"]} {
+               puts $fd_cli    "unconfigure mgmt ipaddress";
+               puts $fd_cli    "configure mgmt ipaddress $ipAddr/$ipMask";
+           } else {
+        	set gwPort [GetDUTPort $switchPort2DefaultRouter $dut]
+                puts $fd_cli    "configure default delete port $gwPort";
+        	puts $fd_cli    "enable port $gwPort";
+        	sleep 5
+        	puts $fd_cli   "create vlan commvlan vr $virtualRouter";
+        	puts $fd_cli   "create vlan commvlan vr $virtualRouter";
+        	puts $fd_cli    "configure commvlan add port $gwPort";
+        	puts $fd_cli    "configure commvlan $ipAddr/$ipMask";
+            }
+               puts $fd_cli    "configure ipr add default $defaultRouter vr $virtualRouter";
+               close $fd_cli
+               SendAFileToTftp tftpServerIP "Tmp/autoexec_$ipAddr.xsf"
+
+
+                Login [set DUT${dut}_CONNECT]
+                ConfigGatewayNetwork
+                SendACmd "tftp [lindex $tftpServerList 0] -v $virtualRouter -g -l autoexec.xsf -r autoexec_${ipAddr}.xsf_${DUT1_IP}"
+                UnconfigGatewayNetwork
+        }
+ }
+}
+##################################################################
+# Procedure Name: showConfigOnAll_DUTs 
+#
+# Description:  utility function 
+#
+# Its purpose is to show config for all DUTs 
+#
+# Input args: At present no input argument
+#
+# Output args: At present no output argument
+##################################################################
+proc showConfigOnAll_DUTs {} {
+
+global numDUT
+    for {set dut 1} {$dut <= $numDUT} {incr dut} {
+           global DUT${dut}_CONNECT
+           Login [set DUT${dut}_CONNECT]
+           SendACmd "show configuration"
+    }
+}
+proc RemoveAutoexecXsf {} {
+global numDUT
+    for {set dut 1} {$dut <= $numDUT} {incr dut} {
+           global DUT${dut}_CONNECT
+           Login [set DUT${dut}_CONNECT]
+          SendACmd "rm autoexec.xsf"
+    }
+
+}
+##################################################################
+# Procedure Name: downloadBootromOnAll_DUTs 
+#
+# Description:  utility function 
+#
+# Its purpose is to downloadBootrom for all DUTs 
+#
+# Input args: At present no input argument
+#
+# Output args: At present no output argument
+##################################################################
+proc downloadBootromOnAll_DUTs { TFTPServerIP bootromFilename } {
+
+global numDUT
+global stackable
+    for {set dut 1} {$dut <= $numDUT} {incr dut} {
+           global DUT${dut}_CONNECT
+           Login [set DUT${dut}_CONNECT]
+           if {[regexp -nocase "$stackable" [GetPlatform DUT${dut}]]} {
+           DownloadBootrom $dut $TFTPServerIP $bootromFilename 
+           }
+    }
+}
+##################################################################
+# Procedure Name: dumpHeapTrace 
+#
+# Description:  utility function 
+#
+# Its purpose is to enable HeapTracing and dump the info per test for all DUTs 
+#
+# Input args:   
+#
+# Output args: At present no output argument
+##################################################################
+proc dumpHeapTrace {userid passwd} {
+    global gHeapTracingProcess
+    global numDUT MAIN
+    global currentTestNumber
+    global whichDutNow
+    global heapTraceEnabled
+    global DUTs_info
+    global cfg
+    global currentTestIndex
+    global chassis stacking
+    if { ([info exists gHeapTracingProcess] ) && ($gHeapTracingProcess != "no") } {
+         # remove empty spaces and comments from testcase like 8.1;#PDX
+         if { ![info exists currentTestNumber] } {
+               set tempCurrentTestNumber "main"
+         } else {
+              set currentTestNumber [string trim $currentTestNumber]
+              if {[regexp {(.*) *;.*} $currentTestNumber match match1]} {
+                set tempCurrentTestNumber $match1
+              } else {
+                set tempCurrentTestNumber $currentTestNumber
+              }
+         }
+         set tempCurrentTestNumber [string trim $tempCurrentTestNumber]
+          # enable heapTracing from pacman for non stacking 
+          # on msm a and msm B if chassis based or on DUT if stackables
+         for {set i 1} {$i <= $numDUT} {incr i 1} {
+             global DUT${i}_CONNECT
+             global DUT${i}_CONNECTB
+             global DUT${i}_IP
+             if {!([regexp -nocase "$stacking" [GetPlatform DUT${i}]])} {
+                set heaptrcTime [clock seconds];
+                Login [set DUT${i}_CONNECT]
+                # enable heaptracing only onces in a module regression
+                if { $heapTraceEnabled != "yes" } {
+                     if {[regexp -nocase "$chassis" [GetPlatform DUT${i}]] == 1 } {
+                          if { [info exists DUT1_CONNECTB] } {
+                             enableHeapTrc $i "B"
+                          }
+                          enableHeapTrc $i
+                     } else {
+                          enableHeapTrc $i
+                     }
+                }
+                # mgmt should be configured for heaptrc tool to get data
+                Login [set DUT${i}_CONNECT]
+                ConfigGatewayNetwork
+                exSleep 10 ;
+                #       foreach exosProcess $gHeapTracingProcess {
+                #           SendACmd "debug epm configure process $exosProcess memory trace 1"
+                #       }
+                # some libs required for heaptrc to decode exos sysmbol table is available on doc
+                # and not available on regresssion servers hence using doc server to to heaptrc dumps
+                login_linux doc $userid $passwd 
+                # directory name manupulations
+                set heapTraceDir "HeapTrc/$DUTs_info(DUT1,version)/$MAIN(feature_directory)/$cfg"
+                regsub -all {\.\.\/Functionaltest\/} $heapTraceDir {} heapTraceDir 
+                regsub -all {\/cfg} $heapTraceDir {} heapTraceDir 
+                regsub -all {\.cfg} $heapTraceDir {} heapTraceDir 
+                if { $heapTraceEnabled != "yes" } {
+                     linuxSendACmd "mkdir -p $heapTraceDir"
+                }
+                linuxSendACmd "cd $heapTraceDir"
+                exSleep 4 
+                if {[llength $gHeapTracingProcess] >= 1} {
+                   foreach exosProcess $gHeapTracingProcess {
+                      set cmd "/home/$userid/heaptrc [set DUT${i}_IP] $exosProcess > DUT${i}_${exosProcess}_${currentTestIndex}_${tempCurrentTestNumber}.txt"
+                      linuxSendACmd $cmd 
+                      exSleep 4 
+                   }
+                }
+                linuxSendACmd "cd"
+                Login [set DUT${whichDutNow}_CONNECT]
+                UnconfigGatewayNetwork
+             }
+        }
+        set heapTraceEnabled "yes"
+   }
+}
+;# Description: Generates summary file of execution durations
+;# NOTE: calculateTestsToRuna assumes current directory contains completetests.lst
+;# If standard list type is NOT given we just display basic Setup and CheckConn
+;# times along with total run time.
+proc generateExecutionSummary { execTimeFileName listFile module \
+        {setupDur 0} {checkConnDur 0} {totalTestDur 0} \
+        {fileName "execSummary.txt"} } {
+
+    global randomIndex
+
+    set quickExecDuration "NA"
+    set passExecDuration "NA"
+    set allExecDuration "NA"
+
+    ;# If we use standard list type, calculate each.
+    if { ($listFile == "quick") || ($listFile == "pass") || ($listFile == "all") } {
+
+        if { ! [file exists "completetests.lst"] } {
+            result_debug "File completetests.lst not found in directory [pwd]"
+            return 0
+        }
+
+        set platform [GetPlatform]
+
+        ;# Format the Execution Time file into a {{testcase duration} .. } format
+        set formattedExecTimeFile [parseExecTimeFile $execTimeFileName]
+
+        ;# Generate testcase arrays of each run time (quick/pass/all)
+        set testsToRunQuick [calculateTestToRun "quick" $platform]
+        array set tests_to_runQ $testsToRunQuick
+        ;# Calculate duration for this list type
+        set quickExecDuration [calcExecTime \
+                $formattedExecTimeFile \
+                [combineAndStripTestList tests_to_runQ] ]
+
+        if {($listFile == "pass") || ($listFile == "all") } {
+            set testsToRunPass [calculateTestToRun "pass" $platform]
+            array set tests_to_runP $testsToRunPass
+            ;# Calculate duration for this list type
+            set passExecDuration [calcExecTime \
+                    $formattedExecTimeFile \
+                    [combineAndStripTestList tests_to_runP] ]
+        }
+        if {$listFile == "all"} {
+            set testsToRunAll [calculateTestToRun "all" $platform]
+            array set tests_to_runA $testsToRunAll
+            ;# Calculate duration for this list type
+            set allExecDuration [calcExecTime \
+                    $formattedExecTimeFile \
+                    [combineAndStripTestList tests_to_runA] ]
+        }
+        if {$listFile == "dev"} {
+            set testsToRunAll [calculateTestToRun "dev" $platform]
+            array set tests_to_runA $testsToRunAll
+            ;# Calculate duration for this list type
+            set allExecDuration [calcExecTime \
+                    $formattedExecTimeFile \
+                    [combineAndStripTestList tests_to_runA] ]
+        }
+    }
+
+    set execSummaryFileName "[get_result_dir { $randomIndex }]/$fileName"
+    set fdout [open  $execSummaryFileName "w+"]
+
+    puts $fdout "----- Execution Time Summary For $module -----"
+    puts $fdout "   SETUP: $setupDur  \t([formatSeconds $setupDur])"
+    puts $fdout "CHK_CONN: $checkConnDur  \t([formatSeconds $checkConnDur])"
+    puts $fdout "   QUICK: $quickExecDuration  \t([formatSeconds $quickExecDuration])"
+    puts $fdout "    PASS: $passExecDuration  \t([formatSeconds $passExecDuration])"
+    puts $fdout "     ALL: $allExecDuration  \t([formatSeconds $allExecDuration])"
+    puts $fdout "\nTOTAL CURRENT RUN:  $totalTestDur  ([formatSeconds $totalTestDur])"
+
+    return 1
+}
+
+
+proc save_incrementally_run_data {{tc1 ""}} {
+
+  global fd_res
+  global sourceFile
+  global tStartTime
+  global testDuration
+  global randomIndex
+
+  # save report incrementally
+  set tEndTime [clock seconds]
+  set testDuration [expr $tEndTime-$tStartTime]
+
+  result_debug "\n\n*** Time for [file tail [pwd]] Regression test = $testDuration seconds"
+  result_debug "***    ( [formatSeconds $testDuration] )\n\n"
+
+  ;# Write all buffered data into result file.
+  if {$fd_res != ""} {
+      catch {flush $fd_res} result
+      if {$result != ""} { result_error "$result" }
+  }
+  save_test_report "[get_result_dir { $randomIndex }]/report.exr"
+  gen_text_report "[get_result_dir { $randomIndex }]/report.exr" "[get_result_dir { $randomIndex }]/report.txt" "[file tail [pwd]]" $sourceFile $tc1
+}
+
+
+proc executeTestsToRun {testsToRun} {
+    global numDUT
+    global connect
+    global script
+    global MAIN
+    global debugStart
+    global lastInit
+    global origFailCount
+    global failCount
+    global TestsRemaining
+    global DUTs_info
+    global licenseList
+    global license_to_run
+    global currentTestIndex
+    global initFile
+    global EX_REPORT_DATA_1
+    global TrafficGen
+    global MGMT_REG
+    global pID
+    global FAILLOCK DEBUGFAILLOCK
+    set MGMT_REG(currentConnectionType) console; #init to console so mgmt vlan can be cfg'd
+    set MGMT_REG(forceConsole) 0; # init variable
+    set lastInit "NULL"
+    set TestsRemaining $testsToRun
+    set returnFlag "testCompleted"
+    set currentTestIndex 1
+    set licenseCheck "n"
+
+#if {$TrafficGen != ""} {
+#       set testsToRun [SeperateEptIxiaTestcases $testsToRun $TrafficGen]
+#}
+
+    #Open skip file to write skip test cases
+    if {[set fd_main_skip [open "[get_result_dir]/skipTestsList.txt" "a"]] == -1} {
+           return fd_main_skip
+    }
+
+
+    if {[info exists license_to_run]} {
+       set index "null"
+       set licenseCheck "y"
+       set dutLicense $DUTs_info(DUT1,license)
+       set licenseLevel [lsearch $licenseList $dutLicense]
+       set givenLicenseLvl [lsearch $licenseList [string tolower [array names license_to_run]]]
+       set index [lindex $licenseList $givenLicenseLvl]
+      if {$givenLicenseLvl<=$licenseLevel} {
+          set flag "allow"
+      } elseif {$givenLicenseLvl>$licenseLevel} {
+          set flag "deny"
+      }
+      set outlist [combineAndStripTestList license_to_run]
+    }
+
+    ;# For backward compatibility with previous eval command
+    ;# we need to handle array like eval did, rather than using foreach
+    set pID [pid]
+    set tmpFileName "Tmp/testsToRun_$pID"
+    set fdin_ttr [open  $tmpFileName "w+"]
+
+    puts $fdin_ttr $testsToRun
+
+    set fdin_execTime [open $MAIN(timeFile) "RDWR APPEND CREAT"]
+    ;# Dump tests to run, so we can see what we intended to run.
+    flush $fdin_execTime
+
+    flush $fdin_ttr
+    seek $fdin_ttr 0 start
+
+    # Check if this automation should be run using telnet
+    #   If the global MGMT_REG(useTelnetGlobalFlag) flag is set to 1, check to
+    #   see if the mgmt interface is configured.  If it is not
+    #   configure it.  After successful mgmt interface configuration
+    #   set the MGMT_REG(currentConnectionType) global to telnet
+    #
+    #   The MGMT_REG(useTelnetLocalFlag) is used to only enable only in this
+    #     proc.  MGMT_REG(useTelnetGlobalFlag) is set in common.cfg
+    if {$MGMT_REG(useTelnetGlobalFlag) && $MGMT_REG(telnetNeedsConfig)} {
+        result_debug "@@@\nUsing Telnet over Mgmt Regression Mode\nConfigure all DUT mgmt vlans if required\n@@@"
+        _ConfigMgmtNetworkAll
+        set MGMT_REG(useTelnetLocalFlag) 1
+        set MGMT_REG(currentConnectionType) "telnet"
+    }
+
+    while {[gets $fdin_ttr line] != -1} {
+      if {[string trim $line] == ""} {
+          continue;
+      }
+      if {[info exists MAIN(regression_id)] && $MAIN(regression_id) > 1} {
+           global my_db mysqlIP
+           CheckAndPauseRegression -regression_id $MAIN(regression_id) \
+              -feature_directory $MAIN(feature_directory) -db $my_db -host $mysqlIP \
+              -admin_email "sqaauto@extremenetworks.com" -regCfg $MAIN(cfg)
+           if {[info exists MAIN(was_paused)] && $MAIN(was_paused)} {
+               #Clean the test bed configs after pause
+               CleanTestBedCfgs;
+               if {$lastInit != "NULL"} {
+                   if [catch {eval $lastInit} oops] {
+                       puts "Rerun of init after pause hit an exception"
+                   }
+               }
+           }
+      }
+      # Set the last init file
+      if [regexp -nocase "init" $line] {
+         set lastInit "$line"
+      }
+          set EX_REPORT_DATA_1 ""
+      # Remove the current test from the list of tests remaining to be run
+      set TestsRemaining [ldelete "$TestsRemaining" "[string trim $line]"];
+      ;# Tag START time
+      set timeStart [clock seconds];
+
+      # Set the debugStart for multipleLevelDebug
+      set debugStart 1
+
+      global skipTestsOnFailure
+      if {[info exists skipTestsOnFailure]} {
+         if {[lsearch $skipTestsOnFailure $line] >= 0} {
+            result_debug "SKIPPED TEST : $line"
+            continue;
+         }
+      }
+
+      # ---- If license level and testcases are not matching skip the tc
+
+      set origFailCount $failCount
+
+      if {[string length $line] && $licenseCheck != "n"} {
+      set tfound "false"
+      foreach tcase $outlist {
+         if {[regexp -nocase $tcase $line]} {
+             set tfound "true"
+             break
+          }
+      }
+
+      if { $tfound == "true" } {
+         if {$flag == "allow"} {
+            result_debug "Executing the test case $line as it matches with given license"
+      } else {
+            result_debug "Skipping the test case $line as its not matching with given license"
+            #puts "test case is $line in main.tcl"
+            puts $fd_main_skip "$line"
+            continue;
+      }
+      } else {
+           result_debug "$line is not in given in license file"
+      }
+      }
+
+      global currentTestNumber
+      global enableSaveConfigPerTest
+      global enableAbortTestCondition
+      global gHeapTracingProcess
+      set currentTestNumber $line
+      # -------------------------------------------------
+      # Change  the xterm prompt
+      # -------------------------------------------------
+      set MAIN(CURRENTTESTCASE) [parseTestCaseFromLine $line]
+      SetTerminalTitle
+      UpdateTrackDBTxt "executing case: $MAIN(feature_directory) $MAIN(CURRENTTESTCASE)";# tracking db location
+
+      if {[regexp {(.*) *;.*} $currentTestNumber match match1]} {
+           set tempCurrentTestNumber $match1
+      } else {
+           set tempCurrentTestNumber $currentTestNumber
+      }
+      set tempCurrentTestNumber [string trim $tempCurrentTestNumber]
+      if { ([info exists enableSaveConfigPerTest] ) && ([CompareRelease [GetVersion DUT${numDUT}] 12.1]>=0 ) && ($enableSaveConfigPerTest == "yes") } {
+      for {set i 1} {$i <= $numDUT} {incr i 1} {
+       global DUT${i}_CONNECT
+       global DUT${i}_IP
+       Login [set DUT${i}_CONNECT]
+        SendACmd "save configuration as-script perTest_${tempCurrentTestNumber}" NULL NULL false
+      }
+     }
+      if [catch {eval $line} reason] {
+         set debugStart 0
+         global errorInfo
+         puts "errorInfo: $errorInfo"
+         puts "****ERROR REASON: $reason"
+         # If a user lock on fail has come in from the queueing system
+         if {[info exists FAILLOCK] && $FAILLOCK=="yes" && \
+                [info exists DEBUGFAILLOCK] && $DEBUGFAILLOCK > 0} {
+             fix_report_level
+             report_start_test "0.0 User Lock Failed to continue $currentTestNumber"
+             report_end_test fail
+             puts "save incremental run data"
+             save_incrementally_run_data
+             puts "@@\n@@\nFAILLOCK HIT\n@@\n@@";
+             return testCompleted
+         }
+         ;# Write report out
+         report_start_test "Failed to continue $currentTestNumber test - Reason: <$reason>"
+         result_error "Failed to continue - Reason: $reason\n"
+         result_debug "errorInfo: $errorInfo"
+         report_end_test
+         close_result_file
+         fix_report_level
+         ;# trim whitespace
+         set line [string trim $line]
+         if { ! [regexp -nocase "invalid command name\ *\"$line\"" $reason] } {
+            ;# Clean up DUTs in case testcase ended abruptly
+            ;# But NOT for bad testcase name passed in.  Saves some unconf time
+
+            for {set i 1} {$i <= $numDUT} {incr i 1} {
+                global DUT${i}_CONNECT
+                global DUT${i}_SETUP
+                set connect [set DUT${i}_CONNECT]
+                set script [set DUT${i}_SETUP]
+                lappend connectList $connect
+                lappend scriptList $script
+            }
+            if { [RunSetupScript $connectList $scriptList] == "REGROUTER_FAILED" } {
+                set returnFlag "REGROUTER_FAILED"
+            }
+            unset connectList
+            unset scriptList
+            for {set i 1} {$i <= $numDUT} {incr i 1} {
+                set DUTName [format %s%d DUT $i]
+                global ${DUTName}_CONNECT
+                Login [set ${DUTName}_CONNECT]
+                SendACmd "clear log st"
+                SendACmd "disable clipa"
+                SendACmd "disable idletime"
+                SendACmd "disable edp ports all"
+                SendACmd "con edp advertisement-interval 60 holddown-interval 180"
+                global DUTs_info bcmStackable bcmPlatform
+                if {[regexp -nocase $bcmPlatform $DUTs_info(DUT${i},platform)]} {
+                   SendACmd "clear platform system-dump"
+                }
+                if {[info exists DUTs_info(DUT${i},coreFileTarget)]} {
+                    SendACmd "configure debug core-dumps $DUTs_info(DUT${i},coreFileTarget)"
+                }
+            }
+            set MAIN(CURRENTTESTCASE) ""
+            set DUTs_info(DUT1,BaseConfigLoaded) 0
+            # Execute the last init file
+            if [regexp -nocase "init" $line] {
+               set lastInit "NULL"
+            } else {
+               set MAIN(CURRENTTESTCASE) $lastInit
+               set reInit [catch {eval $lastInit} reason]
+            }
+            
+         }
+      } else {
+          CLIConnectMode -action "disable";# if in testcase telnet mode go to console
+      set debugStart 0
+      # Checking reason for -1, in case init returns before full run
+      if {$reason==-1 || $reason == "testSkipped"} {
+         if {$reason == "testSkipped"} {
+           if {[set fd_main_skip [open "[get_result_dir]/skipTestsList.txt"\
+                 "w"]] == -1} {
+              return -1
+           }
+           puts $fd_main_skip "FeatureSkipped"
+           close $fd_main_skip
+                 set tc [parseTestCaseFromLine $line]
+          save_incrementally_run_data $tc
+          if {$MGMT_REG(useTelnetGlobalFlag) && $MGMT_REG(forceConsole) == 1} {
+              set MGMT_REG(currentConnectionType) console
+              set MGMT_REG(forceConsole) 0
+              set MGMT_REG(telnetNeedsConfig) 1
+          }
+         }
+         return $reason
+      }
+#     dumpHeapTrace "autotest-sc" "glitterpen1"; #Commented to optimize runtime;
+     incr currentTestIndex
+      set tc [parseTestCaseFromLine $line]
+      if {$tc != ""} {
+         ;# Log END time
+         set timeEnd [clock seconds];
+        global duration
+         set duration [expr $timeEnd - $timeStart]
+
+         ;# write to testcase and duration to execTime.txt
+         ;# Write out duration to Execution Time File
+         ;# Add testcase: and duration: for easier parsing
+         result_debug "testcase:$tc\tduration:$duration"
+
+         puts $fdin_execTime "testcase:$tc\tduration:$duration"
+         flush $fdin_execTime
+      }
+      set MAIN(CURRENTTESTCASE) ""
+      }
+
+   if { ([info exists enableAbortTestCondition] ) && \
+                 ($enableAbortTestCondition =="testFailure") && \
+                 ( $origFailCount !=$failCount ) } {
+            exit
+   }
+        set tc [parseTestCaseFromLine $line]
+      save_incrementally_run_data $tc
+   }
+
+
+   close $fdin_ttr
+
+   close $fdin_execTime
+
+   close $fd_main_skip
+
+   catch {file delete -force "$tmpFileName"} reason
+
+   return $returnFlag
+}
+
+;# Execute the CLI tests based on testsToRun
+proc executeCLITestsToRun {testsToRun regPath testtorunNo} {
+
+    global NEWBUILD
+    global OLDBUILD
+    global sourceFile
+
+    set returnFlag "testCompleted"
+
+    if [regexp -nocase "uploadanddownload" $regPath] {
+        set func "CLICheck"
+    } else {
+        set func "UpgradeCheck"
+    }
+    if [catch {$func $testsToRun $testtorunNo $NEWBUILD $OLDBUILD} reason] {
+        report_start_test "(2) Failed to continue test - Reason: <$reason>";
+        result_error "(2) Failed to continue - Reason: $reason\n";
+        report_end_test;
+        set returnFlag "testCrashed";
+    } else {
+        set returnFlag "testCompleted";
+        incr testtorunNo;
+    }
+
+    save_incrementally_run_data $testtorunNo
+
+    return $returnFlag
+}
+# --------------------------------------------------------------------
+#  proc _verifyModuleNameArg
+#
+#     **** N O T E   to be called only from the main dir ****
+#     This proc maintains the original ability to match short, regex
+#     directory names.
+#
+#  args : In - module value to be compared with
+#        Out - matched module dirctory full path
+# --------------------------------------------------------------------
+proc _verifyModuleNameArg {regPath module} {
+    global regressionModules
+
+    if {[regexp -nocase "CLItest" $regPath] && ![regexp -nocase "CLItest" $module]} {
+        set curDir [pwd]
+        cd "../CLItest/cli-ew"
+        set modules [glob -- *]
+        set cliModules ""
+        foreach moduleName $modules {
+            if {[file isdir $moduleName]} {
+                lappend cliModules $moduleName
+            }
+        }
+        puts "cliModules: $cliModules"
+        puts "module: $module"
+        set matchCli 0
+        foreach cliModule [lsort $cliModules] {
+            set match ""
+            set str ""
+            if {[regexp -nocase "(^$module.*)" $cliModule match str]} {
+                set module $str
+                cd "$curDir"
+                if [catch {file mkdir "$regPath/$module"} reason] {
+                    puts "DEBUG: unable to create $regPath/$module directory: $reason"
+                }
+                return "$regPath/$module"
+            }
+        }
+        cd "$curDir"
+    } else {
+        set modules [glob -- $regPath/*]
+        set regressionModules ""
+        foreach moduleName $modules {
+           if {[file isdir $moduleName]} {
+              lappend regressionModules $moduleName
+           }
+        }
+
+        foreach regressionModule [lsort $regressionModules] {
+           set match ""
+           set str ""
+           if {[regexp "(^$regPath/$module)" $regressionModule match str]} {
+              return $str;
+              break
+           }
+        }
+    }
+    puts "\n\n!!!!! ERROR $regPath $module does not match any module directories !!!!!"
+    exit;
+}
+#########################################################################
+# procName: _getTestBedNumNodes
+#
+#
+# Just get return the number of nodes in a test bed and
+#     set the MAIN(NODECOUNT)
+#
+#########################################################################
+proc _getTestBedNumNodes {} {
+    global MAIN
+
+    set n 0
+    set MAIN(DUTLIST) ""
+    for {set nDUT 1; global DUT${nDUT}_CONNECT} { [info exists DUT${nDUT}_CONNECT] } \
+                                             {incr nDUT ; global DUT${nDUT}_CONNECT} {
+        incr n
+        lappend MAIN(DUTLIST) $nDUT
+    }
+    set MAIN(NODECOUNT) $n
+    return $n
+}
+#########################################################################
+# Procedure: _getTestBedStandbyNodes
+#
+# 
+# Just get return the number of standby nodes
+#      set MAIN(STDBYCOUNT) 
+#
+######################################################################### 
+proc _getTestBedStandbyNodes {} {
+    global MAIN
+
+    set n 0
+    set MAIN(STDBYLIST) ""
+    for {set nSBY 1; global STDBY${nSBY}_CONNECT} { [info exists STDBY${nSBY}_CONNECT] } \
+                                             {incr nSBY ; global STDBY${nSBY}_CONNECT} {
+        lappend MAIN(STDBYLIST) $nSBY
+        # Make dummy DUT#_CONNECT and DUT#_IP to trick whichDutNow code.
+        #   Login adds 100 to the STDBY#
+        set me [expr 100 + $nSBY]
+        global DUT${me}_CONNECT DUT${me}_IP STDBY${nSBY}_IP CFG_PLATFORM;
+        set DUT${me}_CONNECT  [set STDBY${nSBY}_CONNECT]
+        set DUT${me}_IP       [set STDBY${nSBY}_IP]
+        set CFG_PLATFORM($me) ""
+        incr n
+    }
+    set MAIN(STDBYCOUNT) $n
+    return $n
+}
+
+#########################################################################
+# Procedure: _commentHandler
+#
+# Set MAIN comment global OR other globals based on special formats passed
+#       in.
+#
+#    Aug 2017:   no_analyzer in the comment - ANALYZE(bypass) to 1
+#                xtermtitle  in comment - MAIN(XTERMTITLEON) to 1
+#
+#########################################################################
+proc _commentHandler {comment} {
+    global MAIN ANALYZE
+
+    if {[regexp -nocase "no_analyz" $comment]} {
+        set ANALYZE(bypass) 1
+    }
+    if {[regexp -nocase "xtermtitle" $comment]} {
+        set MAIN(XTERMTITLEON) 1
+    }
+    if {[regexp -nocase {regId:([0-9]+) } $comment a rid]} {
+        set MAIN(regression_id) $rid
+    }
+    set MAIN(comment) $comment
+}

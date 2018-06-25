@@ -1,0 +1,870 @@
+
+
+################################################################## 
+# Procedure Name: SetupBGPInternetFeed
+#   
+# Description:  set up the first BGP AS to the outside world
+#               
+#     
+#
+# Input args: none
+# Output args: none
+# Typical usage: 
+#      
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: SetupSwitch
+##################################################################
+proc SetupBGPInternetFeed {} {
+
+#    SendACmd  "conf default del po all";
+#    SendACmd  "create vlan bgpvlan";
+#    SendACmd  "conf bgpvlan add port 2:24";
+#    SendACmd  "conf bgpvlan ipa 10.201.25.6/24";
+#    SendACmd  "conf ipr add default 10.201.25.1";
+    SendACmd  "config bgp as-number 65533";
+    SendACmd  "config bgp router 10.201.25.6";
+    SendACmd  "create bgp neighbor 10.201.15.211 remote 14490 multiple";
+    SendACmd  "create route-map NOTHING";
+    SendACmd  "config NOTHING add 100 deny match-all";
+    SendACmd  "config bgp neigh 10.201.15.211 route-map out NOTHING";
+    SendACmd  "enable ipforwarding";
+    SendACmd  "enable bgp neighbor 10.201.15.211";      
+    SendACmd  "enable bgp";
+    SendACmd  "config ipro add 10.201.15.211/32 10.201.25.1"; 
+    #create access-profile iplist type ipaddress
+    #conf iplist add ipaddress 192.0.0.0/8
+    #conf bgp nei 10.201.15.211 nlri-filter in iplist         
+    #SendACmd  "dis clipaging";
+}
+
+
+################################################################## 
+# Procedure Name: CleanupBGPInternetFeed
+#   
+# Description:  Turn the BGP router off
+#               
+#     
+#
+# Input args: none
+# Output args: none
+# Typical usage: 
+#      
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: SetupSwitch
+##################################################################
+proc CleanupBGPInternetFeed {} {
+    SendACmd  "disable bgp neighbor all";
+    SendACmd  "disable bgp"; 
+}
+
+
+################################################################## 
+# Procedure Name: GetSummaryPage
+#   
+# Description:  
+# Use when the table is too long. Just try to get the summary page.               
+#     
+#
+# Input args: command ipAddr fd_res testNo
+# Output args: none
+# Typical usage: 
+#        lappend parameterList {sh ipr origin bgp sorted}
+#        GetSummaryPage $parameterList $ipAddr $fd_res $testNo     
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: GetSwitchInfo
+##################################################################
+proc GetSummaryPage { command ipAddr fd_res testNo} {
+ 
+    log_user 2;
+    #exp_internal 1;     
+    set fd_input [open "Tmp/tmp_$testNo" "w"];
+    if [catch "spawn telnet $ipAddr" reason] {
+       result_debug "failed to spawn program: $reason\n";
+       error "failed to spawn program: $reason\n";
+       return;
+    }
+    expect "login: " { send "admin\r" };                         
+    expect "pass*" { send "\r" };    
+    foreach cmd $command {                   
+
+        expect "*#*" { send "$cmd\r" };
+        set exp_out_buf "";
+        regsub -all "\n\r" $expect_out(buffer) "\n" exp_out_buf;
+        if {$fd_input != "NULL" } { 
+            puts $fd_input $exp_out_buf; 
+            puts $fd_res $exp_out_buf; 
+        }
+        expect "*quit" { send "Q" };
+        set exp_out_buf "";
+        regsub -all "\n\r" $expect_out(buffer) "\n" exp_out_buf;
+        if {$fd_input != "NULL" } { 
+            puts $fd_input $exp_out_buf; 
+            puts $fd_res $exp_out_buf;
+        }
+        expect "*quit" { send "Q" };   
+        set exp_out_buf "";
+        regsub -all "\n\r" $expect_out(buffer) "\n" exp_out_buf;
+        if {$fd_input != "NULL" } { 
+            puts $fd_input $exp_out_buf; 
+            puts $fd_res $exp_out_buf;
+        }
+        expect "*#*" { send "\r\r" };
+        set exp_out_buf "";
+        regsub -all "\n\r" $expect_out(buffer) "\n" exp_out_buf;
+        if {$fd_input != "NULL" } { 
+            puts $fd_input $exp_out_buf; 
+            puts $fd_res $exp_out_buf;
+        }
+    }    
+    close $fd_input;
+    log_user 0;
+}
+
+
+################################################################## 
+# Procedure Name: GetTotalKeyValue
+#   
+# Description:  
+#  Execute a CLI command. The function will return total key value
+#  found in the output.               
+#     
+#
+# Input args: none
+# Output args: none
+# Typical usage: 
+#      
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: VerifySwitchOutput
+##################################################################   
+proc GetTotalKeyValue {command parameterList} {
+
+   global spawn_id;
+   set totalkey 0;
+   
+   if {[regexp -- {[\]} $command]} {
+      # Command is passed as a file, read the file instead
+      # of running the command
+      set fd_in [open "$command" "r"]
+   } else {
+      set fd_in [open "Tmp/tmp_TotalBGPRoute" "w"]
+      SendACmd "$command" NULL $fd_in
+      close $fd_in
+      set fd_in [open "Tmp/tmp_TotalBGPRoute" "r"]        
+   }
+
+   while {[gets $fd_in line] != -1} {
+   #result_debug "----- Line=|$line|"
+      foreach itemList $parameterList {
+         #puts "itemList ==> $itemList";
+         set key [lindex $itemList 0]
+         
+         if {[regexp -nocase -indices $key $line matchedRange] == 1} {
+            #found the key
+            #result_debug "Key: |$key| line: |$line| totalkey: |$totalkey|";
+            puts "Key: |$key| line: |$line| totalkey: |$totalkey|";          
+            set totalkey [expr $totalkey + 1];           
+        } 
+     }      
+   }   
+   close $fd_in
+   
+   if {$totalkey != 0 } { return $totalkey } else { return "KEY_NOT_FOUND" }
+   
+   catch {file delete "Tmp/tmp_TotalBGPRoute"}
+}
+
+
+################################################################## 
+# Procedure Name: IsKeyValueSorted
+#   
+# Description:  
+#  Execute a CLI command. The function will return "Sorted" or "NotSorted" 
+#  key value found in the output.               
+#     
+#
+# Input args: command parameterList
+# Output args: sorted/unsorted
+# Typical usage: 
+#      
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: SetupSwitch
+##################################################################
+proc IsKeyValueSorted {command parameterList} {
+
+   global spawn_id;
+   set firstIP 0;
+   set secondIP 0;
+   
+   if {[regexp -- {[\/]} $command]} {
+      # Command is passed as a file, read the file instead
+      # of running the command
+      set fd_in [open "$command" "r"]
+   } else {
+      set fd_in [open "Tmp/tmp_TotalBGPRoute" "w"]
+      SendACmd "$command" NULL $fd_in
+      close $fd_in
+      set fd_in [open "Tmp/tmp_TotalBGPRoute" "r"]        
+   }
+  
+   while {[gets $fd_in line] != -1} {
+   #result_debug "----- Line=|$line|"
+      foreach itemList $parameterList {
+         #puts "itemList ==> $itemList";
+         set key [lindex $itemList 0]         
+         if {[regexp -nocase -indices $key $line matchedRange] == 1} {
+            #found the key
+            #result_debug "Key: |$key| line: |$line| matchedRange: |$matchedRange|" 
+            set searchOption [lindex $itemList 2]
+            if {$searchOption > 0 } {
+               #get the value on some line after the line where the key is found
+               #puts " searchOption = $searchOption";
+               for { set i 0 } { $i < $searchOption } { incr i } {
+                  gets $fd_in lineAfterKey
+               }
+               #result_debug "Wanted ${searchOption}th line after key: |$lineAfterKey|" 
+               set indexWanted [expr [lindex $itemList 1]]
+            } else {
+               if {[lindex $itemList 1] > 0} {
+                  set keyEnd [expr [lindex $matchedRange 1] + 1]
+                  set line2bSearched [string range $line $keyEnd end]
+                  set indexWanted [expr [lindex $itemList 1] - 1]
+               } elseif {[lindex $itemList 1] < 0} {
+                  set keyStart [expr [lindex $matchedRange 0] -1]
+                  set line2bSearched [string range $line 0 $keyStart]
+                  set indexWanted [expr [llength $line2bSearched] + [lindex $itemList 1]]
+               } else {
+                  set keyStart [lindex $matchedRange 0]
+                  set keyEnd [lindex $matchedRange 1]
+                  set line2bSearched [string range $line $keyStart $keyEnd]
+                  set indexWanted 0
+               }
+            }
+            #result_debug "line2bSearched: |$line2bSearched|"
+            set valueFound [lindex $line2bSearched $indexWanted]
+            #result_debug "Key: |$key| valueFound: |$valueFound|"
+            set secondIP [string first . $valueFound];   
+            if {$firstIP > $secondIP} {
+                return "NotSorted";    
+            } else {
+                set firstIP $secondIP;
+            }                        
+         } 
+      }      
+   }   
+   close $fd_in   
+   return "Sorted";
+
+   catch {file delete "Tmp/tmp_TotalBGPRoute"} 
+}
+
+
+################################################################## 
+# Procedure Name: SetupDUTAsIBGP
+#   
+# Description: set up DUT1 as IBGP peer 
+# Assumes the peer is another DU2, strictly works for DUT1<->DUT2 not for test equiment
+#
+#     
+#
+# Input args: none
+# Output args: none
+# Typical usage: 
+#      
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: SetupSwitch
+##################################################################
+proc SetupDUTAsIBGP {} {
+    SendACmd  "create vlan vibgp";
+    SendACmd  "config vibgp add port [GetATrunkPort 2 1]";
+    SendACmd  "config vibgp ipaddress 10.10.10.2/24";
+    SendACmd  "config iproute add default 10.10.10.1";
+    SendACmd  "config bgp as-number 100";
+    SendACmd  "config bgp routerid 10.10.10.2";
+    SendACmd  "create bgp neighbor 10.10.10.1 remote 100";
+    SendACmd  "enable ipforwarding";
+#    SendACmd  "dis bgp sync";  
+    SendACmd  "enable bgp";       
+    SendACmd  "enable bgp neighbor all";      
+}
+################################################################## 
+# Procedure Name: CleanupDUTAsIBGP
+#   
+# Description: Cleans up DUT1 as IBGP peer with DUT2 
+#               
+#     
+#
+# Input args: none
+# Output args: none
+# Typical usage: 
+#      
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: SetupSwitch
+##################################################################
+proc CleanupDUTAsIBGP {} {
+    result_debug "CleanupDUTAsIBGP"
+    SendACmd  "config iproute delete default 10.10.10.1"; 
+    SendACmd  "disable ipforwarding";
+#    SendACmd  "en bgp sync";
+    SendACmd  "disable bgp";
+    SendACmd  "delete bgp neighbor all";
+    SendACmd  "delete vibgp";
+}
+
+
+################################################################## 
+# Procedure Name: SetupDUTAsEBGP
+#   
+# Description:  set up DUT3 as EBGP with DUT1.
+#     Assumes dUT1 sets up DUT3 as EBGP peer as well. Strictly meant for DUT3<->DUT1
+#     would not work for test equiment
+#               
+#     
+#
+# Input args: none
+# Output args: none
+# Typical usage: 
+#      
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: SetupSwitch
+##################################################################
+proc SetupDUTAsEBGP {} {
+
+    SendACmd  "create vlan vebgp";
+    SendACmd  "config vebgp add port [GetATrunkPort 3 1]";
+    SendACmd  "config vebgp ipaddress 20.10.10.2/24";
+    SendACmd  "config iproute add default 20.10.10.1"; 
+    SendACmd  "config bgp as-number 200";
+    SendACmd  "config bgp routerid 20.10.10.2";
+    SendACmd  "create bgp neighbor 20.10.10.1 remote 100";
+    SendACmd  "enable ipforwarding";  
+#    SendACmd  "dis bgp sync"; 
+    SendACmd  "enable bgp";        
+    SendACmd  "enable bgp neighbor all";      
+}
+################################################################## 
+# Procedure Name: CleanupDUTAsEBGP
+#   
+# Description:  Cleanup DUT EBGP info
+#               Assumes DUT was configured using SetupDUTAsEBGP
+#
+#     
+#
+# Input args: none
+# Output args: none
+# Typical usage: 
+#      
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: SetupSwitch
+##################################################################
+proc CleanupDUTAsEBGP {} {
+    result_debug "CleanupDUTAsEBGP"
+    SendACmd  "config iproute delete default 20.10.10.1"; 
+    SendACmd  "disable ipforwarding";
+#    SendACmd  "en bgp sync"; 
+    SendACmd  "disable bgp";       
+    SendACmd  "delete bgp neighbor all";
+    SendACmd  "delete vebgp";    
+}
+
+################################################################## 
+# Procedure Name: SetupDUT1
+#   
+# Description:  sets up DUT1 with IBGP peer to DUT2 and EBGP peer with DUT3
+#               
+#     
+#
+# Input args: none
+# Output args: none
+# Typical usage: 
+#      
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: SetupSwitch
+##################################################################
+proc SetupDUT1 {} {
+    SendACmd  "create vlan vibgp";
+    SendACmd  "config vibgp add port [GetATrunkPort 1 2]";
+    SendACmd  "config vibgp ipaddress 10.10.10.1/24";
+
+    SendACmd  "create vlan vebgp";
+    SendACmd  "config vebgp add port [GetATrunkPort 1 3]";
+    SendACmd  "config vebgp ipaddress 20.10.10.1/24";
+
+    SendACmd  "conf bgp as-number 100";
+    SendACmd  "conf bgp routerid 20.10.10.1";
+    SendACmd  "create bgp neighbor 10.10.10.2 remote 100";
+    SendACmd  "create bgp neighbor 20.10.10.2 remote 200"
+    SendACmd  "enable ipforwarding";
+#    SendACmd  "dis bgp sync";
+    SendACmd  "enable bgp";
+    SendACmd  "enable bgp neighbor all";
+}
+
+################################################################## 
+# Procedure Name: CleanupDUT1
+#   
+# Description:  cleans up DUT with bgp information.
+#  mainly called to cleanup config from SetupDUT1
+#               
+#     
+#
+# Input args: none
+# Output args: none
+# Typical usage: 
+#      
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: SetupSwitch
+##################################################################
+proc CleanupDUT1 {} {
+    SendACmd  "disable ipforwarding"; 
+#    SendACmd  "en bgp sync"; 
+    SendACmd  "disable bgp";      
+    SendACmd  "delete bgp neighbor all";
+    SendACmd  "delete vebgp";
+    SendACmd "delete vibgp"
+}
+
+
+################################################################## 
+# Procedure Name:VerifyNotABGPNeighbor
+#   
+# Description:
+#     This proc is used to verify a given bgp neighbor does not exist
+#     by using sh bgp neigh and sh bgp             
+#     
+#
+# Input args: IPAddress, asNum, IOrE
+# Output args: none
+# Typical usage: 
+#         VerifyNotABGPNeighbor $ipAddress $asNum $IOrE
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: VerifySwitchOutput
+##################################################################
+proc VerifyNotABGPNeighbor {ipAddress asNum IOrE} {
+
+    set e e
+
+   ################################################
+   set subTest "Verify that neighbor $ipAddress does not exist"
+   ################################################
+   result_h2 "$subTest"
+   report_start_test "$subTest"
+   lappend parameterList "{$IOrE$e.* $ipAddress *$asNum .* ESTABLISHED} notExist";
+   CheckKeyValue "show bgp neighbor" $parameterList -comment "BGP neighbor not established" -time {s: 0 i: 4 d: 60 f: 60 r};
+   unset parameterList;
+   report_end_test
+}
+
+################################################################## 
+# Procedure Name: VerifyCorrectBGPNeighbor
+#   
+# Description:
+#     This proc is used to verify a given bgp neighbor exists with right i or e
+#     neighbor flag. It also checks the correct number of i or e routes learned.  
+#               
+#     
+#
+# Input args: IPAddress, asNum, numRoutes, IOrE
+# Output args: ok/error
+# Typical usage: 
+#        VerifyNotABGPNeighbor $ipAddress, asNum, $numRoutes, $I
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: VerifySwitchOutput
+##################################################################
+proc VerifyCorrectBGPNeighbor {ipAddress asNum numRoutes IOrE} {
+
+    set e e
+
+   ################################################
+   set subTest "Verify that neighbor $ipAddress ESTABLISHED"
+   ################################################
+   result_h2 "$subTest"
+   report_start_test "$subTest"
+   lappend parameterList "{$IOrE$e.* $ipAddress *$asNum .* ESTABLISHED} exist";
+   if {[regexp -nocase [CheckKeyValue "show bgp neighbor" $parameterList -comment "BGP neighbor established" -time {s: 1 i: 4 d: 60 f: 60 r}] "error"]} {
+   return "error"
+   }
+   unset parameterList;
+   report_end_test
+ 
+   if {[regexp -nocase $IOrE "i"]} {
+      lappend parameterList "{Routes from IBGP *: $numRoutes} exist";
+      return [CheckKeyValue "show bgp" $parameterList -comment "Verify numRoutes learned from internal neighbor" -time {s: 0 i: 4 d: 60 f: 60 r}]
+      #unset parameterList;
+   } elseif {[regexp -nocase $IOrE "e"]} {
+      lappend parameterList "{Routes from EBGP *: *$numRoutes} exist";
+      return [CheckKeyValue "show bgp" $parameterList -comment "Verify numRoutes learned from external neighbor" -time {s: 0 i: 4 d: 60 f: 60 r}];
+      #unset parameterList;
+   }
+}
+
+################################################################## 
+# Procedure Name: VerifyCorrectBGPNeighborList
+#   
+# Description:
+#     This proc is used to verify a given list of bgp neighbor exists with right i or e
+#     neighbor flag. 
+#               
+#     
+#
+# Input args: peerIp - list of nbr ip address, peerAsNum - List of peer's 
+#                      AS Number, peerType - List of peer's type. 
+#                      List order should be the same for all the lists
+#                      mentioned above
+# Output args: ok/error
+# Typical usage: 
+#        VerifyNotABGPNeighbor $ipAddress, asNum, $numRoutes, $I
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: VerifySwitchOutput
+##################################################################
+proc VerifyCorrectBGPNeighborList {args} {
+
+    set e e
+
+   parse_args VerifyCorrectBGPRoutesLearned $args {
+      peerIp "" 
+      peerAsNum ""
+      peerType ""
+   }
+
+for {set index 0} {$index<[llength $peerIp]} {incr index} {
+   set peerIpValue [lindex $peerIp $index]
+   set peerAsNum [lindex $peerAsNum $index]
+   set peerTypeValue [lindex $peerType $index]
+
+   lappend parameterList "{$peerTypeValue$e.* $peerIpValue *$peerAsNum .* ESTABLISHED} exist";
+}
+   return [CheckKeyValue "show bgp neighbor" $parameterList -comment "BGP neighbor established" -time {s: 1 i: 4 d: 60 f: 60 r}];
+   #unset parameterList;
+}
+
+################################################################## 
+# Procedure Name: VerifyCorrectBGPRoutesLearned
+#   
+# Description:  Verify that specific BGP routes are learned on the
+#               switch.
+#               It uses route attributes in a list along with network ip
+#               to verify the learning
+#     
+#
+# Input args: args
+# Output args: none
+# Typical usage: 
+#      
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: VerifySwitchOutput
+##################################################################
+proc VerifyCorrectBGPRoutesLearned {args} {
+   parse_args VerifyCorrectBGPRoutesLearned $args {
+      peerIp "" 
+      peerAsPath ""
+      ipNwList ""
+      originList "0"
+      routesList ""
+      nextHopList ""
+      fromPrefixList ""
+      bestRouteList ""
+      fromPrefixList ""
+      thruPrefixList ""
+      localPrefList ""
+      asTypeList ""
+      asPathList ""
+      medList ""
+      peerType ""
+   }
+
+for {set index 0} {$index<[llength $peerIp]} {incr index} {
+   set peerIpValue [lindex $peerIp $index]
+   set peerAsPathVal [lindex $peerAsPath $index]
+   set ipNwListValue [lindex $ipNwList $index]
+   set fromPrefixListValue [lindex $fromPrefixList $index]
+   set thruPrefixListValue [lindex $thruPrefixList $index]
+   set originListValue [lindex $originList $index]
+   set nextHopListValue [lindex $nextHopList $index]
+   set routesListValue [lindex $routesList $index]
+   set medListValue [lindex $medList $index]
+   set asPathListValue [lindex $asPathList $index]
+   set asTypeListValue [lindex $asTypeList $index]
+   set localPrefListValue [lindex $localPrefList $index]
+   set bestRouteListValue [lindex $bestRouteList $index]
+   set peerTypeValue [lindex $peerType $index]
+   set length [llength $ipNwListValue]
+   set incompleteRoutesList ""
+   set incompleteRoutesList1 ""
+   result_debug "length=$length and asPathListValue $asPathListValue";
+
+   ################################################
+   set subTest "Verify correct routes learned from peer $peerIpValue"
+   ################################################
+   result_h2 "$subTest"
+   report_start_test "$subTest"
+   
+   if {[llength $fromPrefixListValue]!=$length || [llength $thruPrefixListValue]!=$length || [llength $routesListValue]!=$length || \
+       [llength $nextHopListValue]!=$length} {
+      result_error "Error in input args:fromPrefixList,thruPrefixList,routesList,ipNwList,nextHopList should be same length"
+      report_end_test
+      return -1
+   }
+   
+   for {set i 0} {$i<$length} {incr i} {
+      set ipNetwork [lindex $ipNwListValue $i]
+      set fromPrefix [lindex $fromPrefixListValue $i]
+      set thruPrefix [lindex $thruPrefixListValue $i]
+      set originType [lindex $originListValue $i]
+      set nextHop [lindex $nextHopListValue $i]
+      set localPref [lindex $localPrefListValue $i]
+      set numRoutes [lindex $routesListValue $i]
+      set med [lindex $medListValue $i]
+      set bestRoute [lindex $bestRouteListValue $i]
+      set peerTypeVal [lindex $peerTypeValue $i]
+
+      switch -- $originType \
+         "1" {
+             set originCode EGP
+         } "0" {
+             set originCode IGP
+         } "2" {
+             set originCode Incomplete
+         } default {
+             set originCode IGP
+         }
+      
+      if {$peerTypeVal=="i"} {
+         set peerAsPathList ""
+      } else {
+         set peerAsPathList $peerAsPathVal
+      }
+      if {[llength $asPathListValue]!=0} {
+         set aslist [lindex $asPathListValue $i]
+         set asSegmentTypes [lindex $asTypeListValue $i]
+         if {$aslist!=""} {
+            set indice 0
+            foreach asType $asSegmentTypes {
+               if {[llength $asSegmentTypes]>1} {             
+                  lappend peerAsPathList [lindex $aslist $indice]
+               } else {
+                  if {$asType==1} {
+                     set aslist [list $aslist]   ;# in order to properly check the set of AS_SET
+                  }
+                  foreach asl $aslist {
+                     lappend peerAsPathList $asl
+                  }
+               }
+               incr indice
+            }
+         }
+      }
+      for {set j 0} {$j<$numRoutes} {incr j} {
+         set myIP [incrIpField $ipNetwork 3 $j]
+         scan $myIP %d.%d.%d.%d a b c d
+         set myIP [format %d.%d.%d.%d $a $b $c 0]
+         if {$localPref!=""} {
+            if {$med!=""} {
+               lappend incompleteRoutesList "{Route: $myIP/$fromPrefix} {Origin $originCode, Next-Hop $nextHop, LPref $localPref, MED $med} inLine exist 1"
+            } else {
+               lappend incompleteRoutesList "{Route: $myIP/$fromPrefix} {Origin $originCode, Next-Hop $nextHop, LPref $localPref} inLine exist 1"
+            }
+         } else {
+            if {$med!=""} {
+               lappend incompleteRoutesList "{Route: $myIP/$fromPrefix} {Origin $originCode, Next-Hop $nextHop.* MED $med} inLine exist 1"
+            } else {
+#               lappend incompleteRoutesList "{Route: $myIP/$fromPrefix} {Origin $originCode, Next-Hop $nextHop.*} inLine exist 1"
+               lappend incompleteRoutesList "{Route: $myIP/$fromPrefix} {Origin $originCode, Next-Hop $nextHop} inLine exist 1"
+            }
+         }
+         if {$bestRoute==1} {
+            lappend incompleteRoutesList "{Route: $myIP/$fromPrefix, *Peer $peerIpValue, *BEST} {AS-PATH: $peerAsPathList} inLine exist 2"
+         } else {
+            lappend incompleteRoutesList "{Route: $myIP/$fromPrefix, *Peer $peerIpValue} {AS-PATH: $peerAsPathList} inLine exist 2"
+         }
+      }
+   }
+#   result_debug "the constructed incompleteRoutesList $incompleteRoutesList"
+#   result_debug "the constructed incompleteRoutesList1 $incompleteRoutesList1"
+   
+   CheckKeyValue "show bgp neighbor $peerIpValue received-routes detail all" $incompleteRoutesList -comment "BGP neighbor incomplete routes"  -time {s: 0 i: 5 d: 60 f: 60 r};
+   #CheckKeyValue "show bgp neighbor $peerIpValue received-routes detail all" $incompleteRoutesList1 -comment "BGP neighbor incomplete routes correct AS-PATH";
+   unset incompleteRoutesList
+   #unset incompleteRoutesList1
+   
+   report_end_test
+}
+}
+################################################################## 
+# Procedure Name: VerifyCorrectBGPRoutesLearned_12_5
+#   
+# Description:  Verify that specific BGP routes are learned on the
+#               switch.
+#               It uses route attributes in a list along with network ip
+#               to verify the learning
+#     
+#
+# Input args: args
+# Output args: none
+# Typical usage: 
+#      
+#
+# Category Types (SetupSwitch,GetSwitchInfo,SendTraffic,CaptureTraffic,
+#                 SetupTestTool,VerifySwitchOutput,Utility,VerifyTraffic)
+# Category: VerifySwitchOutput
+##################################################################
+proc VerifyCorrectBGPRoutesLearned_12_5 {args} {
+   parse_args VerifyCorrectBGPRoutesLearned_12_5 $args {
+      peerIp "" 
+      peerAsPath ""
+      ipNwList ""
+      originList "0"
+      routesList ""
+      nextHopList ""
+      fromPrefixList ""
+      bestRouteList ""
+      fromPrefixList ""
+      thruPrefixList ""
+      localPrefList ""
+      asTypeList ""
+      asPathList ""
+      medList ""
+      peerType ""
+   }
+
+for {set index 0} {$index<[llength $peerIp]} {incr index} {
+   set peerIpValue [lindex $peerIp $index]
+   set peerAsPathVal [lindex $peerAsPath $index]
+   set ipNwListValue [lindex $ipNwList $index]
+   set fromPrefixListValue [lindex $fromPrefixList $index]
+   set thruPrefixListValue [lindex $thruPrefixList $index]
+   set originListValue [lindex $originList $index]
+   set nextHopListValue [lindex $nextHopList $index]
+   set routesListValue [lindex $routesList $index]
+   set medListValue [lindex $medList $index]
+   set asPathListValue [lindex $asPathList $index]
+   set asTypeListValue [lindex $asTypeList $index]
+   set localPrefListValue [lindex $localPrefList $index]
+   set bestRouteListValue [lindex $bestRouteList $index]
+   set peerTypeValue [lindex $peerType $index]
+   set length [llength $ipNwListValue]
+   set incompleteRoutesList ""
+   set incompleteRoutesList1 ""
+   result_debug "length=$length and asPathListValue $asPathListValue";
+
+   ################################################
+   set subTest "Verify correct routes learned from peer $peerIpValue"
+   ################################################
+   result_h2 "$subTest"
+   report_start_test "$subTest"
+   
+   if {[llength $fromPrefixListValue]!=$length || [llength $thruPrefixListValue]!=$length || [llength $routesListValue]!=$length || \
+       [llength $nextHopListValue]!=$length} {
+      result_error "Error in input args:fromPrefixList,thruPrefixList,routesList,ipNwList,nextHopList should be same length"
+      report_end_test
+      return -1
+   }
+   
+   for {set i 0} {$i<$length} {incr i} {
+      set ipNetwork [lindex $ipNwListValue $i]
+      set fromPrefix [lindex $fromPrefixListValue $i]
+      set thruPrefix [lindex $thruPrefixListValue $i]
+      set originType [lindex $originListValue $i]
+      set nextHop [lindex $nextHopListValue $i]
+      set localPref [lindex $localPrefListValue $i]
+      set numRoutes [lindex $routesListValue $i]
+      set med [lindex $medListValue $i]
+      set bestRoute [lindex $bestRouteListValue $i]
+      set peerTypeVal [lindex $peerTypeValue $i]
+
+      switch -- $originType \
+         "1" {
+             set originCode EGP
+         } "0" {
+             set originCode IGP
+         } "2" {
+             set originCode Incomplete
+         } default {
+             set originCode IGP
+         }
+      
+      if {$peerTypeVal=="i"} {
+         set peerAsPathList ""
+      } else {
+         set peerAsPathList $peerAsPathVal
+      }
+      if {[llength $asPathListValue]!=0} {
+         set aslist [lindex $asPathListValue $i]
+         set asSegmentTypes [lindex $asTypeListValue $i]
+         if {$aslist!=""} {
+            set indice 0
+            foreach asType $asSegmentTypes {
+               if {[llength $asSegmentTypes]>1} {             
+                  lappend peerAsPathList [lindex $aslist $indice]
+               } else {
+                  if {$asType==1} {
+                     set aslist [list $aslist]   ;# in order to properly check the set of AS_SET
+                  }
+                  foreach asl $aslist {
+                     lappend peerAsPathList $asl
+                  }
+               }
+               incr indice
+            }
+         }
+      }
+      for {set j 0} {$j<$numRoutes} {incr j} {
+         set myIP [incrIpField $ipNetwork 3 $j]
+         scan $myIP %d.%d.%d.%d a b c d
+         set myIP [format %d.%d.%d.%d $a $b $c 0]
+         if {$localPref!=""} {
+            if {$med!=""} {
+               lappend incompleteRoutesList "{Route: $myIP/$fromPrefix} {Origin $originCode, Next-Hop $nextHop, LPref $localPref, MED $med} inLine exist 1"
+            } else {
+               lappend incompleteRoutesList "{Route: $myIP/$fromPrefix} {Origin $originCode, Next-Hop $nextHop, LPref $localPref} inLine exist 1"
+            }
+         } else {
+            if {$med!=""} {
+               lappend incompleteRoutesList "{Route: $myIP/$fromPrefix} {Origin $originCode, Next-Hop $nextHop.* MED $med} inLine exist 1"
+            } else {
+               lappend incompleteRoutesList "{Route: $myIP/$fromPrefix} {Origin $originCode, Next-Hop $nextHop} inLine exist 1"
+            }
+         }
+         if {$bestRoute==1} {
+            lappend incompleteRoutesList "{Route: $myIP/$fromPrefix, *Peer $peerIpValue, *BEST} {AS-PATH: $peerAsPathList} inLine exist 3"
+         } else {
+            lappend incompleteRoutesList "{Route: $myIP/$fromPrefix, *Peer $peerIpValue} {AS-PATH: $peerAsPathList} inLine exist 3"
+         }
+      }
+   }
+   
+   CheckKeyValue "show bgp neighbor $peerIpValue received-routes detail all" $incompleteRoutesList -comment "BGP neighbor incomplete routes"  -time {s: 0 i: 5 d: 60 f: 60 r};
+   unset incompleteRoutesList
+   
+   report_end_test
+}
+}

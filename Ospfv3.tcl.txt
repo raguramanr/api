@@ -1,0 +1,91 @@
+
+#############################################################
+# procedure name: getOspfv3DRandBDR
+# 
+# gives the DR and BDR for a given DUT and an interface on it 
+#############################################################
+set ipv6(IPV6_ICMP_HDR_DEF) "3A"
+set ipv6(IPV6_OSPF_HDR_DEF) "59"
+set ipv6(IPV6_HOP_HDR_DEF)  "00"
+set ipv6(IPV6_OSPF_HDR_LEN) "16"
+
+proc getOspfv3DRandBDR {dut interface} {
+
+    global [set dut]_CONNECT
+    Login [set [set dut]_CONNECT]
+
+    lappend parameterList "{^$interface} 5"
+    set state [GetKeyValue "show ospfv3 interfaces " $parameterList]
+    result_debug " AJAY INTERFACE STATE= $state"
+    return $state
+
+
+    #set intf [SendACmd "show ospfv3 interfaces"]
+    #set intf [split $intf \n]
+
+    #foreach line $intf {
+    #   if { [regexp "^$interface.*" $line] == 1} {
+    #        regexp "(^$interface).* +(DOWN|UP|ODR|BDR|DR).*" $line match interf state
+    #        #regexp {(^/$interface).* +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+ +([^ ]+).*} $line match interf state
+    #        break
+    #   }
+    #}
+    #      
+    #if [info exists interf] {
+    #    if [info exists state] {
+    #    result_debug " AJAY st= $state"
+    #         return $state
+    #    } else { 
+    #         result_debug " AJAY NO STATE"
+    #         return -1
+    #    }
+    #}
+}
+
+#############################################################
+# procedure name: checkInterfaceState
+#
+# checks the DR and BDR for a given DUT and an interface on it
+#############################################################
+#proc checkInterfaceState {dut interface state} {
+#
+#       set dutState [getOspfv3DRandBDR $dut $interface]
+#
+#       #if {[regexp -- $state $dutState] == 1} {}
+#       if {[string compare $state $dutState] == 0} {
+#          result_ok "dut= $dut, interface= $interface, state= $state"
+#       } else {
+#          result_error "dut= $dut, interface= $interface, expected state= $state, current state= $dutState"
+#       }
+#}
+
+
+#############################################################
+# procedure name: checkInterfaceState
+#
+# checks the DR and BDR for a given DUT and an interface on it
+#############################################################
+proc checkInterfaceState {dut interface state} {
+
+    global [set dut]_CONNECT
+    Login [set [set dut]_CONNECT]
+
+    lappend parameterList "{$interface.*$state} exist"
+    CheckKeyValue "show ospfv3 interfaces " $parameterList -time {s: 0 i: 5 d: 5 f: 60 r}
+    unset parameterList
+}
+
+
+proc strip8021qTag { rawFrame } {
+   set type [string range $rawFrame 36 40]
+
+   # if tagged, get rid of type and tag field from 36 to 47
+   if {$type == "81 00"} {
+     set leftRawFrame [string range $rawFrame 0 35]
+     set rightRawFrame [string range $rawFrame 48 [string length $rawFrame]]
+     set rawFrame [format "%s%s" $leftRawFrame $rightRawFrame]
+   }
+
+
+  return $rawFrame
+}

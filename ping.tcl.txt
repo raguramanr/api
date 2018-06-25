@@ -1,0 +1,345 @@
+
+##################################################################
+# Procedure Name: check_ping    
+# Description:
+#     	This proc is a wrapper function of CheckPing{}.  Some arguments in
+#	CheckPing{} like gsIpAddr, frameSize are bypassed as defaults in this proc.
+# Input args: {pingIP}{myIP}{portId}{pingStatus}{fd}
+# Output args: None
+# Typical usage:
+#	check_ping $pingIP $sourceIp $portId "pingable" $fd_res
+# Category: VerifyTraffic
+##################################################################  
+proc check_ping {{pingIP "0.0.0.0"}           
+                 {myIP "0.0.0.0"}             
+                 {portId "1"} 	            
+                 {pingStatus "pingable" }      
+                 {fd "NULL"}
+		 {sourceMac  "default" }
+		 {destMac  "default" }} {
+              
+CheckPing -txPortId $portId -sIpAddr $myIP -dIpAddr $pingIP -sourceMac $sourceMac -destMac $destMac\
+               -gsIpAddr 0.0.0.0 -pingStatus $pingStatus -filePt $fd
+
+}
+
+##################################################################
+# Procedure Name: CheckPing    
+# Description:
+#     	Send ICMP echo request (i.e. ping) packet from an ixia port to
+#	the specified destination ip and verify if echo reply is received.  
+# Input args: args
+# Output args: None
+# Typical usage:
+#	CheckPing  -txPortId 1 -rxPortId 2 \
+#            -sIpAddr $clientIP1 -dIpAddr $clientIP2 \
+#            -pingStatus "pingable"
+# Category: VerifyTraffic
+##################################################################
+proc CheckPing {args} {
+   parse_args CheckPing $args {
+     txPortId "1"
+     rxPortId "0"    
+     tag      "none"
+     sourceMac "default"
+     destMac   "default"
+     sIpAddr "127.0.0.1"
+     dIpAddr "127.0.0.1"
+     gsIpAddr "0.0.0.0"
+     psvrGwIpAddr "0.0.0.0"
+     pingStatus "pingable"
+     frameSize "64"
+     filePt "NULL"
+   }
+   global TrafficGen
+   set pPattern "abcd"   
+   
+   if { $gsIpAddr == "0.0.0.0" } {
+      result_debug "Pinging from $sIpAddr to $dIpAddr"
+      set gsIpAddr $dIpAddr 
+   } else { 
+      result_debug "Pinging from $sIpAddr to $dIpAddr via $gsIpAddr"
+   }   
+   if {$rxPortId == $txPortId} {
+      result_error "Invalid port specification: txPortId=rxPortId"
+      return
+   }
+
+   if {$destMac == "default"} {
+
+       #enable protocol server for the Rx port, to reponse to ARP request
+       if {$rxPortId > 0} {
+	if {$TrafficGen != "ept"} {
+	   SaveAndSetProtocolServer $rxPortId $dIpAddr $psvrGwIpAddr ixInfo \
+		   -arpService true -pingService true -tag $tag
+	}
+       }
+       #request mac to send ip packet
+       set destMacAddrTx [SendArpRequest $txPortId $sIpAddr $gsIpAddr $tag]
+       #need to set this to some invalid mac, otherwise ixia send function won't return
+       if {$destMacAddrTx == "NO_ARP_REPLY" } {
+	   set destMacAddrTx "00 00 00 00 00 00"
+       }
+   } else {
+       ;# User specified
+       set destMacAddrTx $destMac
+   }
+   #turn on capturing function on all the monitor ports
+   
+   StartPortsCapture $txPortId
+   
+    #MM 05-10-2011: Added sleep for 40G Ixia ports
+    sleep 5
+
+   result_debug "Sending IP Packet to $dIpAddr from $sIpAddr.  SrcMac:$sourceMac DstMac:$destMacAddrTx"
+   
+   #send icmp packets
+   set frameSent [SendIpFrame -txPortId $txPortId -protocol "icmp" \
+                  -tag $tag -dataPattern $pPattern -frameSize $frameSize \
+                  -sourceMac $sourceMac -destMac $destMacAddrTx -sourceIp $sIpAddr  -destIp $dIpAddr \
+                  -type 8 -code 0 -id 1234 -sequence 5678 ]
+   result_debug "Frame (icmp) sent on portId $txPortId:"
+   result_debug "$frameSent"
+  
+   #retrieve data from ixia
+   #find how many expected packets was received
+
+   set frReceived 0      
+   set rawPortData [GetCapturedFrames $txPortId]
+   foreach frame $rawPortData {
+      puts "Raw: $frame"
+      set messageType [ GetMessageType $frame]
+      switch --  $messageType \
+         "IP_ICMP" {
+         set TTLSent [GetTTL $frameSent]
+         set TTLReceived [GetTTL $frame]
+         # check ttl               
+          result_debug "SourceMac: [GetSourceMacAddress $frame] DestMac: [GetDestMacAddress $frame]"
+          result_debug "SourceIp: [GetSourceIPAddress $frame] DestIp: [GetDestIPAddress $frame]"
+         puts "TTLSent=$TTLSent TTLReceived=$TTLReceived"
+         if {([GetSourceIPAddress $frame] == [GetDestIPAddress $frameSent]) } {
+            set type [GetICMPType $frame] 
+            set code [GetICMPCode $frame] 
+            set id [GetICMPId $frame]
+            set sequence [GetICMPSequence $frame]
+            result_debug "type$type code$code id$id sequence$sequence"
+            if {$type != 0} {
+               result_error "Wanted type = 0 but got type = $type"
+            } elseif {$code != 0 } {
+               result_error "Wanted code = 0 but got code = $code"
+            } elseif {$id != 1234 } {
+               result_error "Wanted id = 1234 but got id = $id"
+            } elseif {$sequence != 5678 } {
+               result_error "Wanted sequence = 1234 but got sequence = $sequence"
+            } else {
+               incr frReceived  1
+            }
+         }
+      }
+      puts "$messageType"
+   }
+   puts "numPacketReceived= $frReceived"   
+
+   #reset protocol server, since it won't be reset when init
+   if {$rxPortId > 0} {
+    if {$TrafficGen != "ept"} {
+      RestoreSavedProtocolServer ixInfo
+	}
+   }
+
+   report_start_test "Pinging $dIpAddr on port $txPortId. Should be $pingStatus"
+
+   if { ($frReceived >= 1 && $frReceived <= 3) && ($pingStatus == "pingable") } {
+      result_ok "Pinging sucessful as expected"
+   } elseif { ($frReceived == 0) && ($pingStatus == "notPingable") } {
+      result_ok "Pinging failed as expected."
+   } elseif { ($frReceived == 0) && ($pingStatus == "pingable") } {
+      result_error "Should be pingable, but receive no response."
+   } elseif { ($frReceived > 0) && ($pingStatus == "notPingable") } {
+      result_error "Should not be pingable but receive reply message."
+   }  else {
+      result_error "Failed pinging check. Unknown reason"
+   }
+   report_end_test  
+    
+}
+
+##################################################################
+# Procedure Name: CheckCLIPing    
+# Description:
+#     	Send a CLI ping command from the DUT and check if ping response
+#	is well received on DUT.  
+# Input args: command {flag} {comment} 
+# Output args: None
+# Typical usage:
+#	CheckCLIPing "ping 30.0.0.30 from 10.0.0.1" "Pingable"
+# Category: VerifyTraffic
+##################################################################
+proc CheckCLIPing {command {flag "pingable"} {comment ""} {sleepTime 7}} {
+
+;# Acceptable ping packet loss tolerance
+set tolerance 50
+global whichDutNow DUTs_info
+
+set tmpTime [clock seconds]
+set fd_in [open "Tmp/tmp_${tmpTime}_[pid].cfg" "w"]
+set ret 1
+#Adding sleep for 5 seconds for timing issue
+sleep 5
+send "$command\r"
+result_debug "$command\r"
+sleep $sleepTime
+
+if [regexp "cont.*" $command] {
+    result_debug "Sending Ctrl-C"
+    ;# Send Ctrl-C
+    send "\x03"
+}
+
+send "\r"
+expect "$command"
+expect "# "
+SendACmd ""
+
+
+set exp_out_buf ""
+regsub -all "\n\r" $expect_out(buffer) "\n" exp_out_buf
+regsub -all "\t" $exp_out_buf " " exp_out_buf
+if {$fd_in != "NULL" } { puts -nonewline $fd_in $exp_out_buf }
+result_pre $exp_out_buf      
+close $fd_in
+
+lappend parameterList "{loss} -1"
+set value [GetKeyValue "Tmp/tmp_${tmpTime}_[pid].cfg" $parameterList]
+unset parameterList
+
+if {[CompareRelease [GetVersion DUT${whichDutNow}] 12.2.0.3]>=0} {
+   lappend parameterList "{received} -2"
+} else {
+   lappend parameterList "{received} -1"
+}
+
+set packetReceived [GetKeyValue "Tmp/tmp_${tmpTime}_[pid].cfg" $parameterList]
+unset parameterList
+
+#puts "value: $value"
+set packetLoss "Not Found"
+scan $value "%d" packetLoss
+puts "packetLoss: $packetLoss"
+
+report_start_test "Checking <$command> with flag $flag $comment"
+   if {$flag == "pingable" } {
+      if {$packetLoss > $tolerance || $packetReceived == 0} {    ;# Increased tolerance for exos
+         set ret 0
+         result_error "Wanted pingable with packet loss of 0%, but got $packetLoss %"
+      } else {
+         set ret 1
+         result_ok "Got acceptable $packetLoss % packet loss - pingable (Tolerance $tolerance %)"
+      }
+   } elseif {$flag == "notPingable" } {
+      if {$packetLoss != 100 && $packetReceived != 0} {
+         set ret 0
+         result_error "Wanted notPingable with packet loss of 100%, but got $packetLoss %"
+      } else {
+         set ret 1
+         result_ok "Got 100% packet loss as wanted - not pingable"
+      }
+   } else { result_error "Unknown flag: $flag" }
+report_end_test
+
+file delete "Tmp/tmp_${tmpTime}_[pid].cfg"
+return $ret
+}
+
+proc CheckCLIPing6 {command {flag "pingable"} {comment ""} } {
+
+set packetLoss [cliPing $command]
+if { $flag == "pingable" && $packetLoss > 25 } {
+   result_debug "*** Retry : $command with flag $flag"
+   set packetLoss [cliPing $command]
+}
+
+if  { $flag == "pingable" && $packetLoss > 25 } {
+   if  { [string compare [lindex $command 1]  "ipv6"] == 0 } {
+     SendACmd "rtlookup ipv6 [lindex $command 2]"
+   }
+}
+
+report_start_test "Checking <$command> with flag $flag $comment"
+   if {$flag == "pingable" } {
+      if {$packetLoss > 25 } {
+         result_error "Wanted pingable with packet loss of  <= 25%, but got $packetLoss %"
+      } else {
+         result_ok "Got $packetLoss% packet loss as wanted - pingable"
+      }
+   } elseif {$flag == "notPingable" } {
+      if {$packetLoss != 100 } {
+         result_error "Wanted notPingable with packet loss of 100%, but got $packetLoss %"
+      } else {
+         result_ok "Got 100% packet loss as wanted - not pingable"
+      }
+   } else { result_error "Unknown flag: $flag" }
+report_end_test
+
+}
+
+##################################################################
+# Procedure Name: ixCheckPing
+# Description:
+#       Send a ping request command from ixia to DUT and awaits ping
+#        response, this proc is similar to CheckPing. But 
+#        could be used if the port is  part of any protocol control vlan 
+#        (where flooding of control packets happen).  
+# Input args: portId,sourceIp, destIp, tag 
+# Output args: None
+# Typical usage: ixCheckPing  "1" "10.0.0.5" "10.0.0.1" 
+#       
+# Category: VerifyTraffic
+##################################################################
+
+proc ixCheckPing {{portId 1} sourceIp destIp {tag ""}} {
+MapIxiaPortId $portId chas card port
+if ![port isValidFeature $chas $card $port portFeatureIxRouter] {
+   result_error "the card doesn't support linux operation"
+   return -1
+}
+set command "/bin/ping -c 6 -I $sourceIp $destIp"
+
+if {$tag == ""} {
+   set tag none
+}
+EnableProtocolServer $portId $sourceIp $tag true
+
+if [pcpuCommandService add $chas $card $port $command] {
+   result_error "command could not be added to the port"
+   return -1
+}
+
+ClearPortsStats $portId
+
+if [pcpuCommandService execute] {
+   result_error "command could not be executed for the port"
+   return -1
+}
+
+set getVal [pcpuCommandService getFirst]
+if !$getVal {
+   set Command [pcpuCommandService cget -command]
+   set output [pcpuCommandService cget -output]
+   result_debug "the command given is $Command"
+   result_debug "the output for the given command is $output"
+}
+exSleep 2
+report_start_test "verify the ping response"
+stat get statAllStats $chas $card $port
+set PingResponse [stat cget -rxPingReply]
+result_debug "Number of ping response packets are $PingResponse"
+if {$PingResponse >= 3} {
+   result_ok "received ping response for sent requests"
+} else {
+   result_error "problems with ping from port"
+}
+report_end_test
+DisableProtocolServer $portId $sourceIp
+}
+

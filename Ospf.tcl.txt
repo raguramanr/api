@@ -1,0 +1,2409 @@
+
+################################################################## 
+# Procedure Name: GetOSPFRouterID
+#   
+# Description: proc that returns the ip address of the router id from a ospf control packet
+#
+# Input args: rawFrame
+# Output args: none
+# Return value: Router ip address or -1 on error
+# Typical usage:
+#               set RouterID [GetOSPFRouterID $dataFrame]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc GetOSPFRouterID { rawFrame } {
+   set type [string range $rawFrame 36 40]
+   switch -- $type \
+      "08 00" {
+      return [GetIPAddressOffset $rawFrame 114]          
+   } default {
+      result_debug "Unknown Message Type: $type"
+      #just return the type
+      return -1
+   }
+}
+
+################################################################## 
+# Procedure Name: GetOSPFPktLength
+#   
+# Description: proc that returns the length of a ospf packet in a ospf control packet
+#
+# Input args: rawFrame
+# Output args: none
+# Return value: short integer or -1 on error
+# Typical usage:
+#          set ospfPktLength [GetOSPFPktLength $rawFrame]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc GetOSPFPktLength { rawFrame } {
+   set type [string range $rawFrame 36 40]
+   # if tagged, get rid of type and tag field from 36 to 47
+   if {$type == "81 00"} {
+     set leftRawFrame [string range $rawFrame 0 35] 
+     set rightRawFrame [string range $rawFrame 48 [string length $rawFrame]] 
+     set rawFrame [format "%s%s" $leftRawFrame $rightRawFrame]
+   }
+   set type [string range $rawFrame 36 40]
+   switch -- $type \
+      "08 00" {
+      return [GetShortIntOffset $rawFrame 108]
+   } default {
+      result_debug "Unknown Message Type: $type"
+      #just return the type
+      return -1
+   }
+}
+
+################################################################## 
+# Procedure Name: GetOSPFAreaID
+#   
+# Description: proc that returns the area ip address in a ospf control packet
+#
+# Input args: rawFrame
+# Output args: none
+# Return value: Ip address  or -1 on error
+# Typical usage:
+#           set AreaID [GetOSPFAreaID $dataFrame]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc GetOSPFAreaID { rawFrame } {
+   set type [string range $rawFrame 36 40]
+   switch -- $type \
+      "08 00" {
+      return [GetIPAddressOffset $rawFrame 126]          
+   } default {
+      result_debug "Unknown Message Type: $type"
+      #just return the type
+      return -1
+   }
+}
+
+################################################################## 
+# Procedure Name: GetOSPFAuthType
+#   
+# Description: proc that returns the authentication type in a ospf control packet
+#
+# Input args: rawFrame
+# Output args: none
+# Return value: short integer or -1 on error
+# Typical usage:
+#          set authType [GetOSPFAuthType $dataFrame]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc GetOSPFAuthType { rawFrame } {
+   set type [string range $rawFrame 36 40]
+   switch -- $type \
+      "08 00" {
+      return [GetShortIntOffset $rawFrame 144]          
+   } default {
+      result_debug "Unknown IP Type: $type"
+      #just return the type
+      return -1
+   }
+}
+
+################################################################## 
+# Procedure Name: GetOSPFAuthentication
+#   
+# Description: proc that returns the authentication string from a ospf control packet
+#
+# Input args: rawFrame
+# Output args: none
+# Return value: 5 byte hex value or -1 on error
+# Typical usage:
+#              set auth [GetOSPFAuthentication $dataFrame]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc GetOSPFAuthentication { rawFrame } {
+   set type [string range $rawFrame 36 40]
+   switch -- $type \
+      "08 00" {
+      return [string range $rawFrame 150 172]         
+   } default {
+      result_debug "Unknown IP Type: $type"
+      #just return the type
+      return -1
+   }
+}
+
+################################################################## 
+# Procedure Name: GetOSPFNetworkMask
+#   
+# Description: proc that returns the ip address format network mask from a ospf control packet
+#
+# Input args: rawFrame
+# Output args: none
+# Return value: IP address or -1 on error
+# Typical usage:
+#               set NetworkMask [GetOSPFNetworkMask $dataFrame]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc GetOSPFNetworkMask { rawFrame } {
+   set type [string range $rawFrame 36 40]
+   switch -- $type \
+      "08 00" {
+      return [GetIPAddressOffset $rawFrame 174]         
+   } default {
+      result_debug "Unknown IP Type: $type"
+      #just return the type
+      return -1
+   }
+}
+
+################################################################## 
+# Procedure Name: GetOSPFNumberOfAdsInLsa
+#   
+# Description: proc that returns the number of lsas in a ospf control packet
+#
+# Input args: rawFrame
+# Output args: none
+# Return value: integer value or -1 on error
+# Typical usage:
+#          GetOSPFNumberOfAdsInLsa $rawFrame
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc GetOSPFNumberOfAdsInLsa { rawFrame } {
+   set type [string range $rawFrame 36 40]
+   # if tagged, get rid of type and tag field from 36 to 47
+   if {$type == "81 00"} {
+     set leftRawFrame [string range $rawFrame 0 35] 
+     set rightRawFrame [string range $rawFrame 48 [string length $rawFrame]] 
+     set rawFrame [format "%s%s" $leftRawFrame $rightRawFrame]
+   }
+   set msgType [GetMessageType $rawFrame]
+   if {$msgType == "IP_OSPFv2_LINK_UPDATE"} {
+      return [GetIntOffset $rawFrame 174]
+   } else {
+      return -1
+   }
+}
+
+################################################################## 
+# Procedure Name: GetOSPFHelloInterval
+#   
+# Description: proc that returns the hello interval from a hello packet
+#
+# Input args: rawFrame
+# Output args: none
+# Return value: Short integer or -1 on error
+# Typical usage:
+#          set HelloInterval [GetOSPFHelloInterval $dataFrame]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc GetOSPFHelloInterval { rawFrame } {
+   set type [string range $rawFrame 36 40]
+   switch -- $type \
+      "08 00" {
+      return [GetShortIntOffset $rawFrame 186]         
+   } default {
+      result_debug "Unknown IP Type: $type"
+      #just return the type
+      return -1
+   }
+}
+
+################################################################## 
+# Procedure Name: GetOSPFRouterPriority
+#   
+# Description: proc that returns the ospf router priority from a hello packet
+#
+# Input args: rawFrame
+# Output args: none
+# Return value: Byte value or -1 on error
+# Typical usage:
+#          set RouterPriority [GetOSPFRouterPriority $dataFrame]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc GetOSPFRouterPriority { rawFrame } {
+   set type [string range $rawFrame 36 40]
+   switch -- $type \
+      "08 00" {
+      return [GetByteOffset $rawFrame 195]         
+   } default {
+      result_debug "Unknown IP Type: $type"
+      #just return the type
+      return -1
+   }
+}
+
+################################################################## 
+# Procedure Name: GetOSPFRouterDeadInterval
+#   
+# Description: proc that returns the ospf router dead interval from a hello packet
+#
+# Input args: rawFrame
+# Output args: none
+# Return value: Integer or -1 on error
+# Typical usage:
+#           set RouterDeadInterval [GetOSPFRouterDeadInterval $dataFrame]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc GetOSPFRouterDeadInterval { rawFrame } {
+   set type [string range $rawFrame 36 40]
+   switch -- $type \
+      "08 00" {
+      return [GetIntOffset $rawFrame 198]         
+   } default {
+      result_debug "Unknown IP Type: $type"
+      #just return the type
+      return -1
+   }
+}
+
+################################################################## 
+# Procedure Name: GetOSPFDesignatedRouter
+#   
+# Description: proc that returns the ip address of DR from a hello packet
+#
+# Input args: rawFrame
+# Output args: none
+# Return value: IP address or -1 on error
+# Typical usage:
+#           set DesignatedRouter [GetOSPFDesignatedRouter $dataFrame]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc GetOSPFDesignatedRouter { rawFrame } {
+   set type [string range $rawFrame 36 40]
+   switch -- $type \
+      "08 00" {
+      return [GetIPAddressOffset $rawFrame 210]         
+   } default {
+      result_debug "Unknown IP Type: $type"
+      #just return the type
+      return -1
+   }
+}
+
+################################################################## 
+# Procedure Name: GetOSPFBackupRouter
+#   
+# Description: proc that returns the ip address of BDR from a hello packet
+#
+# Input args: rawFrame
+# Output args: none
+# Return value: IP address or -1 on error
+# Typical usage:
+#           set BackupRouter [GetOSPFBackupRouter $dataFrame]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc GetOSPFBackupRouter { rawFrame } {
+   set type [string range $rawFrame 36 40]
+   switch -- $type \
+      "08 00" {
+      return [GetIPAddressOffset $rawFrame 222]         
+   } default {
+      result_debug "Unknown IP Type: $type"
+      #just return the type
+      return -1
+   }
+}
+
+################################################################## 
+# Procedure Name: GetOSPFNeighbor
+#   
+# Description: proc that returns the ip address of ospf neighbor from a hello packet
+#
+# Input args: rawFrame
+# Output args: none
+# Return value: IP address or -1 on error
+# Typical usage:
+#           set NeighborList [GetOSPFNeighbor $dataFrame]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc GetOSPFNeighbor { rawFrame } {
+   set type [string range $rawFrame 36 40]
+   switch -- $type \
+      "08 00" {
+      set length [GetShortIntOffset $rawFrame 108]
+      puts "PacketLength: $length"
+      if { $length == 44} { return "" }
+      return [GetIPAddressOffset $rawFrame 234]         
+   } default {
+      result_debug "Unknown IP Type: $type"
+      #just return the type
+      return -1
+   }
+}
+
+################################################################## 
+# Procedure Name: GetOSPFPacketLength
+#   
+# Description: proc that returns the length of ospf packet from a ospf control packet
+#
+# Input args: rawFrame
+# Output args: none
+# Return value: short integer or -1 on error
+# Typical usage:
+#                  set length [GetOSPFPacketLength $dataFrame]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc GetOSPFPacketLength { rawFrame } {
+   set type [string range $rawFrame 36 40]
+   switch -- $type \
+      "08 00" {
+      return [GetShortIntOffset $rawFrame 108]     
+   } "81 00" {
+      return [GetShortIntOffset $rawFrame 120]
+   } default {
+      result_debug "Unknown IP Type: $type"
+      #just return the type
+      return -1
+   }
+}
+
+################################################################## 
+# Procedure Name: GetOSPFControlBits
+#   
+# Description: proc that returns the control bits from a hello/dd ospf packet
+#
+# Input args: rawFrame
+# Output args: none
+# Return value: hex value of 2 bytes or -1 on error
+# Typical usage:
+#                  set length [GetOSPFPacketLength $dataFrame]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc GetOSPFControlBits { rawFrame } {
+   set type [GetMessageType $rawFrame]
+   switch -- $type \
+      "IP_OSPFv2_DATABASE" {
+      return [string range $rawFrame 183 184]
+   } "IP_OSPFv2_HELLO" {
+      return [string range $rawFrame 192 193]
+   } default {
+      result_debug "Unknown IP Type: $type"
+      #just return the type
+      return -1
+   }
+}
+
+################################################################## 
+# Procedure Name: GetOSPFSequenceNumber
+#   
+# Description: proc that returns the list of lsa sequence numbers from update/linkack/dd ospf
+#              control packets
+#
+# Input args: rawFrame
+# Output args: none
+# Return value: List of integers or -1 on error
+# Typical usage:
+#         set slaveSeqNum [GetOSPFSequenceNumber $dataFrame]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc GetOSPFSequenceNumber { rawFrame } {
+   set type [GetMessageType $rawFrame]
+   set incrCount 0
+   switch -- $type \
+      "IP_OSPFv2_LINK_UPDATE" {
+         set LSUTypeList [GetOspfOptions $rawFrame "LSUType"]
+         #result_debug "the LSUTypeList is $LSUTypeList and numads are [GetOSPFNumberOfAdsInLsa $rawFrame]"
+         set startLoc 222
+         for {set i 0} {$i<[GetOSPFNumberOfAdsInLsa $rawFrame]} {incr i} {
+            if {[lindex $LSUTypeList $i]==1} {
+               set numLinks [GetNumLinks $rawFrame 1]
+               #set numLinks [GetShortIntOffset $rawFrame [expr $startLoc+30]]
+               #result_debug "the numLinks is $numLinks"
+               #incr count is routerlinkheader(24)+numlinks*eachlinkad(36)+nextrouterlinkheader(36)
+               set incrCount [expr 36+[expr $numLinks*36]+36]
+            } elseif {[lindex $LSUTypeList $i]==2} {
+               # incrCount by 32*3+3*4=108 for a network link
+               set incrCount 108
+            } else {
+	       result_debug "GetOSPFSequenceNumber"
+	       result_debug "i= $i, LSUTypeList= $LSUTypeList"
+            }
+            lappend seqNumList [GetIntOffset $rawFrame $startLoc]
+            set startLoc [expr $startLoc+$incrCount]
+            #result_debug "the seqNumList $seqNumList and new startLoc is $startLoc"
+         }
+         return $seqNumList
+      } "IP_OSPFv2_LINK_ACK" {
+         #result_debug "the LSUTypeList is $LSUTypeList and numads are [GetOSPFNumberOfAdsInLsa $rawFrame]"
+         for {set startLoc 210} {[expr $startLoc + 1] <= [expr [string length $rawFrame]-12]} {incr startLoc 60} {
+            lappend seqNumList [GetIntOffset $rawFrame $startLoc]
+            #result_debug "the seqNumList $seqNumList"
+         }
+         return $seqNumList
+      } "IP_OSPFv2_DATABASE" {
+         return [GetIntOffset $rawFrame 186]
+      } default {
+         result_debug "Unknown Message Type: $type"
+         #just return the type
+         return -1
+      }
+}
+
+################################################################## 
+# Procedure Name: GetLSALengths
+#   
+# Description: proc that returns the lsa lengh for link update ospf control packets
+#
+# Input args: rawFrame
+# Output args: none
+# Return value: List of integers or -1 on error
+# Typical usage:
+#          set lsaLength [GetLSALengths $rawFrame]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc GetLSALengths { rawFrame } {
+   set type [GetMessageType $rawFrame]
+   set incrCount 0
+   switch -- $type \
+      "IP_OSPFv2_LINK_UPDATE" {
+         set LSUTypeList [GetOspfOptions $rawFrame "LSUType"]
+         #result_debug "the LSUTypeList is $LSUTypeList and numads are [GetOSPFNumberOfAdsInLsa $rawFrame]"
+         if {[string range $rawFrame 36 40]=="08 00"} {
+            set startLoc 240
+         } elseif {[string range $rawFrame 36 40]=="81 00"} {
+            set startLoc 252
+         }
+         set lengthList ""
+         for {set i 0} {$i<[GetOSPFNumberOfAdsInLsa $rawFrame]} {incr i} {
+            if {[lindex $LSUTypeList $i]==1} {
+               set numLinks [GetNumLinks $rawFrame 1]
+               #set numLinks [GetShortIntOffset $rawFrame [expr $startLoc+30]]
+               #result_debug "the numLinks is $numLinks"
+               #incr count is routerlinkheader(24)+numlinks*eachlinkad(36)+nextrouterlinkheader(36)
+               set incrCount [expr 36+[expr $numLinks*36]+36]
+            } elseif {[lindex $LSUTypeList $i]==2} {
+               # incrCount by 32*3+3*4=108 for a network link
+               set incrCount 108
+            } else {
+	       result_debug "GetLSALength"
+	       result_debug "i= $i, LSUTypeList= $LSUTypeList"
+            }
+            lappend lengthList [GetShortIntOffset $rawFrame $startLoc]
+            set startLoc [expr $startLoc+$incrCount]
+            #result_debug "the seqNumList $seqNumList and new startLoc is $startLoc"
+         }
+         return $lengthList
+      } default {
+         result_debug "Unknown Message Type: $type"
+         #just return the type
+         return -1
+      }
+}
+
+################################################################## 
+# Procedure Name: GetOSPFCheckSumValue
+#   
+# Description: proc that returns the checksum of packet for link update ospf control packets
+#
+# Input args: rawFrame
+# Output args: none
+# Return value: list of hex integers or -1 on error
+# Typical usage:
+#           set checkSum [GetOSPFCheckSumValue $updatePkt]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc GetOSPFCheckSumValue { rawFrame } {
+   set type [GetMessageType $rawFrame]
+   set incrCount 0
+   result_debug "the type:$type"
+   switch -- $type \
+      "IP_OSPFv2_LINK_UPDATE" {
+         set LSUTypeList [GetOspfOptions $rawFrame "LSUType"]
+         #result_debug "the LSUTypeList is $LSUTypeList and numads are [GetOSPFNumberOfAdsInLsa $rawFrame]"
+         set startLoc 234
+         for {set i 0} {$i<[GetOSPFNumberOfAdsInLsa $rawFrame]} {incr i} {
+            if {[lindex $LSUTypeList $i]==1} {
+               set numLinks [GetNumLinks $rawFrame 1]
+               #set numLinks [GetShortIntOffset $rawFrame [expr $startLoc+18]]
+               #result_debug "the numLinks is $numLinks"
+               #incr count is routerlinkheader(24)+numlinks*eachlinkad(36)+nextrouterlinkheader(36)
+               set incrCount [expr 36+[expr $numLinks*36]+36]
+            } elseif {[lindex $LSUTypeList $i]==2} {
+               # incrCount by 32*3+3*4=108 for a network link
+               set incrCount 108
+            } else {
+	       result_debug "GetCheckSumValue"
+	       result_debug "i= $i, LSUTypeList= $LSUTypeList"
+            }
+            lappend checkSumList [string range $rawFrame $startLoc [expr $startLoc+4]]
+            set startLoc [expr $startLoc+$incrCount]
+            #result_debug "the checkSumList $checkSumList and new startLoc is $startLoc"
+         }
+         return $checkSumList
+      } default {
+         result_debug "Unknown Message Type: $type"
+         #just return the type
+         return -1
+      }
+}
+
+################################################################## 
+# Procedure Name: GetOspfOptions
+#   
+# Description: This proc is used to return OSPF packet options
+#
+# Input args: rawFrame, optionName
+# optionName: LSRType: returns the list of link state type in Link State Request packet
+#             LSUType: returns the list of link state type in Link State Update packet
+#             LSRID: Returns the list of link state id in Link State Request packet
+#             LSUID: Returns the list of link state id in Link State Update packet
+#             RAdvertsingRouter: Returns the list of advertising router in Link State Request Packet
+#             UAdvertsingRouter: Returns the list of advertising router in Link State Update Packet
+# Output args: none
+# Return value: List of option value or -1 on error
+# Typical usage:
+#           GetOspfOptions $rawFrame "LSUType"
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc GetOspfOptions { rawFrame optionName } {
+   set type [string range $rawFrame 36 40]
+   # if tagged, get rid of type and tag field from 36 to 47
+   if {$type == "81 00"} {
+     set leftRawFrame [string range $rawFrame 0 35] 
+     set rightRawFrame [string range $rawFrame 48 [string length $rawFrame]] 
+     set rawFrame [format "%s%s" $leftRawFrame $rightRawFrame]
+   }
+
+   switch -- $optionName {
+      "LSRType" {
+         set lsTypeList ""
+         for {set startLoc 174} {[expr $startLoc + 10] <= [expr [string length $rawFrame]-12]} {incr startLoc 36} {
+            lappend lsTypeList [string trimleft [string range $rawFrame $startLoc [expr $startLoc + 10]] " 0"]
+            #result_debug "the rawFrame $rawFrame and lsTypeList:$lsTypeList and string:[string range $rawFrame $startLoc [expr $startLoc + 10]]"
+         }
+         return $lsTypeList
+      }
+      "LSUType" {
+         set lsUTypeList ""
+         set startLoc 195
+         set incrVal 0
+         for {set i 0} {$i<[GetOSPFNumberOfAdsInLsa $rawFrame]} {incr i} {
+            set lsUTypeValue [string trimleft [string range $rawFrame $startLoc [expr $startLoc + 1]] " 0"]
+            lappend lsUTypeList $lsUTypeValue
+            if {$lsUTypeValue==1} {
+               set numLinks [GetNumLinks $rawFrame 1]
+               #incr count is routerlinkheader(24)+numlinks*eachlinkad(36)+nextrouterlinkheader(36)
+               set incrVal [expr 36+[expr $numLinks*36]+36]
+               #set incrVal 108
+            } elseif {$lsUTypeValue==2} {
+              #set incrVal 105
+              set incrVal 84
+           } elseif {$lsUTypeValue==3} {
+              set incrVal 84
+           } elseif {$lsUTypeValue==7} {
+              set incrVal 108
+           }
+           set startLoc [expr $startLoc+$incrVal]
+         }
+         return $lsUTypeList
+      }
+      "LSRID" {
+         set lsIdList ""
+         for {set startLoc 186} {[expr $startLoc + 10] <= [expr [string length $rawFrame]-12]} {incr startLoc 36} {
+            lappend lsIdList [GetIPAddressOffset $rawFrame $startLoc]
+         }
+         return $lsIdList
+      }
+      "LSUID" {
+         set lsUIdList ""
+         set startLoc 198
+         set incrVal 0
+
+         for {set i 0} {$i<[GetOSPFNumberOfAdsInLsa $rawFrame]} {incr i} {
+            set lsUId [GetIPAddressOffset $rawFrame $startLoc]
+            set lsUTypeValue [lindex [GetOspfOptions $rawFrame "LSUType"] $i]
+            lappend lsUIdList $lsUId
+            if {$lsUTypeValue==1} {
+               set numLinks [GetNumLinks $rawFrame 1]
+               #incr count is routerlinkheader(24)+numlinks*eachlinkad(36)+nextrouterlinkheader(36)
+               set incrVal [expr 36+[expr $numLinks*36]+36]
+            } elseif {$lsUTypeValue==2} {
+              #set incrVal 144
+              set incrVal 108
+           } elseif {$lsUTypeValue==3} {
+              set incrVal 84
+           } elseif {$lsUTypeValue==7} {
+              set incrVal 108
+           }
+           result_debug "the lsUTypeValue $lsUTypeValue and incrVal $incrVal and lsUIdList $lsUIdList"
+           set startLoc [expr $startLoc+$incrVal]
+         }
+         return $lsUIdList
+      }
+      "UAdvertisingRouter" {
+         set advURouterList ""
+         set startLoc 210
+         set incrVal 0
+         
+         for {set i 0} {$i<[GetOSPFNumberOfAdsInLsa $rawFrame]} {incr i} {
+            set advURouter [GetIPAddressOffset $rawFrame $startLoc]
+            set lsUTypeValue [lindex [GetOspfOptions $rawFrame "LSUType"] $i]            
+            lappend advURouterList $advURouter
+            if {$lsUTypeValue==1} {
+               set numLinks [GetNumLinks $rawFrame 1]
+               #incr count is routerlinkheader(24)+numlinks*eachlinkad(36)+nextrouterlinkheader(36)
+               set incrVal [expr 36+[expr $numLinks*36]+36]
+            } elseif {$lsUTypeValue==2} {
+              #set incrVal 144
+              set incrVal 108
+           } elseif {$lsUTypeValue==3} {
+              set incrVal 84
+           } elseif {$lsUTypeValue==7} {
+              set incrVal 108
+           }
+           set startLoc [expr $startLoc+$incrVal]
+         }
+         return $advURouterList
+      }
+      "LSUAGE" {
+         set lsUAgeList ""
+         set startLoc 186
+         set incrVal 0
+         for {set i 0} {$i<[GetOSPFNumberOfAdsInLsa $rawFrame]} {incr i} {
+            set lsUAge [string trimleft [string range $rawFrame $startLoc [expr $startLoc+4]] " 0"]
+            set lsUType [lindex [GetOspfOptions $rawFrame "LSUType"] $i]
+            lappend lsUAgeList $lsUAge
+            if {$lsUType==1} {
+               set numLinks [GetNumLinks $rawFrame 1]
+               #incr count is routerlinkheader(24)+numlinks*eachlinkad(36)+nextrouterlinkheader(36)
+               set incrVal [expr 36+[expr $numLinks*36]+36]
+               #set incrVal 108
+            } elseif {$lsUType==2} {
+              #set incrVal 105
+              #set incrVal 84
+              set incrVal 96
+           }
+           set startLoc [expr $startLoc+$incrVal]
+         }
+         return $lsUAgeList
+      }
+      "RAdvertisingRouter" {
+         set advRouterList ""
+         for {set startLoc 198} {[expr $startLoc + 10] <= [expr [string length $rawFrame]-12]} {incr startLoc 36} {
+            lappend advRouterList [GetIPAddressOffset $rawFrame $startLoc]
+         }
+         return $advRouterList
+      } default {
+         result_debug "Unknown optionName supplied: $optionName"
+         #just return the type
+         return -1
+      }
+   }
+}
+
+################################################################## 
+# Procedure Name: VerifyLSAInfo
+#   
+# Description:
+#     This proc is used to verify the Router link and network link info in an link state update
+#     for router link lsa: It verifies the linkid, link data and link type info for stub/transit network
+#     for network link lsa: It verifies the attached routers and subnet mask
+#     note that it does not verify the info correctness but it verifies the info format
+#     and existence
+#
+# Assumptions:
+#  1. This works considering the subnet mask 255.255.2255.255 and maximum
+#     interface Ip is a.b.c.4.
+#  2. DRIP in the network has to be correct when passed to this proc
+# Input args: rawFrame DRIP
+# Output args: None.
+# Return value: -1 only on error
+# Typical usage:
+#           VerifyLSAInfo $rawFrame $dsIpAddress
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc VerifyLSAInfo {rawFrame DRIP {LinkType 1}} {
+   set LSUTypeList [GetOspfOptions $rawFrame "LSUType"]
+   result_debug "the LSUTypeList $LSUTypeList"
+   for {set count 1} {$count<=[llength $LSUTypeList]} {incr count} {
+      switch -- [lindex $LSUTypeList [expr $count-1]] \
+      "1" {
+         if {$LinkType==1} {
+         set numLinks [GetNumLinks $rawFrame $count $LSUTypeList]
+         result_debug "the numLinks $numLinks"
+         for {set i 1} {$i<=$numLinks} {incr i} {
+            set routerLinkInfo [GetRouterLinkInfo $rawFrame $count $i]
+            result_debug "the routerLinkInfo $routerLinkInfo"
+            set linkId [lindex $routerLinkInfo 0]
+            set linkData [lindex $routerLinkInfo 1]
+            set linkType [lindex $routerLinkInfo 2]
+            
+            # Verify the router link for stub/transit networks
+#            result_debug "the linkType is $linkType, linkId $linkId, linkData $linkData"
+            
+            if {$linkType==3} {     ;# Stub network
+               ################################################
+               set subTest "Router LSA ($count) for link $i, Id:$linkId, Data:$linkData, Type:$linkType (stub network)"
+               ################################################
+               result_h2 "$subTest"
+               report_start_test "$subTest"
+
+               scan $linkId {%d.%d.%d.%d} a b c d
+               if {($d==0) && ($linkData=="255.255.255.0")} {
+                  result_ok "Correct Stub Network info:LinkId:$linkId, LinkData:$linkData, linkType:$linkType (stub network), PASS"
+               } else {
+                  result_error "Wrong Stub Network info:LinkId:$linkId, LinkData:$linkData, linkType:$linkType (stub network), FAIL"
+               }
+            } elseif {$linkType==2} {   ;# Transit network
+               ################################################
+               set subTest "Router LSA ($count) for link $i, Id:$linkId, Data:$linkData, Type:$linkType (Transit network)"
+               ################################################
+               result_h2 "$subTest"
+               report_start_test "$subTest"
+
+               scan $linkData {%d.%d.%d.%d} a b c d
+#               result_debug "the linkId is $linkId and d is $d"
+               if {($linkId==$DRIP) && ($d<=4) && ($d>0)} {
+                  result_ok "Correct transit Network info:LinkId:$linkId, LinkData:$linkData, linkType:$linkType (Transit network), PASS"
+               } else {
+                  result_error "Wrong transit Network info:LinkId:$linkId, LinkData:$linkData, linkType:$linkType (Transit network), FAIL"
+               }
+            } elseif {$linkType==1} {     ;# P2P network
+               ################################################
+               set subTest "Router LSA ($count) for link $i, Id:$linkId, Data:$linkData, Type:$linkType (Point to Point network)"
+               ################################################
+               result_h2 "$subTest"
+               report_start_test "$subTest"
+
+               # Match linkData notlinkId for p2p link
+               if {$linkData==$DRIP} {
+                  result_ok "Correct P2P Network info:LinkId:$linkId, LinkData:$linkData, linkType:$linkType (P2P network), PASS"
+               } else {
+                  result_error "Wrong P2P Network info:LinkId:$linkId, LinkData:$linkData, linkType:$linkType (P2P Netowkr), FAIL"
+               }
+            } else {
+               ################################################
+               set subTest "Router LSA ($count) for link $i, Invalid info"
+               ################################################
+               result_h2 "$subTest"
+               report_start_test "$subTest"
+               result_error "Invlaid linkType encountered $linkType"
+            }
+            report_end_test
+         }
+         }
+      } "2" {
+         if {$LinkType==2} {
+         set LSUId [GetOspfOptions $rawFrame "LSUID"]
+         set LSUAdvertRouter [GetOspfOptions $rawFrame "UAdvertisingRouter"]
+
+         set advRouter [lindex $LSUAdvertRouter [expr $count-1]]
+         set lsuid [lindex $LSUId [expr $count-1]]
+         ################################################
+         set subTest "Network LSA for linkId:$LSUId, Advertising router:$LSUAdvertRouter"
+         ################################################
+         result_h2 "$subTest"
+         report_start_test "$subTest"
+         if {[regexp -nocase $DRIP $advRouter]} {
+            result_ok "Correct Network info:LinkStateId:$lsuid,adv router:$advRouter, PASS"
+         } else {
+            result_error "Wrong Network info:LinkStateId:$lsuid,adv router:$advRouter, FAIL"
+         }
+         report_end_test
+      }
+      } "3" {
+         if {$LinkType==3} {
+         set LSUId [GetOspfOptions $rawFrame "LSUID"]
+         set LSUAdvertRouter [GetOspfOptions $rawFrame "UAdvertisingRouter"]
+
+         set advRouter [lindex $LSUAdvertRouter [expr $count-1]]
+         set lsuid [lindex $LSUId [expr $count-1]]
+         ################################################
+         set subTest "Summary-net LSA for linkId:$lsuid, Advertising router:$advRouter"
+         ################################################
+         result_h2 "$subTest"
+         report_start_test "$subTest"
+         if {[regexp -nocase $DRIP $advRouter]} {
+            result_ok "Correct Network info:LinkStateId:$lsuid,adv router:$advRouter, PASS"
+         } else {
+            result_error "Wrong Network info:LinkStateId:$lsuid,adv router:$advRouter, FAIL"
+         }
+         report_end_test
+         }
+      } "4" {
+         if {$LinkType==4} {
+         set LSUId [GetOspfOptions $rawFrame "LSUID"]
+         set LSUAdvertRouter [GetOspfOptions $rawFrame "UAdvertisingRouter"]
+
+         set advRouter [lindex $LSUAdvertRouter [expr $count-1]]
+         set lsuid [lindex $LSUId [expr $count-1]]
+         ################################################
+         set subTest "Summary-asb LSA for linkId:$lsuid, Advertising router:$advRouter"
+         ################################################
+         result_h2 "$subTest"
+         report_start_test "$subTest"
+         if {[regexp -nocase $DRIP $advRouter]} {
+            result_ok "Correct Network info:LinkStateId:$lsuid,adv router:$advRouter, PASS"
+         } else {
+            result_error "Wrong Network info:LinkStateId:$lsuid,adv router:$advRouter, FAIL"
+         }
+         report_end_test
+         }
+      } "5" {
+         if {$LinkType==5} {
+         set LSUId [GetOspfOptions $rawFrame "LSUID"]
+         set LSUAdvertRouter [GetOspfOptions $rawFrame "UAdvertisingRouter"]
+
+         set advRouter [lindex $LSUAdvertRouter [expr $count-1]]
+         set lsuid [lindex $LSUId [expr $count-1]]
+         result_debug "the total LSUId $LSUId, LSUAdvertRouter $LSUAdvertRouter"
+         ################################################
+         set subTest "As-external LSA for linkId:$lsuid, Advertising router:$advRouter"
+         ################################################
+         result_h2 "$subTest"
+         report_start_test "$subTest"
+         if {[regexp -nocase $DRIP $advRouter]} {
+            result_ok "Correct Network info:LinkStateId:$lsuid,adv router:$advRouter, PASS"
+         } else {
+            result_error "Wrong Network info:LinkStateId:$lsuid,adv router:$advRouter, FAIL"
+         }
+         report_end_test
+         }
+      } "7" {
+         if {$LinkType==7} {
+         set LSUId [GetOspfOptions $rawFrame "LSUID"]
+         set LSUAdvertRouter [GetOspfOptions $rawFrame "UAdvertisingRouter"]
+
+         set advRouter [lindex $LSUAdvertRouter [expr $count-1]]
+         set lsuid [lindex $LSUId [expr $count-1]]
+         ################################################
+         set subTest "External-type7 LSA for linkId:$lsuid, Advertising router:$advRouter"
+         ################################################
+         result_h2 "$subTest"
+         report_start_test "$subTest"
+         if {[regexp -nocase $DRIP $advRouter]} {
+            result_ok "Correct Network info:LinkStateId:$lsuid,adv router:$advRouter, PASS"
+         } else {
+            result_error "Wrong Network info:LinkStateId:$lsuid,adv router:$advRouter, FAIL"
+         }
+         report_end_test
+         }
+      } default {
+         result_error "Invalid link Type encountered [lindex $LSUTypeList [expr $count-1]]"
+         return -1
+      }
+   }
+}
+
+
+################################################################## 
+# Procedure Name: GetNumLinks
+#   
+# Description: Returns the number of links in a LSA given the lsa number
+#              Should be called ONLY FOR Router LSAs But now fixed for network LSAs too;-)
+#
+#
+# Input args: rawFrame, lsaName, LSUTypeList
+# Output args: None.
+# Return value: Returns the number of links found in rawFrame
+# Typical usage:
+#         GetNumLinks $rawFrame 1
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc GetNumLinks {rawFrame lsaNum {LSUTypeList 1}} {
+   set countValue 0
+   for {set i 1} {$i<=[llength $LSUTypeList]} {incr i} {
+      set lsUType [lindex $LSUTypeList [expr $i-1]]
+      if {$i!=$lsaNum} {
+         if {$lsUType==1} {
+            set countValue [expr 144+$countValue]
+         } elseif {$lsUType==2} {
+            set countValue [expr 108+$countValue]
+         } elseif {$lsUType==3} {
+            set countValue [expr 108+$countValue]
+         }
+         continue
+      } else {
+         set startingLoc 252
+         if {[string range $rawFrame 36 40]=="08 00"} {
+            set startingLoc 252
+         } elseif {[string range $rawFrame 36 40]=="81 00"} {
+            set startingLoc 264
+         }
+         set startLoc [expr $startingLoc + [expr $countValue * [expr $lsaNum-1]]]
+         set numLinks [GetShortIntOffset $rawFrame $startLoc]
+      }
+   }
+   #result_debug "the lsNum $lsaNum, startLoc:$startLoc, endLoc:$endLoc"
+   #return [string trimleft [string range $rawFrame $startLoc $endLoc] " 0"]
+   return $numLinks
+}
+
+################################################################## 
+# Procedure Name: GetRouterLinkInfo
+#   
+# Description: proc that is used to get the router link info including link Id,
+#              link data and linkType
+#
+#
+# Input args: rawFrame, lsaNum, linkNum
+# Output args: None.
+# Return value:
+#            Returns a list of linkId, linkData and linkType from a LSA update given the
+#            LSA number and link number in that lsa
+#            make sure the lsaNum is the lsa number in lsupdate1 for lsanum 1 and 2 for lasNum 2
+# Typical usage:
+#         GetRouterLinkInfo $rawFrame $count $i
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc GetRouterLinkInfo {rawFrame lsaNum linkNum} {
+   set linkInfo ""
+   set prevLinkType 0
+
+   set LSUTypeList [GetOspfOptions $rawFrame "LSUType"]
+   
+   set prevLinkType [lindex $LSUTypeList [expr $lsaNum-2]]   ;# (-2 for getting the previous link type in number
+   
+
+   if {$prevLinkType==1} {
+      set startLoc [expr [expr 258 + [expr 144 * [expr $lsaNum-1]]] + [expr 36 * [expr $linkNum -1]]]
+   } elseif {$prevLinkType==2} {
+      set startLoc [expr [expr 258 + [expr 108 * [expr $lsaNum-1]]] + [expr 36 * [expr $linkNum -1]]]
+   } else {
+      set startLoc [expr [expr 258 + [expr 144 * [expr $lsaNum-1]]] + [expr 36 * [expr $linkNum -1]]]
+   }
+   #result_debug "the prevLinkType $prevLinkType and startLoc $startLoc, lsaNum $lsaNum and linkNum $linkNum and LSUTypeList $LSUTypeList"
+   lappend linkInfo [GetIPAddressOffset $rawFrame $startLoc]
+   set linkDataStart [expr $startLoc+12]
+   lappend linkInfo [GetIPAddressOffset $rawFrame $linkDataStart]
+   set linkTypeStart [expr $linkDataStart + 12]
+   lappend linkInfo [string trimleft [string range $rawFrame $linkTypeStart [expr $linkTypeStart+1]] " 0"]
+   set linkTosMetric [expr $linkTypeStart + 3]
+   lappend linkInfo [string trimleft [string range $rawFrame $linkTosMetric [expr $linkTosMetric+7]] " 0"]
+   return $linkInfo
+}
+
+
+################################################################## 
+# Procedure Name: ReduceOSLSADefaultValues
+#   
+# Description: proc that is used to use nofeep interface to reduce default values of
+#              ospfLsRegresh, ospfLsMaxAge, ospfLsCheckAge, ospfLsMaxAgeDiff.
+#              This is done to reduce total time taken in wait of lsa refresh/flush during regression
+#
+#
+# Input args: dutList
+# Output args: None.
+# Return vlaue: none
+# Typical usage:
+#         ReduceOSLSADefaultValues "1 2 3 4"
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc ReduceOSLSADefaultValues {dutList} {
+
+   set firstSubStr "DUT"
+   set lastSubStr "_CONNECT"
+   foreach dut $dutList {
+      global $firstSubStr$dut$lastSubStr
+      Login [expr $$firstSubStr$dut$lastSubStr]
+      SendACmd "disable ospf"
+
+       EnableDebugMode
+       SendACmd "jerry configure ospf lsa-timer-multiple 5"
+       DisableDebugMode
+       
+   }
+}
+
+################################################################## 
+# Procedure Name: MakeOSLSADefaultValues
+#   
+# Description: proc that is used to use nofeep interface to undo reduced values of
+#              ospfLsRegresh, ospfLsMaxAge, ospfLsCheckAge, ospfLsMaxAgeDiff to default.
+#              This is oppsite of ReduceOSLSADefaultValues
+#
+# Input args: dutList
+# Output args: None.
+# Return vlaue: none
+# Typical usage:
+#         MakeOSLSADefaultValues "1 2 3 4"
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc MakeOSLSADefaultValues {dutList} {
+
+   set firstSubStr "DUT"
+   set lastSubStr "_CONNECT"
+   foreach dut $dutList {
+      global $firstSubStr$dut$lastSubStr
+      Login [expr $$firstSubStr$dut$lastSubStr]
+      SendACmd "disable ospf"
+       
+      EnableDebugMode
+      SendACmd "jerry configure ospf lsa-timer-multiple 60"
+      DisableDebugMode
+       
+   }
+}
+
+################################################################## 
+# Procedure Name: SetupCommonVlan
+#   
+# Description: ospf topology specific proc that is used to setup a common ospf vlan setup
+#
+#
+# Input args: vlan1IP, vlan2IP, vlanArea, dutID, enableOSPF
+# Output args: None.
+# Return vlaue: none
+# Typical usage:
+#         SetupCommonVlan $DUT1vlan1IP $DUT1vlan2IP $vlanArea 1
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc SetupCommonVlan { vlan1IP vlan2IP vlanArea dutID {enableOSPF "true" }} {
+
+SendACmd	"enable ipforwarding"
+SendACmd	"create vlan vlan1"
+SendACmd	"config vlan1 ipaddress $vlan1IP/24"
+SendACmd	"enable ipforwarding vlan vlan1"
+SendACmd	"config vlan1 add port [GetATrunkPort $dutID 0]"
+SendACmd	"create ospf area $vlanArea"
+SendACmd	"create vlan vlan2"
+SendACmd	"config vlan2 ipaddress $vlan2IP/24"
+SendACmd	"enable ipforwarding vlan vlan2"
+SendACmd	"config vlan2 add port [MapDUTPortId [expr $dutID * 2] $dutID]"
+SendACmd	"config ospf add vlan vlan1 area $vlanArea"
+SendACmd	"config ospf add vlan vlan2 area $vlanArea"
+if { $enableOSPF == "true" } { SendACmd	"enable ospf" }
+
+}
+
+################################################################## 
+# Procedure Name: CleanupCommonVlan
+#   
+# Description: ospf topology specific proc that is used to cleanup the configuration performed
+#              by SetupCommonVlan
+#
+#
+# Input args: vlanArea
+# Output args: None.
+# Return vlaue: none
+# Typical usage:
+#         CleanupCommonVlan  $vlanArea
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc CleanupCommonVlan { vlanArea } {
+
+SendACmd	"delete vlan vlan1"
+SendACmd	"delete vlan vlan2"
+SendACmd	"disable ospf"
+sleep 2		;# exos
+SendACmd	"delete ospf area $vlanArea"
+
+}
+
+################################################################## 
+# Procedure Name: SetupSingleOSPFVlan
+#   
+# Description: ospf topology specific proc that is used to setup a single ospf vlan
+#              for a given area.
+#
+#
+# Input args:  vlan1IP, vlanArea, portList, dutID, vlanName, enableOSPF, tag
+# Output args: None.
+# Return vlaue: none
+# Typical usage:
+#         SetupSingleOSPFVlan 100.101.10.1  $area [MapDUTPortId 1] 1 "vlan1"
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc SetupSingleOSPFVlan { vlan1IP vlanArea portList dutID {vlanName "vlan1"} {enableOSPF "true"} {tag ""}} {
+
+SendACmd "disable ospf"
+sleep 2		;# exos
+SendACmd "enable ipforwarding"
+SendACmd "create vlan $vlanName"
+SendACmd "config $vlanName ipaddress $vlan1IP/24"
+SendACmd "show $vlanName"
+if {[string length $tag]} {
+   SendACmd "config $vlanName tag $tag"
+   SendACmd "config $vlanName add port $portList tagged"
+} else {
+   SendACmd "config $vlanName add port $portList"
+}
+SendACmd "enable ipforwarding vlan $vlanName"
+
+#just create the area eventhough the area might exist
+if {$vlanArea != "0.0.0.0" } { SendACmd	"create ospf area $vlanArea" }
+SendACmd  "config ospf add vlan $vlanName area $vlanArea"
+
+if { $enableOSPF == "true" } { SendACmd	"enable ospf" }
+
+}
+
+##################################################################
+# Procedure Name: SetupSingleOSPFv3Vlan
+#
+# Description: ospf topology specific proc that is used to setup a single ospf vlan
+#              for a given area.
+#
+#
+# Input args:  vlan1IP, vlanArea, portList, dutID, vlanName, enableOSPF, tag
+# Output args: None.
+# Return vlaue: none
+# Typical usage:
+#         SetupSingleOSPFVlan 100.101.10.1  $area [MapDUTPortId 1] 1 "vlan1"
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc SetupSingleOSPFv3Vlan { vlan1IP vlanArea portList {vlanName "vlan1"} {enableOSPF "true"} {tag ""}} {
+
+sleep 2         ;# exos
+SendACmd "create vlan $vlanName"
+SendACmd "config $vlanName ipaddress $vlan1IP/64"
+if {[string length $tag]} {
+   SendACmd "config $vlanName tag $tag"
+   SendACmd "config $vlanName add port $portList tagged"
+} else {
+   SendACmd "config $vlanName add port $portList"
+}
+SendACmd "enable ipforwarding ipv6"
+SendACmd "show $vlanName"
+#just create the area eventhough the area might exist
+if {$vlanArea != "0.0.0.0" } { SendACmd "create ospfv3 area $vlanArea" }
+SendACmd  "config ospfv3 add vlan $vlanName area $vlanArea"
+
+if { $enableOSPF == "true" } { SendACmd "enable ospfv3" }
+
+}
+
+
+################################################################## 
+# Procedure Name: SetupSingleOSPFVlanP2P
+#   
+# Description: ospf p2p topology specific proc that is used to setup a single p2p ospf vlan
+#              for a given area.
+#
+#
+# Input args:  vlan1IP, vlanArea, portList, dutID, vlanName, enableOSPF, tag
+# Output args: None.
+# Return vlaue: none
+# Typical usage:
+#         SetupSingleOSPFVlanP2P $DUT1vlan1_3IP $vlanAreaBB $portList 1 "vlan1_3"
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc SetupSingleOSPFVlanP2P { vlan1IP vlanArea portList dutID {vlanName "vlan1"} {enableOSPF "true"} {tag ""}} {
+
+SendACmd "disable ospf"
+sleep 2		;# exos
+SendACmd "enable ipforwarding"
+SendACmd "create vlan $vlanName"
+SendACmd "config $vlanName ipaddress $vlan1IP/24"
+if {[string length $tag]} {
+   SendACmd "config $vlanName tag $tag"
+   SendACmd "config $vlanName add port $portList tagged"
+} else {
+   SendACmd "config $vlanName add port $portList"
+}
+SendACmd "enable ipforwarding vlan $vlanName"
+
+#just create the area eventhough the area might exist
+if {$vlanArea != "0.0.0.0" } { SendACmd	"create ospf area $vlanArea" }
+SendACmd  "config ospf add vlan $vlanName area $vlanArea link point"
+
+if { $enableOSPF == "true" } { SendACmd	"enable ospf" }
+}
+
+################################################################## 
+# Procedure Name: CleanupSingleOSPFVlan
+#   
+# Description: ospf topology specific proc that is used to cleanup single ospf vlan cinfiguration
+#              for a given area. opposite of SetupSingleOSPFVlan
+#
+#
+# Input args:  vlanArea, vlanName
+# Output args: None.
+# Return vlaue: none
+# Typical usage:
+#         CleanupSingleOSPFVlan $area vlan1
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc CleanupSingleOSPFVlan { vlanArea {vlanName "vlan1"}} {
+
+SendACmd	"delete vlan $vlanName"
+sleep 2		;# exos
+SendACmd	"disable ospf"
+sleep 2		;# exos
+if {$vlanArea != "0.0.0.0" } { SendACmd "delete ospf area $vlanArea"}
+
+}
+##################################################################
+# Procedure Name: CleanupSingleOSPFv3Vlan
+#
+# Description: ospf topology specific proc that is used to cleanup single ospf vlan cinfiguration
+#              for a given area. opposite of SetupSingleOSPFVlan
+#
+#
+# Input args:  vlanArea, vlanName
+# Output args: None.
+# Return vlaue: none
+# Typical usage:
+#         CleanupSingleOSPFVlan $area vlan1
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc CleanupSingleOSPFv3Vlan { vlanArea {vlanName "vlan1"}} {
+
+SendACmd        "delete vlan $vlanName"
+sleep 2         ;# exos
+SendACmd        "disable ospfv3"
+sleep 2         ;# exos
+if {$vlanArea != "0.0.0.0" } { SendACmd "delete ospfv3 area $vlanArea"}
+
+}
+
+
+################################################################## 
+# Procedure Name: SetupSingleRIPVlan
+#   
+# Description: ospf topology specific proc that is used to setup a RIP vlan for a given
+#              vlan name.
+#
+#
+# Input args:  vlan1IP, portList, dutID, vlanName, enableRIP
+# Output args: None.
+# Return vlaue: none
+# Typical usage:
+#         SetupSingleRIPVlan $DUT2vlan2_3IP $portList 2 "rip_vlan23"
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc SetupSingleRIPVlan { vlan1IP portList dutID {vlanName "vlan1"} {enableRIP "true" }} {
+
+SendACmd	"create vlan $vlanName"
+SendACmd	"config $vlanName ipaddress $vlan1IP/24"
+SendACmd	"enable ipforwarding vlan $vlanName"
+SendACmd	"config $vlanName add port $portList"
+SendACmd	"config rip add vlan $vlanName"
+SendACmd        "configure rip updatetime 10" ;#shorten for testing purposes
+
+if { $enableRIP == "true" } { SendACmd	"enable rip" }
+
+}
+
+##################################################################
+# Procedure Name: SetupSingleRIPngVlan
+#
+# Description: ospf topology specific proc that is used to setup a RIP vlan for a given
+#              vlan name.
+#
+#
+# Input args:  vlan1IP, portList, dutID, vlanName, enableRIP
+# Output args: None.
+# Return vlaue: none
+# Typical usage:
+#         SetupSingleRIPVlan $DUT2vlan2_3IP $portList 2 "rip_vlan23"
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc SetupSingleRIPngVlan { vlan1IP portList dutID {vlanName "vlan1"} {enableRIP "true" }} {
+
+SendACmd        "create vlan $vlanName"
+SendACmd        "config $vlanName ipaddress $vlan1IP/64"
+SendACmd        "enable ipforwarding ipv6"
+SendACmd        "config $vlanName add port $portList"
+SendACmd        "config ripng add vlan $vlanName"
+SendACmd        "configure ripng updatetime 10" ;#shorten for testing purposes
+
+if { $enableRIP == "true" } { SendACmd  "enable ripng" }
+
+}
+
+
+################################################################## 
+# Procedure Name: CleanupSingleRIPVlan
+#   
+# Description: ospf topology specific proc that is used to cleanup the RIP topology.
+#              This proc is opposite of SetupSingleRIPVlan
+#
+#
+# Input args:  vlanName
+# Output args: None.
+# Return vlaue: none
+# Typical usage:
+#         CleanupSingleRIPVlan "rip_vlan23"
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc CleanupSingleRIPVlan {{vlanName "vlan1"}} {
+SendACmd "config rip updatetime 30"
+SendACmd	"delete vlan $vlanName"
+SendACmd	"disable rip"
+
+}
+
+##################################################################
+# Procedure Name: CleanupSingleRIPngVlan
+#
+# Description: ospf topology specific proc that is used to cleanup the RIP topology.
+#              This proc is opposite of SetupSingleRIPVlan
+#
+#
+# Input args:  vlanName
+# Output args: None.
+# Return vlaue: none
+# Typical usage:
+#         CleanupSingleRIPVlan "rip_vlan23"
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc CleanupSingleRIPngVlan {{vlanName "vlan1"}} {
+SendACmd "config ripng updatetime 30"
+SendACmd        "delete vlan $vlanName"
+SendACmd        "disable ripng"
+
+}
+
+################################################################## 
+# Procedure Name: CheckAreaCheckSum
+#   
+# Description: proc that checks the area checksum using "sh os are $area" for DUT1 and DUT2
+#              for a given flag
+#
+#
+# Input args:  area, DUT1Ip, DUT2Ip, flag
+# Output args: None.
+# Return vlaue: none
+# Typical usage:
+#            CheckAreaCheckSum 0.0.0.0 $DUT1_CONNECT $DUT3_CONNECT
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc CheckAreaCheckSum {area DUT1Ip DUT2Ip {flag "equal"} } {
+   
+   report_start_test "Checking area $area checksum between [GetDUTName $DUT1Ip] and [GetDUTName $DUT2Ip]"
+   Login $DUT1Ip
+   lappend parameterList "Chksum: 1"
+   set checkSumDUT1 [GetKeyValue "show ospf area $area" $parameterList]
+   Login $DUT2Ip
+   set checkSumDUT2 [GetKeyValue "show ospf area $area" $parameterList]
+   if {$flag == "equal" } {
+      if {$checkSumDUT1 == $checkSumDUT2} {
+         result_ok "Checksums for area $area are the same."
+      } else {
+         # --- double check to make sure
+         for {set x 0} {$x < 6} {incr x} {
+             result_debug "Got <$checkSumDUT1> and <$checkSumDUT2> first time, try getting again($x)..."
+             sleep 10
+             Login $DUT1Ip
+             set checkSumDUT1 [GetKeyValue "show ospf area $area" $parameterList]
+	     Login $DUT2Ip
+             set checkSumDUT2 [GetKeyValue "show ospf area $area" $parameterList]
+	     if {$checkSumDUT1 == $checkSumDUT2} {
+                   break;
+             }
+         }
+	 if {$checkSumDUT1 == $checkSumDUT2} {
+	    result_ok "Checksums for area $area are the same."
+	 } else { 
+            result_error "Checksums for area $area are different. Should be the same."
+            result_error "Got <$checkSumDUT1> and <$checkSumDUT2>."
+         }
+      }
+   } else {
+      if {$checkSumDUT1 != $checkSumDUT2} {
+         result_ok "Checksums for area $area are different."
+      } else {
+         result_error "Checksums for area $area are the same. Should be different."
+         result_error "Got <$checkSumDUT1> and <$checkSumDUT2>."
+      }
+   }
+   report_end_test
+}
+
+################################################################## 
+# Procedure Name: IncreaseLinkCost
+#   
+# Description: This proc is used to increase link cost of a given vlan vlanName
+#              on a DUT by $cost.
+#
+#
+# Input args:  DUT, vlanName, cost
+# Output args: None.
+# Return vlaue: none
+# Typical usage:
+#            IncreaseLinkCost "DUT1" "vlan1_2_3" $cost
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc IncreaseLinkCost {DUT vlanName {cost "10"} } {
+
+lappend parameterList "Cost: 1"
+set currentCostField [GetKeyValue "show ospf interfaces $vlanName" $parameterList]
+unset parameterList
+scan $currentCostField {%d} currentCost
+set newCost [expr $currentCost + $cost]
+SendACmd	"config ospf $vlanName cost $newCost"
+
+lappend parameterList "Cost: $newCost/C"
+CheckKeyValue "show ospf interfaces $vlanName" $parameterList
+unset parameterList
+}
+
+################################################################## 
+# Procedure Name: GetDesiredPktType
+#   
+# Description: This proc is used to return the packets from rawPktList that match pktType,
+#              srcIp and destIp
+#
+#
+#
+# Input args:  rawPktList, pktType, srcIp, dstIp
+# Output args: None.
+# Return vlaue: Integer or "" on error
+# Typical usage:
+#  set OSPFHelloPackets [GetDesiredPktType $rawPortDataList IP_OSPFv2_HELLO $DUT1vlan1_3IP $ripMultiCastAddress]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc GetDesiredPktType {rawPktList pktType srcIp dstIp} {
+
+   set desiredPkts ""
+   set prevPktFragFlag 0
+   for {set i 0} {$i < [llength $rawPktList]} {incr i} {
+      set dataFrame [lindex $rawPktList $i]
+      set messageType [GetMessageType $dataFrame]
+      set dstinationIp [GetDestIPAddress $dataFrame]
+      set sourceIp [GetSourceIPAddress $dataFrame]
+      # Capture the packets from DUT1 to DRouters
+#      result_debug "the sourceIp $sourceIp,dstinationIp $dstinationIp,messageType $messageType"
+      if {($messageType==$pktType)&&($sourceIp==$srcIp)&&($dstinationIp==$dstIp)} {
+         lappend desiredPkts $dataFrame
+#	 result_debug "dataFrame = $dataFrame"
+      }
+      set prevPktFragFlag [GetIPFragmentFlags $dataFrame]
+   }
+   return $desiredPkts
+}
+
+################################################################## 
+# Procedure Name: VerifyRxmtInterval
+#   
+# Description: This proc is used to verify retransmit interval in time stamped packets
+#              for $interval seconds. A tolerance is accepted in percentage by default 1%.
+#
+#
+#
+# Input args:  timeStampList, interval, tolerance
+# Output args: None.
+# Return value: 0 on error only
+# Typical usage:
+#              VerifyRxmtInterval $DD1TimeStamp
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc VerifyRxmtInterval {timeStampList {interval 5} {tolerance 1}} {
+   set subTest "Verify if the Rxmt interval is $interval secs."
+   report_start_test "$subTest"
+   
+   # Check for error
+   if {[llength $timeStampList]<2} {
+      result_error "Insufficient information in timestamp list, FAIL"
+      report_end_test
+      
+      return 0
+   }
+   
+   for {set i 0} {$i < [expr [llength $timeStampList]-1]} {incr i} {
+      set secondTimeStamp [lindex $timeStampList [expr $i + 1]]
+      set firstTimeStamp [lindex $timeStampList $i]
+      
+      # Store in mili seconds
+#      set secTimeStamp [string range $secondTimeStamp 0 8]
+#      set firTimeStamp [string range $firstTimeStamp 0 8]
+      
+      #result_debug "the firTimeStamp:$firTimeStamp, secTimeStamp:$secTimeStamp"
+      set intervalInSe [mpexpr $secondTimeStamp-$firstTimeStamp]
+      set intervalInSec [mpexpr $intervalInSe/1000000000.0]
+      set diff [expr abs(double($intervalInSec) - double($interval))]
+      set percent [expr double($diff)/ double($interval)*100.0]
+      result_debug "The interval=$intervalInSec, percent=$percent and diff:$diff"
+      # Count for a percentage of 1 tolerance
+      if {$percent <= $tolerance} {
+         set result "ok"
+      } else {
+         set wrongInterval $intervalInSec
+         set result "ng"
+      }
+   }
+
+   if {$result == "ok"} {
+      result_ok "Packets correctly spaced with $intervalInSec secs, PASS"
+   } else {
+      result_error "Packets incorrectly spaced with $wrongInterval secs, FAIL"
+   }
+   report_end_test
+}
+
+################################################################## 
+# Procedure Name: setupOSPFRouter
+#   
+# Description: This proc is used to setup ixia port as a ospf router. It can create multiple interfaces
+#              supplied via interfaceIpList
+#
+#
+#
+# Input args:  args
+# Output args: None.
+# Return value: -1 on error only
+# Typical usage:
+#setupOSPFRouter -dutIp "62.1.0.109" -interfaceIpList "62.1.0.23" -maskList "255.255.255.0" -areaIdList "0" -helloIntervalList "10" \
+#                -deadIntervalList "40" -networkTypeList "ospfBroadcast" -metricList "10" -mtuSizeList 1500 \
+#                -linkTypeList "ospfLinkTransit" -numNetworksList 10000 -prefixList "30" -routeOriginList "ospfRouteOriginArea" \
+#                -networkIpList "37.0.0.0" -routerIdList "62.1.0.23" -txPortId 2
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: SendTraffic
+##################################################################
+proc setupOSPFRouter {args} {
+   global TrafficGen
+    parse_args setupOSPFRouter $args {
+        dutIp ""
+        interfaceMacList ""
+        interfaceIpList ""
+        maskList "255.255.255.0"
+        areaIdList "0"
+        helloIntervalList "10"
+        deadIntervalList "40"
+        networkTypeList "ospfBroadcast"
+        metricList "10"
+        mtuSizeList "1500"
+        linkTypeList "ospfLinkTransit"
+        numNetworksList "0"
+        prefixList ""
+        routeOriginList "ospfRouteOriginArea"
+        networkIpList ""
+        routeMetricList "10"
+        routerIdList ""
+        txPortId  "1"
+        tag "none"
+        trafficEng "false"
+        routerPrioirty "0"
+    }
+    
+   
+   switch -exact -- $TrafficGen {
+      ixia -
+      ixvm {
+         
+    # get the port information
+    MapIxiaPortId $txPortId cha car por
+    result_debug "setupOSPFRouter: Chas: $cha Card: $car Port: $por"
+    
+    # select the port
+    ipAddressTable clear
+    ipAddressTable setDefault
+    ipAddressTable config -defaultGateway $dutIp
+    ipAddressTableItem setDefault
+    ipAddressTableItem config -fromIpAddress [lindex $interfaceIpList 0]
+    if {[llength $interfaceMacList] > 0} {
+        set macAddr [lindex $interfaceMacList 0]
+        if {$macAddr == "default"} {
+            if {[port get $cha $car $por]} {
+                error "setupOSPFRouter: port get $chas $card $port failed."
+            }
+            set macAddr [port cget -MacAddress]
+        }
+    } else {
+        set macAddr [uniqMac $cha $car $por]
+    }
+    ipAddressTableItem config -fromMacAddress $macAddr
+    ipAddressTableItem config -numAddresses 1
+    ipAddressTableItem config -mappingOption oneIpToOneMac
+    ipAddressTableItem config -enableUseNetwork true
+    ipAddressTableItem config -netMask 24
+    if {$tag != "none"} {
+       ipAddressTableItem config -enableVlan true
+       ipAddressTableItem config -vlanId $tag
+    }
+    ipAddressTableItem set               
+    ipAddressTable addItem
+    ipAddressTable set $cha $car $por
+    
+    if {[ospfServer select $cha $car $por]} {
+        error "setupOSPFRouter: ospfServer select $cha $car $por failed."
+    }
+    if {[ospfServer clearAllRouters]} {
+        error "setupOSPFRouter: ospfServer clearAllRouters failed."
+    }
+
+    for {set i 0} {$i<[llength $interfaceIpList]} {incr i} {
+        set interfaceIp [lindex $interfaceIpList $i]
+        set mask [lindex $maskList $i]
+        set areaId [lindex $areaIdList $i]
+        set helloInterval [lindex $helloIntervalList $i]
+        set deadInterval [lindex $deadIntervalList $i]
+        set networkType [lindex $networkTypeList $i]
+        set metric [lindex $metricList $i]
+        set mtuSize [lindex $mtuSizeList $i]
+        set linkType [lindex $linkTypeList $i]
+        set numNetworks [lindex $numNetworksList $i]
+        set prefix [lindex $prefixList $i]
+        set routeOrigin [lindex $routeOriginList $i]
+        set networkIp [lindex $networkIpList $i]
+        set routeMetric [lindex $routeMetricList $i]
+        set routerId [lindex $routerIdList $i]
+        
+        set returnCode [extrMakeOspfRouter -interfaceIp $interfaceIp -ipMask $mask \
+                                           -areaId $areaId -helloInterval $helloInterval \
+                                           -deadInterval $deadInterval \
+                                           -networkType $networkType -metric $metric \
+                                           -linkType $linkType -mtuSize $mtuSize \
+                                           -numNetworks $numNetworks -prefix $prefix \
+                                           -routeOrigin $routeOrigin \
+                                           -networkIp $networkIp \
+                                           -routeMetric $routeMetric -routerId $routerId \
+                                           -txPortId $txPortId -trafEng $trafficEng]
+        if {$returnCode==-1} {
+            return -1
+        }
+    }
+    
+    protocolServer setDefault
+    protocolServer config -enableArpResponse true
+    protocolServer config -enablePingResponse true
+    protocolServer config -enableOspfService true
+    if {[protocolServer set $cha $car $por]} {
+        error "setupOSPFRouter: protocolServer set $cha $car $por failed."
+    }
+    
+    set portList [list [list $cha $car $por]]   
+    result_debug "Writing Configuration to Hardware..."
+    if {[ixWriteConfigToHardware portList]} {
+        result_debug "Error writing config to hardware"
+    }
+      }
+      
+      stc {
+         
+         set txPortId [hMapPortIdToSpirentPort $txPortId]
+         set txSpeed [getPortSpeed $txPortId]
+         set txMedia [stcGetMedia $txPortId]
+         cleanupBgp	$txPortId
+         if {$mtuSizeList != ""} {
+            result_debug "OSPF multi MTU not supported"
+            logcmd stc::perform SetupPortsCommand -PortList $txPortId -Mtu [lindex $mtuSizeList 0] -Media $txMedia
+         }
+         for {set i 0} {$i<[llength $interfaceIpList]} {incr i} {
+            set j 0 ; # for tracking lsa ids
+            set interfaceIp [lindex $interfaceIpList $i]
+            set mask [getIpV4MaskWidth2 [lindex $maskList $i]]
+            set areaId [long2IpAddr [lindex $areaIdList $i]]
+            set helloInterval [lindex $helloIntervalList $i]
+            set deadInterval [lindex $deadIntervalList $i]
+            set networkType [lindex $networkTypeList $i]
+            set metric [lindex $metricList $i]
+            set mtuSize [lindex $mtuSizeList $i]
+            set linkType [lindex $linkTypeList $i]
+            set numNetworks [lindex $numNetworksList $i]
+            set prefix [lindex $prefixList $i]
+            set routeOrigin [lindex $routeOriginList $i]
+            set networkIp [lindex $networkIpList $i]
+            set routeMetric [lindex $routeMetricList $i]
+            set routerId [lindex $routerIdList $i]
+            
+            if {$tag == "none"} {
+               array set cmdResults [logcmd stc::perform DeviceCreateCommand -ParentList [logcmd stc::get system1 -children-project] -port $txPortId -IfStack "Ipv4If EthIIIf" -IfCount "1 1" -active false]
+               set deviceHndl $cmdResults(-ReturnList)
+            } else {
+               array set cmdResults [logcmd stc::perform DeviceCreateCommand -ParentList [logcmd stc::get system1 -children-project] -port $txPortId -IfStack "Ipv4If VlanIf EthIIIf" -IfCount "1 1 1" -active false]
+               set deviceHndl $cmdResults(-ReturnList)
+               logcmd stc::config [logcmd stc::get $deviceHndl -children-VlanIf] -VlanId $tag 
+            }
+            logcmd stc::config $deviceHndl -RouterId $routerId
+            logcmd stc::config [logcmd stc::get $deviceHndl -children-Ipv4If] -Address $interfaceIp -Gateway $dutIp -PrefixLength $mask
+            
+            if {$networkType == "ospfBroadcast"} {
+               set networkType BROADCAST
+            }
+            
+            set ospfAttributes "-under $deviceHndl -RouterPriority $routerPrioirty -TeInfoPresent $trafficEng -LsaRefreshInterval 10"
+            if {$areaId != ""} {
+               append ospfAttributes " -AreaId [int2ip $areaId]"
+            }
+            if {$helloInterval != ""} {
+               append ospfAttributes " -HelloInterval $helloInterval"
+            }
+            if {$deadInterval != ""} {
+               append ospfAttributes " -RouterDeadInterval $deadInterval"					
+            }
+            if {$networkType != ""} {
+               append ospfAttributes " -NetworkType $networkType"					
+            }
+            if {$metric != ""} {
+               if {[llength $metric] > 1} {set tmetric [lindex $metric 0]} else {set tmetric $metric}
+               if {$tmetric < 1} {set tmetric 1}
+               append ospfAttributes " -IfCost $tmetric"					
+            }
+            
+            set ospfRouterConfig [eval "logcmd stc::create Ospfv2RouterConfig [subst $ospfAttributes]"]
+                        
+            set routerLsaAttrs "-AdvertisingRouterId $routerId" ;# -LinkStateId $routerId
+            
+            switch [lindex [lindex $routeOrigin 0] 0] {
+               ospfRouteOriginExternalType2 -
+               ospfRouteOriginExternal { append routerLsaAttrs " -Asbr TRUE" } 
+               ospfRouteOriginArea { append routerLsaAttrs " -Abr TRUE" }
+               default { error "Unsupported OSPF Route Origin : $routeOrigin" }
+            }
+            
+            set hRouterLsa [eval "logcmd stc::create RouterLsa -under $ospfRouterConfig [subst $routerLsaAttrs]"];# -seqnum [expr ($i<<24) +$j]
+            incr j
+            
+            if {$linkType != ""} {
+               # get routerLSA
+               switch $linkType {
+                  ospfLinkTransit { set linkType TRANSIT_NETWORK }
+                  default { error "did not understand OSPF Link Type : $linkType (should be POINT_TO_POINT, STUB_NETWORK, TRANSIT_NETWORK, or VL)" }
+               }
+               logcmd stc::create RouterLsaLink -under $hRouterLsa -LinkType $linkType
+            }
+            if {$trafficEng == "true"} {
+               set hTeLsa [logcmd stc::create teLsa -under $ospfRouterConfig]
+            }
+
+            set idx 0
+            while {[llength $networkIp] > $idx} {
+               set prefx [lindex $prefix $idx]
+               set myIp [cleanRoute [lindex $networkIp $idx] $prefx]
+               if {[llength $metric] == [llength $networkIp]} { set rMetric [lindex $metric $idx] } else { set rMetric [lindex $routeMetric $idx] }
+               set routeOrg [lindex $routeOrigin $idx]
+               set noOfNetworks [lindex $numNetworks $idx]
+               incr idx
+               
+               set ospfRouteAttrs "-under $ospfRouterConfig";# -seqnum [expr ($i<<24) +$j]"
+               incr j
+               if {$routerId != ""} {
+                  append ospfRouteAttrs " -AdvertisingRouterId $routerId"
+               }
+               if {$rMetric != ""} {
+                  append ospfRouteAttrs " -Metric $rMetric"
+               }
+               switch $routeOrg {
+                  ospfRouteOriginExternal {
+                     set ospfRoute [eval "logcmd stc::create ExternalLsaBlock [subst $ospfRouteAttrs] -metrictype type1"]
+                  }
+                  
+                  ospfRouteOriginArea {
+                     set ospfRoute [eval "logcmd stc::create SummaryLsaBlock [subst $ospfRouteAttrs]"]
+                  }
+                  
+                  ospfRouteOriginExternalType2 {
+                     set ospfRoute [eval "logcmd stc::create ExternalLsaBlock [subst $ospfRouteAttrs] -metrictype type2"]
+                  }
+                  default { error "Unsupported OSPF Route Origin : $routeOrigin" }
+               }
+               logcmd stc::config [logcmd stc::get $ospfRoute -children-Ipv4NetworkBlock] -NetworkCount $noOfNetworks \
+                  -StartIpList [cleanRoute $myIp $prefx] -PrefixLength $prefx
+            }
+         }
+      }
+   }
+} ;# setupOSPFRouter
+
+################################################################## 
+# Procedure Name: startOspf
+#   
+# Description: This proc is used to start test equipment ospf protocol adjacency
+#              on the list of ports supplied via txPortIdList
+#
+#
+#
+# Input args:  txPortIdList
+# Output args: None.
+# Return value: none
+# Typical usage:
+#      startOspf 2
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: SendTraffic
+##################################################################
+proc startOspf {txPortIdList} {
+    set pList ""
+   
+   global TrafficGen STARTOSPF
+   
+   switch -exact -- $TrafficGen {
+      ixia -
+      ixvm {
+         
+    foreach txPortId $txPortIdList {
+	MapIxiaPortId $txPortId cha car por
+        result_debug "startOspf: Chas: $cha Card: $car Port: $por"
+        lappend pList "$cha $car $por"
+    }
+
+    if {[ixStartOspf pList]} {
+        error "startOspf: ixStartOspf failed."
+    }
+}
+      stc {
+         set globalDeviceList ""
+         foreach txPortId $txPortIdList {
+            if {[info exists STARTOSPF($txPortId)] && $STARTOSPF($txPortId)} {
+                continue;
+            }
+            set STARTOSPF($txPortId) 1
+            set txPortId [hMapPortIdToSpirentPort $txPortId]
+            set deviceList [logcmd stc::get $txPortId -affiliationport-Sources]
+            result_debug "startOSPF: Device List - $deviceList"
+            set globalDeviceList [concat $globalDeviceList $deviceList]
+            logcmd stc::perform DeviceStartCommand -DeviceList $globalDeviceList
+#             set timeout1 [expr [clock seconds] + 60]
+#             set timeout2 [expr [clock seconds] + 120]
+#             foreach dev $deviceList {
+#                set rtr [logcmd stc::get $dev -children-ospfv2routerconfig]
+#                while 1 {
+#                   puts "WAITING 10 sec"
+#                   after 10000
+#                   if {[logcmd stc::get $rtr -NeighborState] != "FULL"} {
+#                      puts "DOWN"
+#                     # logcmd stc::perform Ospfv2RestartRouterCommand -RouterList $dev
+#                   } else {
+#                      puts "UP - exiting"
+#                      break
+#                   }
+#                   if {[clock seconds] > $timeout1} { 
+#                      puts "60 SEC TIMEOUT STOPPING and STARTING DEV" 
+#                      logcmd stc::perform DeviceStopCommand $dev
+#                      after 10000
+#                      logcmd stc::perform DeviceStartCommand $dev
+#                      set timeout1 [expr $timeout2+60]
+#                   }
+#                   if {[clock seconds] > $timeout2} { break }
+#                }
+#             }
+# #            result_debug "READVERTISING LSAs"
+#             # logcmd stc::perform Ospfv2ReadvertiseLsaCommand -RouterList $deviceList
+         }
+      }
+   }
+}
+
+################################################################## 
+# Procedure Name: stopOspf
+#   
+# Description: This proc is used to stop test equipment ospf protocol adjacency
+#              on the list of ports supplied via txPortIdList
+#              This proc is opposite of startOspf
+#
+#
+#
+# Input args:  txPortIdList
+# Output args: None.
+# Return value: none
+# Typical usage:
+#      stopOspf 2
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: SendTraffic
+##################################################################
+proc stopOspf {txPortIdList} {
+    set pList ""
+   
+   set pList ""
+   
+   global TrafficGen
+   switch -exact -- $TrafficGen {
+      ixia -
+      ixvm {
+         
+    foreach txPortId $txPortIdList {	
+	MapIxiaPortId $txPortId cha car por
+        result_debug "stopOspf: Chas: $cha Card: $car Port: $por"
+        lappend pList "$cha $car $por"
+    }
+
+    if {[ixStopOspf pList]} {
+        error "stopOspf: ixStopOspf failed."
+    }
+}
+      stc {
+         foreach txPortId $txPortIdList {
+            set STARTOSPF($txPortId) 0
+            set txPortId [hMapPortIdToSpirentPort $txPortId]
+            foreach emulatedDevice [set DeviceList [logcmd stc::get $txPortId -affiliationport-Sources]] {
+               foreach {lsatype cmd} {summarylsablock Ospfv2AgeSummaryLsaCommand \
+                                      routerlsa Ospfv2AgeRouterLsaCommand \
+                                     ExternalLsaBlock Ospfv2AgeExternalLsaCommand} {
+                  set rtrcfg [logcmd stc::get $emulatedDevice -children-ospfv2routerconfig]
+                  if {$rtrcfg == ""} {continue;}
+                  if {[llength [set lsalist [logcmd stc::get $rtrcfg -children-$lsatype]]] > 0} {
+                     puts "AGING LSAs"
+                     logcmd stc::perform $cmd -LsaList $lsalist
+                  }
+               }
+               logcmd stc::apply
+              # after 10000
+               logcmd stc::perform Ospfv2ShutdownRouterCommand -RouterList $emulatedDevice
+            }
+         }
+#          puts "WAITING 30 SEC"
+#          after 30000
+      }
+   }
+}
+
+################################################################## 
+# Procedure Name: cleanupOspf
+#   
+# Description: This proc is used to cleanup test equipment port for ospf configuration
+#              that was performed by setupOSPFRouter
+#
+#
+#
+# Input args:  txPortIdList
+# Output args: None.
+# Return value: none
+# Typical usage:
+#      cleanupOspf 2
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: SendTraffic
+##################################################################
+proc cleanupOspf {txPortIdList} {
+   
+   global TrafficGen
+   switch -exact -- $TrafficGen {
+      ixia -
+      ixvm {
+         
+    foreach txPortId $txPortIdList {    
+        # get the port information
+        MapIxiaPortId $txPortId cha car por
+        result_debug "cleanupOspf: Chas: $cha Card: $car Port: $por"
+        
+        # select the port
+        if {[ospfServer select $cha $car $por]} {
+            error "cleanupOspf: ospfServer select $cha $car $por failed."
+        }
+        
+        if {[ospfServer getRouter router1]} {
+            error "cleanupOspf: ospfServer getRouter router1 failed."
+        }
+        
+        ospfRouter clearAllInterfaces
+        ospfRouter clearAllLsaGroups
+        ospfRouter clearAllRouteRanges
+        ospfRouter setDefault
+        
+        if {[ospfServer clearAllRouters]} {
+            error "cleanupOspf: ospfServer clearAllRouters failed."
+        }
+        ospfServer write
+        
+        ipAddressTable setDefault
+        ipAddressTable clear
+        ipAddressTable set $cha $car $por
+
+        protocolServer setDefault
+        protocolServer config -enableArpResponse false
+        protocolServer config -enablePingResponse false
+        protocolServer config -enableOspfService false
+        if {[protocolServer set $cha $car $por]} {
+            error "cleanupOspf: Error Setting Protocol Server"
+        }
+        if {[protocolServer write $cha $car $por]} {
+            error "cleanupOspf: protocolServer write $cha $car $por failed."
+        }
+    } ;# foreach txPortId
+      }
+      stc {
+         foreach txPortId $txPortIdList {
+            set txPortId [hMapPortIdToSpirentPort $txPortId]
+            foreach emulatedDevice [logcmd stc::get $txPortId -affiliationport-Sources] {
+               set ipv4If [logcmd stc::get $emulatedDevice -children-Ipv4If]
+               if {$ipv4If != ""} {                 
+                  foreach {lsatype} {summarylsablock routerlsa ExternalLsaBlock} {
+                     if {[llength [set lsalist [logcmd stc::get [logcmd stc::get $emulatedDevice -children-ospfv2routerconfig] -children-$lsatype]]] > 0} {
+#                        logcmd stc::perform $cmd -LsaList $lsalist
+#                        logcmd stc::apply
+puts "DELETING LSAS"
+                        foreach lsa $lsalist {
+                           logcmd stc::delete $lsa
+                        }
+                     }
+                  }
+               }
+            }
+         }
+         logcmd stc::apply
+         after 2000
+puts "DELETING ROUTER"
+         cleanupBgp	$txPortIdList
+      }
+   }
+} ;# cleanupOspf
+
+
+################################################################## 
+# Procedure Name: extrMakeOspfRouter
+#   
+# Description: This internal proc is used to setup test equipment port for ospf configuration
+#              This is called within from setupOSPFRouter.
+#
+#
+# Input args:  args
+# Output args: None.
+# Return value: 0
+# Typical usage:
+#      set returnCode [extrMakeOspfRouter -interfaceIp $interfaceIp -ipMask $mask -areaId $areaId \
+#          -helloInterval $helloInterval -deadInterval $deadInterval \
+#          -networkType $networkType -metric $metric -linkType $linkType -mtuSize $mtuSize -numNetworks $numNetworks \
+#          -prefix $prefix -routeOrigin $routeOrigin -networkIp $networkIp -routerId $routerId -txPortId $txPortId]
+#
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: SendTraffic
+##################################################################
+proc extrMakeOspfRouter {args} {
+    parse_args extrMakeOspfRouter $args {
+        interfaceIp ""
+        ipMask ""
+        areaId 0
+        helloInterval 10
+        deadInterval 40
+        networkType "ospfBroadcast"
+        metric 10
+        routeMetric 10
+        linkType "ospfLinkTransit"
+        mtuSize "1500"
+        numNetworks 0
+        prefix ""
+        routeOrigin "ospfRouteOriginArea"
+        networkIp ""
+        routerId ""
+        txPortId  "1"
+        trafEng   "false"
+    }
+    
+    ospfRouter setDefault
+    ospfRouter clearAllInterfaces
+    ospfRouter clearAllRouteRanges
+    ospfRouter config -enable true
+    ospfRouter config -routerId $routerId
+    
+    ospfInterface setDefault
+    ospfInterface config -enable true
+    ospfInterface config -connectToDut true
+    ospfInterface config -ipAddress $interfaceIp
+    ospfInterface config -ipMask $ipMask
+    ospfInterface config -areaId $areaId
+    ospfInterface config -priority 0
+    ospfInterface config -options 2
+    ospfInterface config -helloInterval $helloInterval
+    ospfInterface config -deadInterval $deadInterval
+    ospfInterface config -networkType $networkType
+    ospfInterface config -metric $metric
+    ospfInterface config -numberOfLearnedLsas 0
+    ospfInterface config -enableTrafficEngineering $trafEng
+    ospfInterface config -maxBandwidth 0.0
+    ospfInterface config -maxReservableBandwidth 0.0
+    ospfInterface config -linkMetric 0
+    ospfInterface config -unreservedBandwidthPriority0 0.0
+    ospfInterface config -unreservedBandwidthPriority1 0.0
+    ospfInterface config -unreservedBandwidthPriority2 0.0
+    ospfInterface config -unreservedBandwidthPriority3 0.0
+    ospfInterface config -unreservedBandwidthPriority4 0.0
+    ospfInterface config -unreservedBandwidthPriority5 0.0
+    ospfInterface config -unreservedBandwidthPriority6 0.0
+    ospfInterface config -unreservedBandwidthPriority7 0.0
+    ospfInterface config -linkType $linkType   
+    ospfInterface config -neighborRouterId 0.0.0.0
+    ospfInterface config -mtuSize $mtuSize
+    ospfInterface config -enableValidateMtu true
+    if {[ospfRouter addInterface interface1]} {
+        error "extrMakeOspfRouter: ospfRouter addInterface interface1 failed."
+    }
+
+    set idx 0
+    set rangeId 1
+    while {[llength $networkIp] > $idx} {
+    set myIp [lindex $networkIp $idx]
+    set rMetric [lindex $routeMetric $idx]
+    set prefx [lindex $prefix $idx]
+    set routeOrg [lindex $routeOrigin $idx]
+    set noOfNetworks [lindex $numNetworks $idx]
+    incr idx
+    ospfRouteRange setDefault
+    ospfRouteRange config -enable true
+    ospfRouteRange config -routeOrigin $routeOrg
+    ospfRouteRange config -metric $rMetric
+    ospfRouteRange config -numberOfNetworks $noOfNetworks
+    ospfRouteRange config -prefix $prefx
+    ospfRouteRange config -networkIpAddress $myIp
+
+    ospfRouter addRouteRange [format "routeRange%02d" $rangeId]
+    ospfRouteRange setDefault
+    incr rangeId
+}
+
+#    if {[ospfRouter addRouteRange routeRange1]} {
+#        error "extrMakeOspfRouter: ospfRouter addRouteRange routeRange1 failed."
+#    }
+    if {[ospfServer addRouter router1]} {
+        error "extrMakeOspfRouter: ospfServer addRouter router1 failed."
+    }
+    
+    return 0
+} ;# extrMakeOspfRouter
+
+proc GetOspfLinkCost {vlanName} {
+
+   lappend parameterList "Cost: 1"
+   set currentCostField [GetKeyValue "show ospf interface $vlanName" $parameterList]
+   unset parameterList
+   scan $currentCostField {%d} currentCost
+   return $currentCost
+}
+
+proc Setup14.13.4.1 {} {
+
+global DUT1_CONNECT
+global DUT2_CONNECT
+global DUT3_CONNECT
+global DUT4_CONNECT
+
+Login $DUT1_CONNECT
+SendACmd "config ospf routerid 4.0.0.1"
+set DUT1vlan1IP 1.0.0.1
+set portList [GetATrunkPort 1 2]
+SetupSingleOSPFVlan $DUT1vlan1IP 0.0.0.0 $portList 1 "vlan12"
+SendACmd "create ospf area 0.0.0.4"
+
+#set DUT3vlan1IP 2.0.0.3
+set DUT1vlan4IP 4.0.0.1 ;#101.0.0.1
+set portList [GetATrunkPort 1 4]
+SetupSingleOSPFVlan $DUT1vlan4IP 0.0.0.4 $portList 1 "vlan14"
+#SendACmd "configure ospf vlan vlan23 neighbor add $DUT3vlan1IP"
+
+Login $DUT2_CONNECT
+set DUT2vlan1IP 1.0.0.2
+set portList [GetATrunkPort 2 1]
+SetupSingleOSPFVlan $DUT2vlan1IP 0.0.0.0 $portList 2 "vlan12"
+
+set DUT2vlan2IP 2.0.0.2
+set portList [GetATrunkPort 2 3]
+SetupSingleOSPFVlan $DUT2vlan2IP 0.0.0.0 $portList 2 "vlan23"
+
+Login $DUT3_CONNECT
+
+#SendACmd "config ospf routerid 101.0.0.113"
+SendACmd "config ospf routerid 3.0.0.3"
+set DUT3vlan1IP 2.0.0.3
+set portList [GetATrunkPort 3 2]
+SetupSingleOSPFVlan $DUT3vlan1IP 0.0.0.0 $portList 3 "vlan23"
+
+set DUT3vlan2IP 3.0.0.3 ;#101.0.0.113
+set portList [GetATrunkPort 3 4]
+SetupSingleOSPFVlan $DUT3vlan2IP 0.0.0.4 $portList 3 "vlan34"
+#SendACmd "configure ospf vlan vlan12 neighbor add $DUT1vlan1IP"
+
+
+Login $DUT4_CONNECT
+set DUT4vlan1IP 4.0.0.4
+set portList [GetATrunkPort 4 1]
+SetupSingleOSPFVlan $DUT4vlan1IP 0.0.0.4 $portList 4 "vlan14"
+
+set DUT4vlan2IP 3.0.0.4
+set portList [GetATrunkPort 4 3]
+SetupSingleOSPFVlan $DUT4vlan2IP 0.0.0.4 $portList 4 "vlan34"
+
+Login $DUT4_CONNECT
+SendACmd "disable ospf"
+SendACmd        "config ospf area 0.0.0.4 nssa summary stub-default-cost 10"
+SendACmd "enable ospf"
+Login $DUT1_CONNECT
+SendACmd "disable ospf"
+SendACmd        "config ospf area 0.0.0.4 nssa summary stub-default-cost 10"
+SendACmd "enable ospf"
+#Login $DUT2_CONNECT
+#SendACmd "disable ospf"
+#SendACmd        "config ospf area 0.0.0.0 nssa summary stub-default-cost 10"
+#SendACmd "enable ospf"
+Login $DUT3_CONNECT
+SendACmd "disable ospf"
+exSleep 5 ;#Added sleep ...
+SendACmd        "config ospf area 0.0.0.4 nssa summary stub-default-cost 10"
+SendACmd "enable ospf"
+}
+
+
+proc Cleanup14.13.4.1 {} {
+   global DUT1_CONNECT
+   global DUT2_CONNECT
+   global DUT3_CONNECT
+   global DUT4_CONNECT
+
+   Login $DUT1_CONNECT
+   SendACmd "disable ospf"
+   SendACmd "delete vlan vlan12"	   
+   foreach vlan  {vlan12 vlan14} {
+      SendACmd "delete vlan $vlan"
+   }
+   SendACmd "delete ospf area all"
+   SendACmd "config ospf routerid automatic"
+
+   Login $DUT2_CONNECT
+   SendACmd "disable ospf"
+   foreach vlan  {vlan12 vlan23} {
+      SendACmd "delete vlan $vlan"
+   }
+   SendACmd "delete ospf area all"
+
+   Login $DUT3_CONNECT
+   foreach vlan  {vlan23 vlan34} {
+      SendACmd "delete vlan $vlan"
+   }
+   SendACmd "delete ospf area all"
+   SendACmd "disable ospf"
+   SendACmd "config ospf routerid automatic"
+
+   Login $DUT4_CONNECT
+   SendACmd "disable ospf"
+   foreach vlan  {vlan34 vlan14} {
+      SendACmd "delete vlan $vlan"
+   }
+   SendACmd "delete ospf area all"
+}
+
+proc VerifyEmptyDDPacket {dataFrame sourceIp destinationIp} {
+   upvar $sourceIp srcIp
+   upvar $destinationIp dstIp
+
+   set messageType [GetMessageType $dataFrame]
+   set result 0
+   set srcIp ""
+   set dstIp ""
+   if {$messageType == "IP_OSPFv2_DATABASE"} {
+         set macDest [GetDestMacAddress $dataFrame]
+         set srcIp [GetSourceIPAddress $dataFrame]
+         set dstIp [GetDestIPAddress $dataFrame]
+         set length [GetOSPFPacketLength $dataFrame]
+         set controlBits [GetOSPFControlBits $dataFrame]
+
+         #result_debug "Get an $messageType from $srcIp to $dstIp with length $length and controlBits $controlBits"
+         if {$length == 32 && $controlBits == "07"} {
+            set mac1 255
+                 scan $macDest {%d.} mac1
+                 if {$mac1 != 01} {
+               result_ok "Empty DD packet is sent to unicast mac address $macDest"
+               set result 1
+                 } else {
+               result_error "Empty DD packet is sent to multicast mac address $macDest"
+                 }
+            set ip1 255
+                 scan $dstIp {%d.} ip1
+                 if {$ip1 < 224} {
+               result_ok "Empty DD packet is sent to unicast ip address $dstIp"
+                 } else {
+               result_error "Empty DD packet is sent to multicast ip address $dstIp"
+               set result 0
+                 }
+              }
+           }
+      return $result
+}

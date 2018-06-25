@@ -1,0 +1,41 @@
+
+proc xmlVerification { msg parameterList } {
+
+    result_debug "API returned msg:\n$msg\n"
+
+    foreach line $parameterList {
+	if {[regexp $line $msg]} {
+	    set msgPassed 1
+	} else {
+	    set msgPassed 0
+	    break
+	}
+    }
+    unset parameterList
+
+    if { $msgPassed } {
+	result_ok "getvlan operation successful"
+    } else {
+	result_error "getvlan operation failed for incorrect line $line"
+    }
+}
+
+proc VerifyPortConfig { checkFor {msg "none"} } {
+    global DUT1_CONNECT
+
+    lappend parameterList $checkFor
+    if { $msg == "none" } {
+	CheckKeyValue "show port [MapDUTPortId 1] info detail" $parameterList -comment "Verify $checkFor"
+    } else {
+	set tempfilename "Tmp/[pid]_xml.txt"
+	set tempfile [open $tempfilename w]
+	foreach line [split $msg "\n"] {
+	    puts $tempfile $line
+	}
+	close $tempfile
+	CheckKeyValue $tempfilename $parameterList -comment "for file operation:Verify get message correct for $checkFor"
+	file delete $tempfilename
+    }
+    unset parameterList
+
+}

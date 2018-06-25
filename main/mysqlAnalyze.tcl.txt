@@ -1,0 +1,97 @@
+#!/usr/bin/tclsh
+
+
+source ../Lib/parse_args.tcl
+source ../Lib/mysqlLib.tcl
+set cfgFile ../main/runReg.cfg
+
+# Source config file that has Regression PC information
+if [file exists $cfgFile] {
+    puts "Sourcing $cfgFile now"
+    catch {source $cfgFile} reason
+} else {
+    puts "!!! Configuration file $cfgFile not found !!!"
+    return 0
+}
+
+
+global mysqlIP my_db
+set host $mysqlIP
+set db $my_db
+global host mysql_handler
+
+conn_to_db $host $db
+
+parse_args mysqlAnalyze $argv {
+    regId "null"
+    module "null"
+    run_number "1"
+    forstats "no"
+}
+
+puts "regId $regId"
+set regression_id $regId
+set feature_directory $module
+
+
+set regType [mysqlsel $mysql_handler "SELECT feature_type from regression_table WHERE regression_id = '$regression_id' " -flatlist]
+if {$regType == ""} {
+    puts "No regType for regression_id:$regression_id"
+    return 0
+}
+puts "regType: $regType"
+
+set regSubType [mysqlsel $mysql_handler "SELECT feature_sub_type from regression_table WHERE regression_id = '$regression_id' " -flatlist]
+if {$regSubType == ""} {
+    puts "No regSubType for regression_id:$regression_id"
+    return 0
+}
+puts "regSubType: $regSubType"
+
+set feature_id [mysqlsel $mysql_handler "SELECT feature_id FROM feature_table WHERE feature_type = '$regType' AND feature_sub_type = '$regSubType' AND feature_directory = '$feature_directory'" -flatlist]
+if {$feature_id == ""} {
+    puts "No modules feature_id for module: $module"
+    return 0
+}
+puts "feature_id: $feature_id\n"
+
+     catch {
+        # let PHP analyze the report files and update log files
+        set regression_id_url [http_formatQuery regression_id $regression_id feature_id \
+                                               $feature_id run_number $run_number forstats $forstats]
+        puts " regression_id_url: $regression_id_url"
+
+        if {$my_db == "autoweb_db_5" || $my_db == "autoweb_db_7"} {
+          set analyseURL "http://$host/phpdb4/failAnalysis.php"
+        } else {
+          set analyseURL "http://$host/failAnalysis.php"
+        }
+        set analyseURL [append analyseURL "?$regression_id_url"]
+        puts " analyseURL: $analyseURL"
+        set token [http_get $analyseURL -timeout 1000000 ]
+        upvar #0 $token httpState
+        while { [string match eof $httpState(state)] != 1 } {
+            set incommingHttp "$httpState(state) [string match eof $httpState(state)]"
+            puts $logFileId $incommingHttp
+            puts stderr $incommingHttp
+            flush stderr
+            if {$incommingHttp == "header 0"} {
+              puts "we got $incommingHttp which causes a loop - terminating mysqlAutomate"
+              return
+            }
+            after 100
+        }
+        if { [info exists httpState(error)] } {
+          set lasterror $httpState(http)
+          puts "GOT HTTP ERROR: $lasterror"
+        }
+
+     } httpResult
+
+    if { $httpResult != "" } {
+        puts "HTTP CRASH: $httpResult"
+     }
+
+
+
+

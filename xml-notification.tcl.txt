@@ -1,0 +1,158 @@
+proc StartWebServer { enableAuth } {
+	if { $enableAuth } {
+		EnableWebServerAuth
+	} else {
+		DisableWebServerAuth
+	}
+	exec ../../main/Tmp/apache-tomcat-6.0.20/bin/startup.sh
+
+	sleep 10
+}
+
+proc StopWebServer {} {
+	exec ../../main/Tmp/apache-tomcat-6.0.20/bin/shutdown.sh
+}
+
+proc RemoveWebServerLog {} {
+	exec rm -rf ../../main/Tmp/apache-tomcat-6.0.20/logs/catalina.out
+}
+
+proc EnableWebServerAuth {} {
+	exec chmod -R 777 ../../main/Tmp/apache-tomcat-6.0.20
+	exec cp -f ../../XML_API/API_Java/assets/Auth_server.xml ../../main/Tmp/apache-tomcat-6.0.20/conf/server.xml
+	exec cp -f ../../XML_API/API_Java/assets/Auth_tomcat-users.xml ../../main/Tmp/apache-tomcat-6.0.20/conf/tomcat-users.xml
+	exec cp -f ../../XML_API/API_Java/assets/Auth_server-config.wsdd ../../main/Tmp/apache-tomcat-6.0.20/webapps/axis/WEB-INF/server-config.wsdd
+	exec cp -f ../../XML_API/API_Java/assets/Auth_web.xml ../../main/Tmp/apache-tomcat-6.0.20/webapps/axis/WEB-INF/web.xml
+}
+
+proc DisableWebServerAuth {} {
+        exec cp -f ../../XML_API/API_Java/assets/NoAuth_server.xml ../../main/Tmp/apache-tomcat-6.0.20/conf/server.xml
+        exec cp -f ../../XML_API/API_Java/assets/NoAuth_tomcat-users.xml ../../main/Tmp/apache-tomcat-6.0.20/conf/tomcat-users.xml
+        exec cp -f ../../XML_API/API_Java/assets/NoAuth_server-config.wsdd ../../main/Tmp/apache-tomcat-6.0.20/webapps/axis/WEB-INF/server-config.wsdd
+	exec cp -f ../../XML_API/API_Java/assets/NoAuth_web.xml ../../main/Tmp/apache-tomcat-6.0.20/webapps/axis/WEB-INF/web.xml
+}
+
+proc ConfigureWebAuthOnSwitch { target } {
+        global ServerIP
+        global DUT1_CONNECT
+
+	Login $DUT1_CONNECT
+	SendACmd "configure xml-notification target $target user emanemos encrypted-auth ZW1hbmVtb3M6cGFzc3dvcmQ="
+}
+
+proc ConfigureWebInvalidAuthOnSwitch { target } {
+        global ServerIP
+        global DUT1_CONNECT
+
+        Login $DUT1_CONNECT
+        SendACmd "configure xml-notification target $target user invalid encrypted-auth ZW1hbmVtb3M6cGFzc3dvcmQ="
+}
+
+proc UnConfigureWebAuthOnSwitch { target } {
+        global ServerIP
+        global DUT1_CONNECT
+
+        Login $DUT1_CONNECT
+        SendACmd "configure xml-notification target $target user none"
+
+}
+
+proc AddNotificationTarget { target moduleList filterName enableAuth} {
+	global ServerIP
+	global XMLProtocol
+	global DUT1_CONNECT
+
+	if { [string match -nocase $XMLProtocol "http"] } {
+		set XMLPort 9080
+	} else {
+		set XMLPort 9443
+	}
+	
+	set url "$XMLProtocol://$ServerIP:$XMLPort/axis/services/eventPort"
+
+	Login $DUT1_CONNECT
+	SendACmd "create xml-notification target $target url $url"
+	foreach module $moduleList {
+		SendACmd "configure xml-notification target $target add $module"
+	}
+	SendACmd "create log target xml-notification $target"
+	SendACmd "configure log target xml-notification $target filter $filterName"
+	if { $enableAuth } {
+		ConfigureWebAuthOnSwitch $target
+	} 
+}
+
+proc AddSecondNotificationTarget { target moduleList filterName enableAuth} {
+        global ServerIP
+        global XMLProtocol
+        global DUT1_CONNECT
+
+        if { [string match -nocase $XMLProtocol "http"] } {
+                set XMLPort 10080
+        } else {
+                set XMLPort 10443
+        }
+
+        set url "$XMLProtocol://$ServerIP:$XMLPort/axis/services/eventPort"
+
+        Login $DUT1_CONNECT
+        SendACmd "create xml-notification target $target url $url"
+        foreach module $moduleList {
+                SendACmd "configure xml-notification target $target add $module"
+        }
+        SendACmd "create log target xml-notification $target"
+        SendACmd "configure log target xml-notification $target filter $filterName"
+        if { $enableAuth } {
+                ConfigureWebAuthOnSwitch $target
+        }
+}
+
+
+proc EnableNotificationTarget { target } {
+	
+	global DUT1_CONNECT
+	Login $DUT1_CONNECT
+	SendACmd "enable log target xml-notification $target"
+	SendACmd "enable xml-notification $target"
+}
+
+proc DisableNotificationTarget { target } {
+
+	global DUT1_CONNECT
+        SendACmd "disable log target xml-notification $target"
+        SendACmd "disable xml-notification $target"
+	Login $DUT1_CONNECT
+}
+
+proc RemoveNotificationTarget { target } {
+
+	global DUT1_CONNECT
+        SendACmd "delete xml-notification target $target"
+	Login $DUT1_CONNECT
+}
+
+proc readLogXmlNotification {  matchAttr  } {
+	set logFileName "../../main/Tmp/apache-tomcat-6.0.20/logs/catalina.out"
+	set logFile [open $logFileName r]
+	set msg [read $logFile]
+	foreach line [split $msg "\n"] {
+		if { [VerifyXmlNotification $line $matchAttr] } {
+			return 1
+		}
+	}	
+	result_debug "$matchAttr Not Found"
+	return 0
+}
+
+proc VerifyXmlNotification { keyValue matchAttr } {
+
+	foreach attr $matchAttr {
+		if {[string match -nocase *$attr* $keyValue]} {
+			result_debug "$attr Found"
+		} else {
+#			result_error "$attr Not Found"
+			return 0
+		}		
+	}
+	return 1
+}

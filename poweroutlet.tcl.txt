@@ -1,0 +1,1809 @@
+################################################################## 
+# Procedure Name: login_pwr_outlet
+#   
+# Description: 
+#   Internal proc that is used to login to 3 supported power outlets apc, wti
+#   or Mariner MEAD card.
+#   returns error or ok
+# Input args:
+#     ipAddr - Ip address of the power cycle device used to login
+#                
+# Output args: none
+# Return value: apc/wti/mead or error on failure
+#              
+#
+# Typical usage: 
+#
+#    set returnCode [login_pwr_outlet $ipAddr]
+#
+#
+# Category: Setup
+##################################################################
+proc login_pwr_outlet {ipAddr {numRetry 5}  {backOffTime 10} {password "extreme"}} {
+    global spawn_id
+    global spawn_ids
+    global telnet_pid
+    global MAIN
+ 
+    ;# We try several times to spawn telnet because only 1 telnet session is allowed
+    ;# per power cycler.  In the event there is already one connected, we backOff then
+    ;# retry.
+    if {![info exists MAIN(tmpSpawnIds)]} {
+        set MAIN(tmpSpawnIds) ""
+    }
+
+    for {set i 0}  {$i < $numRetry} {incr i} {
+        set connectStatus 1
+        set pTry 0
+        if [catch "spawn telnet $ipAddr" reason] {
+            result_warning "failed to spawn program: $reason\n"
+        }
+        set telnet_pid $reason
+        if {[lsearch $MAIN(tmpSpawnIds) $spawn_id] < 0} {
+            lappend MAIN(tmpSpawnIds) $spawn_id
+        }
+       
+        set timeout 2
+        result_debug "Login telnet $ipAddr,  pid=$spawn_id"
+        #wait for connection
+        after 700
+        send "\r"	
+        expect {
+            "?nable to ?onnect" {
+                expect *
+                result_warning "Unable to connect"		
+                set connectStatus 0
+            }
+            "closed by foreign host" {
+                result_warning "Connection closed by foreign host exp $expect_out(buffer)"
+                set connectStatus 0
+            }
+            "Connection refused" {
+                result_warning "Connection refused"
+                set connectStatus 0
+            }
+            "User Name : " {
+                send "apc\r"
+                expect -re "assword :*"
+                send "apc\r"
+                expect {
+                    " Control Console " {
+                        send "\r"
+                        expect -re "> "
+                        return "apc"
+                    }
+                    "apc>" {
+                        return "apc2016"
+                    }
+                }
+            }
+            "login: " {
+                send "extreme\r"
+                expect -re "Password*"
+                send "$password\r"
+                expect -re "> "
+                puts "sent extreme and $password"
+                return "mpc"
+            }
+            "MPC>" {
+                send "\r"
+                expect "MPC>"
+                return "mpc"
+            }
+            "Username:" {
+                send "extreme\r"
+                expect "Password:"
+                send "extreme\r"
+                expect {
+                    "LX:" {
+                        return "mrv"
+                    }
+                    "Sentry:" {
+                        return "mrv_sentry"
+                    }
+                    "Switched CDU:" {
+                        puts "***\nSentry Switched CDU\n***"
+                        return "mrv_sentry"
+                    }
+                    -re "Welcome to" {
+                        puts "***\nDUALCOM DUALCOM\n***"
+                        return "dualcom"
+                    }
+                }
+            }   
+            "Enter Password" {
+                send "$password\r"
+                expect "PS>"
+                return "wti_ips"
+            }
+            "NPS>" {
+                puts "1 send /s $spawn_id"
+                send "/S\r"
+                expect {
+                    -re "NPS>|NPS> " {
+                        puts "1 return wti_nps"
+                        return "wti_nps"
+                    } 
+                    "<ESC> to quit" {
+                        puts "1 continue"
+                        send "\r"
+                        exp_continue;
+                    }
+                }
+            }
+            "NPS> " {
+                puts "2 send /s"
+                send "/S\r"
+                expect {
+                    "NPS> " {
+                        puts "2 return wti_nps"
+                        return "wti_nps"
+                    }
+                    "<ESC> to quit" {
+                        puts "2 continue"
+                        send "\r"
+                        exp_continue;
+                    }
+                }
+            }
+            "IPS>" {
+                send "\/Sr"
+                expect "IPS>"
+                return "wti_ips"
+            }
+            "Mead" {
+                return "mead"
+            }
+            "for command menu" {
+                return "mead"
+            }
+            timeout {
+                incr pTry
+                if {$pTry < 4} {
+                    puts "timeout $pTry"
+                    #want to get a Login prompt or #
+                    send "\r"
+                    exp_continue
+                } else {
+                    puts "timeout $pTry"
+                    #want to get a Login prompt or #
+                    send "\r"
+                    catch {close -i $spawn_id} why
+                }
+            }
+        }
+    
+        if {$connectStatus == 0} {
+            result_warning "($i) Failed to spawn telnet to powerCycler: $reason...\
+                retrying after $backOffTime secs\n"
+            exSleep $backOffTime
+        }
+    }
+
+    result_debug "After $numRetry attempts, we failed to connect to \
+        PowerCycler at $ipAddr: $reason\n"
+    return "error"
+}
+
+################################################################## 
+# Procedure Name: power_cycle_apc
+#   
+# Description: 
+#   Internal proc that is used to power cycle a apc device
+#   Returns 1 on success
+# Input args:
+#     outletList - outlet List of the device to be power cycled
+#                
+# Output args: none
+#              
+# Return value: 1
+#
+# Typical usage: 
+#
+#    power_cycle_apc $destinationPorts
+#
+# Category: Setup
+##################################################################
+proc power_cycle_apc {outletList} {
+    global spawn_id
+    # Initialize an APC type variable
+    puts "Outlet list : $outletList"
+    set apcType 9606
+    # Control Console Menu
+    send "1\r"    ;# 1- Device Manager
+    ;# Support both APC powercycler menus for APC9606 and APC7906 and APC9617
+    expect {
+	-re "3- Outlet Control.*>" {
+	    # Device Manager Menu
+	    send "3\r"    
+	    expect -re "> "
+        }
+	-re "1- Outlet Control.*>" {
+	    # Device Manager Menu
+	    send "1\r"    
+	    expect -re "> "
+        }
+	-re "2- Outlet Management.*>" {
+	    # Device Manager Menu
+	    send "2\r"    
+            exp_continue;
+        }
+        -re "1- MasterSwitch plus.*" {
+            # Device Manager Menu for 9617
+            send "1\r"
+            expect -re "1- Outlet.*"
+            set apcType 9617
+        }
+	-re "Master Control.*>" {
+	    ;# Do nothing
+	}
+	timeout {
+	    ;# Do nothing
+	}
+    }
+
+    foreach outlet $outletList {
+        result_debug "\nTurning off power on outlet #$outlet\n"
+        send "$outlet\r"
+        expect -re  "> "
+        # Outlet $outlet: Menu
+        send "1\r"    ;# Control Outlet
+        expect -re  "> "
+        if {$apcType != 9617} {
+            # Control Outlet Menu
+            send "2\r"     ;# Immediate Off
+            expect -re "YES.* :"
+        } else {
+            # Control Outlet Menu for 9617
+            send "3\r"     ;# Immediate Off is 3 for 9617
+            expect -re "YES.* :"
+        }
+
+        send "YES\r"
+        expect -re "<ENTER> .* ..."
+        send "\r"
+        expect -re  "> "
+
+        # Control Outlet Menu
+        # EY-09-08-2005: Change delay to 1000 ms.
+        after 1000;
+        send "\033\r"
+        expect -re  "> "
+        send "\033\r"
+        expect -re  "> "
+    }
+    exSleep 10
+    foreach outlet $outletList {
+        result_debug "\nTurning on power on outlet #$outlet\n"
+        send "$outlet\r"
+        expect -re  "> "
+
+        # Outlet $outlet: Menu
+        send "1\r"    ;# Control Outlet
+        expect -re  "> "
+
+        # Control Outlet Menu
+        send "1\r"     ;# Immediate On
+        expect -re "YES.* :"
+
+        send "YES\r"
+        expect -re "<ENTER> .* ..."
+        send "\r"
+        send "\r"
+        expect -re  "> "
+
+        # Control Outlet Menu
+        after 500
+        send "\033\r"
+        expect -re  "> "
+        send "\033\r"
+        expect -re  "> "
+    }
+    send "\033\r"
+    expect -re  "> "
+    send "\033\r"
+    expect -re  "> "
+    send "\033\r"
+    expect -re  "> "
+
+    send "4\r" 
+    expect "Connection closed by foreign host"
+    return 1 
+}
+
+################################################################## 
+# Procedure Name: power_cycle_apc2016
+#   
+# Description: 
+#   Internal proc that is used to power cycle 220V rear mount APC
+#   Returns 1 on success
+# Input args:
+#     outletList - outlet List of the device to be power cycled
+#                
+# Output args: none
+#              
+# Return value: 1
+#
+# Typical usage: 
+#
+#    power_cycle_apc2016 $destinationPorts
+#
+# Category: Setup
+##################################################################
+proc power_cycle_apc2016 {outletList} {
+    global spawn_id
+    # Initialize an APC type variable
+    puts "Outlet list : $outletList"
+
+    foreach outlet $outletList {
+        result_debug "\nTurning off power on outlet #$outlet\n"
+        send "olOff $outlet\r"
+        expect -re  ">"
+    }
+    exSleep 4
+    foreach outlet $outletList {
+        result_debug "\nTurning on power on outlet #$outlet\n"
+        send "olOn $outlet\r"
+        expect -re  ">"
+    }
+    send "bye\r";
+    expect "Connection closed by foreign host"
+    return 1
+}
+
+################################################################## 
+# Procedure Name: PowerCycleDUT
+#   
+# Description: 
+#   A Top level proc that can be used to powerCycle a device of interest. 
+#   Currently APC and WTI are supported
+#
+#   Returns 1 on success and -1 on error
+#
+# Input args:
+#     dut    - DUT number (i.e.1-5) of the power cycle device to be power cycled
+#                
+# Output args: none
+# Return value: 1 on success or -1 on failure
+#              
+#
+# Typical usage: 
+#
+#    PowerCycleDUT $dut
+#
+#
+# Category: Setup
+##################################################################
+proc PowerCycleDUT {DUT {wait "YES"} {showError "true"} } {
+
+    set time1 [clock seconds]
+    global spawn_id
+    global telnet_pid
+
+    ;# Support OLD format
+    global POWERCYCLE_IP
+    global POWERCYCLE_PORTS
+
+    ;# New format array
+    global POWERCYCLE_DUT
+
+    set pCycleIp ""
+    set pCyclePasswd "extreme"
+
+    ;# First check if new config format exists
+    if {[info exists POWERCYCLE_DUT($DUT)]} {
+        ;# New format
+        result_debug "Using NEW format"   
+        set pCycleIp          [lindex $POWERCYCLE_DUT($DUT) 0]
+        set destinationPorts  [lindex $POWERCYCLE_DUT($DUT) 1]
+        if {[lindex $POWERCYCLE_DUT($DUT) 2] != ""} {
+            set pCyclePasswd      [lindex $POWERCYCLE_DUT($DUT) 2]
+        }
+	
+    } elseif {[info exists POWERCYCLE_IP] && [info exists POWERCYCLE_PORTS] } {
+        ;# Old format
+        result_debug "Using OLD format"   
+        set pCycleIp         $POWERCYCLE_IP
+        set destinationPorts [lindex $POWERCYCLE_PORTS [expr $DUT-1]]
+    } else {
+        result_debug "No Power Cycle configuration defined in Config file"   
+        ClearConsoleDUT $DUT
+        return -1
+    }
+    
+    global in
+    if {[info exists in] && $in != "main"} {
+        report_start_test "\n\nDUT $DUT Power Cycle"
+        result_ok "PowerCycleDUT $DUT Start: DUT:$DUT IP:$pCycleIp \
+        Ports:$destinationPorts, pCyclePasswd $pCyclePasswd.."
+        report_end_test
+    } else {
+        report_start_test "\n\nDUT $DUT Power Cycle"
+        if {$showError!="false"} {
+            result_error "PowerCycleDUT $DUT Start ERROR: DUT:$DUT IP:$pCycleIp \
+            Ports:$destinationPorts, pCyclePasswd $pCyclePasswd.."
+        } else {
+            result_ok "PowerCycleDUT $DUT Start: DUT:$DUT IP:$pCycleIp \
+            Ports:$destinationPorts, pCyclePasswd $pCyclePasswd.."
+        }
+        report_end_test
+    }
+    
+    
+
+    set returnCode [login_pwr_outlet $pCycleIp 5 20 $pCyclePasswd]
+    if {$returnCode=="error"} {
+        result_debug "Unable to connect to power cycle unit at $pCycleIp..."
+        return -1
+    } else {
+        result_debug "PowerCycleDut logged into $returnCode"
+    }
+
+    switch -- $returnCode \
+      "apc" {
+        power_cycle_apc $destinationPorts
+        if {$wait == "YES"} {
+            exSleep 180  ;# For PC platform in worst scenario with fsck
+        }
+    } "apc2016" {
+        power_cycle_apc2016 $destinationPorts
+        if {$wait == "YES"} {
+            exSleep 90  ;# For PC platform in worst scenario with fsck
+        }
+    } "wti" {
+        power_cycle_wti $destinationPorts
+        if {$wait == "YES"} {
+            exSleep 180
+        }
+    } "wti_nps" {
+        puts "Ports: $destinationPorts"
+        set destinationPorts [join $destinationPorts ","]
+        puts "Ports: $destinationPorts"
+        power_cycle_wti $destinationPorts
+        if {$wait == "YES"} {
+            exSleep 90
+        }
+    } "wti_ips" {
+        #puts "Ports: $destinationPorts"
+        #set destinationPorts [join $destinationPorts ","]
+        puts "Ports: $destinationPorts"
+        power_cycle_wti $destinationPorts
+        if {$wait == "YES"} {
+            exSleep 180
+        }
+    } "mead" {
+        power_cycle_mead
+        if {$wait == "YES"} {
+            exSleep 60
+        }
+    } "mrv" {
+        result_debug "Attempt to connect to MRV Power Controller"
+        power_cycle_mrv  $destinationPorts
+        if {$wait == "YES"} {
+            exSleep 60
+        }
+    } "mrv_sentry" {
+        result_debug "Attempt to connect to MRV Sentry Power Controller"
+        power_cycle_mrv_sentry  $destinationPorts
+        if {$wait == "YES"} {
+            exSleep 60
+        }
+    } "mpc" {
+        result_debug "Attempt to connect to MPC Power Cycler"
+        puts "Ports: $destinationPorts"
+        set destinationPorts [join $destinationPorts "+"]
+        puts "Ports: $destinationPorts"
+        power_cycle_mpc $destinationPorts
+        if {$wait == "YES"} {
+            result_debug "Wait for MPC Power Cycle of Ports: $destinationPorts"
+            exSleep 180
+        }
+    } "dualcom" {
+        result_debug "Attempt to connect to DUALCOM Power Controller"
+        power_cycle_dualcom  $destinationPorts
+        if {$wait == "YES"} {
+            exSleep 60
+        }
+    } "default" {
+    }
+    set time2 [clock seconds]
+    if [catch {close -i $spawn_id} reason] {
+        puts "Failed to close spawn_id $spawn_id Reason: $reason"
+    }
+    if [catch {wait} x] {
+        puts "Failed on wait : reason $x"
+    }
+    exSleep 1
+    result_debug "*** Time for power cycle $DUT = [expr $time2-$time1] secs\n\n"
+    result_debug "*** Close spawn_id $spawn_id ... Kill pid $telnet_pid"
+    return 1
+}
+
+################################################################## 
+# Procedure Name: power_cycle_wti
+#   
+# Description: 
+#   Internal proc to power cycle a wti device.
+#   carried over from webstacks code
+#
+# Input args:
+#     units   - port numbers on wti to be power cycled
+#                
+# Output args: none
+# Return value: none
+#              
+#
+# Typical usage: 
+#
+#    power_cycle_wti $destinationPort
+#
+#
+# Category: Setup
+##################################################################
+proc power_cycle_wti { units } {
+    set result 0
+    set done 0
+    global expect_out spawn_id
+
+    puts "spawn_id is $spawn_id"
+    #set unitLength [llength $units]
+    #if {$unitLength > 1} {
+    #    set unitString [join $units ","] ; # this is causing a problem for IPS powerCycle -- qdao
+    #    set unitString [join $units " "]
+    #} else {
+    #    set unitString $units
+    #}
+    exp_send "\r"
+    set unitString $units
+    result_debug "\nReboot power on ports #$units\n"
+    exSleep 1
+    expect {
+        "NPS>" {
+            result_debug "+++ [timestamp -format %T] 1 Send /boot $unitString"
+            exp_send "/boot $unitString \r"
+        }
+        "IPS>"  {
+            result_debug "--- [timestamp -format %T] ---"
+            result_debug "+++ [timestamp -format %T] +++"
+            exSleep 1
+            send "/boot $unitString\r"
+        }
+        -re "NPS*" {
+            result_debug "+++ regex [timestamp -format %T] 2 Send /boot $unitString"
+            exp_send "/boot $unitString \r"
+        }
+        "<ESC> to quit" {
+            exp_send "\r"
+            exp_continue;
+        } 
+        -re "IPS*"  {
+            result_debug "--- [timestamp -format %T] ---"
+            result_debug "+++ [timestamp -format %T] +++"
+            exSleep 1
+            send "/boot $unitString\r"
+        }
+        timeout {
+            result_debug "ERROR: power_cycle never received Command prompt"
+        }
+    }
+    expect {
+        -re "Sure.*: " {
+            result_debug "+++ [timestamp -format %T] Are you sure $unitString"
+            send "y\r"
+            expect -re ">"
+            send "\X\r"
+        } 
+        -re "Sure" {
+            result_debug "+++ [timestamp -format %T] 222 Are you sure $unitString"
+            send "y\r"
+            expect -re ">"
+            send "\X\r"
+        }
+        "NPS>" {
+            puts "sleep a couple of seconds to see if it reboots."
+            after 5000
+            result_debug "+++ [timestamp -format %T] +++ $unitString"
+            result_debug "Send Exit - exp $expect_out(buffer)"
+            send "\x"
+            return
+        }
+        "<ESC> to quit" {
+            exp_send "\r"
+            exp_continue;
+        }
+        "IPS>" {
+            result_debug "--- [timestamp -format %T] ---"
+            result_debug "Send Exit"
+            send "\x"
+        }
+        -re "NPS*" {
+            result_debug "--- [timestamp -format %T] ---"
+            result_debug "Send Exit"
+            send "\x"
+        }
+        -re "IPS*" {
+            result_debug "--- [timestamp -format %T] ---"
+            result_debug "Send Exit"
+            send "\x"
+        }
+        timeout {
+            result_debug "!!!!!!! ERROR: power_cycle never received Confirmation question"
+        }
+    }
+    expect {
+        -re "Sure.*: "  {
+            result_debug "+++ [timestamp -format %T] Logout - Are you sure? $unitString"
+            send "y\r"
+            set result 1
+            set done 1
+        }
+        "NPS>" {
+            send "\r"
+            set result 1
+            set done 1
+        }
+        "Disconnected" {
+        }
+        "<ESC> to quit" {
+            exp_send "\r"
+            exp_continue;
+        }
+        -re "NPS*" {
+            send "\r"
+            set result 1
+            set done 1
+        }
+        -re "IPS*" {
+            send "\r"
+            set result 1
+            set done 1
+        }
+        timeout {
+            result_debug "ERROR: power_cycle never received EXIT prompt"
+        }
+    }
+    exSleep 1
+}   
+
+
+
+################################################################## 
+# Procedure Name: power_cycle_mead
+#   
+# Description: 
+#   Internal proc to power cycle a Mariner Mead device.
+#
+# Output args: none
+# Return value: none
+#
+# Sample MEAD Login Screen
+#              
+# Mead PSU Controller
+# Copyright 2003 Extreme Networks
+#
+# PSU Commands               Description
+# ------------               -----------
+# digital <psu>  . . . . . . Read digital status for PSU (0-5).
+# enable <psu> . . . . . . . Enable PSU (0-5).
+# enableall  . . . . . . . . Enable all PSUs.
+# disable <psu>  . . . . . . Disable PSU (0-5).
+# disableall . . . . . . . . Disable all PSUs (0-5).
+# auto <psu> . . . . . . . . Auto-control PSU (0-5).
+# autoall  . . . . . . . . . Auto-control all PSUs.
+# range <psu> [low|high] . . Set PSU (0-5) AC range low or high.
+# registers <psu>  . . . . . Display PSU (0-5) registers.
+# read <psu> <reg> . . . . . Read PSU (0-5) register (00-7F).
+# write <psu> <reg> <data> . Write PSU (0-5) register (00-7F) data (00-FF).
+# rom <psu>  . . . . . . . . Display PSU (0-5) ROM contents.
+# romblock <psu> . . . . . . Display PSU (0-5) ROM block contents.
+# state  . . . . . . . . . . Display PSU state machine.
+#
+# Mead Commands              Description
+# -------------              -----------
+# mute . . . . . . . . . . . Set console output to mute.
+# terse  . . . . . . . . . . Set console output to terse.
+# verbose  . . . . . . . . . Set console output to verbose.
+# analog . . . . . . . . . . Display analog measurements.
+# get <offset> . . . . . . . Get Mead EEPROM (0000-3F00) data.
+# set <offset> <data>  . . . Set Mead EEPROM (0000-3FFF) data (00-FF).
+# temp . . . . . . . . . . . Display Mead temperature.
+# slot . . . . . . . . . . . Display Mead slot number.
+# zero . . . . . . . . . . . Zero Mead odometer.
+# rev  . . . . . . . . . . . Display Mead software revision.
+# reset  . . . . . . . . . . Reset Mead.
+#
+# 03/04/04: Notes on MEAD console.
+#            - No prompt on login.  When you attach to console you end up
+#              at the last line...reset..........Reset Mead.
+#            - Echos each char to screen with a new line
+#                 i.e. d
+#                      di
+#                      dis
+#                      disa
+#                      disab
+#            - Spews lots of status info onto console.  
+#            - Serial Cable Pinout (RJ45)
+#                       Xyplex   Mead
+#                       ------   ----
+#                      1 (CTS) - 2 (DCD)
+#                      2 (DTR) - 1 (DSR)
+#                      7 (DSR) - 3 (DTR)
+#                      4 (GND) - 4 (GND)
+#                      3 (TXD) - 5 (RXD)
+#                      6 (RXD) - 6 (TXD)
+#
+# Typical usage: 
+#
+#    power_cycle_mead
+#
+#
+# Category: Setup
+##################################################################
+proc power_cycle_mead {} {
+
+    result_debug "\nPower Cycling through MEAD..."
+
+#    send "reset\r"  ;# because of PD2-245459717, changed reset to disableall->enableall
+#    expect "Reset"
+    send "disableall\r"
+    expect "PSU_STATE_MEAD_DISABLE"
+    send "enableall\r"
+    expect "PSU_STATE_MEAD_ENABLE"
+    send "\035"  ;# logout, sends ctrl ]
+    expect "telnet>"  ;# sends q
+    send "q\r"
+
+}
+################################################################## 
+# Procedure Name: power_cycle_mpc
+#   
+# Description: 
+#   Internal proc to power cycle a NEW wti device.
+#   Login prompt,password prompt, basic prompt seem to be different
+#        from other wti
+#
+# Input args:
+#     units   - port numbers on wti to be power cycled
+#                
+# Output args: none
+# Return value: none
+#              
+#
+# Typical usage: 
+#
+#    power_cycle_mpc $destinationPort
+#
+#
+# Category: Setup
+##################################################################
+proc power_cycle_mpc { units } {
+    global spawn_id
+    result_debug "\nPower reboot ports #$units\n"
+    #exp_send "\r"
+    exp_send "\r"
+    expect {
+        "MPC>" {
+            puts "!!!\nBOOT $units\n!!!"
+	    exp_send "/BOOT $units\r"
+        }
+        "VMR>" {
+            exp_send "/BOOT $units\r"
+        }
+        timeout {
+            result_debug "ERROR: power reboot never received Command prompt"
+	    return -1
+        }
+    }
+# Confirm command
+    expect {
+        "Are" {
+	    exp_send "Y\r"
+	    exp_continue
+        } \
+        "Processing" {
+	    exp_send "\r"
+	    exp_continue
+        } \
+        "MPC>" {
+            exp_send "/X\r"
+        } \
+        "VMR>" {
+            exp_send "/X\r"
+        } \
+        timeout {
+            result_debug "ERROR: power reboot never received Processing confirmation"
+        }
+    }
+
+    result_debug "MPC Power cycle reboot complete"
+}
+################################################################## 
+# Procedure Name: power_cycle_dualcom
+#   
+# Description: 
+#   Internal proc to power cycle dual com ports
+#
+# Input args:
+#     units   - port numbers on dualcom to be power cycled
+#                
+# Output args: none
+# Return value: none
+#              
+#
+# Typical usage: 
+#
+#    power_cycle_dualcom $destinationPort
+#
+#
+# Category: Setup
+##################################################################
+proc power_cycle_dualcom { units } {
+    global spawn_id
+    set result 0
+    set done 0
+
+    result_debug "\nTurning off power on ports #$units\n"
+    exp_send "1";
+    expect {
+        -re "Edit Outlet States" {
+            puts "Got STATES"
+        }
+    }
+    foreach outlet $units {
+        result_debug "\nTurning off power on outlet # $outlet\n"
+        exp_send "$outlet"
+        expect *
+        exp_send -- "\055"
+        expect {
+            -re "OUTLET $outlet +OFF +0" {
+                puts "Got OFF $outlet"
+            }
+        }
+    }
+    exSleep 1
+    foreach outlet $units {
+        result_debug "\nTurning off power on outlet # $outlet\n"
+        exp_send "$outlet"
+        expect *
+        exp_send "\053"
+        expect {
+            -re "OUTLET $outlet +ON +0" {
+                puts "Got ON $outlet"
+            }
+        }
+    }
+    result_debug "Logout of Dualcom"
+    exp_send "\010"
+    expect {
+        -re "Main Menu" {
+            puts "GOT MAIN MENU"
+        }
+    }
+    #exp_continue
+    exSleep 1
+    send "4\r"
+puts "GOT END"
+    #exSleep 3;
+}
+################################################################## 
+# Procedure Name: power_cycle_mrv
+#   
+# Description: 
+#   Internal proc to power cycle mrv com ports
+#
+# Input args:
+#     units   - port numbers on dualcom to be power cycled
+#                
+# Output args: none
+# Return value: none
+#              
+#
+# Typical usage: 
+#
+#    power_cycle_mrv $destinationPort
+#
+#
+# Category: Setup
+##################################################################
+proc power_cycle_mrv { units } {
+    global spawn_id
+    result_debug "\nRebooting power on outlet #$units\n"
+    foreach outlet $units {
+        result_debug "\nRebooting power on outlet # $outlet\n"
+        send "reboot $outlet\r"
+        expect "LX:"
+    }
+    exSleep 20;
+    result_debug "Logout of MRV"
+    send "exit\r"
+}
+##################################################################
+# Procedure Name: power_cycle_mrv_sentry
+#
+# Description:
+#   Internal proc to power cycle mrv sentry com ports
+#
+# Input args:
+#     units   - port numbers to be power cycled
+#
+# Output args: none
+# Return value: none
+#
+#
+# Typical usage:
+#
+#    power_cycle_mrv_sentry $destinationPort
+#
+#
+# Category: Setup
+##################################################################
+proc power_cycle_mrv_sentry { units } {
+    result_debug "\nRebooting power on outlet #$units\n"
+    foreach outlet $units {
+        result_debug "\nRebooting power on outlet # $outlet\n"
+        send "reboot $outlet\r"
+        expect {
+            "Sentry:" {}
+            "Switched CDU:" {}
+        }
+    }
+    result_debug "Logout of MRV"
+    send "exit\r"
+}
+
+
+##################################################################
+#
+# Turn DUTs off when not in use
+#
+##################################################################
+
+################################################################## 
+# Procedure Name: PowerOffDUT
+#   
+# Description: 
+#   A Top level proc that can be used to power off a device of interest. 
+#
+#   Returns 1 on success and -1 on error
+#
+# Input args:
+#     dut    - DUT number (i.e.1-5) of the power off device to be power offd
+#                
+# Output args: none
+# Return value: 1 on success or -1 on failure
+#              
+#
+# Typical usage: 
+#
+#    PowerOffDUT $dut
+#
+#
+# Category: Setup
+##################################################################
+proc PowerOffDUT {DUT action} {
+
+    set time1 [clock seconds]
+    global spawn_id
+    global telnet_pid VBOXINFO
+    global POWERCYCLE_DUT
+    global MAIN
+
+    if {[info exists VBOXINFO($DUT,name)]} {
+        powerCycleVM $DUT $action
+        return
+    }
+
+    set MAIN(tmpSpawnIds) ""
+    set pOffIp ""
+    set pOffPasswd "extreme"
+
+    ;# First check if new config format exists
+    if {[info exists POWERCYCLE_DUT($DUT)]} {
+        set pOffIp          [lindex $POWERCYCLE_DUT($DUT) 0]
+        set destinationPorts  [lindex $POWERCYCLE_DUT($DUT) 1]
+        if {[lindex $POWERCYCLE_DUT($DUT) 2] != ""} {
+            set pOffPasswd      [lindex $POWERCYCLE_DUT($DUT) 2]
+        }
+    } else {
+        return 1
+    }
+
+    set returnCode [login_pwr_outlet $pOffIp 5 20 $pOffPasswd]
+    if {$returnCode=="error"} {
+        result_debug "Unable to connect to power controller at $pOffIp..."
+        return -1
+    }
+    puts "**** I think that I am on a $returnCode power cycler ****"
+    switch -- $returnCode \
+    "apc" {
+        puts "Getting ready to run power_off_apc"
+        power_off_apc $destinationPorts $action
+    } \
+    "apc2016" {
+        puts "Getting ready to run power_off_apc2016"
+        power_off_apc2016 $destinationPorts $action
+    } \
+    "mrv_sentry" {
+        puts "Getting ready to power $action power_off_apc2016"
+        power_off_mrv_sentry $destinationPorts $action
+    } \
+    "mpc" {
+        result_debug "Attempt to connect to MPC Power $action"
+        set destinationPorts [join $destinationPorts "+"]
+        puts "Ports: $destinationPorts"
+        power_off_mpc $destinationPorts $action
+    } \
+    "mrv" {
+        power_off_mrv $destinationPorts $action
+    } \
+    "wti" {
+        power_off_wti $destinationPorts $action
+    } \
+    "wti_nps" {
+        puts "Ports: $destinationPorts"
+        set destinationPorts [join $destinationPorts ","]
+        puts "Ports: $destinationPorts"
+        power_off_wti $destinationPorts $action
+    } \
+    "wti_ips" {
+        puts "Ports: $destinationPorts"
+        power_off_wti $destinationPorts $action
+    } \
+    "dualcom" {
+        result_debug "Attempt to turn $action $destinationPorts DUALCOM Power Controller"
+        power_off_dualcom  $destinationPorts $action
+    } \
+    default {
+        result_debug "*** No power $action procedure for $DUT\n\n"
+        return -1
+    }
+    set time2 [clock seconds]
+    if [catch {close -i $spawn_id} reason] {
+        puts "Failed to close spawn_id $spawn_id Reason: $reason"
+    }
+    if [catch {wait} x] {
+        puts "Failed on wait : reason $x"
+    }
+    exSleep 1
+    result_debug "*** Time for power $action $DUT = [expr $time2-$time1] secs\n\n"
+    result_debug "*** Spawn_id $spawn_id  Telnet PID $telnet_pid\n\n"
+    foreach sid $MAIN(tmpSpawnIds) {
+        catch {close -i $sid} reason
+    } 
+    #send "exit\r"
+}
+
+################################################################## 
+# Procedure Name: power_off_mpc
+#   
+# Description: 
+#   Internal proc to power off a NEW wti device.
+#   Login prompt,password prompt, basic prompt seem to be different
+#        from other wti
+#
+# Input args:
+#     units   - port numbers on wti to be power off-ed
+#                
+# Output args: none
+# Return value: none
+#              
+#
+# Typical usage: 
+#
+#    power_off_mpc $destinationPort $action
+#
+#
+# Category: Setup
+##################################################################
+proc power_off_mpc { units action } {
+    global spawn_id
+    result_debug "\nMPC Power $action ports #$units\n"
+    exp_send "\r"
+    exSleep 1
+    expect {
+        "MPC>" {
+            result_debug "Rcvd MPC> --- [timestamp -format %T] ---"
+	    switch $action {
+		"off" {exp_send "/OFF $units\r"}
+		"on" {exp_send "/ON $units\r"}
+	    }
+        }
+        "VMR>" {
+            result_debug "Rcvd VMR> --- [timestamp -format %T] ---"
+            switch $action {
+                "off" {exp_send "/OFF $units \r";}
+                "on" {exp_send "/ON $units\r"; puts "turn on"}
+            }
+        }
+        timeout {
+            result_debug "ERROR: power $action never received Command prompt"
+	    return -1
+        }
+    }
+# Confirm command
+   exSleep 1
+    expect {
+        -re "Are" {
+            result_debug "Rcvd Are you sure --- [timestamp -format %T] ---"
+	    exp_send "Y\r"
+	    exp_continue
+        } 
+        -re "rocessing" {
+            result_debug "Rcvd Processing --- [timestamp -format %T] ---"
+	    exp_send "\r"
+	    exp_continue
+        } 
+        "MPC>" {
+            result_debug "Power $action complete --- [timestamp -format %T] ---"
+            exp_send "/X\r"
+        } 
+        "VMR>" {
+            result_debug "Power $action complete --- [timestamp -format %T] ---"
+            exp_send "/X\r"
+        } 
+        timeout {
+            result_debug "ERROR: power $action never received Processing confirmation"
+        }
+    }
+
+# Confirm logout
+    expect {
+        "Disconnected"  {
+            result_debug "Rcvd Disconnected --- [timestamp -format %T] ---"
+            result_debug "#$units Successfully Powered $action!"
+        }
+        timeout {
+            result_debug "Did not receive Disconnected message after logoff"
+	}
+    }
+    return 1
+}
+
+################################################################## 
+# Procedure Name: power_off_apc
+#   
+# Description: 
+#   Internal proc that is used to power off a apc device
+#   Returns 1 on success
+# Input args:
+#     outletList - outlet List of the device to be power offd
+#                
+# Output args: none
+#              
+# Return value: 1
+#
+# Typical usage: 
+#
+#    power_off_apc $destinationPorts
+#
+# Category: Setup
+##################################################################
+proc power_off_apc {outletList action} {
+    global spawn_id
+    puts "@@@\n@@@\nAPC Outlet List: $outletList \n@@@\n@@@"
+    foreach outlet $outletList {
+	expect {
+	     "1- Device Manager" {
+		    exp_send "1\r"
+		}
+	     timeout {
+		result_debug "Timeout Disconnect1"
+		return 1 
+		}
+	}
+	expect {
+	    "1- MasterSwitch" {
+		    exp_send "1\r"
+		    exp_continue
+		}
+	    "9- Master Control/Config" {
+		    exp_send "$outlet\r"
+		}
+	    "9- ALL Outlets" {
+		    exp_send "$outlet\r"
+		}
+            "2- Outlet Management" {
+                    exp_send "2\r"
+                    expect "> "
+                    exp_send "1\r"
+                    expect "> "
+                    exp_send "$outlet\r"
+                }
+
+	    timeout {
+		result_debug "Timeout Disconnect2"
+		return 1 
+		}
+	}
+	expect {
+	    "1- Control Outlet" {
+		    exp_send "1\r"
+		}
+	    "1- Outlet Control" {
+		    exp_send "1\r"
+		}
+	    timeout {
+		result_debug "Timeout Disconnect3"
+		return 1 
+		}
+	}
+	expect {
+	    "2- Immediate Off" {
+		    switch $action {
+			"on" { exp_send "1\r" } \
+			"off" { exp_send "2\r" }
+		    }
+		}
+	    "2- Delayed On" {
+		    switch $action {
+			"on" { exp_send "1\r" } \
+			"off" { exp_send "3\r" }
+		    }
+		}
+	    timeout {
+		result_debug "Timeout Disconnect4"
+		return 1 
+		}
+	}
+	expect {
+	    "Enter 'YES' to continue" {
+		    exp_send "YES\r"
+		    exp_continue
+		}
+	    "Press <ENTER> to continue" {
+		    exp_send "\r"
+		    exp_sleep 1
+		    exp_send "\033"
+		    exp_sleep 1
+		    exp_send "\033"
+		    exp_sleep 1
+		    exp_send "\033"
+                    expect {
+                        "1- Outlet Control" {
+                            exp_send "\033"
+                            exp_continue
+                        }
+                        "1- MasterSwitch" {
+                            exp_send "\033"
+                            exp_continue
+                        }
+                        "1- Bank Management" {
+                            exp_send "\033"
+                            exp_continue
+                        }
+                        "4- Logout" {
+                            puts "Hit Logout Prompt"
+                            exp_send "4"
+                            return 1
+                        }
+                        timeout {
+                            result_debug "E1 Timeout Disconnect"
+                            return 1
+                        }
+	           }
+            }
+	    timeout {
+		puts "Timeout Disconnect5"
+		return 1 
+            }
+	}
+    }
+puts "Hit the end somehow"
+    exp_send "4\r"
+    return 1 
+}
+################################################################## 
+# Procedure Name: power_off_apc2016
+#   
+# Description: 
+#   Internal proc that is used to power off a apc 220Volt rear mount
+#   Returns 1 on success
+# Input args:
+#     outletList - outlet List of the device to be power offd
+#                
+# Output args: none
+#              
+# Return value: 1
+#
+# Typical usage: 
+#
+#    power_off_apc2016 $destinationPorts
+#
+# Category: Setup
+##################################################################
+proc power_off_apc2016 {outletList action} {
+    global spawn_id
+    puts "@@@\n@@@\nAPC Outlet List: $outletList \n@@@\n@@@"
+    foreach outlet $outletList {
+        switch $action {
+            "on" { exp_send "olOn $outlet\r" } \
+            "off" { exp_send "olOFF $outlet\r" }
+        }
+        expect "apc>"
+    }
+    exp_send "bye\r"
+    return 1
+}
+################################################################## 
+# Procedure Name: power_off_mrv
+#   
+# Description: 
+#   Internal proc that is used to power off a mrv device
+#   Returns 1 on success
+# Input args:
+#     outletList - outlet List of the device to be power offd
+#                
+# Output args: none
+#              
+# Return value: 1
+#
+# Typical usage: 
+#
+#    power_off_mrv $destinationPorts
+#
+# Category: Setup
+##################################################################
+proc power_off_mrv {outletList action} {
+    global spawn_id
+    exp_send "\r"
+    foreach outlet $outletList {
+	expect {
+	    "LX:" {
+		switch $action {
+		    "on" { exp_send "ON $outlet\r" } \
+		    "off" { exp_send "OFF $outlet\r" }
+		}
+	    }
+	    timeout {
+		result_debug "Timeout Disconnect"
+		return 1 
+	    }
+	}
+    }
+    expect {
+	"LX:" {
+	    exp_send "LOGOUT\r"
+	}
+	timeout {
+	    result_debug "Timeout Disconnect"
+	    return 1 
+	}
+    }
+    return 1 
+}
+##################################################################
+# Procedure Name: power_off_mrv_sentry
+#
+# Description:
+#   Internal proc that is used to power off a mrv device
+#   Returns 1 on success
+# Input args:
+#     outletList - outlet List of the device to be power offd
+#
+# Output args: none
+#
+# Return value: 1
+#
+# Typical usage:
+#
+#    power_off_mrv_sentry $destinationPorts
+#
+# Category: Setup
+##################################################################
+proc power_off_mrv_sentry {outletList action} {
+    exp_send "\r"
+    foreach outlet $outletList {
+        expect {
+            "Sentry:" {
+                switch $action {
+                    "on" { exp_send "ON $outlet\r" } \
+                    "off" { exp_send "OFF $outlet\r" }
+                }
+            }
+            "Switched CDU:" {
+                switch $action {
+                    "on" { exp_send "ON $outlet\r" } \
+                    "off" { exp_send "OFF $outlet\r" }
+                }
+            }
+            timeout {
+                result_debug "Timeout Disconnect"
+                catch {exp_close} what
+                catch {wait} what
+                after 1000
+                return 1
+            }
+        }
+    }
+    expect {
+        "Sentry:" {
+            exp_send "LOGOUT\r"
+        }
+        "Switched CDU:" {
+            exp_send "LOGOUT\r"
+        }
+        timeout {
+            result_debug "Timeout Disconnect"
+            catch {exp_close} what
+            catch {wait} what
+            after 1000
+            return 1
+        }
+    }
+    #catch {exp_close} what
+    #catch {wait} what
+    #after 1000
+    return 1
+}
+##################################################################
+# Procedure Name: power_off_dualcom
+#
+# Description:
+#   Internal proc to power off dual com ports
+#
+# Input args:
+#     units   - port numbers on dualcom to be powered off/on
+#
+# Output args: none
+# Return value: none
+#
+#
+# Typical usage:
+#
+#    power_off_dualcom $destinationPort $action
+#
+#
+# Category: Setup
+##################################################################
+proc power_off_dualcom { units action} {
+    global spawn_id
+    set result 0
+    set done 0
+
+    result_debug "\nTurning $action power on ports #$units\n"
+    exp_send "1";
+    expect {
+        -re "Edit Outlet States" {
+            puts "Got STATES"
+        }
+    }
+    foreach outlet $units {
+        result_debug "\nTurning $action power on outlet # $outlet\n"
+        exp_send "$outlet"
+        expect *
+        if {$action == "off"} {
+            exp_send -- "\055"
+        } else {
+            exp_send -- "\053"
+        }
+        expect {
+            -re "OUTLET $outlet +OFF +0" {
+                puts "Got OFF $outlet"
+            }
+            -re "OUTLET $outlet +ON +0" {
+                puts "Got ON $outlet"
+            }
+        }
+    }
+    result_debug "Logout of Dualcom"
+    exp_send "\010"
+    expect {
+        -re "Main Menu" {
+            puts "GOT MAIN MENU"
+        }
+    }
+    exSleep 1
+    send "4\r"
+    puts "END Dualcom $action"
+}
+##################################################################
+# Procedure Name: power_off_wti
+#
+# Description:
+#   Internal proc to power off/on a wti device.
+#
+# Input args:
+#     units   - port numbers on wti to be power cycled
+#     action  - off | on
+#
+# Output args: none
+# Return value: none
+#
+#
+# Typical usage:
+#
+#    power_off_wti $destinationPort $action
+#
+#
+# Category: Setup
+##################################################################
+proc power_off_wti { units action } {
+    global spawn_id
+    set result 0
+    set done 0
+    global expect_out spawn_id
+
+    exp_send "\r"
+    set unitString $units
+    result_debug "\nTurning $action power on ports #$units\n"
+    exSleep 3
+    expect {
+        "NPS>" {
+            result_debug "+++ NPS Send /$action $unitString"
+            exp_send "/$action $unitString \r"
+        }
+        "IPS>"  {
+            result_debug "+++ IPS Send /$action $unitString"
+            exSleep 1
+            send "/$action $unitString\r"
+        }
+        -re "NPS*" {
+            result_debug "+++ NPS 2 Send /$action $unitString"
+            exp_send "/$action $unitString \r"
+        }
+        -re "IPS*"  {
+            result_debug "+++ IPS 2 Send /$action $unitString"
+            exSleep 1
+            send "/$action $unitString\r"
+        }
+        timeout {
+            result_debug "ERROR: power_cycle never received Command prompt"
+        }
+    }
+    expect {
+        -re "Sure.*: " {
+            result_debug "+++ [timestamp -format %T] Are you sure $unitString"
+            send "y\r"
+        }
+        -re "Sure" {
+            result_debug "+++ [timestamp -format %T] 222 Are you sure $unitString"
+            send "y\r"
+        }
+        "NPS>" {
+            result_debug "+++ [timestamp -format %T] +++ $unitString"
+            result_debug "No confirmation prompt seen 1 - exp $expect_out(buffer)"
+            send "\r"
+        }
+        "IPS>" {
+            result_debug "--- [timestamp -format %T] ---"
+            result_debug "+++ [timestamp -format %T] +++"
+            result_debug "No confirmation prompt seen"
+            send "\r"
+        }
+        -re "NPS*" {
+            result_debug "--- [timestamp -format %T] ---"
+            result_debug "+++ [timestamp -format %T] +++"
+            result_debug "No confirmation prompt seen 2"
+            send "\r"
+        }
+        -re "IPS*" {
+            result_debug "--- [timestamp -format %T] ---"
+            result_debug "+++ [timestamp -format %T] +++"
+            result_debug "No confirmation prompt seen"
+            send "\r"
+        }
+        timeout {
+            result_debug "!!!!!!! ERROR: power_cycle never received Confirmation question"
+        }
+    }
+    expect {
+        "NPS>" {
+            result_debug "+++ [timestamp -format %T] +++ Exit NPS $unitString"
+            send "/X\r"
+        }
+        "IPS>"  {
+            result_debug "--- [timestamp -format %T] ---"
+            result_debug "+++ [timestamp -format %T] +++"
+            send "/X\r"
+        }
+        -re "NPS*" {
+            result_debug "--- [timestamp -format %T] ---"
+            result_debug "+++ [timestamp -format %T] +++ 2"
+            send "/X\r"
+        }
+        -re "IPS*"  {
+            result_debug "--- [timestamp -format %T] ---"
+            result_debug "+++ [timestamp -format %T] +++"
+            send "/X\r"
+        }
+        timeout {
+            result_debug "ERROR: power_cycle never received Command prompt #2"
+        }
+    }
+    expect {
+        -re "Sure.*: "  {
+            result_debug "+++ [timestamp -format %T] Logout - Are you sure? $unitString"
+            send "y\r"
+            set result 1
+            set done 1
+        }
+        "NPS>" {
+            result_debug "--- [timestamp -format %T] ---"
+            result_debug "+++ [timestamp -format %T] +++"
+            result_debug "No confirmation prompt seen 1"
+            send "\r"
+            set result 1
+            set done 1
+        }
+        "IPS>" {
+            result_debug "--- [timestamp -format %T] ---"
+            result_debug "+++ [timestamp -format %T] +++"
+            result_debug "No confirmation prompt seen"
+            send "\r"
+            set result 1
+            set done 1
+        }
+        -re "NPS*" {
+            result_debug "--- [timestamp -format %T] ---"
+            result_debug "+++ [timestamp -format %T] +++"
+            result_debug "No confirmation prompt seen 2"
+            send "\r"
+            set result 1
+            set done 1
+        }
+        -re "IPS*" {
+            result_debug "--- [timestamp -format %T] ---"
+            result_debug "+++ [timestamp -format %T] +++"
+            result_debug "No confirmation prompt seen"
+            send "\r"
+            set result 1
+            set done 1
+        }
+        timeout {
+            result_debug "ERROR: power_cycle never received EXIT prompt"
+        }
+    }
+}
+##################################################################
+# Procedure Name: PowerCycleBpes
+#
+# Description:
+#   A Top level proc that can be used to powerCycle Bpe Slots
+#   In event that they crash
+#
+#   Returns 1 on success and -1 on error
+#
+# Input args:
+#     dut    - DUT number (i.e.1-5) of the power cycle device to be power cycled
+#
+# Output args: none
+# Return value: 1 on success or -1 on failure
+#
+#
+# Typical usage:
+#
+#    PowerCycleDUT $dut
+#
+#
+# Category: Setup
+##################################################################
+proc PowerCycleBpes {args} {
+    global POWERCYCLE_BPE spawn_id
+    parse_args PowerCycleBpes $args {
+        DUT       "1"
+        showError "false"
+        wait      "YES"
+    }
+
+    set time1 [clock seconds]
+
+    set pCycleIp ""
+    set pCyclePasswd "extreme"
+
+    ;# First check if new config format exists
+    if {[info exists POWERCYCLE_BPE($DUT)]} {
+        set pCycleIp          [lindex $POWERCYCLE_BPE($DUT) 0]
+        set destinationPorts  [lindex $POWERCYCLE_BPE($DUT) 1]
+        if {[lindex $POWERCYCLE_BPE($DUT) 2] != ""} {
+            set pCyclePasswd      [lindex $POWERCYCLE_DUT($DUT) 2]
+        }
+    } else {
+        result_debug "No BPE Power Cycler configuration defined in Config file"
+        return -1
+    }
+
+    global in
+    if {[info exists in] && $in != "main"} {
+        report_start_test "\n\nDUT $DUT Power Cycle"
+        result_ok "Power Cycle BPE $DUT Start: DUT:$DUT IP:$pCycleIp \
+        Ports:$destinationPorts, pCyclePasswd $pCyclePasswd.."
+        report_end_test
+    } else {
+        report_start_test "\n\nDUT $DUT Power Cycle"
+        if {$showError!="false"} {
+            result_error "PowerCycleBPE $DUT Start ERROR: DUT:$DUT IP:$pCycleIp \
+            Ports:$destinationPorts, pCyclePasswd $pCyclePasswd.."
+        } else {
+            result_ok "PowerCycleDUTBPE $DUT Start: DUT:$DUT IP:$pCycleIp \
+            Ports:$destinationPorts, pCyclePasswd $pCyclePasswd.."
+        }
+        report_end_test
+    }
+
+
+
+    set returnCode [login_pwr_outlet $pCycleIp 5 20 $pCyclePasswd]
+    if {$returnCode=="error"} {
+        result_debug "Unable to connect to power cycle unit at $pCycleIp..."
+        return -1
+    }
+
+    switch -- $returnCode \
+      "apc" {
+        power_cycle_apc $destinationPorts
+        if {$wait == "YES"} {
+            exSleep 60  ;# For PC platform in worst scenario with fsck
+        }
+    } "apc2016" {
+        power_cycle_apc2016 $destinationPorts
+        if {$wait == "YES"} {
+            exSleep 60  ;# For PC platform in worst scenario with fsck
+        }
+    } "wti" {
+        power_cycle_wti $destinationPorts
+        if {$wait == "YES"} {
+            exSleep 60
+        }
+    } "wti_nps" {
+        puts "Ports: $destinationPorts"
+        set destinationPorts [join $destinationPorts ","]
+        puts "Ports: $destinationPorts"
+        power_cycle_wti $destinationPorts
+        if {$wait == "YES"} {
+            exSleep 60
+        }
+    } "wti_ips" {
+        #puts "Ports: $destinationPorts"
+        #set destinationPorts [join $destinationPorts ","]
+        puts "Ports: $destinationPorts"
+        power_cycle_wti $destinationPorts
+        if {$wait == "YES"} {
+            exSleep 60
+        }
+    } "mead" {
+        power_cycle_mead
+        if {$wait == "YES"} {
+            exSleep 60
+        }
+    } "mrv" {
+        result_debug "Attempt to connect to MRV Power Controller"
+        power_cycle_mrv  $destinationPorts
+        if {$wait == "YES"} {
+            exSleep 60
+        }
+    } "mrv_sentry" {
+        result_debug "Attempt to connect to MRV Sentry Power Controller"
+        power_cycle_mrv_sentry  $destinationPorts
+        if {$wait == "YES"} {
+            exSleep 60
+        }
+    } "mpc" {
+        result_debug "Attempt to connect to MPC Power Cycler"
+        puts "Ports: $destinationPorts"
+        set destinationPorts [join $destinationPorts "+"]
+        puts "Ports: $destinationPorts"
+        power_cycle_mpc $destinationPorts
+        if {$wait == "YES"} {
+            result_debug "Wait for MPC Power Cycle of Ports: $destinationPorts"
+            exSleep 60
+        }
+    } "dualcom" {
+        result_debug "Attempt to connect to DUALCOM Power Controller"
+        power_cycle_dualcom  $destinationPorts
+        if {$wait == "YES"} {
+            exSleep 60
+        }
+    } "default" {
+    }
+    set time2 [clock seconds]
+    if [catch {close -i $spawn_id} reason] {
+        puts "Failed to close spawn_id $spawn_id Reason: $reason"
+    }
+    if [catch {wait} x] {
+        puts "Failed on wait : reason $x"
+    }
+    exSleep 1
+    result_debug "*** Time for power cycle $DUT = [expr $time2-$time1] secs\n\n"
+    result_debug "*** Close spawn_id $spawn_id ..."
+    return 1
+}

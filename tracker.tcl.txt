@@ -1,0 +1,175 @@
+catch {package require mysqltcl}
+#################################################################################
+# Procedure: _GetResultBuild
+# 
+#
+#
+#
+#################################################################################
+proc _GetPostResultBuild {} {
+    global MAIN DUTs_info
+
+    if {[info exists DUTs_info(DUT1,imageBooted)] && \
+        [info exists DUTs_info(DUT1,priImage)] && \
+        [info exists DUTs_info(DUT1,secImage)]} {
+
+        if {[regexp -nocase "pri" $DUTs_info(DUT1,imageBooted)]} {
+            set MAIN(RESULTBUILD) $DUTs_info(DUT1,priImage)
+        } else {
+            set MAIN(RESULTBUILD) $DUTs_info(DUT1,secImage)
+        }
+    }
+
+}
+###############################################################################
+# Connect to tracker
+###############################################################################
+proc tracker_db_connect {} {
+    global mysqlstatus MAIN
+    set user GHundertmark-RO
+    set password GHundertmark-RO
+
+    if {![info exists MAIN(USETRACKER)] || !$MAIN(USETRACKER)} {
+        return "fail";
+    }
+
+    if {[catch {mysqlconnect -host tracker -user $user -password $password -db tracker} handle]} {
+        puts "\nFAILED TO Connect to db -host tracker -user $user"
+        return "fail"
+    }
+    puts "\nConnect to db -host tracker"
+    set MAIN(TRACKERHANDLE) $handle
+    return $handle
+}
+###############################################################################
+#
+###############################################################################
+proc close_mysql_handle {hdl} {
+    global MAIN
+
+    if {[regexp -nocase "my" $hdl]} {
+        set MAIN(TRACKERHANDLE) "null"
+        set MAIN(RESDBHANDLE)   "null"
+        catch {mysqlclose $hdl} reason
+    } 
+}
+###############################################################################
+# Get tracker bugNumber if exists grant
+############################################################################### 
+proc tracker_get_bugnumber {args} {
+    global CRINFO MAIN
+    parse_args tracker_get_bugnumber $args {
+        testcase  "null"
+        testplan  "null"
+        release   "null"
+        filterout "null"
+        handle    "null"
+    }
+    set myCRs ""
+    set select_query "SELECT DISTINCT BD.bugNumber, BD.globalState, BD.status, UAM.autoManual "
+    append select_query "FROM bugDescriptions BD "
+    append select_query "LEFT JOIN udfAutoManual UAM ON BD.bugNumber = UAM.bugNumber "
+    append select_query "LEFT JOIN udfFeatures UF ON BD.bugNumber = UF.bugNumber "
+    append select_query "LEFT JOIN udfTestCase UTC ON BD.bugNumber = UTC.bugNumber "
+    append select_query "LEFT JOIN udfTestPlan UTP ON BD.bugNumber = UTP.bugNumber "
+    append select_query "LEFT JOIN releaseTracking RT on BD.bugNumber = RT.bugNumber "
+    append select_query "WHERE BD.productFamily = 'xos' "
+    append select_query "AND RT.targetReleaseId = '$release' "
+    append select_query "AND (UF.features = '$testplan' OR UF.features LIKE '% $testplan' OR "
+    append select_query "UF.features LIKE '$testplan %' OR UF.features LIKE '% $testplan %' OR "
+    append select_query "UTP.testPlan = '$testplan' OR UTP.testPlan LIKE '$testplan %' OR "
+    append select_query "UTP.testPlan LIKE '% $testplan' OR UTP.testPlan LIKE '% $testplan %') "
+    append select_query "AND (UTC.testCase = '$testcase' OR UTC.testCase LIKE '$testcase %' OR "
+    append select_query "UTC.testCase LIKE '% $testcase' OR UTC.testCase LIKE '% $testcase %')";
+
+    _writeMALog "$select_query"
+
+    set qout [mysqlsel $handle $select_query -list]
+    foreach r $qout {
+        set cr [lindex $r 0]
+        set gState [lindex $r 1]
+        regsub {[ ]+} $gState "_" gState
+        set status [lindex $r 2]
+        regsub {[ ]+} $status "_" status
+        set auto   [lindex $r 3]
+        if {[regexp -nocase $filterout $status]} {
+            #puts "skipped f $filterout s $status";
+            continue;
+        }
+        puts "Found CR: $cr : globalState: $gState status: $status autoState: $auto"
+        set CRINFO($cr,globalState) $gState;
+        set CRINFO($cr,status) $status;
+        set CRINFO($cr,auto) $auto;
+        set CRINFO($cr,testcase) $testcase;
+        lappend myCRs $cr
+        lappend MAIN(CRLIST) $cr;
+        lappend MAIN(CRTESTCASELIST) $testcase
+    }
+    return $myCRs
+}
+###############################################################################
+# Get tracker REL.releaseName from a build
+###############################################################################
+proc tracker_get_releaseInfo {args} {
+
+    parse_args tracker_get_bugnumber $args {
+        build    "null"
+        getType  "name"
+        handle   "null"
+    }
+
+    set select_query "SELECT REL.releaseId, REL.releaseName "
+    append select_query "FROM releases REL "
+    append select_query "LEFT Join builds BLD on REL.releaseId = BLD.releaseId "
+    append select_query "WHERE BLD.buildName = '$build' AND REL.productId = '132'";
+
+    set qout [mysqlsel $handle $select_query -list]
+    foreach r $qout {
+        if {$getType == "name"} {
+            return [lindex $r 1]
+        } else {
+            return [lindex $r 0]
+        }
+    }
+
+}
+###############################################################################
+# GetTestCaseCRS
+###############################################################################
+proc GetTestCaseCRS {args} {
+    global MAIN
+
+    parse_args GetTestCaseCRS $args {
+        testcase    "null"
+        close_hdl   "null"
+    }
+
+    set CRLIST ""
+    if {![info exists MAIN(RESULTBUILD)] || ![info exists MAIN(feature_directory)]} {
+        return ""
+    }
+
+    if {$MAIN(TRACKERHANDLE) != "null"} {
+        set h [tracker_db_connect]
+    } else {
+        set h $MAIN(TRACKERHANDLE)
+    }
+    if {$h == "fail"} {
+        return "";
+    }
+    set r [tracker_get_releaseInfo -build "$MAIN(RESULTBUILD)" -getType "id" -handle $h]
+    if {$r > 100} {
+        # --- no filters for now -filterout "resolv|close"
+        set CRLIST [tracker_get_bugnumber -handle $h -testcase $testcase \
+                      -testplan $MAIN(feature_directory) -release "$r"]
+        if {$close_hdl != "null"} {
+            close_mysql_handle $h
+        }
+        return $CRLIST
+    } else {
+        if {$close_hdl != "null"} {
+            close_mysql_handle $h
+        }
+        return ""
+    }
+}

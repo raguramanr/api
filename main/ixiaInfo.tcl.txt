@@ -1,0 +1,273 @@
+#!/usr/bin/tclsh
+
+package require Tclx
+source ../Lib/mainLib.tcl
+#package require IxTclHal
+# Connect to chassis and get chassis ID
+
+#set hostList {"10.68.7.90" "10.68.7.91" "10.68.4.3" "10.68.40.50" "10.68.1.73" "10.68.1.74" "10.68.1.42" "10.67.40.200" \
+#              "10.68.102.100" "10.68.103.100" "10.68.105.111" "10.68.105.100"}
+
+#set hostList {"10.69.1.247" "10.120.40.113" "10.127.13.249" "10.127.7.226" "10.127.8.127" "10.222.1.201" "10.50.3.30" "10.50.3.71" "10.51.3.30" "10.52.2.188" "10.52.2.189" "10.52.8.62" "10.59.1.99" "10.67.40.200" "10.68.1.42" "10.68.1.73" "10.68.1.74" "10.68.102.100" "10.68.103.100" "10.68.105.100" "10.68.105.111" "10.68.4.3" "10.68.40.50" "10.68.7.90" "10.68.7.91" "10.69.1.201" "10.69.1.205" "10.69.1.213" "10.69.1.216" "10.69.1.224" "10.69.1.227" "10.69.1.228" "10.69.1.251" "10.69.5.150" "10.69.5.151" "10.69.5.153" "10.69.5.154" "10.69.6.110" "10.69.6.111"}
+
+#set hostList {"10.69.1.125" "10.66.1.9" "10.66.65.50" "10.68.61.51" "10.120.40.113" "10.127.13.249" "10.127.7.226" "10.127.8.127" "10.222.1.201" "10.50.3.30" "10.50.3.71" "10.51.3.30" "10.52.2.188" "10.52.2.189" "10.52.8.62" "10.59.1.99" "10.67.40.200" "10.68.1.42" "10.68.1.73" "10.68.1.74" "10.68.102.100" "10.68.103.100" "10.68.105.100" "10.68.105.111" "10.68.40.50" "10.68.7.90" "10.68.7.91" "10.69.1.201" "10.69.1.205" "10.69.1.213" "10.69.1.216" "10.69.1.224" "10.69.1.227" "10.69.1.228" "10.69.1.251" "10.69.5.150" "10.69.5.151" "10.69.5.153" "10.69.5.154" "10.69.6.110" "10.69.6.111" "10.127.9.206" "10.127.13.150" "10.69.1.229" "10.69.5.160" "10.68.4.3" "10.68.105.111" "10.127.4.36" "10.69.5.152" "10.69.1.246" "10.69.1.247"}
+
+load [lindex [glob "/usr/lib/libexpect*so*"] 0]
+
+set LIB_PATH ../Lib
+lappend auto_path $LIB_PATH
+
+puts "DEBUG: Appending $LIB_PATH to autopath:$auto_path"
+gen_index "./../Lib"
+
+set tmplist [egrep_unique -f "ixiaCh.*10\.6|ixiaCh.*10\.12" -t cfg -ext cfg -option "-h"]
+set hostList ""
+foreach mh $tmplist {
+    set hip [lindex $mh 2]
+    set hip [string trim $hip ";"]
+    lappend hostList $hip
+}
+set hostList [lsort -unique $hostList]
+puts $hostList
+
+if [catch {source "../main/cfg/common.cfg"} rea] {
+    puts "*** WARNING: Unable to source common.cfg:$rea............... ***"
+    puts "*** WARNING: Application level variables may not be defined. ***"
+    exit -1
+}
+
+
+set cTime [clock seconds]
+set ixiaDirs [glob -nocomplain -- /auto/ixia_*]
+
+
+set cList ""
+set gfList ""
+set mdList ""
+set fd_in [open "./Tmp/ixia_inventory.csv" "w"]
+
+set cCount 1
+puts $hostList
+puts $fd_in ",,,,"
+puts $fd_in ",,,,"
+puts $fd_in "IXIAs,,,,"
+puts $fd_in ",,,,"
+
+set timeout 10
+foreach  hostname $hostList {
+    puts "HERE GOES FOR $hostname"
+    #set timeout 10
+    set send_human {.1 .3 1 .05 2}
+    set telnetOK 1
+    #set send_slow {10 .001}
+    # Get the chassis serial number
+    if [catch "spawn telnet $hostname" reason] {
+        puts "failed to spawn program: $reason\n"
+        puts $fd_in "$hostname,NO TELENT ACCESS,,,"
+        set label1 "Not Available"
+    }
+    expect {
+        "?nable to ?onnect" {
+            puts "failed to connect to ixia"
+            puts $fd_in "$hostname,NO TELENT ACCESS,,,"
+            set label1 "Not Available"
+            set telnetOK 0
+            continue
+        }
+        "?o route to ?ost" {
+            puts "failed to connect to ixia"
+            set label1 "Not Available"
+            puts $fd_in "$hostname,NO TELENT ACCESS,,,"
+            set telnetOK 0
+            continue
+        }
+        "?onnection refused" {
+            puts "failed to connect to ixia"
+            set label1 "Not Available"
+            puts $fd_in "$hostname,NO TELENT ACCESS,,,"
+            set telnetOK 0
+        }
+        "?onnected to" {
+        #wait for all remaining characters to come
+        #puts "Connection established"
+        }
+        timeout {
+            puts $fd_in "$hostname,NO TELENT ACCESS,,,"
+            set telnetOK 0
+        }
+    }
+
+    if {$telnetOK} {
+        set label2 ""
+        set label1 ""
+        set dummy ""
+        sleep 2
+        send  "\r"
+        #sleep 2
+        expect ">"
+        sleep 1
+        send -h "puts \$env(COMPUTERNAME)\r"
+        sleep 2
+        expect {
+            -re \[A-Z0-9]+\-\[A-Z0-9]+\-\[A-Z0-9]+ {
+                if {[regexp -nocase {([A-Z0-9]+\-[A-Z0-9]+\-[A-Z0-9]+)} $expect_out(buffer) dummy label1]} {
+                    puts "Found regexp Chassis ID dummy $dummy label1 $label1"
+                }
+            }
+            -re \[A-Z0-9]+\-\[A-Z0-9]+ {
+                if {[regexp -nocase {([A-Z0-9]+\-[A-Z0-9]+)} $expect_out(buffer) dummy label1]} {
+                    puts "Found regexp Chassis ID dummy $dummy label1 $label1"
+                }
+            }
+            -re \[A-Z]+\[0-9]+ {
+                if [regexp -nocase -all {(OPT[A-Z0-9]+|[0-9A-Z]+)} $expect_out(buffer) dummy label1] {
+                    puts "Found regexp Chassis ID dummy $dummy label1 $label1"
+                }
+            }
+            timeout {
+                set label1 "NOT AVAILABLE"
+                puts "Hit timeout $expect_out(buffer)"
+            }
+        }
+        send -h "puts \$env(IXTCLHAL_LIBRARY)\r"
+        sleep 2
+        expect {
+            -re ".*no such.*" {
+                set label2 "4.10"
+            }
+            -re \[0-9]+\.\[0-9]+ {
+                if {[regexp -nocase {([0-9]+\.[0-9]+)} $expect_out(buffer) dummy label2]} {
+                    puts "Found regexp Ixia Version dummy $dummy label2 $label2"
+                }
+            }
+            timeout {
+                set label2 "4.10"
+                puts "Hit timeout $expect_out(buffer)"
+            }
+        }
+        catch {exp_close}
+        catch {wait}
+    } else {
+        puts $fd_in "$hostname,NO TELENT ACCESS,,,"
+        continue
+    }
+
+    set foundDir 0
+    if {$label2 != ""} {
+        set bList [split $label2 "."]
+        set bString "[lindex $bList 0]_[lindex $bList 1]" 
+        foreach id $ixiaDirs {
+            puts "Looking for $bString in $id"
+            if {[regexp -nocase $bString $id]} {
+                set foundDir 1
+                puts "Found ixia version dir $id"
+                break
+            }
+        }
+    }
+    if {!$foundDir} {
+        puts "Could not find an Ixia Version Directory"
+    }
+    set auto_path_temp ""
+    set savedType ""
+    foreach var $auto_path {
+        set var1 [split $var "/"]
+        if {![regexp -nocase "ixia" $var1]} {
+            lappend auto_path_temp $var
+        }
+    }
+    set auto_path $auto_path_temp
+
+    SetIxiaEnv "$id"
+    lappend auto_path [file join $env(IXIA_HOME) "lib"]
+
+
+    package require IxTclHal
+
+    set host $hostname
+    if [catch "set out [ixInitialize $host]" $reason] {
+        puts "Ixia $host is not reachable"
+        puts $fd_in "$host,not reachable,,,"
+        continue;
+    }
+    if {[regexp -nocase "error" $out]} {
+        puts "Ixia $host is not reachable"
+        puts $fd_in "$host,not reachable,,,"
+        continue;
+    }
+
+    # Grant Added
+    version get
+    ixPuts -nonewline "Company name is "
+    ixPuts [version cget -companyName]
+    ixPuts -nonewline "Copyright is "
+    ixPuts [version cget -copyright]
+    ixPuts -nonewline "Install Version is "
+    ixPuts [version cget -installVersion]
+    ixPuts -nonewline "ixTclHAL Version is "
+    ixPuts [version cget -ixTclHALVersion]
+    ixPuts -nonewline "Product Version is "
+    ixPuts [version cget -productVersion]
+    ixPuts -nonewline "Product Serial Number is  "
+    ixPuts [version cget -productVersion]
+
+    set chas [ixGetChassisID $host]
+    # Get the chassis: number of cards
+    chassis getFromID $chas
+    set ctype [chassis cget -typeName]
+    set ncards [chassis cget -maxCardCount]
+    ixPuts "Chassis $ctype, id $chas,max card $ncards cards"
+    puts $fd_in "$host,$ctype,$label1,[version cget -installVersion],#Slots $ncards"
+
+    for {set i 1} {$i <= $ncards} {incr i} {
+       # Check for missing card
+       if {[card get $chas $i] != 0} {
+         continue
+       }
+       set portList [list [list $chas $i 1]]
+       # Get all of the card's characteristics
+       set fpgaVersion [card cget -fpgaVersion]
+       set hwVersion [card cget -hwVersion]
+       set portCount [card cget -portCount]
+       set type [card cget -type]
+       set typeName [card cget -typeName]
+       set serialNumber [card cget -serialNumber]
+       # And list them
+                if {[regexp -nocase {LM Serial Number ([0-9]+).*} $serialNumber dummy sn]} {
+                    puts "Found regexp Serial $sn"
+                } else {
+                    puts "Missed Serial $serialNumber"
+                    set sn "Missed"
+                }
+       ixPuts "Card $i: $typeName ($type), $portCount ports, \
+       fpga: $fpgaVersion, hwVersion: $hwVersion serialNumber: $sn"
+       puts $fd_in "Card $i,$typeName,$sn,,"
+       # If the card is a 10/100 RMII, play with its settable parameters
+       #if {$type == $::card10100RMii} {
+       #  card config -clockRxRisingEdge 0
+       #  card config -clockTxRisingEdge 1
+       #  if [card set $chas $i] {
+       #    ixPuts "Could not card set $chas $i"
+       #  }
+       #  ixWriteConfigToHardware portList
+       #}
+       # Just for fun, we'll export the data associated with the first card
+       # and read it to any other cards of the same type
+       #if {$i == 1} {
+        # if {[card export cardfile $chas $i] != 0} {
+        #   ixPuts "Could not export"
+        #   set savedType "null"
+        # } else {
+        #   set savedType $type
+        # }
+       #} elseif {$type == $savedType} {
+       #  if {[card import cardfile $chas $i] == 1} {
+       #    ixPuts "Could not import"
+       #  }
+       #}
+    }
+    puts $fd_in ",,,,"
+}
+
+close $fd_in
+exit

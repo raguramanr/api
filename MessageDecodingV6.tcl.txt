@@ -1,0 +1,992 @@
+
+################################################################## 
+# Procedure Name: GetICMPV6Type
+#   
+# Description:
+#     This proc is used to get the hex icmpv6 type value from an icmp packet header
+#     Supports tagged frames too.
+#
+# Input args: rawFrame
+# Output args: None.
+# Return value: Integer or -1 on error
+# Typical usage:
+# GetICMPTypeV6 frame
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: CaptureTraffic
+##################################################################
+proc GetICMPTypeV6 { rawFrame } {
+   set type [string range $rawFrame 36 40]
+
+   # Remove E-tag if 802.1br frame
+   if {$type == "89 3F"} {
+      set chunk1 [string range $rawFrame 0 35]
+      set chunk2 [string range $rawFrame 60 [string length $rawFrame]]
+      set rawFrame $chunk1$chunk2
+      set type [string range $rawFrame 36 40]
+   }
+
+   switch -- $type \
+      "86 DD" {
+      return [string range $rawFrame 102 103]        
+   }  "81 00" {
+      return [string range $rawFrame 174 176]      ;#tagged frame   
+   } default {
+      result_debug "Unknown IP Type: $type"
+      return -1
+   }
+}
+
+################################################################## 
+# Procedure Name: GetICMPCodeV6
+#   
+# Description:
+#     This proc is used to get the hex icmp code value from an icmp packet header
+#     Supports tagged frames too.
+#
+# Input args: rawFrame
+# Output args: None.
+# Return value: Integer or -1 on error
+# Typical usage:
+# GetICMPCode frame
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: CaptureTraffic
+##################################################################
+proc GetICMPCodeV6 { rawFrame } {
+   set type [string range $rawFrame 36 40]
+
+   # Remove E-tag if 802.1br frame
+   if {$type == "89 3F"} {
+      set chunk1 [string range $rawFrame 0 35]
+      set chunk2 [string range $rawFrame 60 [string length $rawFrame]]
+      set rawFrame $chunk1$chunk2
+      set type [string range $rawFrame 36 40]
+   }
+
+   switch -- $type \
+      "86 DD" {
+      return  [string range $rawFrame 105 106]         
+   }  "81 00" {
+      return  [string range $rawFrame 176 178]      ;#tagged frame   
+   } default {
+      result_debug "Unknown IP Type: $type"
+      #just return the type
+      return -1
+   }
+}
+
+
+################################################################## 
+# Procedure Name: GetTRAFFIClass
+#   
+# Description:
+#     This proc is used to get the hex value of TOS field from an ip packet header
+#     Supports tagged frames too.
+#
+# Input args: rawFrame
+# Output args: None.
+# Return value: 2 byte hex value or -1 on error
+# Typical usage:
+# GetTOSHex frame
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: CaptureTraffic
+##################################################################
+proc GetTRAFFIClass { rawFrame } {
+   set type [string range $rawFrame 36 40]
+   switch -- $type \
+      "08 00" {
+      return [string range $rawFrame 45 46]       
+   }  "81 00" {
+      return [string replace [string range $rawFrame 55 57] 1 1 ""]     ;#tagged frame   
+   } default {
+      result_debug "Unknown Type: $type"
+      #just return the type
+      return -1
+   }
+}
+#################################################################
+# Procedure Name: GetICMPv6Message
+#
+# Description:
+#     This proc is designed to get the next header type.
+#
+# Input args: rawFrame
+# Output args: None.
+# Return value: Automation supported message type or "FAIL" in error
+# Typical usage:
+# GetICMPv6Message frame
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: CaptureTraffic
+##################################################################
+
+proc GetICMPv6Message { rawFrame } {
+
+   set type [string range $rawFrame 36 40]
+
+   # Remove E-tag if 802.1br frame
+   if {$type == "89 3F"} {
+      set chunk1 [string range $rawFrame 0 35]
+      set chunk2 [string range $rawFrame 60 [string length $rawFrame]]
+      set rawFrame $chunk1$chunk2
+      set type [string range $rawFrame 36 40]
+   }
+
+   switch -- $type \
+      "81 00" {
+         set IpType [hextodec [string range $rawFrame 72 74]]
+         switch -- $IpType \
+            "58"  {
+               return "IP_ICMPV6"
+         }
+   }    
+}
+
+
+#################################################################
+# Procedure Name: GetMessageTypeV6
+#
+# Description:
+#     This proc is used to get the type of protocol and specific type in
+#     that protocol. Currently, this proc supports, ICMPV6.
+#     Supports tagged frames too.
+#
+# Input args: rawFrame
+# Output args: None.
+# Return value: Automation supported message type or "FAIL" in error
+# Typical usage:
+# GetMessageType frame
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: CaptureTraffic
+##################################################################
+
+proc GetMessageTypeV6 { rawFrame } {
+   set type [string range $rawFrame 36 40]
+   switch -- $type \
+      "81 00" {
+         set IpType [hextodec [string range $rawFrame 172 174]]
+         switch -- $IpType \
+            "58"  {
+               return "IP_ICMPV6"
+         }  "133"  {
+               return "Router_Solicitation"     ;#RFC2461
+         }  "134"  {
+               return "Router_Advertisement"    ;#RFC2461
+         }  "135"  {
+               return "Neighbor_Solicitation"   ;#RFC2461
+         }  "136"  {
+               return "Neighbor_Advertisement"  ;#RFC2461
+         }  "137"  {
+               return "Redirect_Message"        ;#RFC2461
+         }  default {
+               return "Invalid ICMP Type: $IpType"
+         }
+   }  "86 DD" {
+         set IpType [hextodec [string range $rawFrame 162 164]]
+         switch -- $IpType \
+            "58"  {
+               return "IP_ICMPV6"
+         }  "133"  {
+               return "Router_Solicitation"     ;#RFC2461
+         }  "134"  {
+               return "Router_Advertisement"    ;#RFC2461
+         }  "135"  {
+               return "Neighbor_Solicitation"   ;#RFC2461
+         }  "136"  {
+               return "Neighbor_Advertisement"  ;#RFC2461
+         }  "137"  {
+               return "Redirect_Message"        ;#RFC2461
+         }  default {
+               return "Invalid ICMP Type: $IpType"
+         }
+   }
+}
+
+##################################################################
+# Procedure Name: GetDestIPAddressV6
+#
+# Description:
+#     This proc is used to get the destination IP address  from an IPv6 packet header
+#     Supports tagged frames too.
+#
+# Input args: rawFrame
+# Output args: None.
+# Return value: IP Address or -1 on error
+# Typical usage:
+# GetDestIPAddressV6 frame
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: CaptureTraffic
+##################################################################
+proc GetDestIPAddressV6 { rawFrame } {
+
+   set type [string range $rawFrame 36 40]
+
+   # Remove E-tag if 802.1br frame
+   if {$type == "89 3F"} {
+      set chunk1 [string range $rawFrame 0 35]
+      set chunk2 [string range $rawFrame 60 [string length $rawFrame]]
+      set rawFrame $chunk1$chunk2
+      set type [string range $rawFrame 36 40]
+   }
+
+   switch -- $type \
+      "81 00" {
+      #result_debug "126 to 172 [string range $rawFrame 126 172 ]"
+      #result_debug "type 174 to 176 [string range $rawFrame 174 176 ]"
+      #result_debug "code 177 to 179 [string range $rawFrame 177 179 ]"
+      return [string range $rawFrame 126 172 ]
+   }  "86 DD" {
+      #result_debug "114 to 160 [string range $rawFrame 114 160 ]"
+      #result_debug "type 162 to 164 [string range $rawFrame 162 164 ]"
+      #result_debug "code 165 to 167 [string range $rawFrame 165 167 ]"
+      return [string range $rawFrame 114 160 ]
+   }  default {
+      result_debug "Unknown Type: $type"
+      return -1
+   }
+
+}
+##################################################################
+# Procedure Name: GetSourceIPAddressV6
+#
+# Description:
+#     This proc is used to get the source IP address  from an IPv6 packet header
+#     Supports tagged frames too.
+#
+# Input args: rawFrame
+# Output args: None.
+# Return value: IP Address or -1 on error
+# Typical usage:
+# GetDestIPAddressV6 frame
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: CaptureTraffic
+##################################################################
+proc GetSourceIPAddressV6 { rawFrame } {
+
+   set type [string range $rawFrame 36 40]
+   switch $type {
+      "81 00" {return [string range $rawFrame 78 124 ]}
+      "86 DD" {return [string range $rawFrame 66 112 ]}
+      default {
+         result_debug "Unknown Type: $type"
+         return -1
+      }
+   }
+}
+##################################################################
+# Procedure Name: GetMACEuiIPv6
+#
+# Description:
+#     This proc pulls the MAC address from an EUI Space De-limited
+#         IPv6 Address
+#
+# Input args: Dot de-limited MAC
+# Output args: None.
+# Return value: Colon Seperated MAC - 00:04:96:A1:02:03
+# Typical usage:
+# GetMACEuiIPv6 $euiIPv6Addr
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: CaptureTraffic
+##################################################################
+proc GetMACEuiIPv6 { euiIPv6Addr } {
+   set Mac1 [string range $euiIPv6Addr 27 31]
+   set Mac2 [string range $euiIPv6Addr 39 46 ]
+   set MAC "00 $Mac1 $Mac2"
+   return [string tolower [nl_delimitMac "$MAC"]];
+}
+
+##################################################################
+# Procedure Name: GetControlTypeIPv6
+#
+# Description:
+#     This proc pulls the last 6 bytes from a Space De-limited
+#         IPv6 Address.  Initially used to pull the control message
+#         Type from a multicast packet
+#
+# Input args: Space delimited 6 bytes
+# Output args: None.
+# Return value: 00 01 ff 00 00 00
+# Typical usage:
+# GetControlTypeIPv6 $MulticastAddr
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: CaptureTraffic
+##################################################################
+proc GetControlTypeIPv6 { iPv6Addr } {
+   return [string tolower [string range $iPv6Addr 30 46]];
+}
+
+##################################################################
+# Procedure Name: GetIPv6ReportDAAddrFromMac
+#
+# Description:
+#     This proc creates a report based EUI IPv6 Address  
+#        from a dot-de-limited MAC address
+#
+# Input args: MAC delimit scale
+#             MAC = colon delimited MAC
+#             delimit = type of delimiter for output v6 address
+#             scale: full all 16 words or 32 bytes
+#
+# Output args: None.
+# Return value: Colon Seperated Partial Ipv6 Address - 
+#               Example: MAC = 00:04:96:1D:57:A0
+#                        Return Full = fe80::0204:96ff:fe1d:57a0
+# Typical usage:
+# GetIPv6ReportDAAddrFromMac $Mac colon partial
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc GetIPv6ReportDAAddrFromMac { Mac {delimit colon} {scale partial}} {
+   set hexMacList [split $Mac :]
+   set hex1 [string tolower [lindex $hexMacList 1]];
+   set hex2 [string tolower [lindex $hexMacList 2]];
+   set hex3 [string tolower [lindex $hexMacList 3]];
+   set hex4 [string tolower [lindex $hexMacList 4]];
+   set hex5 [string tolower [lindex $hexMacList 5]];
+   switch -- $delimit \
+      "colon" {
+         if {$scale == "full"} {
+            return "ff02:0000:0000:0000:0000:0000:0000:0000:0000:0000:0000:0000:0000:0001:ff${hex3}:${hex4}${hex5}";
+         } elseif {$scale == "partial"} {
+            return "ff02::01:ff${hex3}:${hex4}${hex5}";
+         } else {
+            return "ff02::01:ff${hex3}:${hex4}${hex5}";
+         }         
+   }  "space" {
+        if {$scale == "full"} {
+           return "ff 02 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 01 ff ${hex3} ${hex4} ${hex5}";
+        } else {
+           return "ff 02 00 00 00 00 00 00 00 00 00 01 ff ${hex3} ${hex4} ${hex5}"
+        }
+   } default {
+      return "ff02::01:ff${hex3}:${hex4}${hex5}";
+   }
+
+}
+##################################################################
+# Procedure Name: GetIPv6ReportDAMac
+#
+# Description:
+#     This proc creates a DA Mac for a report  
+#        based on the SA Mac
+#
+# Input args: MAC delimit scale
+# Output args: None.
+# Return value: Colon Seperated MAC - 
+#               Example: MAC = 33:33:96:1D:57:A0
+#                        
+# Typical usage:
+# GetIPv6ReportDAMac $Mac
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc GetIPv6ReportDAMac { Mac } {
+   set hexMacList [split $Mac :]
+   set hex1 [string tolower [lindex $hexMacList 1]];
+   set hex2 [string tolower [lindex $hexMacList 2]];
+   set hex3 [string tolower [lindex $hexMacList 3]];
+   set hex4 [string tolower [lindex $hexMacList 4]];
+   set hex5 [string tolower [lindex $hexMacList 5]];
+   return "33:33:FF:${hex3}:${hex4}:${hex5}";
+}
+##################################################################
+# Procedure Name: GetRightIPv6EuiFromMac
+#
+# Description:
+#     This proc creates the right 6 hex EUI digits of an  
+#        IPv6 address from a MAC address
+#
+# Input args: IPv6 Address - GetRightIPv6EuiFromMac
+# Output args: None.
+# Return value: Colon Seperated Partial Ipv6 Address - 
+#               Example: MAC = 00:04:96:1D:57:A0
+#                        Full = fe80::204:96ff:fe1d:57a0 
+#                        only return 1d:57a0
+# Typical usage:
+# GetRightIPv6EuiFromMac $Mac
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: CaptureTraffic
+##################################################################
+proc GetRightIPv6EuiFromMac { Mac } {
+   set hexMacList [split $Mac :]
+   set hex1 [lindex $hexMacList 3];
+   set hex2 [lindex $hexMacList 4];
+   set hex3 [lindex $hexMacList 5];
+   set rValue ${hex1}:${hex2}${hex3}
+   return [string tolower $rValue];
+}
+##################################################################
+# Procedure Name: GetIPv6EuiFromMac
+#
+# Description:
+#     This proc creates the Full MAC Portion of an EUI IPv6 Address  
+#        from a dot-de-limited MAC address
+#
+# Input args: MAC Address
+# Output args: None.
+# Return value: Colon Seperated Partial Ipv6 Address - 
+#               Example: MAC = 00:04:96:1D:57:A0
+#                        Full = fe80::0204:96ff:fe1d:57a0 
+#                        Return = 204:96ff:fe1d:57a0
+# Typical usage:
+# GetIPv6EuiAllFromMac $Mac
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: CaptureTraffic
+##################################################################
+proc GetIPv6EuiFromMac { Mac } {
+   set hexMacList [split $Mac :]
+   set hex1 [lindex $hexMacList 1];
+   set hex2 [lindex $hexMacList 2];
+   set hex3 [lindex $hexMacList 3];
+   set hex4 [lindex $hexMacList 4];
+   set hex5 [lindex $hexMacList 5];
+   set val45 [string trimleft "${hex4}${hex5}" "0"];
+   set val2 [string trimleft "${hex2}" "0"]; 
+   return [string tolower "2${hex1}:${val2}ff:fe${hex3}:${val45}"];
+}
+##################################################################
+# Procedure Name: GetIPv6LinkLocalFromMac
+#
+# Description:
+#     This proc creates a full EUI IPv6 Address  
+#        from a dot-de-limited MAC address
+#
+# Input args: MAC delimit scale
+#             MAC = colon delimited MAC
+#             delimit = type of delimiter for output v6 address
+#             scale: full all 16 words or 32 bytes
+#
+# Output args: None.
+# Return value: Colon Seperated Partial Ipv6 Address - 
+#               Example: MAC = 00:04:96:1D:57:A0
+#                        Return Full = fe80::0204:96ff:fe1d:57a0
+# Typical usage:
+# GetIPv6LinkLocalFromMac $Mac colon partial
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: CaptureTraffic
+##################################################################
+proc GetIPv6LinkLocalFromMac { Mac {delimit colon} {scale partial} {trim 0}} {
+   set hexMacList [split $Mac :]
+   set hex0 [string tolower [lindex $hexMacList 0]];
+   set hex1 [string tolower [lindex $hexMacList 1]];
+   set hex2 [string tolower [lindex $hexMacList 2]];
+   set hex3 [string tolower [lindex $hexMacList 3]];
+   set hex4 [string tolower [lindex $hexMacList 4]];
+   set hex5 [string tolower [lindex $hexMacList 5]];
+
+   if {$hex0 == "02"} {
+      set ULBit "00"
+      set ULBitShort "" 
+        if {$trim} {
+            set hex1 [string trimleft $hex1 0]
+        }
+   } else {
+      set ULBit "02"
+      set ULBitShort "2"
+   }
+   switch -- $delimit \
+      "colon" {
+         if {$scale == "full"} {
+            return [string toupper "FE80:0000:0000:0000:0000:0000:0000:0000:0000:0000:0000:0000:${ULBit}${hex1}:${hex2}FF:FE${hex3}:${hex4}${hex5}"];
+         } elseif {$scale == "partial"} {
+set hex4 [string trimleft $hex4 0]
+
+            return [string toupper "FE80::${ULBitShort}${hex1}:${hex2}FF:FE${hex3}:${hex4}${hex5}"];
+         } else {
+            set hex2 [string trimleft $hex2 0]
+            set hex4 [string trimleft $hex4 0]
+            if {$hex4 == ""} {
+               set hex5 [string trimleft $hex5 0]
+            }
+            return "fe80::${ULBitShort}${hex1}:${hex2}ff:fe${hex3}:${hex4}${hex5}"
+         }         
+   }  "space" {
+         return [string toupper "FE 80 00 00 00 00 00 00 ${ULBit} ${hex1} ${hex2} FF FE ${hex3} ${hex4} ${hex5}"];
+   } default {
+      return [string toupper "FE80::${ULBitShort}${hex1}:${hex2}FF:FE${hex3}:${hex4}${hex5}"];
+   }
+
+}
+
+################################################################## 
+# Procedure Name: GetIPV6HopLimit
+#   
+# Description:
+#     This proc is used to get the decimal hop limit of v6 traffic
+#     Supports tagged frames too.
+#
+# Input args: rawFrame
+# Output args: None.
+# Return value: Integer or -1 on error
+# Typical usage:
+# GetIPV6HopLimit frame
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: CaptureTraffic
+##################################################################
+proc GetIPV6HopLimit { rawFrame } {
+   set type [string range $rawFrame 36 40]
+   switch -- $type \
+      "86 DD" {
+      return [string range $rawFrame 63 64]        
+   }  "81 00" {
+      return [string range $rawFrame 75 76]      ;#tagged frame   
+   } default {
+      result_debug "Unknown IP Type: $type"
+      return -1
+   }
+}
+################################################################## 
+# Procedure Name: GetICMPv6Header2Value
+#   
+# Description:
+#     This proc is used to get the 2nd icmp header and icmpv6 frame
+#     Supports tagged frames too. (hex 82 83 84 = query report done)
+#
+# Input args: rawFrame
+# Output args: None.
+# Return value: Return decimal icmpv6 packet type
+# Typical usage:
+# GetICMPv6Header2Value $frame
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: CaptureTraffic
+##################################################################
+proc GetICMPv6Header2Value { rawFrame {withRA "yes"}} {
+   set type [string range $rawFrame 36 40]
+   switch -- $type \
+      "86 DD" {
+         if {$withRA == "yes"} {
+            return [hextodec [string range $rawFrame 186 187]]
+         } else {
+            return [hextodec [string range $rawFrame 162 163]]
+         }
+   }  "81 00" {
+         if {$withRA == "yes"} {
+            return [hextodec [string range $rawFrame 198 199]]      ;#tagged frame
+         } else {
+            return [hextodec [string range $rawFrame 174 175]]      ;#tagged frame
+         }
+   } default {
+      result_debug "Unknown EtherType: $type"
+      return -1
+   }
+}
+################################################################## 
+# Procedure Name: CheckMLDRouterAlert
+#   
+# Description:
+#     This proc is used to check if a v6 packet is an MLD router alert.
+#
+# Input args: rawFrame
+# Output args: None.
+# Return value: Integer or -1 on error
+# Typical usage:
+# CheckRouterAlert frame
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: CheckRouterAlert
+##################################################################
+proc CheckMLDRouterAlert { rawFrame } {
+   set type [string range $rawFrame 36 40]
+   switch -- $type \
+      "86 DD" {
+         result_debug "Checking: [string range $rawFrame 162 185]"
+      if {[string range $rawFrame 162 185] == "3A 00 05 02 00 00 01 00"} {        
+         return 1;
+      } else {
+         return 0;
+      }
+   }  "81 00" {
+         result_debug "Checking: [string range $rawFrame 174 197]"
+      if {[string range $rawFrame 174 197] == "3A 00 05 02 00 00 01 00"} {
+         return 1;
+      } else {
+         return 0;
+      }
+   } default {
+      result_debug "Unknown EtherType: $type"
+      return 0
+   }
+}
+################################################################## 
+# Procedure Name: GetMLDResponseDelay
+#   
+# Description:
+#     This proc is used to get the response delay of an mld
+#     ipv6 packet.
+#
+# Input args: rawFrame
+# Output args: None.
+# Return value: Integer or -1 on error
+# Typical usage:
+# GetRouterAlertType frame
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: CaptureTraffic
+##################################################################
+proc GetMLDResponseDelay { rawFrame {withRA "yes"} } {
+   set type [string range $rawFrame 36 40]
+   switch -- $type \
+      "86 DD" {
+         if {$withRA == "yes"} {
+            set mldType [hextodec [string range $rawFrame 186 187]]
+         } else {
+            set mldType [hextodec [string range $rawFrame 162 163]]
+         }
+         if {$mldType == 130} {
+            if {$withRA == "yes"} {
+               set numVar [join [string range $rawFrame 198 203] ""]
+               result_debug "Hex Response Delay $numVar"
+               return [hextodec $numVar]
+            } else {
+               set numVar [join [string range $rawFrame 174 179] ""]
+               result_debug "Hex Response Delay $numVar"
+               return [hextodec $numVar]
+            }
+         } else {
+            result_debug "Unknown Or Unexpected MLDType: $mldType"
+            return -1
+         }
+   }  "81 00" {
+         if {$withRA == "yes"} {
+            set mldType [hextodec [string range $rawFrame 198 199]]      ;#tagged frame
+         } else {
+            set mldType [hextodec [string range $rawFrame 174 175]]
+         }
+         if {$mldType == 130} {
+               if {$withRA == "yes"} {
+                  set numVar [join [string range $rawFrame 210 215] ""]
+                  result_debug "Hex Response Delay $numVar"
+                  return [hextodec $numVar]
+               } else {
+                  set numVar [join [string range $rawFrame 162 167] ""]
+                  result_debug "Hex Response Delay $numVar"
+                  return [hextodec $numVar]
+               }
+         } else {
+            result_debug "Unknown Or Unexpected MLDType: $mldType"
+            return -1
+         }      
+   } default {
+      result_debug "Unknown EtherType: $type"
+      return -1
+   }
+
+}
+
+
+################################################################## 
+# Procedure Name: GetMLDMulticastAddr
+#   
+# Description:
+#     This proc is used to get the hex icmp code value from an icmp packet header
+#     Supports tagged frames too.
+#
+# Input args: rawFrame
+# Output args: None.
+# Return value: Integer or -1 on error
+# Typical usage:
+# GetMLDMulticastAddr frame
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: CaptureTraffic
+##################################################################
+proc GetMLDMulticastAddr { rawFrame {withRA "yes"}} {
+   set type [string range $rawFrame 36 40]
+   switch -- $type \
+      "86 DD" {
+         if {$withRA == "yes"} {
+            return  [string range $rawFrame 210 256]
+         } else {
+            return  [string range $rawFrame 186 232]
+         }
+   }  "81 00" {
+         if {$withRA == "yes"} {
+            return  [string range $rawFrame 222 268]      ;#tagged frame
+         } else {
+            return  [string range $rawFrame 198 244]      ;#tagged frame
+         }
+   } default {
+      result_debug "Unknown IP Type: $type"
+      #just return the type
+      return -1
+   }
+}
+################################################################## 
+# Procedure Name: CheckMLDGeneralQueryGroup
+#   
+# Description:
+#     This proc checks an mld packet to set if the group is all 0's
+#     Supports tagged frames too.
+#
+# Input args: rawFrame
+# Output args: None.
+# Return value: Integer or 1 on pass 0 on fail
+# Typical usage:
+# CheckMLDGeneralQueryGroup frame
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc CheckMLDGeneralQueryGroup { rawFrame {withRA "yes"} } {
+   set type [string range $rawFrame 36 40]
+   switch -- $type \
+      "86 DD" {
+         if {$withRA == "yes"} {
+            if {[string range $rawFrame 210 256] == "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00"} {
+               return 1;
+            } else {
+               return 0;
+            }
+         } else {
+            if {[string range $rawFrame 186 232] == "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00"} {
+               return 1;
+            } else {
+               return 0;
+            }
+         }
+   }  "81 00" {
+         if {$withRA == "yes"} {
+            if {[string range $rawFrame 222 268] == "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00"} {
+               return 1;
+            } else {
+               return 0;
+            }
+         } else {
+            if {[string range $rawFrame 198 244] == "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00"} {
+               return 1;
+            } else {
+               return 0;
+            }
+         }
+   } default {
+      result_debug "Unknown IP Type: $type"
+      #just return the type
+      return 0
+   }
+}
+################################################################## 
+# Procedure Name: GetMLDGroupAddr
+#   
+# Description:
+#     This proc returns the mcast group from an mld packet
+#
+# Input args: rawFrame
+# Output args: None.
+# Return value: Space delimited v6 group address
+# Typical usage:
+# GetMLDGroupAddr frame
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: CaptureTraffic
+##################################################################
+proc GetMLDGroupAddr { rawFrame {withRA "yes"} } {
+   set type [string range $rawFrame 36 40]
+   switch -- $type \
+      "86 DD" {
+         if {$withRA == "yes"} {
+            return [string range $rawFrame 210 256];
+         } else {
+            return [string range $rawFrame 186 232];
+         }
+   }  "81 00" {
+         if {$withRA == "yes"} {
+            return [string range $rawFrame 222 268];
+         } else {
+            return [string range $rawFrame 198 244];
+         }
+   } default {
+      result_debug "Unknown IP Type: $type"
+      #just return the type
+      return 0
+   }
+}
+
+##################################################################
+# Procedure Name: GetOSPFDesiredPktTypeV6
+#
+# Description: This proc is used to return the packets from rawPktList that match pktType,
+#              srcIp and destIp
+#
+#
+#
+# Input args:  rawPktList, pktType, srcIp, dstIp
+# Output args: None.
+# Return vlaue: Integer or "" on error
+# Typical usage:
+#  set OSPFHelloPackets [GetDesiredPktType $rawPortDataList IP_OSPFv2_HELLO $DUT1vlan1_3IP $ripMultiCastAddress]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifyTraffic
+##################################################################
+proc GetOSPFDesiredPktTypeV6 {rawPktList pktType srcIp dstIp} {
+
+   set desiredPkts ""
+   set prevPktFragFlag 0
+   set sframe ""
+   set dframe ""
+
+
+#Taking the first two bytes & FF FE byte from sourec LLC address of rawframe
+#Example FE 80 00 00 00 00 00 00 02 04 96 FF FE 1D 5A 80
+
+   set srcip "FE 80 FF FE"
+   set desip "FE 80 FF FE"
+
+#Gettin the sourec LLC from the frame
+   if {[string length $rawPktList] < 36} {
+      return NOT_L3_PACKET
+   }
+
+   set type [string range $rawPktList 36 40]
+   switch $type {
+      "81 00" {set sframe [string range $rawPktList 78 124]}
+      "86 DD" {set sframe [string range $rawPktList 66 112]}
+      "default" {return NOT_L3_PACKET}
+   }
+  set srcframe  [concat [string range $sframe 0 4] [string range $sframe 33 37]]
+
+
+#Gettin the destniation LLC from the frame
+
+   set type [string range $rawPktList 36 40]
+   switch -- $type \
+      "81 00" {
+      set dframe [string range $rawPktList 126 172]
+   }  "86 DD" {
+      set dframe [string range $rawPktList 114 160]
+   }
+
+set desframe  [concat [string range $dframe 0 4] [string range $dframe 33 37]]
+
+set desmac [string range $rawPktList 3 7]
+set srcmac [string range $rawPktList 21 25]
+
+
+   set messageType [GetOSPFMessageTypeV6 $rawPktList]
+
+     # Capture the packets from DUT1 to DRouters
+      if {[string equal $messageType $pktType] && \
+          [string equal $srcip $srcframe] && \
+          [string equal $desip $desframe] && \
+          [string equal $desmac $dstIp] && \
+          [string equal $srcmac $srcIp]} {
+         return $messageType
+      }
+}
+
+
+
+#################################################################
+# Procedure Name: GetOSPFMessageTypeV6
+#
+# Description:
+#     This proc is used to get the type of protocol and specific type in
+#     that protocol. Currently, this proc supports OSPFV3 extensively.
+#     Supports tagged frames too.
+#
+# Input args: rawFrame
+# Output args: None.
+# Return value: Automation supported message type or "FAIL" in error
+# Typical usage:
+# GetMessageType frame
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: CaptureTraffic
+##################################################################
+proc GetOSPFMessageTypeV6 { rawFrame } {
+   set type [string range $rawFrame 36 40]
+
+
+ #  result_debug "the rawframe is $rawFrame"
+
+   #---- Verify OSPF for tagged frame
+   if {$type == "81 00"} {
+   set ethTyp [string range $rawFrame 48 52]
+   switch -- $ethTyp \
+           "86 DD" {
+               set proto [string range $rawFrame 72 73]
+               switch -- $proto \
+               "59" {
+               set type [string range $rawFrame 177 178]
+               set version [string range $rawFrame 175 175]
+               switch -- $type \
+               "01"  {
+                  return "IP_OSPFv${version}_HELLO"
+            }  "02"  {
+                  return "IP_OSPFv${version}_DATABASE"
+            }  "03"  {
+                  return "IP_OSPFv${version}_LINK_REQUEST"
+            }  "04"  {
+                  return "IP_OSPFv${version}_LINK_UPDATE"
+            }  "05"  {
+                  return "IP_OSPFv${version}_LINK_ACK"
+            }  default  {
+                  result_debug "Unknown Type: IP_OSPFv${version}_$type"
+                  return "IP_OSPFv${version}_$type"
+            }
+       }
+
+         }
+    } elseif {$type == "86 DD"} {
+               set proto [string range $rawFrame 60 61]
+               switch -- $proto \
+               "59" {
+               set type [string range $rawFrame 165 166]
+               set version [string range $rawFrame 163 163]
+               switch -- $type \
+               "01"  {
+                  return "IP_OSPFv${version}_HELLO"
+            }  "02"  {
+                  return "IP_OSPFv${version}_DATABASE"
+            }  "03"  {
+                  return "IP_OSPFv${version}_LINK_REQUEST"
+            }  "04"  {
+                  return "IP_OSPFv${version}_LINK_UPDATE"
+            }  "05"  {
+                  return "IP_OSPFv${version}_LINK_ACK"
+            }  default  {
+                  result_debug "Unknown Type: IP_OSPFv${version}_$type"
+                  return "IP_OSPFv${version}_$type"
+            }
+       }
+
+   }
+}
+

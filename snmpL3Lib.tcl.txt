@@ -1,0 +1,1058 @@
+#!/usr/bin/tclsh
+
+
+#################################################################
+#  Procedure Name: snmpGetIfIndexForIpAddr
+#  
+#  Description:
+#    This procedures retrieves the interface index for the given
+#    IP address.
+#
+#  Input Variables:
+#    session - Session identifier which identifies the connection 
+#              with the DUT
+#    ipaddr  - IP address 
+#    fd      - File descriptor of open log file
+#
+#  Optional Args:
+#     None
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    Interface Index associated with the given IP address
+#
+#  Possible Usage:
+#    snmpGetIfIndexForIpAddr -session $sessionid -ipaddr 10.0.0.1
+################################################################
+
+proc snmpGetIfIndexForIpAddr {session ipaddr {fd NULL}} {
+  set func "snmpGetIfIndexForIpAddr:"
+
+  snmpDebug DEBUG "$func - session-$session ipaddr-$ipaddr" $fd
+  set result [snmpGet -session $session -oid ipAdEntIfIndex.$ipaddr]
+  snmpDebug LOG "$func - snmpGet -$result" $fd
+  set retVal [snmpUtilGetVal int $result]
+  snmpDebug LOG "$func - snmpGet IfIndex is $retVal" $fd
+  return $retVal
+}
+
+#################################################################
+#  Procedure Name: snmpCreateIpArpEntry
+#  
+#  Description:
+#    This procedures creates the static IP ARP entry.
+#
+#  Input Variables:
+#    session - Session identifier which identifies the connection 
+#              with the DUT
+#    network - IP address of the network through which this ARP
+#              entry to be created
+#    ipaddr  - IP address in the ARP entry
+#    mac     - MAC address in the ARP entry
+#
+#  Optional Args:
+#    fd - File descriptor of open log file
+#
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    0       - On failure 
+#    Ifindex corresponding to the ARP entry - On success
+#
+#  Possible Usage:
+#    snmpCreateIpArpEntry -session $sessionid -network 10.0.0.0 \
+#                         -ipaddr 10.0.0.5 -mac "00:01:02:03:04:05"
+################################################################
+
+proc snmpCreateIpArpEntry {args} {
+   parse_args snmpCreateIpArpEntry $args {
+      session ""
+      network ""
+      ipaddr ""
+      mac ""
+      fd "NULL"
+   }
+
+   set func "snmpCreateIpArpEntry:"
+
+   if { $network == "" || $session == "" || $mac == "" || $ipaddr == ""} {
+       error "$func network, session, ipaddress and mac must be specified"
+       return 0
+   }
+
+   snmpDebug DEBUG "$func network=$network session=$session ipaddr=$ipaddr mac=$mac - Start" $fd
+
+   result_debug "\n-- Creating static IP ARP entry $ipaddr - $mac --"
+
+   # ----- Change the MAC address to corresponding HEX string
+   regsub {([0-9|A-F|a-f]+):([0-9|A-F|a-f]+):([0-9|A-F|a-f]+):([0-9|A-F|a-f]+):([0-9|A-F|a-f]+):([0-9|A-F|a-f]+)} $mac {\1 \2 \3 \4 \5 \6} cookedMac
+
+   snmpDebug DEBUG "$func cookedMac is $mac -> $cookedMac" $fd
+
+   set ifindex [snmpGetIfIndexForIpAddr $session $network $fd]
+   set result [snmpSet -session $session -oid ipNetToMediaType.$ifindex.$ipaddr\
+                       -type i -val 4 \
+                       -oid ipNetToMediaPhysAddress.$ifindex.$ipaddr \
+                       -type x -val $cookedMac]
+  snmpDebug LOG "$func snmpSet - $result" $fd
+
+  snmpDebug DEBUG "$func - End\n" $fd
+  return $ifindex
+}
+
+#################################################################
+#  Procedure Name: snmpDeleteIpArpEntry
+#  
+#  Description:
+#    This procedures deletes an already created static IP ARP entry.
+#
+#  Input Variables:
+#    session - Session identifier which identifies the connection 
+#              with the DUT
+#    ifindex - Interface index returned when creating IP ARP entry.
+#    ipaddr  - IP address in the ARP entry
+#
+#  Optional Args:
+#    fd - File descriptor of open log file
+#    network - IP address of the network through which this ARP
+#              entry was created
+#    ifindex - This parameter is OPTIONAL, if network parameter 
+#              is specifed. Otherwise this is a mandatory parameter
+#
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    0    - On failure 
+#    1    - On success
+#
+#  Possible Usage:
+#  set ifindex [snmpCreateIpArpEntry -session $sessionid \
+#                                    -network 10.0.0.1 \
+#                                    -ipaddr 10.0.0.5 \
+#                                    -mac "00:01:02:03:04:05"]
+# snmpDeleteIpArpEntry -session $sessionid -ifindex $ifindex\
+#                      -ipaddr 10.0.0.5
+################################################################
+
+proc snmpDeleteIpArpEntry {args} {
+  parse_args snmpDeleteIpArpEntry $args {
+     session ""
+     ifindex ""
+     ipaddr ""
+     network ""
+     fd "NULL"
+  }
+
+  set func "snmpDeleteIpArpEntry:"
+
+  if { $ifindex != "" && $network != "" } {
+     error "Either ifindex or network must be specified"
+     return 0
+  }
+
+  if { $session == "" || $ipaddr == ""} {
+      error "$func session, ipaddress and ifindex must be specified"
+      return 0
+  }
+
+  result_debug "\n-- Deleting IP ARP entry $ipaddr, index - $ifindex --"
+
+  snmpDebug DEBUG "$func session=$session ifindex=$ifindex ipaddr=$ipaddr - Start" $fd
+
+  # ----- If network is specified, then ifindex needs to be found out
+   
+  if { $network != "" } {
+     set ifindex [snmpGetIfIndexForIpAddr $session $network $fd]
+  }
+
+  set result [snmpSet -session $session -oid ipNetToMediaType.$ifindex.$ipaddr\
+                       -type i -val 2]
+  snmpDebug LOG "$func snmpSet - $result" $fd
+  snmpDebug DEBUG "$func - End\n" $fd
+  return 1 
+}
+
+#################################################################
+#  Procedure Name: snmpCheckIpArpEntry
+#  
+#  Description:
+#    This procedures checks the existence of IP ARP entry.
+#
+#  Input Variables:
+#    session - Session identifier which identifies the connection 
+#              with the DUT
+#    network - IP address of the network through which the ARP
+#              entry is created
+#    ipaddr  - IP address in the ARP entry
+#    mac     - MAC address in the ARP entry
+#
+#  Optional Args:
+#    ifindex - Interface index associated with this ARP entry
+#    comment - Test case comment to be logged in the text file.
+#    result - If the value is "exist", the ARP entry must be 
+#             present. If "notexist", ARP entry should not 
+#             be present in the IP FDB. Default is "exist" 
+#    fd - File descriptor of open log file
+#
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    0       - On failure 
+#    1       - On success
+#
+#  Possible Usage:
+#    snmpCheckIpArpEntry -session $sessionid -network 10.0.0.0 \
+#                         -ipaddr 10.0.0.5 -mac "00:01:02:03:04:05"
+################################################################
+
+proc snmpCheckIpArpEntry {args} {
+   parse_args snmpCheckIpArpEntry $args {
+      session ""
+      status "exist"
+      network ""
+      ipaddr ""
+      mac ""
+      ifindex ""
+      fd "NULL"
+      comment "snmpCheckIpArpEntry"
+   }
+
+   set func "snmpCheckIpArpEntry:"
+   set retVal 0
+
+   if { $network == "" || $session == "" || $mac == "" || $ipaddr == ""} {
+       error "$func network, session, ipaddress and mac must be specified"
+       return 0
+   }
+
+   snmpDebug DEBUG "$func network=$network session=$session ipaddr=$ipaddr mac=$mac - Start" $fd
+
+   result_debug "\n-- Checking IP ARP entry $ipaddr - $mac --"
+
+   # ---- If ifindex is not specified, get the interface index
+   if { $ifindex == "" } {
+      set ifIndex [snmpGetIfIndexForIpAddr $session $network $fd]
+   } else {
+      set ifIndex $ifindex
+   }
+
+   set result [snmpGet -session $session -oid ipNetToMediaPhysAddress.$ifIndex.$ipaddr]
+   snmpDebug LOG "$func snmpGet - $result" $fd
+   report_start_test "$comment"
+   # ----- Change the MAC address according to the SNMP output
+   regsub {([0-9|A-F|a-f]+):([0-9|A-F|a-f]+):([0-9|A-F|a-f]+):([0-9|A-F|a-f]+):([0-9|A-F|a-f]+):([0-9|A-F|a-f]+)} $mac {\1 \2 \3 \4 \5 \6} cookedMac
+   
+   snmpDebug DEBUG "$func $mac is changed to $cookedMac" $fd
+   set test ".*$cookedMac"
+   if {[regexp -nocase $test $result] == 1} {
+      if {[string compare "exist" [string tolower $status]] == 0 } {
+          result_ok "IP ARP entry $ipaddr $mac exist. PASS"
+          set retVal 1
+      } else {
+          result_error "IP ARP entry $ipaddr $mac exist expected $status. FAIL"
+      }
+   } else {
+      if {[string compare "notexist" [string tolower $status]] == 0 } {
+          result_ok "IP ARP entry $ipaddr $mac not exist expected $status. PASS"
+          set retVal 1
+      } else {
+          result_error "IP ARP entry $ipaddr $mac not exist expected $status. FAIL"
+      }
+   }
+
+   report_end_test
+   snmpDebug DEBUG "$func - End\n" $fd
+   return $retVal
+}
+
+
+#################################################################
+#  Procedure Name: snmpCheckIpFdb
+#  
+#  Description:
+#    This procedures checks whether the specified ipaddress 
+#    is learnt or not learnt through the given vlan and port id.
+#
+#  Input Variables:
+#    session   - Session identifier which identifies the connection 
+#                with the DUT
+#    vlanid    - Identifier for already created vlan
+#    port      - Port number
+#    ipaddress - IP address to be checked for its existence or 
+#                non-existence.
+#
+#  Optional Args:
+#    comment - Test case comment to be logged in the text file.
+#    result - If the value is "exist", the IP address must be 
+#             present. If "notexist", IP address should not 
+#             be present in the IP FDB. Default is "exist" 
+#    fd - File descriptor of open log file
+#
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    Logs the error message   - On failure 
+#    Logs the success message - On success
+#
+#  Possible Usage:
+#    set  ipaddr "10.21.23.4"
+#    snmpCheckIpFdb -session $sessionid -vlanid $vlan_id -port 1\
+#          -ipaddress $ipaddr -result exist \
+#          -comment "Check $ipaddr through vlan $vlan_id port 1"
+################################################################
+
+proc snmpCheckIpFdb { args } {
+   parse_args snmpCheckIpFdb $args {
+      session ""
+      result "exist"
+      mac ""
+      ipaddress ""
+      vlanid ""
+      port ""
+      comment "none"
+      fd "NULL"
+   }
+
+  set func "snmpCheckIpFdb:"
+
+  if { $session == "" || $ipaddress == "" || $mac == "" || $vlanid == "" || $port == "" } {
+       error "$func session,ipaddress,vlanid, mac and port must be specified"
+       return
+  }
+
+  result_debug "\n-- Checking IP FDB entry $ipaddress - $mac --"
+
+  if { $result != "" } {
+     set result [string tolower $result]
+     if { !([string compare "exist" $result] == 0  ||
+          [string compare "notexist" $result] == 0) } {
+        error "$func $result is invalid argument should be exist or notexist"
+        return 0
+     }
+ }
+
+  snmpDebug DEBUG "$func session-$session mac-$mac ipaddress-$ipaddress vlanid-$vlanid port-$port - Start" $fd
+ 
+   # Parse the port
+   set port [snmpUtilParsePortList $port]
+ 
+   set mac [snmpUtilFormatMacAddr $mac] 
+
+   snmpDebug LOG "$func formated mac address is - $mac" $fd
+
+   set output [snmpGetTable -session $session -oid extremeFdbIpFdbMacAddress]
+
+   snmpDebug DEBUG "$func snmpGetTable - $output" $fd
+
+   report_start_test "$comment"
+
+   foreach line [split $output "\n"] {
+      if {[regexp -nocase $mac $line matchedRange] == 1} {
+         regexp {.*[.]([0-9]+)} $line res seqnum
+         if {[info exists seqnum] == 1} {
+            set ipaInfo [snmpGet -session $session -oid \
+                  extremeFdbIpFdbIPAddress.$seqnum]
+            snmpDebug LOG "$func snmpGet-$ipaInfo" $fd
+            set ipa [snmpUtilGetVal ipaddr $ipaInfo]
+
+            set vlanInfo [snmpGet -session $session -oid \
+                  extremeFdbIpFdbVlanIfIndex.$seqnum]
+            snmpDebug LOG "$func snmpGet-$vlanInfo" $fd
+            set vlanno [snmpUtilGetVal int $vlanInfo]
+
+            set prt [snmpGet -session $session -oid \
+                  extremeFdbIpFdbPortIfIndex.$seqnum]
+            snmpDebug LOG "$func snmpGet-$prt" $fd
+            set portnum [snmpUtilGetVal int $prt]
+
+            snmpDebug LOG "$func - Check for $portnum:$port $ipa:$ipaddress $vlanno:$vlanid" $fd             
+            if {$portnum == $port && $ipa == $ipaddress && $vlanno == $vlanid} {
+               if {[string compare "exist" [string tolower $result]] == 0} {
+                  result_ok "IP FDB Entry is found with port $port vlanid $vlanid seqnum $seqnum result $result. PASS"   
+                } else {
+                  result_error "IP FDB Entry is found with port $port vlanid $vlanid seqnum $seqnum result $result. FAIL"   
+                }
+                report_end_test
+                return
+            } 
+         }
+      }
+   }
+
+   if {[string compare "exist" [string tolower $result]] == 0} {
+      result_error "IP FDB Entry is not found for $ipaddress $mac $vlanid $port result $result. FAIL"
+   } else {
+      result_ok "IP FDB Entry is not found for $ipaddress $mac $vlanid $port result $result. PASS"
+   }
+   report_end_test
+   snmpDebug DEBUG "$func - End\n" $fd
+   return
+}
+
+#################################################################
+#  Procedure Name: snmpGetIpStats
+#  
+#  Description:
+#    This procedures retrieves the IP statistical information for
+#    a given parameter
+#
+#  Input Variables:
+#    session   - Session identifier which identifies the connection 
+#                with the DUT
+#    oid       - Object identifier which specifies the IP statistics
+#                to be retrieved
+#
+#  Optional Args:
+#    fd - File descriptor of open log file
+#
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    0             - On failure 
+#    IP statistics - On success
+#
+#  Possible Usage:
+#    snmpGetIpStats -session $session -oid ipInAddrErrors.0
+################################################################
+
+proc snmpGetIpStats {args} {
+   parse_args snmpGetIpStats $args {
+      session ""
+      oid ""
+      fd "NULL"
+   }
+
+   set func "snmpGetIpStats"
+
+   if { $session == "" || $oid == ""} {
+       error "$func session and oid must be specified"
+       return 0
+   }
+
+   result_debug "\n-- Getting IP statistics $oid --"
+   set result [snmpGet -session $session -oid $oid]
+   snmpDebug LOG "$func - snmpGet - $result" $fd
+
+   # ----- Extract the number from the output of snmpGet
+   set retVal [snmpUtilGetVal counter $result]
+   snmpDebug LOG "$func - snmpGet - return value is $retVal" $fd
+
+   return $retVal
+
+}
+
+#################################################################
+#  Procedure Name: snmpChangeIpForwarding
+#  
+#  Description:
+#    This procedures changes the IP forwarding state of the switch
+#    or an individual VLAN
+#
+#  Input Variables:
+#    session   - Session identifier which identifies the connection 
+#                with the DUT
+#
+#  Optional Args:
+#    status - Status indicating whether the IP forwarding state to
+#             be enabled or disabled. Default is "enable"
+#    vlanid - VLAN identifier of the VLAN for which the IP forwarding
+#             state to be changed. If the VLAN id is not specified,
+#             IP forwarding state of the switch will be changed.
+#    fd - File descriptor of open log file
+#
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    0 - On failure 
+#    1 - On success
+#
+#  Possible Usage:
+#    snmpChangeIpForwarding -session $session -status "disable"
+################################################################
+
+proc snmpChangeIpForwarding {args} {
+   parse_args snmpChangeIpForwarding $args {
+      session ""
+      status "enable"
+      vlanid ""
+      fd "NULL"
+   }
+
+   set func "snmpChangeIpForwarding"
+
+   if { $session == "" } {
+       error "$func SNMP session id must be specified"
+       return 0
+   }
+
+   set status [string tolower $status]
+
+   result_debug "\n-- Changing IP forwarding status to $status --"
+
+   if { $status == "enable" } {
+      set forwardState 1
+   } elseif { $status == "disable" } {
+      set forwardState 2
+   } else {
+      error "$func - status value should be either enable or disable"
+      return 0
+   }
+
+   snmpDebug DEBUG "$func session-$session status-$status vlanid-$vlanid - Start" $fd 
+   # ----- If vlanid is given, change IP forwarding state of the particular VLAN
+   if { $vlanid != "" } {
+      set result [snmpSet -session $session -oid extremeVlanIpForwardingState.$vlanid \
+                          -type i -val $forwardState]
+      snmpDebug LOG "$func - snmpSet - $result" $fd
+
+   } else {
+      # ----- Change the IP forwarding state of the switch instead
+      set result [snmpSet -session $session -oid ipForwarding.0 \
+                         -type i -val $forwardState]
+      snmpDebug LOG "$func - snmpSet - $result" $fd
+   }
+   snmpDebug DEBUG "$func - End\n" $fd
+   return 1
+}
+
+#################################################################
+#  Procedure Name: snmpCheckIpForwarding
+#  
+#  Description:
+#    This procedures checks whether the IP forwarding state of the switch
+#    or an individual VLAN is enabled or not
+#
+#  Input Variables:
+#    session   - Session identifier which identifies the connection 
+#                with the DUT
+#
+#  Optional Args:
+#    status - If the value is "enabled", the IP Forwarding state must be 
+#             true. If "disabled", IP Forwarding state should false. Default is "enabled" 
+#    vlanid - VLAN identifier of the VLAN for which the IP forwarding
+#             state to be checked. If the VLAN id is not specified,
+#             IP forwarding state of the switch will be checked.
+#    fd - File descriptor of open log file
+#
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    0 - On failure 
+#    1 - On success
+#
+#  Possible Usage:
+#    snmpCheckIpForwarding -session $session -status "enabled"
+################################################################
+
+proc snmpCheckIpForwarding {args} {
+   parse_args snmpCheckIpForwarding $args {
+      session ""
+      status "enabled"
+      vlanid ""
+      fd "NULL"
+      comment "snmpCheckIpForwarding"
+   }
+
+   set func "snmpCheckIpForwarding"
+
+   if { $session == "" } {
+       error "$func SNMP session id must be specified"
+       return 0
+   }
+
+   set status [string tolower $status]
+
+   result_debug "\n-- Checking IP forwarding status for $status --"
+
+   if { $status == "enabled" } {
+      set forwardState "true"
+   } elseif { $status == "disabled" } {
+      set forwardState "false"
+   } else {
+      error "$func - status value should be either enabled or disabled"
+      return 0
+   }
+
+   snmpDebug DEBUG "$func session-$session status-$status vlanid-$vlanid - Start" $fd 
+   # ----- If vlanid is given, check IP forwarding state of the particular VLAN
+   if { $vlanid != "" } {
+      set result [snmpGet -session $session -oid extremeVlanIpForwardingState.$vlanid]
+      snmpDebug LOG "$func - snmpGet - $result" $fd
+
+      set ForwardingState [snmpUtilGetVal boolean $result]
+      if {[string compare $forwardState $ForwardingState] != 0} {
+         result_error "IP Forwarding state for $vlanid expected is true but found \
+                       $ForwardingState. FAIL"
+         return 0
+      } else {
+         result_ok "IP Forwarding state for $vlanid expected is true and exists. PASS"
+      }
+
+   } else {
+      # ----- Check the IP forwarding state of the switch instead
+      set result [snmpGet -session $session -oid ipForwarding.0]
+      snmpDebug LOG "$func - snmpGet - $result" $fd
+      
+      if { [string compare $forwardState "true"] == 0 } {
+          lappend parameterList {{.*forwarding(1)*} exist}
+          snmpCheckKeyValue $parameterList -output $result \
+                    -comment "Check IP Forwarding is enabled in the switch" -fd $fd
+          unset parameterList 
+      } elseif { [string compare $forwardState "false"] == 0 } {
+          lappend parameterList {{.*notforwarding(2)*} exist}
+          snmpCheckKeyValue $parameterList -output $result \
+                    -comment "Check IP Forwarding is not enabled in the switch" -fd $fd
+          unset parameterList 
+      }
+
+   }
+   snmpDebug DEBUG "$func - End\n" $fd
+   return 1
+}
+
+#################################################################
+#  Procedure Name: snmpChangeVlanLoopbackMode
+#  
+#  Description:
+
+#################################################################
+#  Procedure Name: snmpChangeVlanLoopbackMode
+#  
+#  Description:
+#    This procedures enables or disables loop back mode of a VLAN
+#
+#  Input Variables:
+#    session   - Session identifier which identifies the connection 
+#                with the DUT
+#    vlanid    - VLAN identifier of the VLAN for which the loopback
+#                mode to be changed
+#  Optional Args:
+#    status - Status indicating whether the loopback mode to
+#             be enabled or disabled. Default is "enable"
+#    fd - File descriptor of open log file
+#
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    0 - On failure 
+#    1 - On success
+#
+#  Possible Usage:
+#    set vlanid [snmpCreateVlan]
+#    snmpChangeVlanLoopbackMode -session $session -vlanid $vlanid \
+#                               -state "disable"
+################################################################
+
+proc snmpChangeVlanLoopbackMode { args } {
+   parse_args snmpChangeVlanLoopbackMode $args {
+      session ""
+      vlanid ""
+      status "enable"
+      fd "NULL"
+   }
+
+   set func "snmpChangeVlanLoopbackMode:"
+
+   if { $session == "" || $vlanid == "" } {
+      error "$func session and vlanid should be specified"
+      return 0
+   }
+
+   set status [string tolower $status]
+
+   result_debug "\n-- Changing VLAN loopback mode to $status --"
+
+   if { $status == "enable" } {
+      set loopbackState 1
+      set loopbackVal "true"
+   } elseif { $status == "disable" } {
+      set loopbackState 2
+      set loopbackVal "false"
+   } else {
+      error "$func - status value should be either enable or disable"
+      return 0
+   }
+
+   snmpDebug DEBUG "$func session-$session vlanid-$vlanid status-$status - Start" $fd
+
+   # ----- Enable or Disable loopback mode in VLAN
+   set output [snmpSet -session $session -oid extremeVlanIfLoopbackModeFlag.$vlanid -type i -val $loopbackState]
+
+   snmpDebug LOG "snmpSet- Interface loopback mode $output" $fd
+
+   set get_info [snmpGet -session $session -oid extremeVlanIfLoopbackModeFlag.$vlanid]
+   snmpDebug LOG "snmpGet- Interface loopback mode $get_info" $fd
+
+   set loopbackFlag [snmpUtilGetVal boolean $get_info]
+
+   if {[string compare $loopbackVal $loopbackFlag] != 0} {
+      result_error "loop back Flag for vlan id $vlanid expected is $loopbackVal but found $loopbackFlag. FAIL"
+   snmpDebug DEBUG "$func - End\n" $fd
+      return 0
+   } else {
+      result_ok "loop back Flag for vlan id $vlanid expected is $loopbackVal, found $loopbackFlag. PASS"
+      snmpDebug DEBUG "$func - End\n" $fd
+   }
+}
+
+#################################################################
+#  Procedure Name: snmpCheckIpAddress
+#  
+#  Description:
+#    This procedures checks whether the given IP address exists
+#    in the IP address table or not
+#
+#  Input Variables:
+#    session   - Session identifier which identifies the connection 
+#                with the DUT
+#    addr      - IP address 
+#
+#  Optional Args:
+#    status - If the value is "exist", the IP address must be 
+#             present. If "notexist", IP address should not 
+#             be present in the IP address table. Default is "exist" 
+#    mask   - IP network mask. If the mask value is given, the netmask
+#             value of the entry will also be checked
+#    iface  - Interface index associated with the IP address. If the 
+#             interface index is specified, the interface index assocaited
+#             with the IP address entry will also be checked
+#    comment - Test case comment to be logged in the text file.
+#    fd      - File descriptor of open log file
+#
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    0 - On failure 
+#    1 - On success
+#
+#  Possible Usage:
+#    snmpCheckIpAddress -session $session -addr "192.207.39.1" \
+#                       -mask "255.255.255.0" -iface 2
+################################################################
+
+proc snmpCheckIpAddress {args} {
+   parse_args snmpCheckIpAddress $args {
+      session ""
+      status "exist"
+      addr ""
+      mask ""
+      iface ""
+      comment "none" 
+      fd "NULL" 
+   }
+
+   set func "snmpCheckIpAddress"
+   set retVal 0
+
+   if { $addr == "" || $session == "" } { 
+       error "$func IP address and SNMP session id must be specified"
+       return 0
+   }
+
+   snmpDebug DEBUG "$func session-$session addr-$addr mask-$mask iface-$iface - Start" $fd
+
+   result_debug "\n-- Checking IP address $addr/$mask of a VLAN --"
+
+   report_start_test "$comment"
+
+   # ----- Get the ipAddrTable entries to verify whether the IP address exists or not
+   set maskResult [snmpGet -session $session -oid ipAdEntNetMask.$addr]
+   set ifaceResult [snmpGet -session $session -oid ipAdEntIfIndex.$addr]
+    
+   snmpDebug LOG "$func snmpGet-$maskResult" $fd
+   snmpDebug LOG "$func snmpGet-$ifaceResult" $fd
+   # ----- If the entry not exist but the check is for exist, return error
+   if {[regexp -nocase ".*No Such Instance.*" $maskResult]} {
+      if { $status == "exist" } {
+         result_error "IP address $addr doesn't exist in the ipAddrTable. FAIL"
+      } else {
+         result_ok "IP address $addr doesn't exist in the ipAddrTable result $status. PASS"
+      }
+      report_end_test
+      return 0
+   } else {
+      if { $status == "notexist" } {
+         result_error "IP address $addr exist in the ipAddrTable result $status. FAIL"
+      }
+
+      # ---- Mask exist, so compare the mask with the given one
+      if { $mask == "" && $iface == ""} {
+         report_end_test
+         return 0
+      }
+      result_ok "IP address $addr exist in the ipAddrTable result $status. PASS"
+   }
+   
+   # ---- Match the netmask if it is given 
+   if { $mask != "" } {
+      set maskAddr [snmpUtilGetVal ipaddr $maskResult]
+      if { $mask == $maskAddr } {
+         result_ok "IP netmask $mask matched with $maskAddr. PASS"
+         set retVal 1
+      } else {
+         result_error "IP netmask $mask not matched with $maskAddr. FAIL"
+      }
+   }
+
+   # ---- Match the interface index if it is given 
+   if { $iface != "" } {
+      set index [snmpUtilGetVal int $ifaceResult]
+      if { $iface == $index } {
+         result_ok "Interface index $iface and $index matched. PASS"
+         report_end_test
+         return $retVal 
+      } else {
+         result_error "Interface index $iface and $index not matched. FAIL"
+         # ----- If no error till now, then return error
+         if { $retVal == 1 } {
+             report_end_test
+             return 0
+         } else {
+             report_end_test
+             return $retVal
+         }
+      }
+    }
+
+    snmpDebug DEBUG "$func returning $retVal - End\n" $fd
+    report_end_test
+    return $retVal
+}
+
+#################################################################
+#  Procedure Name: snmpCheckIpRoute
+#  
+#  Description:
+#    This procedures checks whether the given IP route exists
+#    in the IP routing table or not
+#
+#  Input Variables:
+#    session   - Session identifier which identifies the connection 
+#                with the DUT
+#    addr      - IP address
+#    gw        - Gateway address
+#
+#  Optional Args:
+#    status - If the value is "exist", the route must be 
+#             present. If "notexist", route should not 
+#             be present in the IP routing table. Default is "exist" 
+#    proto  - Protocol through which the route is learnt.
+#             Possible values are (defined in RFC 1213)
+#                * other
+#                * local
+#                * netmgmt
+#                * icmp
+#                * egp
+#                * ggp
+#                * hello
+#                * rip
+#                * is-is
+#                * es-is
+#                * ciscoIgrp
+#                * bbnSpfIgp
+#                * ospf
+#                * bgp
+#             Default value is "local"
+#    comment - Test case comment to be logged in the text file.
+#    fd      - File descriptor of open log file
+#
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    0 - On failure 
+#    1 - On success
+#
+#  Possible Usage:
+#    snmpCheckIpRoute -session $session -addr "192.207.39.1" \
+#                     -mask "255.255.255.0" -gw 192.207.39.1\
+#                     -status "exist" -proto "rip"
+################################################################
+
+proc snmpCheckIpRoute {args} {
+   parse_args snmpCheckIpRoute $args {
+      session ""
+      status "exist"
+      addr ""
+      gw ""
+      proto "local"
+      comment "snmpCheckIpRoute" 
+      fd "NULL" 
+   }
+
+   set func "snmpCheckIpRoute:"
+   set retVal 0
+
+   if { $addr == "" || $session == "" || $gw == ""} { 
+       error "$func IP address, SNMP session id and gateway address must be specified"
+       return 0
+   }
+
+   result_debug "\n-- Checking IP route entry $addr with gateway $gw --"
+
+   report_start_test "$comment"
+
+   snmpDebug DEBUG "$func session-$session addr-$addr gw-$gw - Start" $fd
+
+   # ----- convert the status string to lower to facilitate the string comparison
+   set status [string tolower $status]
+
+   # ----- Get the ipRouteTable entries to verify the IP address exists or not
+   set output [snmpGet -session $session -oid ipRouteNextHop.$addr]
+   snmpDebug LOG "snmpGet - $output" $fd
+   set gwAddr [snmpUtilGetVal ipaddr $output]
+   snmpDebug LOG "snmpGet - gateway address is $gwAddr" $fd
+   set protocol [snmpGet -session $session -oid ipRouteProto.$addr]
+   snmpDebug LOG "snmpGet - protocol is $protocol" $fd
+   set test ".*$proto.*"
+   if {[string compare $gwAddr $gw] == 0 \
+       && [regexp -nocase $test $protocol result] == 1} {
+      if {[string compare $status "exist" ] == 0} {
+         result_ok "The route $addr with gateway $gw protocol $proto exists result $status. PASS"
+         set retVal 1
+      } else {
+         result_error "The route $addr with gateway $gw protocol $proto exists result $status. FAIL"
+      }
+   } else {
+      if {[string compare $status "notexist" ] == 0} {
+         result_ok "The route $addr with gateway $gw protocol $proto not exists result $status. PASS"
+         set retVal 1
+      } else {
+         result_error "The route $addr with gateway $gw protocol $proto not exists result $status. FAIL"
+      }
+   }
+
+   snmpDebug DEBUG "$func returning $retVal - End\n" $fd
+   report_end_test
+   return $retVal
+}
+
+#################################################################
+#  Procedure Name: snmpCheckIpForwardEntry
+#  
+#  Description:
+#    This procedures checks whether the given IP route exists
+#    in the IP forwarding table (defined in IP-FOWARDING MIB) 
+#    or not
+#
+#  Input Variables:
+#    session   - Session identifier which identifies the connection 
+#                with the DUT
+#    addr      - Destination IP address
+#    gw        - Gateway address
+#    mask      - Network Mask address
+#    proto     - Protocol through which the route is learnt.
+#                Possible values are (defined in RFC 1213)
+#                * other
+#                * local
+#                * netmgmt
+#                * icmp
+#                * egp
+#                * ggp
+#                * hello
+#                * rip
+#                * is-is
+#                * es-is
+#                * ciscoIgrp
+#                * bbnSpfIgp
+#                * ospf
+#                * bgp
+#             Default value is "local"
+#
+#  Optional Args:
+#    ifindex - Interface index through which the route is reachable
+#    status - If the value is "exist", the route must be 
+#             present. If "notexist", route should not 
+#             be present in the IP routing table. Default is "exist" 
+#
+#    comment - Test case comment to be logged in the text file.
+#    fd      - File descriptor of open log file
+#
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    0 - On failure 
+#    1 - On success
+#
+#  Possible Usage:
+#    snmpCheckIpForwardEntry -session $session -addr "192.207.39.0" \
+#                     -gw 192.207.39.1 -proto "local"\
+#                     -ifindex 10 -status "exist"
+################################################################
+
+proc snmpCheckIpForwardEntry {args} {
+   parse_args snmpCheckIpForwardEntry $args {
+      session ""
+      status "exist"
+      addr ""
+      gw ""
+      proto "local"
+      ifindex ""
+      mask ""
+      comment "snmpCheckIpForwardEntry" 
+      fd "NULL" 
+   }
+
+   set func "snmpCheckIpForwardEntry:"
+   set retVal 0
+
+   if { $addr == "" || $session == "" || $gw == "" || $proto == "" || $mask == ""} { 
+       error "$func IP address, SNMP session id, gateway, network mask address and protocol must be specified"
+       return 0
+   }
+
+   result_debug "\n-- Checking IP Forward entry $addr with gateway $gw proto -$proto --"
+
+   report_start_test "$comment"
+
+   snmpDebug DEBUG "$func session-$session addr-$addr gw-$gw proto-$proto - Start" $fd
+
+   # ----- convert the status string to lower to facilitate 
+   #       the string comparison
+   set status [string tolower $status]
+   set proto  [string tolower $proto]
+
+   # ---- If ifindex is not specified, get the interface index
+   if { $ifindex == "" } {
+      set ifIndex [snmpGetIfIndexForIpAddr $session $gw $fd]
+   } else {
+      set ifIndex $ifindex
+   }
+
+   snmpDebug LOG "$func - Interface index is $ifIndex"
+
+   # ----- Get the ipForwardTable entries to verify the 
+   #       interface index exists or not
+   set output [snmpGet -session $session -oid ipForwardIfIndex.$addr.$proto.0.$gw]
+   snmpDebug LOG "snmpGet - $output" $fd
+   set iface [snmpUtilGetVal int $output]
+   snmpDebug LOG "snmpGet - interface index is $iface, given index is $ifIndex" $fd
+   if { $iface == $ifIndex } {
+      set result "exist"
+   } else {
+      set result "notexist"
+   }
+ 
+   if {[string compare $status $result ] == 0} {
+         result_ok "The route $addr with gateway $gw protocol $proto ifindex $ifIndex $result needed $status. PASS"
+         set retVal 1
+   } else {
+         result_error "The route $addr with gateway $gw protocol $proto ifindex $ifIndex $result needed $status. FAIL"
+         set retVal 0
+   }
+
+   snmpDebug DEBUG "$func returning $retVal - End\n" $fd
+   report_end_test
+   return $retVal
+}

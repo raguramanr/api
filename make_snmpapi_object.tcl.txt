@@ -1,0 +1,44 @@
+#!/usr/bin/tclsh
+set output [exec id]
+if { [regexp {.*uid\=0\(root\).*} $output] == 0 } {
+   puts "ERROR: you must be a super-user to execute this script. installation aborted !!!\n"
+   exit
+}
+
+if { [file exists /usr/lib/libnetsnmp.so.5] } {
+catch {set val [exec ls -al /usr/lib/libnetsnmp.so.5]} reason
+if {[info exists val] == 1 } {
+  if { [regexp -nocase ".*libnetsnmp\.so\.5\.0\.9.*" $val] == 1 } {
+     if  {[ file exists /usr/lib/libnetsnmp.so.5.0.9] == 1 } {
+        catch { [ exec rm -f /usr/lib/libnetsnmp.so.5] } reason
+        catch { [exec ln -s /usr/lib/libnetsnmp.so.5.0.9 /usr/lib/libnetsnmp.so.5] }  reason
+     } 
+  }
+}
+}
+
+if { ![file exists /auto/automation/Lib] } {
+   puts "ERROR: the directory /auto/automation/Lib doesn't exists. installation aborted !!!\n"
+   exit
+}
+
+if {[file exists /auto/automation/Lib/SnmpAPI.so]} {
+   catch {[exec rm -f /auto/automation/Lib/SnmpAPI.so]} reason
+}
+
+if {![file exists /usr/bin/gcc]} {
+   puts "ERROR: unable to find gcc compiler in /usr/bin directory. installation aborted !!!\n"
+   exit
+}
+
+puts "INFO: creating SnmpAPI.so in /auto/automation/Lib directory"
+# Create SnmpAPI.so
+#catch {eval [exec /usr/bin/gcc -shared ./snmp_api.c -o /usr/share/snmp/SnmpAPI.so -lnetsnmp -lcrypto -lm] error_msg}
+catch {eval [exec /usr/bin/gcc -shared ./snmp_api.c -o /auto/automation/Lib/SnmpAPI.so /usr/lib/libnetsnmp.so.5 -lcrypto -lm]} error_msg
+catch {eval [exec /usr/bin/gcc -shared ./snmp_api.c -o SnmpAPI.so /usr/lib/libnetsnmp.so.5 -lcrypto -lm]} error_msg
+if {[regexp ".*cannot find -lm.*" $error_msg]} {
+   catch {eval [exec /usr/bin/gcc -shared ./snmp_api.c -o /auto/automation/Lib/SnmpAPI.so /usr/lib/libnetsnmp.so.5 -lcrypto]} error_msg
+}
+
+
+puts "INFO: SnmpAPI.so library installation completed"

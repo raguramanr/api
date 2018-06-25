@@ -1,0 +1,187 @@
+
+################################################################## 
+# Procedure Name: GetReservedFieldHex   
+# Description: Return the reserved field of DVMRP packets like report
+#	       or probe.      
+# Input args: rawFrame
+# Output args: none
+# Return value: 4 bytes hex string
+# Typical usage: 
+#	set reservedField [GetReservedFieldHex $dataFrame]      
+# Category: Utility
+##################################################################
+proc GetReservedFieldHex {rawFrame} {
+
+return [string range $rawFrame 114 118]
+
+}            
+
+################################################################## 
+# Procedure Name: GetGenerationID   
+# Description: Return the generation id of DVMRP probe packet.      
+# Input args: rawFrame
+# Output args: none
+# Return value: short integer
+# Typical usage: 
+#	set generationID [GetGenerationID $dataFrame]      
+# Category: Utility
+##################################################################
+proc GetGenerationID {rawFrame} {
+
+return [GetIntOffset $rawFrame 126]
+
+}            
+
+################################################################## 
+# Procedure Name: GetNeighborIpAddressList   
+# Description: Return the neighbor ip List of DVMRP probe packet      
+# Input args: rawFrame
+# Output args: none
+# Return value: list of IP addresses
+# Typical usage:
+#	set neighborIpList [GetNeighborIpAddressList $dataFrame]      
+# Category: Utility
+##################################################################
+proc GetNeighborIpAddressList {rawFrame} {
+
+   set addressList ""
+   set numNeighbor [expr ([GetIpTotalLength $rawFrame] - 32 ) / 4 ]
+   result_debug "Getting $numNeighbor numNeighbor in Probe message"
+   for {set count 0 } {$count < $numNeighbor } {incr count } {
+   set offset [expr 138 + $count * 12 ]
+   lappend addressList [GetIPAddressOffset $rawFrame $offset]
+   }
+   
+   return $addressList
+}  
+
+################################################################## 
+# Procedure Name: SendDVMRPMessage   
+# Description: Send DVMRP packet from an ixia port and the packet type
+#	       is given in dataPattern argement.		     
+# Input args: args
+# Output args: none
+# Return value: Frame sent
+# Typical usage: 
+#	set srcMac [GetDUTMac "DUT1"]
+#	set destMac [GetDUTMac "DUT2"]
+#	set graftAckData "13 09 3A EA 00 00 FF 03 C0 02 02 00 EF 01 02 04 00 00 00 00 00 00 00 00 00 00"
+#	set ipTotalLength 36 
+#	set frameSent [SendDVMRPMessage -txPortId 9 -sourceIp 192.3.3.1 \
+#                 -destIp 192.3.3.2 -sourceMac $srcMac -destMac $destMac \
+#                 -ipTotalLength $ipTotalLength -dataPattern $graftAckData ]     
+# Category: SendTraffic
+##################################################################
+proc SendDVMRPMessage {args} {
+   parse_args SendDVMRPMessage $args {
+     txPortId "1"
+     sourceMac "default"
+	  destMac "01 00 5E 00 00 04"
+	  sourceIp "127.0.0.1"
+	  destIp "224.0.0.4"
+	  ttl "1"
+     numFrames "1"
+	  tag "none"
+	  dataPattern "13 01 6F 62 00 0E FF 03 39 E4 CC 40 64 64 14 01 00 00 00 00 00 00 00 00 00 00"
+	  ipTotalLength 36
+   }
+   result_debug "Host ($sourceIp) sending a DVMRP message ([lindex $dataPattern 1]) on portId $txPortId"   
+   set numIxiaCd [GetNumIxiaCd $txPortId]
+   set rxPo [MapIxiaPortId $txPortId chasisId card port]
+   if {$tag != "none" } { set wTag "true" } else {set wTag "false" }
+   global startCardNum
+
+
+   set frameSize [expr 38 + [llength $dataPattern] ]
+   result_debug "FrameSize: $frameSize"
+   set frameSent [ixiaConf_2Ports_ip -numIxiaCd $numIxiaCd \
+              -txChas $chasisId -txCard $card -txPort $port \
+              -rxChas $chasisId -rxCard $card -rxPort $rxPo \
+              -ipProtocol "dvmrp" -sMacAddr $sourceMac -dMacAddr $destMac \
+              -sIpAddr $sourceIp -dIpAddr $destIp -ttl $ttl -TOS "0xC0" ipTotalLength $ipTotalLength \
+	           -numFrames $numFrames -wTag $wTag -tagNo $tag  -dataPattern $dataPattern -frameSize $frameSize]  
+   result_debug "DVMRPFrame: $frameSent"
+
+   return $frameSent
+
+}
+
+################################################################## 
+# Procedure Name: check_dvmrp  
+# Description:  check if DVMRP routes exist in the display of "show
+#		dvmrp route" 
+# Input args: {{dIpList {}}{fd_res "NULL"}{testNo "0"}{DUT_C "127.0.0.1"}
+#	       {DUT_IP "127.0.0.1"}}
+# Output args: none
+# Typical usage: 
+#       lappend dvmrpList "yes 192.20.2.0/24 10.10.10.2"
+#	lappend dvmrpList "yes 10.10.10.0/24 10.10.10.1"
+#	check_dvmrp $dvmrpList $fd_res $testNo $DUT1_CONNECT $DUT1_IP
+# Category: VerifySwitchOutput
+##################################################################
+proc check_dvmrp {{dIpList {}}
+                  {fd_res "NULL"}
+                  {testNo "0"}
+                  {DUT_C "127.0.0.1"}
+                  {DUT_IP "127.0.0.1"}} {
+
+   set fd_in [open "Tmp/tmp_$testNo[pid]" "w+"]
+   set date [clock format [clock seconds] -format "%m-%d-%Y %I.%M.%S%p"]
+   result_debug "*** date=$date"
+
+   Login $DUT_C
+   SendACmd	"show dvmrp route" $fd_res $fd_in
+   logout_noSave
+   close $fd_in
+
+   set fd_in [open "Tmp/tmp_$testNo[pid]" "r"]
+   foreach group $dIpList {
+      set shouldExist [lindex $group 0]
+      set net [lindex $group 1]
+#result_debug "@@@@@@@@ net = $net"
+      set gateway [lindex $group 2]
+      set found "false"
+      seek $fd_in 0
+
+      while {[gets $fd_in line] != -1} {
+         set inList [eSplit $line]
+	     set len [llength $inList]
+	     if { $len >= 7 } {
+            set tmpNet [lindex $inList 0]
+            set tmpGateway [lindex $inList 1]
+#result_debug "@@@@@@@@ |$tmpNet|$tmpGateway|"
+			if { $net == $tmpNet } {
+			   if { $gateway == "-" } {
+                  set found "true"
+			   } else {
+		      	  if { $gateway == $tmpGateway } {
+                     set found "true"
+				  }
+			   }
+			}
+		 }
+	  }
+      set DUT_INFO ""
+      if { $DUT_IP != "127.0.0.1" } { set DUT_INFO "(${DUT_IP}) " }
+
+      switch $shouldExist {
+         "yes" {
+            report_start_test "Dvmrp check entry $DUT_INFO'$net'"
+            switch $found {
+               "true"  { result_ok "Dvmrp check entry $net passed" }
+               "false" { result_error "Dvmrp check entry $net failed" }
+		    }
+		 } 
+	     "no" { 
+            report_start_test "Dvmrp check NO entry $DUT_INFO'$net'"
+            switch $found {
+               "true"  { result_error "Dvmrp check NO entry $net failed" }
+               "false" { result_ok "Dvmrp check NO entry $net passed" }
+		    }
+		 }
+      }
+      report_end_test
+   }
+   close $fd_in
+   file delete "Tmp/tmp_$testNo[pid]"
+}  

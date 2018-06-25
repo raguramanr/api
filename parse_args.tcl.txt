@@ -1,0 +1,103 @@
+
+################################################################## 
+# Procedure Name: parse_args   
+# Description: 
+#	This function accepts a arguments list and a definition list.
+#	Uers pass it the name of the function who is having it's arguments parsed, a
+# 	list of argumets (usually the $args variable), and then a list of
+# 	definitions. The definition list is in the form of { variable default
+# 	variable default ... }.   
+# Input args: func_name arg_list def_list
+# Output args: none
+# Return value: list of strings unknownArgs
+# Typical usage: 
+#	proc CheckForwarding {args} {
+#		parse_args CheckForwarding $args {
+#		     txPortId "1"
+#		     rxPortId "0"
+#		     protocol "mac"
+#		     tag      "none"
+#		     generateArpReq "1"
+#		     inSaMac "default"
+#		     inDaMac "FF:FF:FF:FF:FF:FF"
+#		     sIpAddr "127.0.0.1"
+#		     dIpAddr "127.0.0.1"
+#	}	   
+# Category: Utility
+##################################################################
+
+proc parse_args {args} {
+    global TrafficGen MAIN
+    set noComplain 0
+    switch [llength $args] {
+        2 { error "no value given for parameter \"def_list\" to \"parse_args\"" }
+        1 { error "no value given for parameter \"arg_list\" to \"parse_args\"" }
+        0 { error "no value given for parameter \"func_name\" to \"parse_args\"" }
+        default {
+            if {[lindex $args 0] == "-noComplain"} {
+                set noComplain 1
+            }
+            set tmp [expr [llength $args] - 3]
+            if {$tmp > 1} { set tmp 1 }
+
+            set func_name [lindex $args $tmp]
+            incr tmp
+            set arg_list [lindex $args $tmp]
+            incr tmp
+            set def_list [lindex $args $tmp]
+        }
+    }
+
+    set trafficProc 0
+    set trafficArgs {txPortId rxPortId protocol tag sourceMac destMac percentage frameRate streamType}
+
+    # Set the default values from the definition list
+    foreach {opt def} $def_list {
+        uplevel [list set $opt $def]
+        if {[lsearch -exact $trafficArgs $opt] >= 0} {
+            incr trafficProc;
+            if {!$MAIN(IxiaReady) && [regexp -nocase "ix" $TrafficGen]} {
+                #In i_main traffic is turned off by default. Get ready for traffic
+                smallIxiaInit
+                set MAIN(skipIxInit) 0; set MAIN(IxiaReady) 1;
+            }
+        }
+    }
+
+    set unknownArgs ""
+    foreach {arg val} $arg_list {
+        set found 0
+        foreach {opt def} $def_list {
+            if {("$arg" == "-$opt")||("$arg" == "$opt")} {
+                # The arg is in the definition list.  Set the arg value.
+                uplevel [list set $opt $val]
+                set found 1
+            }
+        }
+        if {$trafficProc >= 3 && ($TrafficGen == "ixvm" || $TrafficGen == "stcvm")} {
+            if {$arg == "-percentage"} {
+               uplevel [list set percentage ".001"]
+            }
+            if {$arg == "-frameRate"} {
+               uplevel [list set frameRate "100"]
+            }
+        }
+        if {!$found} {
+            lappend unknownArgs $arg
+            lappend unknownArgs $val
+
+            if {$noComplain} {
+                continue
+            }
+
+            set msg "Bad argument `$arg' to function `$func_name'. Must be one of "
+            set length [expr {[llength $def_list] / 2}]
+            for {set i 0} {$i < ($length - 1)} {incr i} {
+                append msg "[lindex $def_list [expr $i * 2]], "
+            }
+            append msg "or [lindex $def_list [expr $i * 2]]."
+            error $msg
+        }
+    }
+    return $unknownArgs
+} ;# parse_args

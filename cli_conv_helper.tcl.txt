@@ -1,0 +1,306 @@
+catch {package require json::write} oops
+catch {package require json} oops 
+catch {package require base64} oops ;# tcllib
+
+
+
+proc AddToJsonHelperFile {args} {
+    global MAIN connectionTimeout whichDutNow
+    if {![info exists MAIN(startexecution)] || $MAIN(startexecution)!=1} {
+        return
+    }
+    if {![info exists MAIN(USEJSONHELPFILE)] || $MAIN(USEJSONHELPFILE)!=1} {
+        return
+    }
+    if {![info exists MAIN(CURRENTTESTCASE)]} {
+        set tNo "TestUnKnown"
+    } else {
+        set tNo $MAIN(CURRENTTESTCASE)
+    }
+    if {![info exists connectionTimeout]} {
+        set connectionTimeout 90
+    }
+    if {![info exists MAIN(report_start_test)]} {
+        set MAIN(report_start_test) ""
+    }
+    parse_args AddToJsonHelperFile $args {
+        cmd           ""
+        parameterList ""
+        comment       ""
+        dut           "null"
+        yesorno       "Yes"
+        time          "null"
+        type          "check"
+        status        "ok"
+        testNo        ""
+    }
+    # normalize spaces to single
+    regsub -line {[ ]+} $cmd " " cmd
+
+
+    set majmin [GetVersion DUT${whichDutNow} majmin]
+    if {[regexp -nocase {^(sh[ow]{0,2}.*) no-r[efresh]{0,7}} $cmd a ncmd]} {
+        if {$majmin>=11.3&&$majmin<21.1} {
+            set cmd "$ncmd no-refresh"
+        }
+        puts "Hit refresh - new $ncmd"
+        set cmd $ncmd
+    }
+
+    set MAIN(CONVERTFILE) [open "[get_result_dir]/cli_json_helper.txt" "a+"]
+
+    # -- cli2json is showing errors when "?" wildcard is in the command/cmd sent in.
+    if {[regexp -nocase "\\?" $cmd]} {
+        puts $MAIN(CONVERTFILE) "\n\nCommands with ? are not supported by cli2json at this time"
+        puts $MAIN(CONVERTFILE) "No supp: $cmd \n"
+        close $MAIN(CONVERTFILE)
+        return
+    }
+
+    set inSout $MAIN(SHOWSTDOUT)
+    set inLout $MAIN(PRINTTOLOG)
+    set inRout $MAIN(SHOWRESULT_FMT)
+
+    set delim  "=================================================================================="
+    set tline  "============= DUT $whichDutNow $tNo $status"
+    set tline2 "============= $MAIN(report_start_test)"
+    if {$time == "0" || [llength $time] < 4} {
+        set time "null"
+    }
+
+    set timeout 5
+    set exp_out_buf ""
+    _setShowOutput -screen off -log off -res_fmt off
+    exp_send "run script cli2json.py $cmd\r"
+    expect {
+        "$cmd" {}
+        timeout {
+            result_debug "Timeout waiting for CheckDictValue cli converter to echo"
+            return;
+        }
+    }
+    set timeout $connectionTimeout
+    expect {
+        -nocase -re "(\\* )?\[a-z0-9()._-]+(:|\\.)\[0-9]+ (#|>) " {
+            # ExtremeWare and ExtremeWare XOS prompt.
+            #
+            # The pattern breaks down as follows:
+            #
+            # (\\* )?        Unsaved config marker
+            # \[a-z0-9._-]+  Platform type or SNMP system name
+            # (:|\\.)        Name and command ID separator
+            # \[0-9]+        Command ID
+            # (#|>)          System or user prompt marker
+            append exp_out_buf $expect_out(buffer)
+            regsub -all "\n\r" $exp_out_buf "\n" exp_out_buf
+            regsub -all "\t" $exp_out_buf " " exp_out_buf
+            #regsub -all -nocase {[ ]+} $exp_out_buf "" exp_out_buf
+        }
+        "\\?" {
+            send "$yesorno\r"
+            exp_continue
+        }
+        timeout {
+            result_debug "Timeout waiting for CheckDictValue cli convert helper a prompt"
+            return;
+        }
+    }
+
+    set output [string trim $exp_out_buf]
+    # reset printing to whatever it was at beginning of this proc
+    _setShowOutput -screen $inSout -log $inLout -res_fmt $inRout
+    if {[catch {json::json2dict $output} parsed]} {
+        regsub -all -nocase {^.*\[} $output "\[" output
+        if {[catch {json::json2dict $output} parsed]} {
+            puts "2 Dictionary returned Error: $parsed $output"
+            return -1
+        }
+    }
+    set vOdd [expr [llength $parsed] % 2]
+    if {$vOdd  != 0} {
+        lappend parsed {dummy}
+    }
+    #puts "\n\nParsed Dictionary:\n$parsed\n\n"
+    if {[catch {dict get $parsed} psmall]} {
+        puts "Error getting dictionary path - $psmall"
+    } else {
+        set roots ""
+        foreach ele $psmall {
+            lappend roots "[lindex $ele 0]"
+            #            if {![catch {dict get $ele CLIoutput} tolog]} {
+            #                if {$showfmt == "default"} {
+            #                    result_pre $tolog
+            #                    puts $tolog
+            #                }
+            #            } else {
+            #                if {$showfmt != "default"} {
+            #                    result_pre $ele
+            #                    puts $ele
+            #                }
+            #            }
+        }
+    }
+    set nroots ""
+    foreach r $roots {
+        if {[lsearch $nroots $r] <0 && $r != "CLIoutput" && $r != "status" && $r != "dummy"} {
+            lappend nroots $r
+        }
+    }
+    set ev "exist"
+    if {[regexp -nocase "notExist" $parameterList]} {
+        set ev "notExist"
+    }
+    puts $MAIN(CONVERTFILE) $delim
+    puts $MAIN(CONVERTFILE) $tline
+    puts $MAIN(CONVERTFILE) $tline2
+    puts $MAIN(CONVERTFILE) "In parameterList:"
+    puts $MAIN(CONVERTFILE) "$parameterList"
+    puts $MAIN(CONVERTFILE) "set parameterList \"\""
+    foreach r $nroots {
+        puts $MAIN(CONVERTFILE) "lappend parameterList \"\{$r \{key1 key2\}\} \{kval1 kval2\}\" $ev\""
+    }
+    if {$type == "check"} {
+        #show iparp security
+        if {[regexp -nocase {^sh[ow]{0,2} ipar[p]{0,1} sec[urity]{0,5}} $cmd]} {
+            puts $MAIN(CONVERTFILE) "CheckDictValue -cmd \"$cmd\" -parameterList \$parameterList \\ "
+            puts $MAIN(CONVERTFILE) "   -time \"$time\" -comment \"$comment\" -yesorno \"$yesorno\" "
+            puts $MAIN(CONVERTFILE) "   -debugjson \"false\" -testNo \"$testNo\" "
+        } elseif {[regexp -nocase {^sh[ow]{0,2} ipar[p]{0,1} st[ats]{0,3} summ[ary]{0,3}} $cmd]} {
+            puts $MAIN(CONVERTFILE) "_show_iparp_stats -summary \"summary\" -parameterList \$parameterList \\ "
+            puts $MAIN(CONVERTFILE) "   -time \"$time\" -comment \"$comment\" -yesorno \"$yesorno\" "
+            puts $MAIN(CONVERTFILE) "   -debugjson \"false\" -testNo \"$testNo\" "
+        } elseif {[regexp -nocase {^sh[ow]{0,2} ipar[p]{0,1} st[ats]{0,3} vl[an]{0,2} ([a-zA-Z0-9_\-,\!]+).*} $cmd a vl]} {
+            puts $MAIN(CONVERTFILE) "_show_iparp_stats -vlan \"$vl\" -parameterList \$parameterList \\ "
+            puts $MAIN(CONVERTFILE) "   -time \"$time\" -comment \"$comment\" -yesorno \"$yesorno\" "
+            puts $MAIN(CONVERTFILE) "   -debugjson \"false\" -testNo \"$testNo\" "
+        } elseif {[regexp -nocase {^sh[ow]{0,2} ipar[p]{0,1} st[ats]{0,3} vr ([a-zA-Z0-9_\-,\!]+).*} $cmd a mvr]} {
+            puts $MAIN(CONVERTFILE) "_show_iparp_stats -vr \"$mvr\" -parameterList \$parameterList \\ "
+            puts $MAIN(CONVERTFILE) "   -time \"$time\" -comment \"$comment\" -yesorno \"$yesorno\" "
+            puts $MAIN(CONVERTFILE) "   -debugjson \"false\" -testNo \"$testNo\" "
+        } elseif {[regexp -nocase {^sh[ow]{0,2} ipar[p]{0,1} st[ats]{0,3} po[rts]{0,3} ([a-zA-Z0-9_\-,\:]+).*} $cmd a por]} {
+            puts $MAIN(CONVERTFILE) "_show_iparp_stats -show_ports \"$por\" -parameterList \$parameterList \\ "
+            puts $MAIN(CONVERTFILE) "   -time \"$time\" -comment \"$comment\" -yesorno \"$yesorno\" "
+            puts $MAIN(CONVERTFILE) "   -debugjson \"false\" -testNo \"$testNo\" "
+        } elseif {[regexp -nocase {^sh[ow]{0,2} ipar[p]{0,1} st[ats]{0,3} ([a-zA-Z0-9_\-,\:]+).*} $cmd a vl2]} {
+            puts $MAIN(CONVERTFILE) "_show_iparp_stats -vlan \"$vl2\" -parameterList \$parameterList \\ "
+            puts $MAIN(CONVERTFILE) "   -time \"$time\" -comment \"$comment\" -yesorno \"$yesorno\" "
+            puts $MAIN(CONVERTFILE) "   -debugjson \"false\" -testNo \"$testNo\" "
+        } elseif {[regexp -nocase {^sh[ow]{0,2} ipar[p]{0,1} vl[an]{0,2} ([a-zA-Z0-9_\-,\!]+).*} $cmd a vl]} {
+            puts $MAIN(CONVERTFILE) "_show_iparp -vlan \"$vl\" -parameterList \$parameterList \\ "
+            puts $MAIN(CONVERTFILE) "   -time \"$time\" -comment \"$comment\" -yesorno \"$yesorno\" "
+            puts $MAIN(CONVERTFILE) "   -debugjson \"false\" -testNo \"$testNo\" "
+        } elseif {[regexp -nocase {^sh[ow]{0,2} ipar[p]{0,1} vr ([a-zA-Z0-9_\-]+).*} $cmd a mvr]} {
+            puts $MAIN(CONVERTFILE) "_show_iparp -vr \"$mvr\" -parameterList \$parameterList \\ "
+            puts $MAIN(CONVERTFILE) "   -time \"$time\" -comment \"$comment\" -yesorno \"$yesorno\" "
+            puts $MAIN(CONVERTFILE) "   -debugjson \"false\" -testNo \"$testNo\" "
+        } elseif {[regexp -nocase {^sh[ow]{0,2} ipar[p]{0,1} ([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)} $cmd a mip]} {
+            puts $MAIN(CONVERTFILE) "_show_iparp -ipaddress \"$mip\" -parameterList \$parameterList \\ "
+            puts $MAIN(CONVERTFILE) "   -time \"$time\" -comment \"$comment\" -yesorno \"$yesorno\" "
+            puts $MAIN(CONVERTFILE) "   -debugjson \"false\" -testNo \"$testNo\" "
+        } elseif {[regexp -nocase {^sh[ow]{0,2} ipar[p]{0,1} ([a-zA-Z0-9_\-,\!]+)} $cmd a vl2]} {
+            puts $MAIN(CONVERTFILE) "_show_iparp -vlan \"$vl2\" -parameterList \$parameterList \\ "
+            puts $MAIN(CONVERTFILE) "   -time \"$time\" -comment \"$comment\" -yesorno \"$yesorno\" "
+            puts $MAIN(CONVERTFILE) "   -debugjson \"false\" -testNo \"$testNo\" "
+        } elseif {[regexp -nocase {^sh[ow]{0,2} ipar[p]{0,1}} $cmd]} {
+            puts $MAIN(CONVERTFILE) "_show_iparp -parameterList \$parameterList \\ "
+            puts $MAIN(CONVERTFILE) "   -time \"$time\" -comment \"$comment\" -yesorno \"$yesorno\" "
+            puts $MAIN(CONVERTFILE) "   -debugjson \"false\" -testNo \"$testNo\" "
+        } elseif {[regexp -nocase {^sh[ow]{0,2} vl[an]{0,2} ([a-zA-Z0-9_\-]+).*} $cmd a vl]} {
+            puts $MAIN(CONVERTFILE) "_show_vlan -vlan \"$vl\" -parameterList \$parameterList \\ "
+            puts $MAIN(CONVERTFILE) "   -time \"$time\" -comment \"$comment\" -yesorno \"$yesorno\" "
+            puts $MAIN(CONVERTFILE) "   -debugjson \"false\" -testNo \"$testNo\" "
+        } elseif {[regexp -nocase {^sh[ow]{0,2} vl[an]{0,2}} $cmd]} {
+            puts $MAIN(CONVERTFILE) "_show_vlan -parameterList \$parameterList \\ "
+            puts $MAIN(CONVERTFILE) "   -time \"$time\" -comment \"$comment\" -yesorno \"$yesorno\" "
+            puts $MAIN(CONVERTFILE) "   -debugjson \"false\" -testNo \"$testNo\" "
+        } else {
+            puts $MAIN(CONVERTFILE) "CheckDictValue -cmd \"$cmd\" -parameterList \$parameterList \\ "
+            puts $MAIN(CONVERTFILE) "   -time \"$time\" -comment \"$comment\" -yesorno \"$yesorno\" "
+            puts $MAIN(CONVERTFILE) "   -debugjson \"false\" -testNo \"$testNo\" "
+        }
+    } else {
+        if {[regexp -nocase {^sh[ow]{0,2} ipar[p]{0,1} sec[urity]{0,5}} $cmd]} {
+            puts $MAIN(CONVERTFILE) "GetDictValue -cmd \"$cmd\" -parameterList \$parameterList \\ "
+            puts $MAIN(CONVERTFILE) "   -time \"$time\" -comment \"$comment\" -yesorno \"$yesorno\" \\ "
+            puts $MAIN(CONVERTFILE) "   -debugjson \"false\" -testNo \"$testNo\" "
+        } elseif {[regexp -nocase {^sh[ow]{0,2} ipar[p]{0,1} st[ats]{0,3} summ[ary]{0,3}} $cmd]} {
+            puts $MAIN(CONVERTFILE) "_show_iparp_stats -summary \"summary\" -parameterList \$parameterList \\ "
+            puts $MAIN(CONVERTFILE) "   -time \"$time\" -comment \"$comment\" -yesorno \"$yesorno\" "
+            puts $MAIN(CONVERTFILE) "   -debugjson \"false\" -type \"get\" -testNo \"$testNo\" "
+        } elseif {[regexp -nocase {^sh[ow]{0,2} ipar[p]{0,1} st[ats]{0,3} vl[an]{0,2} ([a-zA-Z0-9_\-,\!]+).*} $cmd a vl]} {
+            puts $MAIN(CONVERTFILE) "_show_iparp_stats -vlan \"$vl\" -parameterList \$parameterList \\ "
+            puts $MAIN(CONVERTFILE) "   -time \"$time\" -comment \"$comment\" -yesorno \"$yesorno\" "
+            puts $MAIN(CONVERTFILE) "   -debugjson \"false\" -type \"get\" "
+        } elseif {[regexp -nocase {^sh[ow]{0,2} ipar[p]{0,1} st[ats]{0,3} vr ([a-zA-Z0-9_\-,\!]+).*} $cmd a mvr]} {
+            puts $MAIN(CONVERTFILE) "_show_iparp_stats -vr \"$mvr\" -parameterList \$parameterList \\ "
+            puts $MAIN(CONVERTFILE) "   -time \"$time\" -comment \"$comment\" -yesorno \"$yesorno\" "
+            puts $MAIN(CONVERTFILE) "   -debugjson \"false\" -type \"get\" -testNo \"$testNo\" "
+        } elseif {[regexp -nocase {^sh[ow]{0,2} ipar[p]{0,1} st[ats]{0,3} po[rts]{0,3} ([a-zA-Z0-9_\-,\:]+).*} $cmd a por]} {
+            puts $MAIN(CONVERTFILE) "_show_iparp_stats -show_ports \"$por\" -parameterList \$parameterList \\ "
+            puts $MAIN(CONVERTFILE) "   -time \"$time\" -comment \"$comment\" -yesorno \"$yesorno\" "
+            puts $MAIN(CONVERTFILE) "   -debugjson \"false\" -type \"get\" -testNo \"$testNo\" "
+        } elseif {[regexp -nocase {^sh[ow]{0,2} ipar[p]{0,1} st[ats]{0,3} ([a-zA-Z0-9_\-,\!]+).*} $cmd a vl2]} {
+            puts $MAIN(CONVERTFILE) "_show_iparp_stats -vlan \"$vl2\" -parameterList \$parameterList \\ "
+            puts $MAIN(CONVERTFILE) "   -time \"$time\" -comment \"$comment\" -yesorno \"$yesorno\" "
+            puts $MAIN(CONVERTFILE) "   -debugjson \"false\" -type \"get\" -testNo \"$testNo\" "
+        } elseif {[regexp -nocase {^sh[ow]{0,2} ipar[p]{0,1} vl[an]{0,2} ([a-zA-Z0-9_\-,\!]+).*} $cmd a vl]} {
+            puts $MAIN(CONVERTFILE) "_show_iparp -vlan \"$vl\" -parameterList \$parameterList \\ "
+            puts $MAIN(CONVERTFILE) "   -time \"$time\" -comment \"$comment\" -yesorno \"$yesorno\" "
+            puts $MAIN(CONVERTFILE) "   -debugjson \"false\" -type \"get\" -testNo \"$testNo\" "
+        } elseif {[regexp -nocase {^sh[ow]{0,2} ipar[p]{0,1} vr ([a-zA-Z0-9_\-]+).*} $cmd a mvr]} {
+            puts $MAIN(CONVERTFILE) "_show_iparp -vr \"$mvr\" -parameterList \$parameterList \\ "
+            puts $MAIN(CONVERTFILE) "   -time \"$time\" -comment \"$comment\" -yesorno \"$yesorno\" "
+            puts $MAIN(CONVERTFILE) "   -debugjson \"false\" -type \"get\" -testNo \"$testNo\" "
+        } elseif {[regexp -nocase {^sh[ow]{0,2} ipar[p]{0,1} ([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)} $cmd a mip]} {
+            puts $MAIN(CONVERTFILE) "_show_iparp -ipaddress \"$mip\" -parameterList \$parameterList \\ "
+            puts $MAIN(CONVERTFILE) "   -time \"$time\" -comment \"$comment\" -yesorno \"$yesorno\" "
+            puts $MAIN(CONVERTFILE) "   -debugjson \"false\" -type \"get\" -testNo \"$testNo\" "
+        } elseif {[regexp -nocase {^sh[ow]{0,2} ipar[p]{0,1} ([a-zA-Z0-9_\-,\!]+).*} $cmd a vl2]} {
+            puts $MAIN(CONVERTFILE) "_show_iparp -vlan \"$vl2\" -parameterList \$parameterList \\ "
+            puts $MAIN(CONVERTFILE) "   -time \"$time\" -comment \"$comment\" -yesorno \"$yesorno\" "
+            puts $MAIN(CONVERTFILE) "   -debugjson \"false\" -type \"get\" -testNo \"$testNo\" "
+        } elseif {[regexp -nocase {^sh[ow]{0,2} ipar[p]{0,1}} $cmd]} {
+            puts $MAIN(CONVERTFILE) "_show_iparp -parameterList \$parameterList \\ "
+            puts $MAIN(CONVERTFILE) "   -time \"$time\" -comment \"$comment\" -yesorno \"$yesorno\" "
+            puts $MAIN(CONVERTFILE) "   -debugjson \"false\" -type \"get\" -testNo \"$testNo\" "
+        } elseif {[regexp -nocase {^sh[ow]{0,2} vl[an]{0,2} ([a-zA-Z0-9_\-,\!]+).*} $cmd a vl]} {
+            puts $MAIN(CONVERTFILE) "_show_vlan -vlan \"$vl\" -parameterList \$parameterList \\ "
+            puts $MAIN(CONVERTFILE) "   -time \"$time\" -comment \"$comment\" -yesorno \"$yesorno\" "
+            puts $MAIN(CONVERTFILE) "   -debugjson \"false\" -type \"get\" -testNo \"$testNo\" "
+        } elseif {[regexp -nocase {^sh[ow]{0,2} vl[an]{0,2}} $cmd]} {
+            puts $MAIN(CONVERTFILE) "_show_vlan -parameterList \$parameterList \\ "
+            puts $MAIN(CONVERTFILE) "   -time \"$time\" -comment \"$comment\" -yesorno \"$yesorno\" "
+            puts $MAIN(CONVERTFILE) "   -debugjson \"false\" -type \"get\" -testNo \"$testNo\" "
+        } else {
+            puts $MAIN(CONVERTFILE) "GetDictValue -cmd \"$cmd\" -parameterList \$parameterList \\ "
+            puts $MAIN(CONVERTFILE) "   -time \"$time\" -comment \"$comment\" -yesorno \"$yesorno\" \\ "
+            puts $MAIN(CONVERTFILE) "   -debugjson \"false\" -testNo \"$testNo\" "
+        }
+    }
+    puts $MAIN(CONVERTFILE) "------------------- out json --------------------"
+    set pdList ""
+    foreach ele $psmall {
+        if {![catch {dict get $ele CLIoutput} tolog]} {
+            put_ascii_out $MAIN(CONVERTFILE) pre $tolog
+        }
+        if {![catch {dict keys $ele} aKey]} {
+            foreach ak $aKey {
+                if {$ak != "status" && $ak != "CLIoutput" && $ak != "dummy"} {
+                    if {1 || [lsearch $pdList $ak] < 0} {
+                        puts $MAIN(CONVERTFILE) "   $ak"
+                        lappend pdList $ak
+                    } else {
+                        continue;
+                    }
+                    if {![catch {dict get $ele $ak} outVals]} {
+                        #puts "outVals: $outVals"
+                        foreach {k v} $outVals {
+                            puts $MAIN(CONVERTFILE) "       [format "%-30s %-30s" "$k" $v]"
+                        }
+                    }
+                }
+            }
+        }
+    }
+    close $MAIN(CONVERTFILE)
+}

@@ -1,0 +1,210 @@
+proc allCleanup15.5 {numDUT} {
+
+    global DUT${numDUT}_CONNECT
+    set connect [set DUT${numDUT}_CONNECT]
+
+    Login $connect -CheckOperational 0
+
+    SendACmd "enable port all"
+    exSleep 2
+
+    # ----- PROTOCOL SECTION -----
+    SendACmd "disable ospf"
+    SendACmd "config ospf delete vlan all"
+    SendACmd "delete ospf area all"
+    SendACmd "config ospf routerid automatic"
+    SendACmd "unconfigure ospf"
+
+    SendACmd "disable ospfv3"
+    SendACmd "config ospfv3 delete vlan all"
+    SendACmd "delete ospfv3 area all"
+    SendACmd "config ospfv3 routerid automatic"
+    SendACmd "unconfigure ospfv3"
+
+    SendACmd "disable mpls"
+    SendACmd "delete l2vpn vpls all"
+    SendACmd "delete l2vpn vpws all"
+    SendACmd "unconfigure mpls"
+
+    SendACmd "disable pim"
+    SendACmd "config pim delete vlan all"
+    SendACmd "disable pim ssm vlan all"
+    SendACmd "unconfigure pim"
+
+    SendACmd "disable rip"
+    SendACmd "disable ripng"
+    SendACmd "configure rip delete vlan all"
+    SendACmd "configure ripng delete vlan all"
+    SendACmd "unconfigure rip"
+    SendACmd "unconfigure ripng"
+
+    SendACmd "disable bgp"
+    SendACmd "delete bgp neighbor all"
+    SendACmd "configure bgp routerid 0.0.0.0"
+    SendACmd "configure bgp AS-number 0"
+
+    SendACmd "disable vrrp"
+
+    SendACmd "disable netlogin ports all mac"
+    SendACmd "disable netlogin ports all dot1x"
+    SendACmd "disable netlogin ports all web"
+    SendACmd "disable netlogin mac"
+    SendACmd "disable netlogin dot1x"
+    SendACmd "disable netlogin web"
+    SendACmd "unconfigure netlogin vlan"
+
+    SendACmd "unconfigure radius"
+    SendACmd "unconfigure identity-management"
+
+    # ----- VLAN VMAN VR HAL -----
+    SendACmd "unconfig default ipaddress"
+    SendACmd "unconfigure ports all redundant"
+    SendACmd "configure default delete port all"
+
+
+    # --- VLAN
+    set vlanName [GetColumnValues "show vlan" {{0 32}} "\/Total" "Flags :"]
+    if {[llength $vlanName]} {
+        for {set i 0} {$i<[llength [lindex $vlanName 0]]} {incr i} {
+            set everyVlan [lindex [lindex $vlanName 0] $i]
+            set name [split $everyVlan " "]
+            set perVlanName [lindex $name 0]
+            if {[regexp -nocase "\[\-]{2,32}" $perVlanName]} {continue;}
+            if {$perVlanName != "Default" && $perVlanName != "Mgmt"} {
+                SendACmd "delete vlan $perVlanName"
+            }
+        }
+    }
+    # --- VMAN
+    set vmanName [GetColumnValues "show vman" {{0 32}} "\/Total" "Flags :"]
+    if {[llength $vmanName]} {
+        for {set i 0} {$i<[llength [lindex $vmanName 0]]} {incr i} {
+            set everyVman [lindex [lindex $vmanName 0] $i]
+            set name [split $everyVman " "]
+            set perVmanName [lindex $name 0]
+            if {[regexp -nocase "\[\-]{2,32}" $perVmanName]} {continue;}
+            SendACmd "delete vman $perVmanName"
+        }
+    }
+    set shareName [GetColumnValues "show port sharing" {{0 8}} \
+       "==============================================================================" \
+       "=============================================================================="]
+    if {[llength $shareName]} {
+        for {set i 0} {$i<[llength [lindex $shareName 0]]} {incr i} {
+            set everyShare [lindex [lindex $shareName 0] $i]
+            set name [split $everyShare " "]
+            set perShare [lindex $name 0]
+            if {$perShare == "        " || [string trim $perShare] == ""} {
+                continue
+            }
+            if {![CascadeSharePort $numDUT $perShare]} {
+                SendACmd "disable sharing $perShare"
+            }
+        }
+    }
+
+
+    SendACmd "disable jumbo-frame por all"
+    SendACmd "disable mac-lockdown-timeout ports all"
+    SendACmd "disable mirroring"
+
+    #SendACmd "configure port <all> ethertype primary"; # no easy global for all ports
+    SendACmd "unconfigure vman ethertype secondary"
+    SendACmd "unconfigure vman ethertype"
+    SendACmd "disable dot1p examination inner-tag ports all"
+    SendACmd "enable dot1p examination ports all"
+    SendACmd "enable learning ports all"
+    SendACmd "enable flooding all_cast ports all"
+    SendACmd "unconfigure access-list"
+
+
+    global gnssPlatform bcmLynx bcmPlatform
+    set platform [GetPlatform DUT${numDUT}];
+
+    if {[regexp -nocase "$bcmPlatform" $platform]} {
+        SendACmd "configure dot1p type 0 qp1"
+        SendACmd "configure dot1p type 1 qp1"
+        SendACmd "configure dot1p type 2 qp1"
+        SendACmd "configure dot1p type 3 qp1"
+        SendACmd "configure dot1p type 4 qp1"
+        SendACmd "configure dot1p type 5 qp1"
+        SendACmd "configure dot1p type 6 qp1"
+        SendACmd "configure dot1p type 7 qp8"
+        SendACmd "delete qosprofile qp2"
+        SendACmd "delete qosprofile qp3"
+        SendACmd "delete qosprofile qp4"
+        SendACmd "delete qosprofile qp5"
+        SendACmd "delete qosprofile qp6"
+        SendACmd "delete qosprofile qp7"
+    }
+
+    if {![regexp -nocase "$bcmLynx" $platform]} {
+        set vrName [GetColumnValues "show virtual-router" {{0 32}} "Router *VLANs" "Flags :"]
+        if {[llength $vrName]} {
+            for {set i 0} {$i<[llength [lindex $vrName 0]]} {incr i} {
+                set everyVr [lindex [lindex $vrName 0] $i]
+                if {[string trim $everyVr] == ""} {continue;}
+                set name [split $everyVr " "]
+                set perVrName [lindex $name 0]
+                if {$perVrName == "KEY_NOT_FOUND"} {continue;}
+                if {[regexp -nocase "\[\-]{2,32}" $perVrName]} {continue;}
+                if {$perVrName != "VR-Default" && $perVrName != "VR-Mgmt" \
+                                              && $perVrName != "VR-Control"} {
+                    SendACmd "delete virtual-router $perVrName"
+                }
+
+            }
+        }
+    }
+
+    # ----  EAPS
+    SendACmd "disable eaps"
+    set eapsName [GetColumnValues "show eaps" {{0 20}} "Domain *State" "Flags :"]
+    if {[llength $eapsName]} {
+        for {set i 0} {$i<[llength [lindex $eapsName 0]]} {incr i} {
+            set eapsLine [lindex [lindex $eapsName 0] $i]
+            if {[string trim $eapsLine] == "" || $eapsLine == "*"} {continue;}
+            set eapsWords [split $eapsLine " "]
+            set eapsWord0 [lindex $eapsWords 0]
+            if {[regexp -nocase "\[\-]{2,20}" $eapsWord0]} {continue;}
+            if {$eapsWord0 == "KEY_NOT_FOUND"} {continue;}
+            SendACmd "delete eaps $eapsWord0"
+        }
+    }
+    set eapsShare [GetColumnValues "show eaps share" {{0 13}} "Shared-port *Mode" \
+        ".*#.*"]
+    if {[llength $eapsShare]} {
+        for {set i 0} {$i<[llength [lindex $eapsShare 0]]} {incr i} {
+            set eapsLine [lindex [lindex $eapsShare 0] $i]
+            if {[string trim $eapsLine] == ""} {continue;}
+            set eapsWords [split $eapsLine " "]
+            set eapsWord0 [lindex $eapsWords 0]
+            if {[regexp -nocase "\[\-]{2,20}" $eapsWord0]} {continue;}
+            if {$eapsWord0 == "KEY_NOT_FOUND"} {continue;}
+            SendACmd "delete eaps shared-port $eapsWord0"
+        }
+    } else {
+        puts "MISSED ALL shares"
+    }
+
+    # ---- STPD
+    SendACmd "disable stpd"
+    set stpdName [GetColumnValues "show stpd" {{0 20}} "Name *Tag" "Total number of"]
+    if {[llength $stpdName]} {
+        for {set i 0} {$i<[llength [lindex $stpdName 0]]} {incr i} {
+            set stpdLine [lindex [lindex $stpdName 0] $i]
+            if {[string trim $stpdLine] == ""} {continue;}
+            set stpdWords [split $stpdLine " "]
+            set stpdWord0 [lindex $stpdWords 0]
+            if {$stpdWord0 == "s0"} {
+                continue;
+            }
+            if {$stpdWord0 == "KEY_NOT_FOUND"} {continue;}
+            if {[regexp -nocase "\[\-]{2,20}" $stpdWord0]} {continue;}
+            SendACmd "delete stpd $stpdWord0"
+        }
+    }
+    #
+    #  Add code to remove PVLAN
+    #
+}

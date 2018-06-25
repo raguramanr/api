@@ -1,0 +1,439 @@
+
+################################################################
+#  Procedure Name: MultiTask
+#  
+#  Description:
+#     This procedure is used to execute more than one test case simultaneoulsy
+#     by creating separate process for each procedure and execute them. 
+#     Assumptions
+#     -----------
+#       1. All the test cases use telnet connection with the DUT to execute
+#          the CLI commands. No test script should use console connection to
+#          send CLI commands to DUT
+#
+#       2. Test cases which involves rebooting the DUT, downloading the
+#          configuration, etc should not be combined
+#    
+#       3. Since all the test cases are executed simultaneously, user should
+#          takecare not to use the confliting configurations. For example
+#          two test cases should not try to use the same IXIA port
+#
+#  Input Variables:
+#     procList -  List of procedures that needs to be executed simultaneously
+# 
+#  Optional Args:
+#     None
+# 
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#     None
+#
+#  Possible Usage:
+#     lappend procList "1.1.1_2"
+#     lappend procList "5.4.10"
+#     lappend procList "snmp_test"
+#     MultiTask $procList
+###############################################################
+proc MultiTask { procList {result 0}} {
+    global EX_REPORT_DATA MULTITASKCOUNTERON passCount failCount skipCount
+    global DUTs_info MAIN PLANMAIN 
+    global DUTs_Slot_info
+    global MTASK;# 2D array to pid,variable = value for tracking state
+
+    set passIn $passCount
+    set failIn $failCount
+    set skipIn $skipCount
+    set passOut 0
+    set failOut 0
+    set skipOut 0
+    set MAIN(MULTITASKON) 1
+    if {[info exists MULTITASKCOUNTERON] && $MULTITASKCOUNTERON == 1} {
+        set result 1
+    }
+    if $result {
+        set p [pid]
+        if [file exists /tmp/multRes_$p] {
+            file delete -force /tmp/multRes_$p
+        }
+        #set rfile [open "/tmp/multRes_$p" "w"]
+    }
+
+    set numProc [llength $procList]
+
+    if {[info exists EX_REPORT_DATA]} {
+        set EX_BACK_DATA $EX_REPORT_DATA
+    } else {
+        set EX_BACK_DATA ""
+        set EX_REPORT_DATA ""
+    }
+    set fpid [pid]
+    for { set i 0 } { $i < $numProc } {incr i } {
+        set mPid [fork]
+        lappend childPid $mPid
+        #---  delete any preexisting variable files
+        if [file exists "/tmp/${mPid}_setvars"] {catch {file delete "/tmp/${mPid}_setvars"} why}
+        set MTASK(${mPid},fPipe) "null"
+        after 1000
+        if {[lindex $childPid $i]} {
+            # ---- This is the PARENT process
+            if { $i == [expr $numProc - 1] } {
+                foreach pid $childPid {
+                    set status [wait $pid]
+                }
+
+                # restore the original buffer
+                set EX_REPORT_DATA $EX_BACK_DATA
+                # ---- Each child process writes the result file in a
+                #      temp file. Read all the file contents and update the 
+                #      global variable for writting the consolidated report file
+                foreach param $procList {
+                    #Rebuild global EX_REPORT_DATA
+                    append EX_REPORT_DATA [ex_cat "Tmp/${fpid}_$param"]
+                    catch {file delete "Tmp/${fpid}_$param"} why
+                    if {$result} {
+                        #Rebuild globals pass/fail/skip counts
+                        source "Tmp/${fpid}_stat_$param"
+                        set passCount [expr $passCount + $passOut]
+                        set failCount [expr $failCount + $failOut]
+                        set skipCount [expr $skipCount + $skipOut]
+                        catch {file delete "Tmp/${fpid}_stat_$param"} why
+                    }
+                }
+                _endSetMultiTaskVar $fpid
+            }
+        } else {
+            # ---- This is the CHILD process
+            set EX_REPORT_DATA ""
+            # ---- Execute each test script
+            if [catch {eval [lindex $procList $i]} reason] {
+                global errorInfo
+                set pid _[pid]
+                report_start_test "Child process $pid crashed - Reason: <$reason>"
+                result_debug "Child process $pid crashed - Resaon: $reason\n"
+                result_debug $errorInfo
+                result_error "Child process $pid crashed - Resaon: $reason\n"
+                report_end_test
+                #fix_report_level
+            }
+
+            # ---- Each child writes the result file in a temp file
+            set fd_in [open "Tmp/${fpid}_[lindex $procList $i]" "w"]
+            puts -nonewline $fd_in "$EX_REPORT_DATA"
+            flush $fd_in
+            close $fd_in
+            if {$result} {
+                # ---- File to hold pass/fail/skip count for each child
+                set fd_st [open "Tmp/${fpid}_stat_[lindex $procList $i]" "w"]
+                set passDiff [expr $passCount - $passIn]
+                set failDiff [expr $failCount - $failIn]
+                set skipDiff [expr $skipCount - $skipIn]
+                set passOut [expr $passOut + $passDiff]
+                set failOut [expr $failOut + $failDiff]
+                set skipOut [expr $skipOut + $skipDiff]
+                puts $fd_st "set passOut $passOut"
+                puts $fd_st "set failOut $failOut"
+                puts $fd_st "set skipOut $skipOut"
+                flush $fd_st
+                close $fd_st
+            }
+            exit
+        }
+    }
+    if $result {
+        #multiTaskResult /tmp/multRes_$p
+    }
+    # Source all pid_setvars files if by chance the called procs have set the name format
+    foreach p $childPid {
+        if {[file exists "/tmp/${p}_setvars" ]} {
+            catch {source "/tmp/${p}_setvars"} oops
+            catch {file delete -force "/tmp/${p}_setvars"} oops
+        }
+        if {[file exists "/tmp/${p}_showout" ]} {
+            catch {source "/tmp/${p}_showout"} oops
+            catch {file delete -force "/tmp/${p}_showout"} oops
+        }
+    }
+    set MAIN(MULTITASKON) 0
+}
+##############################################################################################
+# procedure: _setMultiTaskVar
+#
+#  Write a variable to a tmp file for a forked pid. So that it can be sourced later and put
+#    in the parent scope
+#
+##############################################################################################
+proc _setMultiTaskVar {mVar mVal} {
+    global MAIN MTASK
+    # Check if this is executed within the MultiTask proc.
+    if {![info exists MAIN(MULTITASKON)] || !$MAIN(MULTITASKON)} {
+        return
+    }
+    # Open the formatted name to store each processes variables
+    if {![info exists MTASK([pid],fPipe)] || $MTASK([pid],fPipe) == "null"} {
+        set MTASK([pid],fPipe) [open "/tmp/[pid]_setvars" "w"]
+    }
+    puts $MTASK([pid],fPipe) "set $mVar \"$mVal\""
+}
+##############################################################################################
+# procedure: _endSetMultiTaskVar
+#
+# Close the tmp file that holds the child pid variables.
+#
+#
+##############################################################################################
+proc _endSetMultiTaskVar {mpid} {
+    global MAIN MTASK
+    # Close the file
+    if {[info exists MTASK(${mpid},fPipe)] && $MTASK(${mpid},fPipe) != "null"} {
+        close $MTASK(${mpid},fPipe)
+    }
+}
+##############################################################################################
+#
+#
+#
+##############################################################################################
+proc _saveOutputIfMultiTasked {mfile} {
+    global MAIN MTASK whichDutNow
+    if {![info exists MAIN(MULTITASKON)] || !$MAIN(MULTITASKON)} {
+        return
+    }
+
+    set fp [open "$mfile" r]
+    set show_data [read $fp]
+    close $fp
+    set fd_so [open "/tmp/[pid]_showout" "w"]
+
+    if {[info exists whichDutNow]} {
+        set dut $whichDutNow
+        puts $fd_so "set DUTs_info(DUT$dut,show_output) \{$show_data\}"
+    } else {
+        puts $fd_so "set MAIN(multiTask_output) \{$show_data\}"
+    }
+    close $fd_so
+}
+######################################################################################################################
+# proc : checkUploadDownloadConfigParallel
+# input : dutList 
+#         The dutList must be provided in ascending order e.g. {1 2 3}  or {1 2 3 4 5}
+# description:  For the given number of duts, uploads/downloads the config  
+#        to save time does this in parallel
+######################################################################################################################
+proc checkUploadDownloadConfigParallel {dutList} {
+set time2 [clock seconds]
+set lastDUT [lindex $dutList end]
+
+foreach dut $dutList {
+
+    global tftpServerList
+    set DUTName [format %s%d DUT $dut]
+    global ${DUTName}_CONNECT
+    Login [set ${DUTName}_CONNECT]
+
+    set sec [clock seconds]
+    lappend childPids [fork]
+    after 1000 ;# required to avoid children getting the same tmp file sometimes being too fast
+    if {[lindex $childPids [expr $dut-1]]} {
+        if {$dut == $lastDUT} {
+            set co 1
+            foreach childPid $childPids {
+                result_debug "Parent now waiting for child # $co with pid $childPid"
+                wait $childPid    ;# parent waits here for child to complete
+                result_debug "Now child returned with pid $childPid"
+                incr co
+            }
+        }
+    } else {
+       result_debug "child # $dut enters with pid [pid]"
+
+        set tmpTime [clock seconds];
+        set tftpServer [CheckUploadConfig $tftpServerList "emistpDUT${dut}$tmpTime.cfg"];
+        if {$tftpServer == "error"} {
+            result_error "Failed to upload to from $box";
+        } else {
+            set status [CheckDownloadConfig $tftpServer "emistpDUT${dut}$tmpTime.cfg"];
+            if {$tftpServer == "error"} {
+                result_error "Failed to download to DUT $dut";
+            }
+        }
+        exit   ;# Child exits here, returns back to the waiting parent
+        # end of fork construct
+    }
+}
+set time3 [clock seconds]
+
+result_debug "Parallel UploadDownloadConfig Time = [expr $time3 - $time2] "
+}
+
+######################################################################################################################
+# proc : checkDownloadConfigParallel
+# input : dutList 
+#         The dutList must be provided in ascending order e.g. {1 2 3}  or {1 2 3 4 5}
+#         filenameList {dut1cfg dut2cfg dut3cfg}
+#
+#    N O T E :  Put the files on the tftp server WITHOUT the .xsf extension
+#
+# description:  For the given number of duts, uploads/downloads the config  
+#        to save time does this in parallel
+######################################################################################################################
+proc checkDownloadConfigParallel {dutList filenameList args } {
+    parse_args checkDownloadConfigParallel $args {
+        wait "90"
+        timeout "90"
+        incremental "0"
+    }
+
+set time2 [clock seconds]
+set lastDUT [lindex $dutList end]
+
+global DUTs_info
+global connectionTimeout
+
+set oldConnTimeout $connectionTimeout
+set connectionTimeout $timeout
+foreach dut $dutList {
+
+    global tftpServerList
+    set DUTName [format %s%d DUT $dut]
+    global ${DUTName}_CONNECT
+    Login [set ${DUTName}_CONNECT]
+
+    set sec [clock seconds]
+    lappend childPids [fork]
+    after 1000 ;# required to avoid children getting the same tmp file sometimes being too fast
+    if {[lindex $childPids [expr $dut-1]]} {
+        if {$dut == $lastDUT} {
+            set co 1
+            foreach childPid $childPids {
+                result_debug "Parent now waiting for child # $co with pid $childPid"
+                wait $childPid    ;# parent waits here for child to complete
+                result_debug "Now child returned with pid $childPid"
+                incr co
+            }
+        }
+    } else {
+        result_debug "child # $dut enters with pid [pid]"
+        set tmpTime [clock seconds];
+        set myIndex [expr $dut - 1]
+        set status [CheckDownloadConfig [lindex $tftpServerList 0] "[lindex $filenameList $myIndex]" 0 -wait $wait -nameFormat "fixed" ];
+        if {$status == "illegal"} {
+            result_error "Failed to download to DUT $dut";
+        } else {
+            set DUTs_info(DUT$dut,CfgLoaded) 1 
+        }
+        exit   ;# Child exits here, returns back to the waiting parent
+        # end of fork construct
+    }
+}
+set time3 [clock seconds]
+set connectionTimeout $oldConnTimeout
+
+result_debug "Parallel DownloadConfig Time = [expr $time3 - $time2] "
+}
+
+################################################################
+#  Procedure Name: copyRes
+#
+#  Description:
+#     This procedure is used to copy the values of the global counters
+#     pass, fail, skip of the child process to a common file "multRes"
+#     this proc needs to be added at the end of each proc given as input
+#     to the MultiTask proc 
+#
+#
+#  Input Variables:
+#     none
+#
+#  Optional Args:
+#     None
+#
+#  Output Variables:
+#     file "multRes" would be created
+#
+#  Return Variables:
+#     None
+#
+#  Possible Usage:
+#    copyRes
+###############################################################
+
+proc copyRes {} {
+global passCount
+global failCount
+global skipCount
+
+set fs [open "multRes" a+]
+#flock -write $fs
+puts $fs "passCount $passCount"
+puts $fs "failCount $failCount"
+puts $fs "skipCount $skipCount"
+#funlock $fs
+close $fs
+
+}
+
+################################################################
+#  Procedure Name: multiTaskResult
+#
+#  Description:
+#     This procedure is used to calculate  the global counters
+#     pass, fail, skip after each MultiTask ccommand is invoked
+#     This proc takes the input from file multRes, created 
+#     through the proc copyRes .  This proc can be invoked 
+#     by the MultiTask proc with the second argument as 1 (true)
+#
+#
+#  Input Variables:
+#     none
+#
+#  Optional Args:
+#     None
+#
+#  Output Variables:
+#     None
+#
+#  Return Variables:
+#     None
+#
+#  Possible Usage:
+#  Possible Usage:
+#     lappend procList "1.1.1_2"
+#     lappend procList "5.4.10"
+#     lappend procList "snmp_test"
+#     MultiTask $procList 1
+#
+#    
+###############################################################
+
+
+proc multiTaskResult {} {
+
+set fd [open multRes r]
+
+global passCount
+global failCount
+global skipCount
+set pass $passCount
+set fail $failCount
+set skip $skipCount
+while {[gets $fd line] >= 0} {
+   if [regexp  passCount $line] {
+      regexp {[0-9]+} $line x
+      set x [expr $x -$pass]
+      incr passCount $x
+   } elseif [regexp failCount $line] {
+      regexp {[0-9]+} $line y
+      set y [expr $y - $fail]
+      incr failCount $y
+   } elseif [regexp skipCount $line] {
+      regexp {[0-9]+} $line z
+      set z [expr $z - $skip]
+      incr skipCount $z
+   }
+}
+close $fd
+file delete -force multRes
+}
+

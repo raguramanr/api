@@ -1,0 +1,235 @@
+
+################################################################## 
+# Procedure Name: iparp_check_data
+#   
+# Description: proc that checks IP arp rable entries for a ip address list dIpList
+# dIpList a list of list.  Every member list contains:
+#       shExist: "should exist", yes or no
+#    	ip:  IP address of the target
+#       mac: MAC address of the target.	Real MAC, "incomplete" or "-"
+#       age: Age of the corresping IP ARP entry	(in minute)
+#       static: yes or no
+#       vlan: Vlan name
+#       vid: Vlan id
+#       port: Port number(s)
+# Note: Except ip, if any other field is "don't care", mark it as "-"
+#       or leave it empty if no other "care" fields after that.
+# Input args: dIpList, fd_res, tesTNo, DUT_C, checkNumArpOnly, targetNumArp, DUT_IP
+# Output args: none
+# Typical usage:
+#           iparp_check_data $ipList $fd_res $testNo $DUT1_CONNECT
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifySwitchOutput
+##################################################################
+proc iparp_check_data {{dIpList {}}
+                       {fd_res "NULL"}
+                       {testNo "0"}
+                       {DUT_C "127.0.0.1"}
+                       {checkNumArpOnly "false"}
+                       {targetNumArp "0"}
+                       {DUT_IP "127.0.0.1"}} {
+
+   global VERSION
+   set numArpFound 0
+   set date [clock format [clock seconds] -format "%m-%d-%Y %I.%M.%S%p"]
+   result_debug "*** date=$date"
+
+   set fd_in [open "Tmp/tmp_$testNo[pid]" "w+"]
+   Login $DUT_C
+   SendACmd	"show iparp" $fd_res $fd_in
+   logout_noSave
+   close $fd_in
+
+   set fd_in [open "Tmp/tmp_$testNo[pid]" "r"]
+   foreach ipPair $dIpList {
+      set found    "false"
+      set check(0) "shExist";  set check(check(0)) "false"
+      set check(1) "ip";	   set check(check(1)) "false"
+      set check(2) "mac";	   set check(check(2)) "false"
+      set check(3) "age";	   set check(check(3)) "false"
+      set check(4) "static";   set check(check(4)) "false"
+      set check(5) "vlan";	   set check(check(5)) "false"
+      set check(6) "vid";	   set check(check(6)) "false"
+      set check(7) "port";	   set check(check(7)) "false"
+      set numField [llength $ipPair]
+
+      for {set i 0} {$i < $numField} {incr i 1} {
+         set $check($i) [string tolower [lindex $ipPair $i]] 
+	  }
+      if { [set $check(2)] == "incomplete" } { set $check(2) "(incomplete)" }
+
+      seek $fd_in 0
+      while {[gets $fd_in line] != -1} {
+         set inList [eSplit $line]
+	     set len [llength $inList]
+	     if { $len >= 4 } {
+			if { $ip == [lindex $inList 0] } {	;# IP addr. match
+	           set errMsg ""
+			   set check(ip) "true"
+			   set found "true"
+
+
+               switch $VERSION {
+                  6  {
+                      for {set i 2} {$i < $numField} {incr i 1} {
+			             set j [expr $i-1]
+				         set inValue [string tolower [lindex $inList $j]]
+                         if { ([set $check($i)] == "-") || ($inValue == [set $check($i)]) } { 
+                            set check(check($i)) "true" 
+                         } else {
+                            if { $i == 3 } {
+					           set expAge [set $check(3)]	   ;# age
+					           if { ($inValue >= [expr $expAge-1]) || ($inValue <= [expr $expAge+1]) } {
+                                  result_warning "Real age value=$inValue, target=$expAge"
+                                  set check(check(3)) "true"
+                               }
+                            } else { 
+			                   set errMsg [append errMsg "$check($i) "]
+			                   set found "true_err"
+							}
+					     }
+                      }
+       		       }
+				   4  {
+                      for {set i 2} {$i < $numField} {incr i 1} {
+                         if { $len == 7 } {	
+                            set j [expr $i-1]
+							set check(check(4)) "true"
+			             } else { 
+			             	if { $i <= 4 } { set j [expr $i-1] }
+			             	if { $i >= 5 } { set j [expr $i-2] }
+						 }
+				         set inValue [string tolower [lindex $inList $j]]
+                         if { $i == 4 } {  ;# Static value
+							switch $len {
+							   6 { set inValue "no" }
+				               7 { if { $inValue == "m" } { set inValue "yes" 
+				                   } else { set inValue "no" }
+							   }
+                            }
+					     }
+
+                         if { ([set $check($i)] == "-") || ($inValue == [set $check($i)]) } { 
+                            set check(check($i)) "true" 
+                         } else {
+                            if { $i == 3 } {
+					           set expAge [set $check(3)]	   ;# age
+					           if { ($inValue >= [expr $expAge-1]) || ($inValue <= [expr $expAge+1]) } {
+                                  result_warning "Real age value=$inValue, target=$expAge"
+                                  set check(check(3)) "true"
+                               }
+                            } else { 
+			                   set errMsg [append errMsg "$check($i) "]
+			                   set found "true_err"
+							}
+					     }
+                      }
+				   }
+			   }
+			}
+		 }
+	  }
+      if { $found == "true" } { 
+         set numArpFound [incr numArpFound 1] 
+result_debug "@@@ ip=$ip, numArpFound=$numArpFound"
+      }
+
+      set DUT_INFO ""
+      if { $DUT_IP != "127.0.0.1" } { set DUT_INFO "(${DUT_IP}) " }
+
+result_debug "#### checkNumArpOnly=$checkNumArpOnly"
+      if { $checkNumArpOnly == "false" } {
+result_debug "#### check(0)=$check(0)"
+         switch [set $check(0)] {
+            "yes" {
+               report_start_test "IpArp check entry $DUT_INFO'$ip $mac'"
+               switch $found {
+                  "true"     { result_ok    "Ip Arp check entry $ip $mac passed" }
+                  "true_err" { result_error "Ip Arp check entry $ip $mac found but $errMsg fields wrong" }
+                  "false"    { result_error "Ip Arp check entry $ip $mac not found"	}
+		       }
+		    } 
+	        "no" { 
+               report_start_test "IpArp check NO entry $DUT_INFO'$ip $mac'"
+               switch $found {
+                  "true"     { result_error "Ip Arp check NO entry $ip $mac failed" }
+                  "true_err" { result_ok    "Ip Arp check NO entry $ip $mac passed, $errMsg fields different" }
+                  "false"    { result_ok    "Ip Arp check NO entry $ip $mac passed" }
+		       }
+		    }
+         }
+         report_end_test
+      }
+   }
+   if { $checkNumArpOnly == "true" } {
+      report_start_test "Number of IP ARP entry check"
+	  if { $numArpFound >= $targetNumArp } {
+		 result_ok    "Num. of ARP check passed. Found=$numArpFound, target=$targetNumArp"
+	  } else {
+		 result_error "Num. of ARP check failed. Found=$numArpFound, target=$targetNumArp"
+	  }
+      report_end_test
+   }
+   close $fd_in
+   file delete "Tmp/tmp_$testNo[pid]"
+   return $numArpFound
+}
+
+################################################################## 
+# Procedure Name: iparp_check_timer
+#   
+# Description: proc that checks IP arp timer enabled/disabled based on enableStatus from
+#              show ipc output.
+#
+#
+#
+# Input args: enableStatus, timer, fd_res, testNo, DUT
+# Output args: none
+# Typical usage:
+#          iparp_check_timer enabled 10 $fd_res $testNo $DUT1_CONNECT
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: VerifySwitchOutput
+##################################################################
+proc iparp_check_timer {enableStatus timer fd_res testNo DUT} {
+   set date [clock format [clock seconds] -format "%m-%d-%Y %I.%M.%S%p"]
+   result_debug "*** date=$date"
+
+   set fd_in [open "Tmp/tmp_$testNo[pid]" "w+"]
+   Login $DUT
+   SendACmd	"show ipc" $fd_res $fd_in
+   logout_noSave
+   close $fd_in
+
+   set fd_in [open "Tmp/tmp_$testNo[pid]" "r"]
+   set result "ok"
+
+   while {[gets $fd_in line] != -1} {
+      set inList [eSplit $line]
+	  if { ([lindex $inList 0] == "ARP") && ([lindex $inList 1] == "Timeout")} {
+         set field3 [string tolower [lindex $inList 3]]
+         set field4 [string trimleft [lindex $inList 4] \[ ]
+result_debug "@@@ field3=$field3"
+result_debug "@@@ field4=$field4"
+         if { ($field3 != "-") && ($field3 != $enableStatus) } {
+		    set result "fail"
+		 }
+         if { ($field4 != "-") && ($field4 != $timer) } {
+		    set result "fail"
+		 }
+         break
+	  }
+   }
+
+   report_start_test "Ip Arp check timer"
+   switch $result {
+      "ok" { result_ok "IpArp timer=$timer, $enableStatus check passed"	}
+	  "fail" { result_error "IpArp timer=$timer, $enableStatus check failed" }
+   }
+   report_end_test
+   close $fd_in
+   file delete "Tmp/tmp_$testNo[pid]"
+}

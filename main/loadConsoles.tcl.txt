@@ -1,0 +1,424 @@
+#!/usr/bin/tclsh
+
+proc result_debug {out} {
+    puts "$out"
+}
+proc result_error {out} {
+    puts "$out"
+}
+proc result_ok {out} {
+    puts "$out"
+}
+proc result_print {out} {
+    puts "$out"
+}
+proc result_pre {out} {
+    puts "$out"
+}
+global curAutoRoot
+global DUTs_info whichDutNow
+
+source ../Lib/mainLib.tcl
+package require Tclx
+
+load [lindex [glob "/usr/lib/libexpect*so*"] 0]
+
+set curLocation [pwd]
+set curDirList [split [string trim [string trim $curLocation ".."] "/"] "/"]
+set v 0;
+set pathList ""
+set curAutoRoot ""
+set skipCC 0
+foreach cd $curDirList {
+    if {$cd == "main" || $cd == "Lib" || $cd == "Util"} {
+        for {set x 0} {$x<$v} {incr x} {
+            lappend pathList [lindex $curDirList $x]
+        }
+        set curAutoRoot "/[join $pathList "/"]"
+    } else {
+        incr v;
+    }
+}
+puts "CURRENT PATH: $curAutoRoot"
+set cDir [file tail [pwd]]
+set LIB_PATH "./../Lib"
+lappend auto_path $LIB_PATH
+puts "DEBUG: Appending $LIB_PATH to autopath:$auto_path"
+
+gen_index "./../Lib"
+#source "./../Util/fs.tcl"
+set resultDir "NULL"
+set tStartTime [clock seconds]
+set tStartDate [clock format [clock seconds] -format "%Y-%m-%d %I.%M.%S%p"]
+set tStartDateString [clock format [clock seconds] -format "%Y-%m-%d_%I.%M.%S%p"]
+
+set testDuration 0
+set testHour 0
+set testMin 0
+set testSec 0
+set resultDir "NULL"
+
+set fd_res [open_result_file "load"]
+
+proc print_usage {} {
+    puts "\r"
+    puts {}
+    puts {NOTE!!!!!!!!!  THIS CAN ONLY BE RUN FROM A VNC SESSION !!!!!!!!!!!!!!!}
+    puts {}
+    puts {Usage: lconsoles.tcl -cfg <config file> }
+    puts {   <cfg>: Path of the config file name }
+    puts {   <d>: Enable debug mode}
+    puts {   <m>: Configure GW Network}
+    puts {   <n>: Number of duts}
+    puts {   <stc>: 'setup trunk cfg' sysName and edp for manual trunkPortList verify}
+    puts {   <ib> sysname to cfg setup inband net}
+    puts {   <power|p>: 1|0|2 1=poweron 2=poweroff-poweron}
+    puts {   <clear|c>: 1|0 Clear the consoles if locked}
+    puts "\r"
+}
+
+# checking command parameters
+if {$argc<1} {
+      puts "Not enough parameters"
+      print_usage
+      return
+}
+
+parse_args lconsoles $argv {
+    cfg    "null"
+    d "0"
+    power 0
+    clear 0
+    stc 0
+    ib 0
+    p 0
+    c 0
+    m 0
+    n 2
+    f 0
+}
+if {$p == 0} {
+   set power 0
+} elseif {$p == 1} {
+   set power 1
+} elseif {$p == 2} {
+   set power 2
+} else {
+   set power 0
+}
+if {$c!=0} {
+   set clear 1
+}
+
+set cfgFile ""
+
+if {$cfg != "null"} {
+      if {![regexp -nocase "^cfg" $cfg] } {
+            set cfgFile [format %s/%s cfg $cfg]
+            set cfgFile [string trim $cfgFile];
+            set com common.cfg
+      } else {
+          set cfgFile $cfg
+          set com cfg/common.cfg
+      }
+}
+
+puts "Using config file: ($cfgFile)"
+
+if {[file exists $cfgFile] == 0} {
+    puts "Cannot find config file: $cfgFile\n"
+    puts stderr "Cannot find config file: $cfgFile"
+    return
+}
+
+puts "************** ABOUT TO source $cfgFile and $com *****************"
+catch {source $cfgFile } reason
+catch {source $com } reason
+set initFileId $DUT1_CONNECT
+set initFile "${curAutoRoot}/main/Tmp/DUTINFO_$initFileId"
+set initFile2 "${curAutoRoot}/main/Tmp2/DUTINFO_$initFileId"
+set fn [file tail $cfg]
+set smallCfgList [split $fn "."]
+set smallCfg [lindex $smallCfgList 0]
+set fn [string trim $fn]
+set fn [file rootname $fn]
+append initFile "_"
+append initFile $fn
+append initFile ".txt"
+
+if {[catch {source $initFile}]} {
+    if {[file exists initFile2]} {
+        if {[catch {source $initFile2}]} {
+            puts "No Good Init File"
+        }
+        set initFile $initFile2
+    }
+} else {
+    set initFile $initFile
+}
+
+if {$power==1} {
+    for {set i 1} {$i<11} {incr i} {
+        if {[info exists POWERCYCLE_DUT($i)]} {
+            puts "Powering on DUT DUT$i"
+            PowerOffDUT $i "on"
+        }
+    }
+}
+
+if {$clear} {
+    set sList "B C D E F G H"
+    for {set i 1} {$i<11} {incr i} {
+        set whichDutNow $i
+        if {[info exists DUT${i}_CONNECT]} {
+            ClearConsoleDUT "[set DUT${i}_CONNECT]"
+            foreach s $sList {
+                if {[info exists DUT${i}_CONNECTB] && \
+                    ![regexp "stack" $cfg]} {
+                    continue
+                } elseif {[info exists DUT${i}_CONNECT${s}]} {
+                    ClearConsoleDUT "[set DUT${i}_CONNECT${s}]"   
+                }
+            }
+        }
+    }
+}
+puts "$initFile"
+if {$f} {
+    catch {source $initFile} bob
+    set TRYFAILSAFE true
+    if {![info exists numDUT]} {
+        if {$n < 1} {
+            puts "Use the -n arg to set the number of DUT"
+            exit
+        }
+        puts "Info required for ConfigGWNetwork not available from initFile"
+        set numDUT $n
+        set supportedPlatform ""
+    }
+    set MGMT_REG(telnetNeedsConfig) 1
+    set MGMT_REG(forceConsole) 1
+    set MGMT_REG(currentConnectionType) "console"
+    set MGMT_REG(useTelnetGlobalFlag) 0
+    set MGMT_REG(useTelnetLocalFlag) 0
+    global whichDutNow connectionTimeout
+    set slotList "{} B C D E F"
+    for {set i 1} {$i<11} {incr i} {
+        set DUTs_info(DUT${i},version) "15.1.1.1"
+        foreach s $slotList {
+            if {[info exists DUT${i}_CONNECT$s]} {
+                set whichDutNow $i
+                set cmd "spawn telnet [set DUT${i}_CONNECT${s}]"
+                if [catch "$cmd" reason] {
+                    result_debug "failed to spawn program: $reason\n"
+                    result_error "failed to spawn program: $reason\n"
+                }
+
+                set ptimeout $connectionTimeout
+                set timeout 3
+                #wait for connection
+                expect {
+                    "?onnection refused" {
+                        result_debug "refused"
+                        continue;
+                    }
+                    "?nable to ?onnect" {
+                        result_debug "unable to connect"
+                        continue;
+                    }
+                    "?onnected to" {
+                        result_debug "Successful Connection"
+                    }
+                }
+                #run the failsafe
+                FailSafeForceful
+                close -i $spawn_id
+                wait
+            }
+        }
+    }
+    if {[info exists spawn_id] && $spawn_id != ""} {
+        #close -i $spawn_id
+    }
+    if [info exists connectionTimeout] {
+        set timeout $connectionTimeout
+    }
+}
+if {$stc} {
+    catch {source $initFile} bob
+    if {![info exists numDUT]} {
+        if {$n < 1} {
+            puts "Use the -n arg to set the number of DUT"
+            exit
+        }
+        puts "Info required for ConfigGWNetwork not available from initFile"
+        set numDUT $n
+        set supportedPlatform ""
+    }
+    for {set i 1} {$i<11} {incr i} {
+        set whichDutNow $i
+        set DUTs_info(DUT${i},version) "15.1.1.1"
+        if {[info exists DUT${i}_CONNECT]} {
+            Login "[set DUT${i}_CONNECT]" -CheckOperational 0 -masterCheck 0
+            SendACmd "configure snmp sysName DUT$i"
+            SendACmd "enable edp port all"
+            _ClearExpectSession
+        }
+    }
+}
+puts "PRE D"
+if {$d } {
+    if {[file exists $initFile]} {
+        catch {source $initFile} bob
+    }
+    if {![info exists numDUT]} {
+        puts "Info required for enable debug mode not available from initFile"
+        set numDUT $n
+        set supportedPlatform ""
+    }
+    puts "In D"
+    catch {source $initFile} bob
+    if {![info exists numDUT]} {
+        puts "Info required for EnableDebugMode not available from initFile"
+        set numDUT $n
+    }
+    set MGMT_REG(telnetNeedsConfig) 1
+    set MGMT_REG(forceConsole) 1
+    set MGMT_REG(currentConnectionType) "console"
+    set MGMT_REG(useTelnetGlobalFlag) 0
+    set MGMT_REG(useTelnetLocalFlag) 0
+    for {set i 1} {$i<11} {incr i} {
+        set whichDutNow $i 
+        if {[info exists DUT${i}_CONNECT]} {
+            EnableDebugModeConsole "[set DUT${i}_CONNECT]"
+            _ClearExpectSession
+        }
+        if {[info exists DUT${i}_CONNECTB]} {
+            EnableDebugModeConsole "[set DUT${i}_CONNECTB]"
+            _ClearExpectSession
+        }
+        if {[info exists DUT${i}_CONNECTC]} {
+            EnableDebugModeConsole "[set DUT${i}_CONNECTC]"
+            _ClearExpectSession
+        }
+        if {[info exists DUT${i}_CONNECTD]} {
+            EnableDebugModeConsole "[set DUT${i}_CONNECTD]"
+            _ClearExpectSession
+        }
+        if {[info exists DUT${i}_CONNECTE]} {
+            EnableDebugModeConsole "[set DUT${i}_CONNECTE]"
+            _ClearExpectSession
+        }
+        if {[info exists DUT${i}_CONNECTF]} {
+            EnableDebugModeConsole "[set DUT${i}_CONNECTF]"
+            _ClearExpectSession
+        }
+    }
+    after 1500
+}
+if {$m} {
+    catch {source $initFile} bob
+    if {![info exists numDUT]} {
+        puts "Info required for ConfigGWNetwork not available from initFile"
+        set numDUT $n
+        set supportedPlatform ""
+    }
+    set MGMT_REG(telnetNeedsConfig) 1
+    set MGMT_REG(forceConsole) 1
+    set MGMT_REG(currentConnectionType) "console"
+    set MGMT_REG(useTelnetGlobalFlag) 0
+    set MGMT_REG(useTelnetLocalFlag) 0
+    for {set i 1} {$i<11} {incr i} {
+        set whichDutNow $i
+        set DUTs_info(DUT${i},version) "15.1.1.1"
+        if {[info exists DUT${i}_CONNECT]} {
+            Login "[set DUT${i}_CONNECT]" -CheckOperational 0 -masterCheck 0
+            ConfigGatewayNetwork
+            _ClearExpectSession
+        }
+    }
+}
+if {$ib} {
+    catch {source $initFile} bob
+    if {![info exists numDUT]} {
+        puts "Info required for ConfigGWNetwork not available from initFile"
+        set numDUT $n
+        set supportedPlatform ""
+    }
+    set MGMT_REG(telnetNeedsConfig) 1
+    set MGMT_REG(forceConsole) 1
+    set MGMT_REG(currentConnectionType) "console"
+    set MGMT_REG(useTelnetGlobalFlag) 0
+    set MGMT_REG(useTelnetLocalFlag) 0
+    for {set i 1} {$i<11} {incr i} {
+        set whichDutNow $i
+        set DUTs_info(DUT${i},version) "15.1.1.1"
+        if {[info exists DUT${i}_CONNECT]} {
+            Login "[set DUT${i}_CONNECT]" -CheckOperational 0 -masterCheck 0
+            SendACmd "config snmp sysN $smallCfg${i}"
+            SendACmd "enable edp port all"
+            ConfigGatewayNetwork
+            ConfigInBandNetwork
+            _ClearExpectSession
+        }
+    }
+}
+if {$f} {
+    after 2000
+}
+for {set i 1} {$i<11} {incr i} {
+    set whichDutNow $i
+    if {$power==2} {
+        if {[info exists POWERCYCLE_DUT($i)]} {
+            puts "Powering off DUT DUT$i"
+            PowerOffDUT $i "off"
+            exSleep 1
+            puts "Powering on DUT DUT$i"
+            PowerOffDUT $i "on"
+        }
+    }
+    if {[info exists DUT${i}_CONNECT]} {
+        puts "Sending /usr/kerberos/bin/telnet \"[set DUT${i}_CONNECT]\""
+        if {[catch {exec /usr/bin/xterm -e \
+                 "../Util/bash_lc ${cfgFile}_DUT$i \"[set DUT${i}_CONNECT]\"" &} reason]} {
+            puts "OOOPPPSSSSS"
+        }
+    }
+    if {[info exists DUT${i}_CONNECTB]} {
+        puts "Sending /usr/kerberos/bin/telnet \"[set DUT${i}_CONNECTB]\""
+        if {[catch {exec /usr/bin/xterm -e \
+                 "../Util/bash_lc ${cfgFile}_DUT${i}B \"[set DUT${i}_CONNECTB]\"" &} reason]} {
+            puts "OOOPPPSSSSS"
+        }
+    }
+    if {[info exists DUT${i}_CONNECTC]} {
+        puts "Sending /usr/kerberos/bin/telnet \"[set DUT${i}_CONNECTC]\""
+        if {[catch {exec /usr/bin/xterm -e \
+                 "../Util/bash_lc ${cfgFile}_DUT${i}C \"[set DUT${i}_CONNECTC]\"" &} reason]} {
+            puts "OOOPPPSSSSS"
+        }
+    }
+    if {[info exists DUT${i}_CONNECTD]} {
+        puts "Sending /usr/kerberos/bin/telnet \"[set DUT${i}_CONNECTD]\""
+        if {[catch {exec /usr/bin/xterm -e \
+                 "../Util/bash_lc ${cfgFile}_DUT${i}D \"[set DUT${i}_CONNECTD]\"" &} reason]} {
+            puts "OOOPPPSSSSS"
+        }
+    }
+    if {[info exists DUT${i}_CONNECTE]} {
+        puts "Sending /usr/kerberos/bin/telnet \"[set DUT${i}_CONNECTE]\""
+        if {[catch {exec /usr/bin/xterm -e \
+                 "../Util/bash_lc ${cfgFile}_DUT${i}E \"[set DUT${i}_CONNECTE]\"" &} reason]} {
+            puts "OOOPPPSSSSS"
+        }
+    }
+    if {[info exists DUT${i}_CONNECTF]} {
+        puts "Sending /usr/kerberos/bin/telnet \"[set DUT${i}_CONNECTF]\""
+        if {[catch {exec /usr/bin/xterm -e \
+                 "../Util/bash_lc ${cfgFile}_DUT${i}F \"[set DUT${i}_CONNECTF]\"" &} reason]} {
+            puts "OOOPPPSSSSS"
+        }
+    }
+}
+close_result_file
+exit;

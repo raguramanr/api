@@ -1,0 +1,289 @@
+
+#load {expect52.dll}
+set auto_path [linsert $auto_path 0 . ]
+
+################################################################## 
+# Procedure Name: logout
+#   
+# Description: proc that logout os the current DUT without saving the config.
+#
+# Input args: fd -   file discriptor
+#             save - save answer  y or n,  n is the default
+#             closeSession - close the telnet session to the console   true/false true def.
+# Output args: none
+# Typical usage:
+#             logout
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc logout {{fd "NULL"} args} {
+    global spawn_id
+    global spawn_ids
+    global hostname
+    global logoutTimeout
+
+    parse_args logout $args {
+        save          "n"
+        closeSession  "true"
+    }
+
+    send "logout\r"
+    if {[info exist logoutTimeout]} {
+        set timeout $logoutTimeout
+    } else {
+        set timeout 60
+    }
+
+    result_debug "Try to Logout"
+    #exp_internal 1
+    expect {
+        timeout {
+            result_debug "!!!logout:Can't logout!!!"
+        }
+        -nocase "\? (y/n)" {
+            result_debug "$expect_out(buffer)"
+            result_debug "Send N to skip Save"
+            exp_send "$save\r"
+            expect {
+                timeout {
+                    result_debug "!!!logout:Can't logout!!!"
+                }
+                eof {
+                    set idcleared 0
+                    result_debug "Connection Closed!!!"
+                    #look for hostname and set spawn id invalid
+                    foreach name $hostname {
+                        if { $spawn_ids($name) == $spawn_id } {
+                            result_debug "Invalidate $spawn_ids($name) host: $name"
+                            if [catch {close -i $spawn_id} reason] {
+                                puts "Failed to close spawn_id $spawn_id Reason: $reason"
+                            }
+                            if [catch {wait} x] {
+                                puts "Failed on wait : reason $x"
+                            }
+                            exSleep 1
+                            set spawn_ids($name) "INVALID"
+                            set idcleared 1
+                        }
+                    }
+                    exSleep 1
+                    if {!$idcleared} {
+                        result_debug "No Spawn_ID cleared.  This may be an issue with Login registering its spawn_id"
+                    }
+                    return
+                }
+                "ogin:" {
+                    result_debug "Received a Login Prompt:\n$expect_out(buffer)"
+                    if {$closeSession != "true"} {
+                        return;
+                    }
+                    result_debug "Hostname list: $hostname - My spawn_id $spawn_id"
+                    set idcleared 0
+                    foreach name $hostname {
+                        result_debug "host spawn_ids($name) $spawn_ids($name) == $spawn_id"
+                        if { $spawn_ids($name) == $spawn_id } {
+                            result_debug "Invalidate $spawn_ids($name) host: $name"
+                            if [catch {close -i $spawn_id} reason] {
+                                puts "Failed to close spawn_id $spawn_id Reason: $reason"
+                            }
+                            if [catch {wait} x] {
+                                puts "Failed on wait : reason $x"
+                            }
+                            exSleep 1
+                            set spawn_ids($name) "INVALID"
+                            set idcleared 1
+                        }
+                    }
+                    exSleep 1
+                    if {!$idcleared} {
+                        result_debug "No Spawn_ID cleared.  This may be an issue with Login registering its spawn_id"
+                    }
+                    foreach name $hostname {
+                        if { $spawn_ids($name) == $spawn_id } {
+                            result_debug "Invalidate $spawn_ids($name) host: $name"
+                            close -i $spawn_id
+                            wait
+                            set spawn_ids($name) "INVALID"
+                            set idcleared 1
+                        }
+                    }
+                    if {!$idcleared} {
+                        result_debug "No Spawn_ID cleared.  This may be an issue with Login registering its spawn_id"
+                    }
+                    return
+                }
+            }
+        }
+        eof {
+            result_debug "Connection Closed!!!"
+            foreach name $hostname {
+                if { $spawn_ids($name) == $spawn_id } {
+                    result_debug "Invalidate $spawn_ids($name) host: $name"
+                    if [catch {close -i $spawn_id} reason] {
+                        #puts "Failed to close spawn_id $spawn_id Reason: $reason"
+                    }
+                    if [catch {wait} x] {
+                        #puts "Failed on wait : reason $x"
+                    }
+                    exSleep 1
+                    set spawn_ids($name) "INVALID"
+                }
+            }
+            exSleep 1
+            return
+        }
+        "ogin:" {
+            result_debug "$expect_out(buffer)"
+            if {$closeSession != "true"} {
+                return;
+            }
+            result_debug "login 2"
+            foreach name $hostname {
+                if { $spawn_ids($name) == $spawn_id } {
+                    result_debug "Invalidate $spawn_ids($name) host: $name"
+                    if [catch {close -i $spawn_id} reason] {
+                        #puts "Failed to close spawn_id $spawn_id Reason: $reason"
+                    }
+                    if [catch {wait} x] {
+                        #puts "Failed on wait : reason $x"
+                    }
+                    exSleep 3
+                    set spawn_ids($name) "INVALID"
+                }
+            }
+            return
+        }
+    }
+}
+################################################################## 
+# Procedure Name: logout_save
+#   
+# Description: proc that logout from the current DUT after saving the current config.
+#
+# Input args: fd
+# Output args: none
+# Typical usage:
+#             logout_save
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc logout_save {{fd "NULL"}} {
+   global spawn_id
+   set timeout 40
+   send "save\r"
+   expect "save?"
+   send "y\r"
+   expect "#"
+   logout $fd
+}
+
+################################################################## 
+# Procedure Name: logout_noSave
+#   
+# Description: proc that Logout a switch without saving the configuration
+#
+# Input args: fd
+# Output args: none
+# Typical usage:
+#             logout_noSave
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc logout_noSave {{fd "NULL"}} {
+   logout $fd
+}
+##################################################################
+# Procedure Name: _ClearExpectSession
+#
+# Description: proc to kill a telnet session
+#
+# Input args: 
+# Output args: 
+# Typical usage:
+#             _ClearExpectSession
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc _ClearExpectSession {args} {
+    global spawn_id
+    global spawn_ids
+    global hostname
+
+    parse_args _ClearExpectSession $args {
+        tmp "1"
+    }
+
+    set idcleared 0
+    foreach name $hostname {
+       if { $spawn_ids($name) == $spawn_id } {
+           result_debug "Invalidate $spawn_ids($name) host: $name"
+           close -i $spawn_id
+           wait
+           set spawn_ids($name) "INVALID"
+           set idcleared 1
+       }
+    }
+    exSleep 2
+    if {!$idcleared} {
+        result_debug "No Spawn_ID cleared.  This may be an issue with Login registering its spawn_id"
+    }
+    return
+}
+##################################################################
+# Procedure Name: ClearTestbedSessions
+#
+# Description: proc to clear the telnet expect sessions for a test bed
+#
+# Input args: 
+# Output args: 
+# Typical usage:
+#             ClearTestbedSessions
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc ClearTestbedSessions {} {
+    for {set i 1} {$i<20} {incr i} {
+        global DUT${i}_CONNECT
+        global DUT${i}_CONNECTB
+        if {[info exists DUT${i}_CONNECT]} {
+            Login "[set DUT${i}_CONNECT]" -CheckOperational 0 -masterCheck 0
+            _ClearExpectSession
+        }
+        if {[info exists DUT${i}_CONNECTB]} {
+            Login "[set DUT${i}_CONNECTB]" -CheckOperational 0 -masterCheck 0
+            _ClearExpectSession
+        }
+    }
+}
+##################################################################
+# Procedure Name: ClearTestbedTelnetPIDs
+#
+# Description: proc to clear the telnet expect pids for a test bed
+#
+# Input args: 
+# Output args: 
+# Typical usage:
+#             ClearTestbedTelnetPIDs
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc ClearTestbedTelnetPIDs {} {
+    for {set i 1} {$i<20} {incr i} {
+        global DUT${i}_CONNECT
+        if {[info exists DUT${i}_CONNECT]} {
+            _clearDutConnectionVars $i
+        }
+    }
+}

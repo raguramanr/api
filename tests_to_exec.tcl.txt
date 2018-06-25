@@ -1,0 +1,274 @@
+# --------------------------------------------------------------------------
+# proc _initCompleteTests
+#
+#   Create all variables associated with a completetests.lst
+# --------------------------------------------------------------------------
+proc _initCompleteTests {args} {
+    global MAIN LSTGROUPING CTLIST
+
+    parse_args _initCompleteTests $args {
+        regPath    "null" 
+        module     "null"
+        version    "null"
+        platform   "null"
+        lst        "null"
+    }
+
+    result_debug "---      Get CT List     ---"
+    result_debug "Feature $module Version $version Platform $platform list $lst"
+
+    set regPath [string trim $regPath "."]
+    set regPath [string trim $regPath "/"]
+    set regPath [_verifyRegPathArg -regPath $regPath -initPath "$MAIN(autoRoot)"];#
+    set modulePath [_verifyModuleNameArg $regPath $module]
+
+    set cliCheck [_checkForCliReg $modulePath]
+    if {$cliCheck == 0} {
+        result_error "CLI Regression completetests.lst locate failed"
+    } elseif {$cliCheck != "normal"} {
+        set modulePath $cliCheck
+    }
+
+    if ![file exists ${modulePath}/completetests.lst] {
+        result_error "Does Not Exist: ${modulePath}/completetests.lst"
+        return 0;
+    }
+    
+    # open compltetetests.lst for reading
+    if {[set fd_in [FileOpen "${modulePath}/completetests.lst" r]]==-1} {
+        return 0;
+    }
+    # open tmp file
+    set pid [pid]
+    if {[set fd_t [FileOpen "/tmp/${pid}_ct_tmp.lst" w]]==-1} {
+        return 0;
+    }
+    # make sure version is minor
+    set vlist [split $version "."]
+    set version "[lindex $vlist 0].[lindex $vlist 1]"
+    # make platform ctests standard
+    set plat [_getSkipPlatName $platform]
+    # clean lines from completetests.lst
+    set cleanlines ""
+    while {[gets $fd_in line] != -1} {
+        set nline [string trim $line]
+        set llist [split $nline ";"]
+        set n1line [lindex $llist 0]
+        if {[regexp {^set} $n1line] || [regexp {^global} $n1line] || $n1line == "\}"} {
+            set n2line [string trim $nline ";"]
+            if {$n1line == "\}"} {
+                set n2line $n1line
+            }
+        } else {
+            set llist [split $n1line "#"]
+            set n2line [string trim [lindex $llist 0]]
+        }
+        if {[regexp {^([a-zA-Z0-9_\.\-\}\{]+)} $n2line]} {
+            set final [split $n2line " "]
+            if {[llength $final] == 1 || [lindex $final 0] == "set" || \
+                  [lindex $final 0] == "global" || [lindex $final 0] == "\}"} {
+                puts $fd_t "$n2line"
+            }
+        }
+    }
+    close $fd_t;
+    close $fd_in;
+
+    if {[catch {source "/tmp/${pid}_ct_tmp.lst"} oops]} {
+        result_warning "Failed to source: /tmp/${pid}_ct_tmp.lst $oops"
+        catch {file delete "/tmp/${pid}_ct_tmp.lst"} oops
+        return 0;
+    } else {
+        catch {file delete "/tmp/${pid}_ct_tmp.lst"} oops
+    }
+
+    #MAIN(lst_arrays)
+
+    set CTLIST(quick_pass_all_dev) ""
+    set CTLIST(quick_pass_all) ""
+    set CTLIST(quick_pass) ""
+    set CTLIST(quick) ""
+    set CTLIST(pass) ""
+    set CTLIST(all) ""
+    set CTLIST(dev) ""
+    set CTLIST(debug) ""
+    set CTLIST(all_dev_debug) ""
+    set CTLIST(dev_debug) ""
+    set CTLIST(skip_version) ""
+    set CTLIST(skip_platform) ""
+    foreach lst_array $MAIN(lst_arrays) {
+        if {[array exists $lst_array]} {
+            foreach index [array names $lst_array] {
+                set TLSTS($lst_array,$index) "[set [set lst_array]($index)]"
+                foreach t $TLSTS($lst_array,$index) {
+                    # create quick pass all dev
+                    if {[string trim $t] != "" && $lst_array != "tests_to_skip"} {
+                        if {[regexp -nocase {[0-9]+\.[0-9]} $index]} {
+                            puts "Found release $index - version in $version"
+                            if {[CompareRelease $index $version] > 0} {
+                                lappend CTLIST(skip_version) $t
+                            }
+                        }
+                        switch $lst_array {
+                            "tests_to_run_quick" {
+                                lappend CTLIST(quick_pass_all_dev) $t
+                                lappend CTLIST(quick_pass_all) $t
+                                lappend CTLIST(quick_pass) $t
+                                lappend CTLIST(quick) $t
+                            }
+                            "tests_to_run_pass" {
+                                lappend CTLIST(quick_pass_all_dev) $t
+                                lappend CTLIST(quick_pass_all) $t
+                                lappend CTLIST(quick_pass) $t
+                                lappend CTLIST(pass) $t
+                            }
+                            "tests_to_run_all" {
+                                lappend CTLIST(quick_pass_all_dev) $t
+                                lappend CTLIST(quick_pass_all) $t
+                                lappend CTLIST(all) $t
+                                lappend CTLIST(all_dev_debug) $t
+                            }
+                            "tests_to_run_dev" {
+                                lappend CTLIST(quick_pass_all_dev) $t
+                                lappend CTLIST(dev) $t
+                                lappend CTLIST(all_dev_debug) $t
+                                lappend CTLIST(dev_debug) $t
+                            }
+                            "tests_to_run_debug" {
+                                lappend CTLIST(debug) $t
+                                lappend CTLIST(all_dev_debug) $t
+                                lappend CTLIST(dev_debug) $t
+                            }
+                        }
+                    }
+                    if {[string trim $t] != "" && $lst_array == "tests_to_skip" && $index == "$plat"} {
+                        lappend CTLIST(skip_platform) $t
+                    }
+                }
+            }
+        }
+    }
+    # ---  LSTGROUPING(alldevdebug)
+    puts "------------------ lst in $lst"
+    if {[info exists LSTGROUPING($lst)] && [info exists CTLIST($LSTGROUPING($lst))]} {
+        puts $CTLIST($LSTGROUPING($lst))
+    }
+    puts "-----------   skip platform"
+    puts $CTLIST(skip_platform)
+
+    puts "-----------   skip version"
+    puts $CTLIST(skip_version)
+}
+
+# --------------------------------------------------------------------------
+# proc _getSkipPlatName
+#
+#    Legacy migration returning old tests_to_skip(NAME) 
+#
+#    Args:  in = platform
+#           out = NAME
+#
+# Typical usage:
+#   set plat [_getSkipPlatName $platform]
+# --------------------------------------------------------------------------
+proc _getSkipPlatName {platform} {
+    global gnssPlatform bcmPlatform i386Platform  pioneerPlatform bcmx440
+    global tests_to_skip
+
+    set plat platform
+
+    set plat $platform
+
+    if {[regexp -nocase $gnssPlatform $platform]} {
+       set plat gnssPlatform
+    }
+    if {[regexp -nocase $pioneerPlatform $platform]} {
+       set plat pioneerPlatform
+    }
+    if {[info exists tests_to_skip(mariner)]} {
+       if {[regexp -nocase "bd-10808" $platform]} {
+          set plat mariner
+       }
+    }
+    if {[info exists tests_to_skip(olympic)]} {
+       if {[regexp -nocase "bd-89|bd-128" $platform]} {
+          set plat olympic
+       }
+    }
+    if {[info exists tests_to_skip(torino)]} {
+       if {[regexp -nocase "bd-128" $platform]} {
+          set plat torino
+       }
+    }
+
+    if {[info exists tests_to_skip(pioneer)]} {
+       if {[regexp -nocase "bd-16808" $platform]} {
+          set plat pioneer
+       }
+    }
+
+    if {[regexp -nocase $bcmPlatform $platform]} {
+       set plat bcmPlatform
+       if {[regexp -nocase "vpex|vpex_onie" $platform]} {
+          set plat "vpex"
+       } 
+    }
+
+    if {[info exists tests_to_skip(bcmx440)]} {
+        if {[regexp -nocase $bcmx440 $platform]} {
+           set plat bcmx440
+        }
+    }
+
+    if {[info exists tests_to_skip(SummitX450)]} {
+       if {[regexp -nocase "X450|x250|x150|x350|x650|SummitX406|NWI|x480|x460|x670|x670g2|e4g|x440|x770" $platform]} {
+          set plat SummitX450
+       }
+    }
+
+    if {[info exists tests_to_skip(Aspen)]} {
+       if {[regexp -nocase "Aspen|BD-88|XCM" $platform]} {
+          set plat Aspen
+       }
+    }
+    if {[info exists tests_to_skip(Everest)]} {
+       if {[regexp -nocase "BD-X8" $platform]} {
+          set plat Everest
+       }
+    }
+
+    if {[regexp -nocase $i386Platform $platform]} {
+       set plat i386Platform
+    }
+    if {[info exists tests_to_skip(Summit-PC)]||[info exists tests_to_skip(BD-PC)]} {
+       if {[regexp -nocase "Summit-PC|BD-PC" $platform]} {
+          set plat $platform
+       }
+    }
+
+    return $plat
+
+}
+
+# ----------------------------------------------------------------------------------
+# proc _checkForCliReg
+#
+#
+#
+# ----------------------------------------------------------------------------------
+proc _checkForCliReg {modulePath} {
+
+    if { [regexp -nocase "uploadanddownload" $modulePath cliReg] || \
+         [regexp -nocase "upgradedowngrade" $modulePath cliReg] } {
+        set ret [regsub $cliReg $modulePath "cli-ew" cliPath]
+        if { $ret == 0 } {
+            puts "ERROR: Error in processing cli completetest.lst"
+            return $ret
+        }
+        return $cliPath
+    } else {
+        return "normal"
+    }
+
+}
+

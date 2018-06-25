@@ -1,0 +1,342 @@
+
+################################################################################
+# SetDefaultIxia
+#
+#   portList - list of ports to set default {{1 2 1} {1 2 2}}
+#
+################################################################################
+proc SetDefaultIxia {portList} {    
+ 
+   foreach port  $portList {
+      set c [lindex $port 0]
+      set s [lindex $port 1]
+      set p [lindex $port 2]
+
+      port               setDefault 
+      capture            set     $c $s $p
+      filter             setDefault 
+      filter             set     $c $s $p
+      filterPallette     setDefault 
+      filterPallette     set     $c $s $p
+      protocolServer     setDefault 
+      protocolServer     set     $c $s $p
+      port               set     $c $s $p
+      stat               setDefault 
+      qos                setDefault 
+      qos                set     $c $s $p
+      stat               set     $c $s $p
+      protocol           setDefault 
+      ip                 setDefault 
+      tcp                setDefault 
+   }
+}
+
+################################################################################
+# IxMySendData
+#
+#  portList - list of port to send data {{1 2 1} {1 2 2}}
+#
+################################################################################
+proc IxMySendData {portList} {
+      ixClearStats        $portList
+      puts "Starting transmit..."
+      ixStartTransmit     $portList
+      after 2000
+      ixCheckTransmitDone $portList
+      puts "Waiting on ixia traffic to complete"
+}
+
+################################################################################
+proc IxFramesSent {ixport1 ixport2} {
+
+   set c1 [lindex $ixport1 0]
+   set s1 [lindex $ixport1 1]
+   set p1 [lindex $ixport1 2]
+
+   set c2 [lindex $ixport2 0]
+   set s2 [lindex $ixport2 1]
+   set p2 [lindex $ixport2 2]
+
+   stat get     statAllStats $c1 $s1 $p1
+   set sentx    [stat cget -framesSent]
+   set recx     [stat cget -framesReceived]
+   stat get     statAllStats $c2 $s2 $p2
+   set senty    [stat cget -framesSent]
+   set recy     [stat cget -framesReceived]
+
+   return [list $sentx $recx $senty $recy]
+}
+
+
+###############################################################################
+# IxMakeStr
+#
+#   Create a stream
+#
+#   ixport - list containing: chassis slot port
+#   smac   - source mac "00 11 22 33 44 55 66"
+#   dmac   - dest mac
+#   tag    - the tag of the frame; "-" if untagged
+#   sip    - source ip; "-" if L2 frame only
+#   dip    - destination ip
+#   ixopts - list containing: numframes framesize rate name; "-" if default
+#   snum   - option: stream number
+#   dma    - option: type of stream
+#
+#   tmphacks - mask is hardcoded to 24bit
+#
+###############################################################################
+proc IxMakeStr {ixport smac dmac tag sip dip ixopts {snum "1" } {dma "stopStream"}} {
+
+   #puts "$ixport $smac $dmac $tag $sip $dip -$ixopts- $snum $dma"
+
+   global IXIASTREAMSETTINGS
+
+   SetDefaultIxia $ixport
+
+   set c [lindex $ixport 0]
+   set s [lindex $ixport 1] ; # ixport = { 1 2 3 }, s = 2
+   set p [lindex $ixport 2] ; # ixport = { 1 2 3 }, p = 3
+
+   # turn on 802dot1q if we got a tag
+   if {$tag != "-"} {
+      protocol config -enable802dot1qTag true
+   }
+
+   # if we got options, set them
+   if {$ixopts != "-"} {
+      set numframes    [lindex $ixopts 0]
+      set framesize    [lindex $ixopts 1]
+      set rate         [lindex $ixopts 2]
+      set name         [lindex $ixopts 3]
+   } else {
+      set numframes $IXIASTREAMSETTINGS(numFrames)
+      set framesize $IXIASTREAMSETTINGS(framesize)
+      set rate      $IXIASTREAMSETTINGS(rate)
+      set name      $IXIASTREAMSETTINGS(name)
+   }
+
+   vlan setDefault
+   vlan config   -vlanID            $tag
+   vlan set $c $s $p 
+   stream setDefault
+   stream config -dma               $dma
+   stream config -numFrames         $numframes
+   stream config -framesize         $framesize
+   stream config -rateMode          1
+   stream config -percentPacketRate $rate
+   stream config -name              $name
+   stream config -da                $dmac
+   stream config -sa                $smac
+
+   # setup L3 layer, if necessary
+   if {$sip != "-"} {
+      protocol config  -name           ip
+      protocol config  -ethernetType   ethernetII
+      ip       config  -ipProtocol     4
+      ip       config  -sourceIpAddr   $sip
+      ip       config  -destIpAddr     $dip
+      ip       config  -sourceIpMask   255.255.255.0 ; # tmp hardcode
+      ip       config  -destIpMask     255.255.255.0 ; # tmp hardcode
+      ip set $c $s $p
+      IxSetArpServer $ixport $sip $smac ; # setup the arpserver
+   }
+
+   stream set   $c $s $p $snum
+   stream write $c $s $p $snum
+}
+
+###############################################################################
+# IxSetArpServer
+#
+#   Setup a port to respond to arps
+#
+#   port  - list containing: chassis slot port
+#   ip    - first ipaddress
+#   mac   - first mac address
+#   count - optional: how many ip addresses to serve
+#
+#   Ex.   IxSetArpServer 1.1.1.1 "00 11 22 33 44 55 66" {1 2 1}
+#   Ex.   IxSetArpServer 2.2.2.2 "00 33 33 33 33 00 01" {1 2 2} 10
+#
+###############################################################################
+proc IxSetArpServer {port ip mac {count 1} } {
+
+   set c [lindex $port 0]
+   set s [lindex $port 1]
+   set p [lindex $port 2]
+
+   protocolServer setDefault
+   protocolServer config -count            $count
+   protocolServer config -arpServerEnable  true
+   protocolServer config -IpAddress        $ip
+   protocolServer config -MacAddress       $mac
+   protocolServer config -pingServerEnable true
+   protocolServer set   $c $s $p
+   protocolServer write $c $s $p
+}
+
+###############################################################################
+# IxMulti_Mac
+#
+#   Modify an existing stream to make multiple macs
+#
+###############################################################################
+proc IxMulti_Mac  {port nSmac nDmac {snum 1}} {
+
+   set c [lindex $port 0]
+   set s [lindex $port 1]
+   set p [lindex $port 2]
+
+   stream get $c $s $p $snum
+
+   if {$nSmac != 1} {
+      stream config -numSA           $nSmac
+      stream config -saRepeatCounter increment
+   }
+   if {$nDmac != "-"} {
+      stream config -numDA $nDmac
+      stream config -daRepeatCounter increment
+   }
+
+   stream set   $c $s $p $snum
+   stream write $c $s $p $snum
+}
+
+###############################################################################
+# IxMulti_Tag
+#
+#   Modify an existing stream to make multiple tags
+#
+###############################################################################
+proc IxMulti_Tag {port nTag {snum 1}}  {
+
+   set c [lindex $port 0]
+   set s [lindex $port 1]
+   set p [lindex $port 2]
+
+   stream get $c $s $p $snum
+   vlan   get $c $s $p
+
+   vlan config -mode    vIncrement
+   vlan config -repeat  $nTag
+   vlan config -maskval XXXXXXXXXXXX
+   vlan set $c $s $p
+
+   stream set   $c $s $p $snum
+   stream write $c $s $p $snum
+}
+
+###############################################################################
+# IxMulti_Ip
+#
+#   Modify an existing stream to make multiple ips
+#
+###############################################################################
+proc IxMulti_Ip {port nSip nDip {snum 1}}  {
+
+   set c [lindex $port 0]
+   set s [lindex $port 1]
+   set p [lindex $port 2]
+
+   stream get $c $s $p $snum
+   ip     get $c $s $p
+
+   if {$nSip != 1} {
+      ip config -sourceIpAddrRepeatCount $nSip
+      ip config -sourceIpAddrMode        ipIncrHost
+   }
+   if {$nDip != 1} {
+      ip config -destIpAddrRepeatCount $nDip
+      ip config -destIpAddrMode        ipIncrHost
+   }
+
+   ip     set   $c $s $p
+   stream set   $c $s $p $snum
+   stream write $c $s $p $snum
+}
+
+###############################################################################
+# IxMakeStr_Multi
+#
+#   Make a stream with multi macs/tags/ip
+#
+###############################################################################
+proc IxMakeStr_Multi {ixport smac dmac tag sip dip ixopts num {snum "1" } {dma "stopStream"}} {
+
+   #puts "$ixport $smac $dmac $tag $sip $dip -$ixopts- $num $snum $dma"
+
+   IxMakeStr $ixport $smac $dmac $tag $sip $dip $ixopts $snum $dma
+
+   if {$tag != "-"} {
+     IxMulti_Tag $ixport $num $snum
+   }
+
+   if {$sip != "-"} {
+     IxMulti_Mac    $ixport $num - $snum
+     IxMulti_Ip     $ixport $num $num $snum
+     IxSetArpServer $ixport $sip $smac $num
+   } else {
+     IxMulti_Mac   $ixport $num $num $snum
+   }
+
+}
+
+###############################################################################
+# IxTest:   Debugging proc to test procs in this file
+###############################################################################
+proc IxTest  {} {
+
+     ixInitialize 10.5.4.223
+     ixLogin Auto
+
+     IxMakeStr       {1 2 1} "00 11 11 11 11 11" "00 22 22 22 22 22" 10 1.1.1.1 2.2.2.2 -
+     IxMulti_Mac     {1 2 1} 10 10
+     IxMulti_Tag     {1 2 1} 10
+     IxMulti_Ip      {1 2 1} 10 10
+     IxSetArpServer  {1 2 1} 1.1.1.1 "00 11 11 11 11 11" 10
+     IxMakeStr_Multi {1 2 1} "00 44 44 44 44 44" "00 55 55 55 55 55" 100 3.3.3.3 4.4.4.4 - 9 2
+     MyGets "Stream is setup"
+
+}
+
+proc IxFullMesh {} {
+
+     global DUT
+
+     ixInitialize 10.5.4.223
+     ixLogin Auto
+
+
+     # pick side of the testbed to configure
+     set spf 51
+     set dutlist {1 2 3 4 5 6}
+     #set spf 96
+     #set dutlist {7 8 9 10 11 12}
+
+     foreach dut $dutlist {
+        set port [IxiaPort $dut]
+        set smac [IxiaMac  $dut]
+        set dmac $DUT($dut,mac)
+        if {$dut < 10} {
+           set sip  11.20$dut.$spf.13
+        } else {
+           set sip  11.2$dut.$spf.13
+        }
+        set ixopts {100 64 10 ipmesh}
+
+        set num 1
+        foreach dutdest $dutlist {
+            if {$dut != $dutdest} {
+              if {$dutdest < 10} {
+                 set dip  11.20$dutdest.$spf.13
+              } else {
+                 set dip  11.2$dutdest.$spf.13
+              }
+               IxMakeStr_Multi $port $smac $dmac - $sip $dip $ixopts 100 $num advance
+               incr num
+            }
+        } 
+        IxSetArpServer  $port $sip $smac 100
+     }
+}

@@ -1,0 +1,232 @@
+
+proc DisableDutSlot {slotList DUTName} {
+    global ${DUTName}_CONNECT;
+    global DUTs_info;
+    global bcmStackable
+
+    Login [set ${DUTName}_CONNECT];
+
+#For stackables, the 'slot' value is actually the port
+    if {[regexp -nocase "$bcmStackable" $DUTs_info($DUTName,platform)]} {
+        foreach slot $slotList {
+            SendACmd "disable port $slot";
+        }
+    } else {
+        foreach slot $slotList {
+            SendACmd "disable slot $slot";
+        }
+    }
+}
+
+
+proc EnableDutSlot {slotList DUTName {waitActive 1}} {
+    global ${DUTName}_CONNECT;
+    global DUTs_info;
+    global bcmStackable
+
+    Login [set ${DUTName}_CONNECT];
+
+    set dutSlotList ""
+
+#For stackables, the 'slot' value is actually the port
+    if {[regexp -nocase "$bcmStackable" $DUTs_info($DUTName,platform)]} {
+        foreach slot $slotList {
+            SendACmd "enable port $slot";
+        }
+    } else {
+        foreach slot $slotList {
+            SendACmd "enable slot $slot";
+           result_debug "Sleeping till Slot $slot becomes operational"
+           set Output ""
+       lappend Output "{Slot-$slot.*Operational} exist"
+       CheckKeyValue "show slot" $Output -time {s: 1 i: 5 d: 180 f: 180 r} -comment "check show slot"
+
+
+        }
+    }
+}
+
+proc CheckNextGenPorts {{dutNumber 1} {portNum 1}} {
+global DUTs_info
+global chassis
+global DUT1_CONNECT
+global bcmChassis
+global FireboltPort
+global HelixPort
+set FireboltPort ""
+set HelixPort ""
+global bcmJaguar
+global bcmx650
+global bcmx480
+
+#Identify Firebolt Helix platforms
+result_debug "\n\nPlatform Name $DUTs_info(DUT${dutNumber},platform)"
+if {[regexp -nocase $bcmJaguar $DUTs_info(DUT${dutNumber},platform)]} {
+   if {[regexp -nocase "a|c" $DUTs_info(DUT${dutNumber},platform)]} {
+      result_debug "Firebolt port"
+      set FireBoltPort 1;
+      return 2;
+   } elseif {[regexp -nocase "e" $DUTs_info(DUT${dutNumber},platform)]} {
+      result_debug "Helix port"
+      set HelixPort 1; 
+      return 1;  
+   }
+}
+
+#Identify Scorpian/Triumph/Apollo/Trident chipsets
+if {[regexp -nocase $bcmx650 $DUTs_info(DUT${dutNumber},platform)]} {
+   result_debug "Scorpian chipset"
+   return 3
+}
+if {[regexp -nocase $bcmx480 $DUTs_info(DUT${dutNumber},platform)]} {
+   result_debug "Triumph chipset"
+   return 4
+}
+if {[regexp -nocase "460|400" $DUTs_info(DUT${dutNumber},platform)]} {
+   result_debug "Apollo chipset"
+   return 5
+}
+if {[regexp -nocase "670" $DUTs_info(DUT${dutNumber},platform)]} {
+   result_debug "Trident chipset"
+   return 6
+}
+if {[regexp -nocase "200" $DUTs_info(DUT${dutNumber},platform)]} {
+   result_debug "Enduro chipset"
+   return 7
+}
+if {[regexp -nocase "440" $DUTs_info(DUT${dutNumber},platform)]} {
+   result_debug "Hurricane chipset"
+   return 8
+}
+
+
+##check if it is Chasssis
+
+if [regexp -nocase "$bcmChassis" $DUTs_info(DUT${dutNumber},platform)] {
+   result_debug "Hit Chassis Port $portNum = [MapDUTPortId $portNum $dutNumber]"
+   set portID1Slot [lindex [split [MapDUTPortId $portNum $dutNumber] :] 0];
+   result_debug "port id slot $portID1Slot"
+   set slotType [lindex $DUTs_info(DUT1,hwList) [expr $portID1Slot - 1]]
+   result_debug "HWList $DUTs_info(DUT1,hwList)"
+   result_debug "Slot Type = $slotType"
+   if {[regexp -nocase "a|c" $slotType]} {
+      result_debug "Firebolt port"
+      set FireBoltPort 1;
+      return 2;
+   } elseif {[regexp -nocase "e" $slotType]} {
+      result_debug "Helix port"
+      set HelixPort 1;
+      return 1;
+   } elseif {[regexp -nocase "650" $slotType]} {
+      result_debug "Scorpian chipset"
+      return 3;
+   } elseif {[regexp -nocase "480" $slotType]} {
+      result_debug "Triumph chipset"
+      return 4;
+   } elseif {[regexp -nocase "460|400" $slotType]} {
+      result_debug "Apollo chipset"
+      return 5;
+   } elseif {[regexp -nocase "670" $slotType]} {
+      result_debug "Trident chipset"
+      return 6;
+   } else {
+      result_debug "Not a Helix or Firebolt port"
+      return 0    
+  }
+}
+
+}
+
+##################################################################
+# Procedure Name: telnetFromDut
+# Description:
+#       This proc is used to start  telnet session from the DUT
+#       It assume that the current session is at the DUT prompt
+# Input args:  ip  - ip to telnet to
+#              vr  - vr to use
+#              user
+#              password
+#              logout - logout: logout of the telnet session at the end
+#                       nologout: don't logout. the DUT will be in the telnet
+#                                 session after running this proc
+# Output args: None
+# Typical usage:
+#           telnetFromDut 20.20.20.2 VR-Default admin ""
+# Category: Telnet
+##################################################################
+
+proc telnetFromDut { ip vr user password {logout logout} } {
+   set passwordSent 0
+   set timeout 10
+   set loginSuccess 0
+   exp_send "telnet vr $vr $ip\r"
+   sleep 2
+   for {set try 0} {$try < 7 } {incr try} {
+      expect {
+          -re "Please contact the administrator" {
+         result_debug_expect
+         return 5
+        }
+         -re "Maximum number of login attempts reached!" {
+         result_debug_expect
+         return 4
+        }
+
+        "closed by foreign host" {
+            result_debug_expect
+            if {$passwordSent == 1} {
+               return 0
+            } else {
+               #if connection closed without sending password something's wrong
+               return "error"
+            }
+         }
+
+         -re ".*login:" {
+            exp_send "$user\r"
+         }
+         -re ".*assword:" {
+            set passwordSent 1
+            exp_send "$password\r"
+         }
+         -re "save your config.*\[#>]" {
+            #see the banner and then system prompt. we are in.
+            result_debug_expect
+            set loginSuccess 1
+            break
+         }
+         timeout {
+            expect *
+            result_debug_expect
+            return "error"
+         }
+      }
+      result_debug_expect
+   }
+
+if { $loginSuccess != 1 } {
+      return "error"
+   }
+   #if caller specify nologout, don't logout
+   if { $logout != "logout" } {
+      return 1
+   }
+   exp_send "exit\r"
+   expect {
+      -nocase "y/n" {
+          result_debug_expect
+          send "n\r"
+      }
+   }
+   expect {
+      "Connection closed by foreign host" {
+         result_debug_expect
+         return 1
+      }
+      timeout {
+         expect *
+         result_debug_expect
+         return error
+      }
+   }
+}

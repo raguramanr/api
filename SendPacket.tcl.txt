@@ -1,0 +1,977 @@
+
+################################################################## 
+# Procedure Name: SendFrame
+#   
+# Description: Sends mac frame from a txPortId to rxPortId
+#     
+#     
+#
+# Input args: txPortId, rxPortId, protocol, protocol, sourceMac, destMac, numFrames
+#             frameSize, frameSizeType, dataPattern, streamType, fcsError, saMode, daMode
+#             percentage, tag, tagPriority, frameRate
+# Output args: none
+# Typical usage:
+#             SendFrame $txPortId
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: SendTraffic
+##################################################################
+proc SendFrame {args} {
+   parse_args SendFrame $args {
+      txPortId "1"
+      rxPortId "0"
+      protocol "mac"
+      sourceMac "default"
+      destMac "default"
+      numFrames "10"
+      frameSize "64"
+      frameSizeType "sizeFixed"
+      frameSizeMAX "1518"
+      frameSizeMIN "64"
+      dataPattern "1234"
+      ethernetType "noType"
+      frameType "08 00"
+      streamType "stopStream"
+      fcsError "good"
+      saMode "idle"
+      daMode "idle"
+      saCount ""
+      daCount ""
+      percentage "100"
+      tag "none"
+      tagPriority "0"	      
+      protocolTagId "null"
+      frameRate "null"
+      tagMode "vIdle"
+      tagRepeat 1
+      udfEnable "false"
+      udfInitval "00"
+      udfOffset "0"
+      udfCountertype "c8"
+      udfContinuousCount "false"
+      udfRepeat "1"
+      protoOffsetEnable "false"
+      protoOffset "14"
+      userDefTag ""
+      dontTx "0"
+      ZeroStats "yes"
+   }
+   global portMappingList
+   global DUTs_info
+   # Using Sendframe Clears preconfigured traffic streams used in MPLS
+   set DUTs_info(DUT1,TrafficPrimed) 0
+
+   set portList [lindex $portMappingList [expr $txPortId-1]]
+   result_debug "INFO: DUT[lindex $portList 2] [lindex $portList 1] ingresses from portId [lindex $portList 0]"
+
+   
+   global portMappingList
+
+   set portList [lindex $portMappingList [expr $txPortId-1]]
+   result_debug "INFO: DUT[lindex $portList 2] [lindex $portList 1] ingresses from portId [lindex $portList 0]"
+   MapIxiaPortId $txPortId txChasisId txCard txPort
+   if {$rxPortId == 0} {
+      set sendLearn "false"
+      set rxPort [MapIxiaPortId $txPortId rxChasisId rxCard rxPo]
+   } else {
+      set sendLearn "true"
+      MapIxiaPortId $rxPortId rxChasisId rxCard rxPort
+   }
+   
+   set numIxiaCd [GetNumIxiaCd $txPortId]
+   
+   if {$tag != "none" } { set wTag "true" } else {set wTag "false" }
+   global startCardNum
+   set frameSent [ixiaConf_2Ports -numIxiaCd $numIxiaCd -rate $frameRate \
+                  -txChas $txChasisId -txCard $txCard -txPort $txPort -startCardNum $startCardNum \
+                  -rxChas $rxChasisId -rxCard $rxCard -rxPort $rxPort -sendLearn $sendLearn \
+                  -protocol $protocol -numFrames $numFrames -frameSize $frameSize -frameSizeType $frameSizeType \
+                  -frameSizeMAX $frameSizeMAX -frameSizeMIN $frameSizeMIN \
+                  -dataPattern $dataPattern -streamType $streamType -fcsError $fcsError \
+		  -frameType $frameType -ethernetType $ethernetType -protocolTagId $protocolTagId \
+                  -inSaMac $sourceMac -saMode $saMode -inDaMac $destMac -daMode $daMode \
+                  -percentage $percentage -wTag $wTag -tagNo $tag -tagPriority $tagPriority \
+                  -tagMode $tagMode -tagRepeat $tagRepeat -saCount $saCount -daCount $daCount \
+		  -udfEnable $udfEnable -udfInitval $udfInitval -udfOffset $udfOffset -dontTx $dontTx \
+                  -udfRepeat $udfRepeat \
+		  -udfCountertype $udfCountertype -udfContinuousCount $udfContinuousCount -protoOffsetEnable $protoOffsetEnable -protoOffset $protoOffset \
+          -userDefTag $userDefTag -ZeroStats $ZeroStats]
+  if {$streamType != "contPacket" && $numFrames > 100 && $dontTx==0} {
+    ixiaCheckTxDone $txChasisId $txCard $txPort $numFrames $txPortId
+  }
+  return $frameSent            
+}
+
+
+
+################################################################## 
+# Procedure Name: SendFrameFromMultiplePorts
+#   
+# Description: Used to send uni/bi directional mac frames in a number of paired ports.
+#     
+#     
+# Input args:
+#      - <txPortId>   - Sending ixia portId
+#      - <rxPortId>   - Receiving ixia portId
+#      - <direction>  - direction of the mac traffic flow "1Way"/"2Way"
+#      - <numFrames>  - Number of mac frames to be sent
+#      - <protocol>   - protocol to be used to send mac frames (default mac but sometimes usr specified for protocol based vlan)
+#      - <frameSize>  - frame size to be used default 64
+#      - <frameSizeType>    - frame size type fixed or random (sizeFixed/sizeRandom)
+#      - <dataPattern>   - data pattern to be used to pad
+#      - <destIp>     - destination IP address           
+#      - <numFrames>  - how many to send
+#      - <streamType> - type of the stream stopStream/contStream...
+#      - <fcsError> - fcsError in the ixia frame send
+#      - <saMode>     - source side sending mode
+#      - <daMode>     - receive side sending mode
+#      - <percentage> - percentage of the line rate to be sent default 100
+#      - <tag>        - tag value to be used if tagged vlan
+#      - <applyFilter> - flag to indicate if filter/filterPallette to be applied on the receiving buffer
+#
+# Output args: none
+# Return value: Retruns the frame sent
+# Typical usage:
+#             SendFrameFromMultiplePorts $txPortId $rxPortId
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: SendTraffic
+##################################################################
+proc SendFrameFromMultiplePorts {args} {
+   parse_args SendFrame $args {
+      txPortId "1"
+      rxPortId "2"
+      direction "1Way"
+      numFrames "1"
+      protocol "mac"
+      frameSize "64"
+      frameSizeType "sizeFixed"
+      dataPattern "1234"
+      streamType "stopStream"
+      fcsError "good"
+      saMode "idle"
+      daMode "idle"
+      percentage "100"
+      tag "none"
+      applyFilter "0"
+      dontTx "0"
+   }
+   
+   MapIxiaPortId $txPortId txChasisId txCard txPort
+   MapIxiaPortId $rxPortId rxChasisId rxCard rxPort
+
+   set sendLearn "true"
+   set numIxiaCd [GetNumIxiaCd $rxPortId] 
+   if {$tag != "none" } { set wTag "true" } else {set wTag "false" }
+  
+   if {$txCard <= $rxCard} {set startCardNum $txCard} else {set startCardNum $rxCard}
+   
+   ixiaConf_groupPorts -numIxiaCd $numIxiaCd -startCardNum $startCardNum -txPortId $txPortId -rxPortId $rxPortId \
+                       -sendLearn $sendLearn -applyFilter $applyFilter -protocol $protocol \
+                       -numFrames $numFrames -frameSize $frameSize -frameSizeType $frameSizeType \
+                       -dataPattern $dataPattern -streamType $streamType -fcsError $fcsError \
+                       -saMode $saMode -daMode $daMode -dontTx $dontTx \
+                       -percentage $percentage -wTag $wTag -tagNo $tag
+
+  if {$streamType != "contPacket" && $numFrames > 100 && $dontTx==0} {
+    ixiaCheckTxDone $txChasisId $txCard $txPort $numFrames $txPortId
+  }    
+}
+
+################################################################## 
+# Procedure Name: SendIpFrame
+#   
+# Description: Used to send ip packets
+#     
+#     
+# Input args: args
+# clearStats "yes". By default the receive stats on the transmitting port will be cleared. Set this option to "no"
+# if you don't want the receive stats of the port ot be cleared
+#
+#
+# Output args: none
+# Return value: Retruns the packet sent
+# Typical usage:
+#               set frameSent [SendIpFrame -txPortId 1 -destMac $destmac -sourceIp $srcIp -destIp $destaddr -ttl $ttl];
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: SendTraffic
+##################################################################
+proc SendIpFrame {args} {
+   parse_args SendIpFrame $args {
+     protocol "ip"
+     txPortId "1"
+     rxPortId "0"
+     sourceMac "default"
+     destMac "00 e0 2b 00 00 01"
+     sourceIp "127.0.0.1"
+     destIp "127.0.0.1"
+     gatewayIp "127.0.0.1"
+     dIpMask "255.255.255.0"
+     sIpMask "255.255.255.0"
+     dClass "classC"
+     sClass "classC"
+     sourcePort "0"
+     destPort "0"
+     ttl "64"
+     goodChecksum "true"
+     numFrames "1"
+     frameSize "64"
+     frameSizeType "sizeFixed"
+     frameSizeMAX "1518"
+     frameSizeMIN "64"
+     ipOptions ""
+     frameRate "default"
+     frameType "08 00"
+     dataPattern "0000"
+     streamType "stopStream"
+     fcsError "good"
+     tag "none"
+     tagMode "vIdle"
+     tagRepeat "1"
+     protocolTagId "null"
+     TOS "default"
+     userPriority "0"
+     percentage "100"
+     priority "0"
+     saMode "idle"
+     daMode "idle"
+     saCount ""
+     daCount ""
+     ipSaMode "ipIdle"
+     ipDaMode "ipIdle"
+     ipSaCount ""
+     ipDaCount ""
+     dontFrag "true"
+     lastFrag "true" 
+     fragmentOffset "0" 
+     tcpSynFlag "false"
+     tcpFinFlag "false"
+     tcpRstFlag "false"
+     tcpAckFlag "false"
+     tcpPushFlag "false"
+     tcpUrgFlag "false"
+     tcpSeqNum "0"
+     type "8"
+     code "0"
+     id "0"
+     sequence "0"
+     direction "1Way"
+     maxResponseTime "100"
+     groupAddr "224.0.0.1"
+     applyFilter "0"
+     udfEnable "false"
+     udfInitval "00"
+     udfOffset "0"
+     udfCountertype "c8"
+     udfContinuousCount "false"
+     protoOffsetEnable "false"
+     protoOffset "14"
+     userDefTag ""
+     clearStats "yes"
+     dontTx "0"
+   }
+   
+   set numIxiaCd [GetNumIxiaCd $txPortId]
+   MapIxiaPortId $txPortId chasisId card port
+   if {$rxPortId==0} {
+      set rxPortId $txPortId
+   }
+   MapIxiaPortId $rxPortId ch c rxPort
+   global portMappingList
+
+   set portList [lindex $portMappingList [expr $txPortId-1]]
+   result_debug "INFO: DUT[lindex $portList 2] [lindex $portList 1] ingresses from portId [lindex $portList 0]"
+   if {$tag != "none" } { set wTag "true" } else {set wTag "false" }
+   global startCardNum
+   set frameSent [ixiaConf_2Ports_ip -numIxiaCd $numIxiaCd \
+              -txChas $chasisId -txCard $card -txPort $port -startCardNum $startCardNum \
+              -rxChas $ch -rxCard $c -rxPort $rxPort -frameType $frameType \
+              -ipProtocol $protocol -sMacAddr $sourceMac -dMacAddr $destMac \
+              -sIpAddr $sourceIp -dIpAddr $destIp -dDutIpAddr $gatewayIp -ttl $ttl \
+              -pSrcPort $sourcePort -pDstPort $destPort -frameSizeType $frameSizeType \
+              -frameSizeMAX $frameSizeMAX -frameSizeMIN $frameSizeMIN \
+	      -goodChecksum $goodChecksum -numFrames $numFrames -frameSize $frameSize \
+	      -frameRate $frameRate -dataPattern $dataPattern -streamType $streamType \
+	      -fcsError $fcsError -wTag $wTag -tagNo $tag -tagNo $tag -tagMode $tagMode -tagRepeat $tagRepeat \
+	      -TOS $TOS -userPriority $userPriority -protocolTagId $protocolTagId \
+	      -percentage $percentage -priority $priority -ipOptions $ipOptions -direction $direction \
+              -saMode $saMode -saCount $saCount -daMode $daMode -daCount $daCount \
+              -ipSaMode $ipSaMode -ipSaCount $ipSaCount -ipDaMode $ipDaMode -ipDaCount $ipDaCount \
+              -dIpMask $dIpMask sIpMask $sIpMask -dClass $dClass -sClass $sClass \
+              -dontFrag $dontFrag -tcpSeqNum $tcpSeqNum -tcpSynFlag $tcpSynFlag -tcpFinFlag $tcpFinFlag \
+              -tcpPushFlag $tcpPushFlag -tcpUrgFlag $tcpUrgFlag \
+              -tcpRstFlag $tcpRstFlag -tcpAckFlag $tcpAckFlag -sequence $sequence -type $type -code $code \
+              -id $id -applyFilter $applyFilter -maxResponseTime $maxResponseTime -groupAddr $groupAddr \
+              -udfEnable $udfEnable -udfInitval $udfInitval -udfOffset $udfOffset -udfCountertype $udfCountertype -udfContinuousCount $udfContinuousCount \
+              -clearStats $clearStats -dontTx $dontTx \
+              -protoOffsetEnable $protoOffsetEnable -protoOffset $protoOffset \
+          -userDefTag $userDefTag -lastFrag $lastFrag -fragmentOffset $fragmentOffset] 
+                                  
+  if {$streamType != "contPacket" && $numFrames > 100 && $dontTx==0} {
+    ixiaCheckTxDone $chasisId $card $port $numFrames $txPortId
+  }  
+  return $frameSent           
+}
+
+################################################################## 
+# Procedure Name: SendGnsRequests
+#   
+# Description: Sends IPX GNS request for all ethernet types ethernetII, ieee8023, ieee8022, iee8023snap.
+#              Internally calls SendIpxFrames to send GNS request
+#     
+# Input args: args
+#
+#
+#
+# Output args: none
+# Return value: Retruns the frame sent
+# Typical usage:
+#         set packet [SendGnsRequests -txPortId 1 -dNetwork "00 00 12 37" -etherType ieee8022 -sendLearn "true" \
+#                     -serverType "00 04"]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: SendTraffic
+##################################################################
+proc SendGnsRequests {args} {
+   parse_args SendGnsRequests $args {
+      txPortId "1"
+      dNetwork "00 00 00 00"
+      numRequests "1"
+      etherType "ethernetII"
+      sendLearn "true"
+      serverType "4"
+      sourceNodeCounterMode "0"
+      destNodeCounterMode "0"
+   }
+   set dNode "FF FF FF FF FF FF"
+   set sSocket "socketSap"
+   set dSocket "socketSap"
+   set udfCounterType "c32"
+   regsub -all " " [format %04s [string trimleft $serverType " 0"]] "0" serverType
+   set udfInitVal "00 03 [string range $serverType 0 1] [string range $serverType 2 3]"
+   switch -- $etherType {
+      "ethernetII" -
+      "ieee8023" {
+         set udfOffset "44"
+      }
+      "ieee8022" {
+         # These changes are required since IXIA Gbic does not support udf on odd numbers
+         # Kludge to start udf1 from 46 and udf2 from 50.
+         set udfOffset "46"   ;# used to be 47
+         set udfInitVal "52 00 03 [string range $serverType 0 1] [string range $serverType 2 3]"
+      }
+      "ieee8023snap" {
+         set udfOffset "52"
+      }
+      default {
+         result_debug "unknown etherType: $etherType"
+         return -1;
+      }
+   }
+   set frameSent [SendIpxFrames -txPortId $txPortId -etherType $etherType \
+              -dNetwork $dNetwork -dSocket $dSocket -dNode $dNode -sSocket $sSocket \
+              -sendLearn $sendLearn -enableUdf "true" -numFrames $numRequests \
+              -sourceNodeCounterMode $sourceNodeCounterMode \
+              -destNodeCounterMode $destNodeCounterMode \
+              -udfOffset $udfOffset -udfCounterType $udfCounterType -udfInitVal "$udfInitVal"]
+
+   return $frameSent   
+}
+
+
+################################################################## 
+# Procedure Name: SendIpxFrames
+#   
+# Description: Sends IPX packets for all ethernet types ethernetII, ieee8023, ieee8022, iee8023snap.
+#              Internally calls SendIpxFrames to send GNS request
+#     
+# Input args: args
+#
+#
+#
+# Output args: none
+# Return value: Retruns the frame sent
+# Typical usage:
+#  set packet [SendIpxFrames -txPortId $txPortId -rxPortId 9 -sNetwork "00 00 $txPortNw" \
+#               -sSocket "socketRipx"  -dNetwork $ixiaFormattedNw -dNode "00 A3 F1 00 00 01" \
+#               -etherType $etherProto -sendLearn "true" \
+#               -dSocket "socketRipx" -packetType "typeNcp"]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: SendTraffic
+##################################################################
+proc SendIpxFrames {args} {
+   parse_args SendIpxFrames $args {
+      direction "1Way"
+      txPortId "1"
+      rxPortId "0"
+      etherType "ethernetII"
+      rxProto "ethernetII"
+      sNetwork "00 00 00 00"
+      sSocket "4000"
+      dNetwork "00 00 00 00"
+      sNode "00 00 00 00 00 00"
+      dNode "00 00 00 00 00 00"
+      dSocket "4000"
+      packetType "typeUnknown"
+      numFrames "1"
+      frameSize "64"
+      frameRate "default"
+      dataPattern "0000"
+      streamType "stopStream"
+      fcsError "good"
+      tag "none"
+	   tagCfi "resetCFI"
+      tagMode "vIdle"
+	   tagRepeat "1"
+	   userPriority "0"
+      percentage "100"
+      priority "0"
+      sendLearn "true"
+      saMode "idle"
+      daMode "idle"
+      chid "1"
+      enableUdf "false"
+      udfOffset "52"
+      udfCounterType "c32"
+      udfInitVal "08 00"
+      sourceNodeCounterMode "0"
+      destNodeCounterMode "0"
+
+   }
+
+   if {$tag != "none" } { set wTag "true" } else {set wTag "false" }
+   set frameSent [ixia_SendIpxPackets -direction $direction -txPortId $txPortId -rxPortId $rxPortId \
+              -etherType $etherType -sNetwork $sNetwork -sSocket $sSocket -sNode $sNode \
+              -dNetwork $dNetwork -dSocket $dSocket -dNode $dNode -rxProto $rxProto \
+              -packetType $packetType -numFrames $numFrames -frameSize $frameSize \
+              -frameRate $frameRate -dataPattern $dataPattern -streamType $streamType \
+              -fcsError $fcsError -wTag $wTag -tagNo $tag -tagCfi $tagCfi \
+              -sourceNodeCounterMode $sourceNodeCounterMode \
+              -destNodeCounterMode $destNodeCounterMode \
+              -tagMode $tagMode -tagRepeat $tagRepeat -userPriority $userPriority \
+              -percentage $percentage -priority $priority -sendLearn $sendLearn \
+              -saMode $saMode -daMode $daMode -chid $chid -enableUdf $enableUdf \
+              -offset $udfOffset -counterType $udfCounterType -initVal $udfInitVal]
+  return $frameSent
+}
+
+################################################################## 
+# Procedure Name: SendIgmpFrame
+#   
+# Description: Sends IGMP join/leave packet based on argument type
+#
+#     
+# Input args: args
+#
+#
+# Output args: none
+# Return value: Retruns the frame sent
+# Typical usage:
+#        set frameSent [SendIgmpFrame -txPortId $txPortId -type $joinGroup -destMac $destMacMulticast \
+#                        -sourceIp $clientIP1   -destIp $multicastIP -groupAddr $multicastIP ]
+#
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: SendTraffic
+##################################################################
+proc SendIgmpFrame {args} {
+   parse_args SendIgmpFrame $args {
+     txPortId "1"
+     sourceMac "default"
+	  destMac "default"
+	  sourceIp "127.0.0.1"
+	  destIp "127.0.0.1"
+	  ttl "1"
+            TOS "default"
+            priority "0"
+            userPriority "0"
+     numFrames "1"
+     frameSize "64"
+     dontFrag "true"
+     ipTotalLength "default"
+     ipDaMode "ipIdle"
+     ipDaCount ""
+	  tag "none"
+	  type "22"
+	  maxResponseTime "100"
+	  groupAddr "224.0.0.1"
+        igmpMode "Fixed"
+        igmpRepeatCount ""
+	  goodChecksum "true"
+     streamType "stopStream"
+     frameRate "default"
+     udfEnable "false"
+     udfInitval "00"
+     udfOffset "0"
+     udfCountertype "c8"
+     udfContinuousCount "false"
+     dataPattern "0000"	 
+     srcIpMask "255.255.255.0"
+     dstIpMask "255.255.255.0" 
+     lengthOverride ""
+   }
+   global portMappingList
+
+   if {$ipTotalLength == "default"} {
+       if {$tag!="none"} {
+       set MACHeaderLength "22"
+       } else {
+       set MACHeaderLength "18"
+       }
+       set ipTotalLength [expr $frameSize - $MACHeaderLength]
+   }
+
+
+   set portList [lindex $portMappingList [expr $txPortId-1]]
+   result_debug "INFO: DUT[lindex $portList 2] [lindex $portList 1] ingresses from portId [lindex $portList 0]"
+   result_debug "Sending a igmp ($type) on portId $txPortId to group $destIp"
+   if {$destMac == "default"} {
+      set destMac [GetMulticastMac $destIp]
+   }
+   set numIxiaCd [GetNumIxiaCd $txPortId]
+   MapIxiaPortId $txPortId chasisId card port
+   if {$tag != "none" } { set wTag "true" } else {set wTag "false" }
+   global startCardNum
+   set frameSent [ixiaConf_2Ports_ip -numIxiaCd $numIxiaCd \
+              -txChas $chasisId -txCard $card -txPort $port -startCardNum $startCardNum \
+              -rxChas $chasisId -rxCard $card -rxPort $port -streamType $streamType \
+              -ipProtocol "igmp" -sMacAddr $sourceMac -dMacAddr $destMac -frameRate $frameRate \
+              -sIpAddr $sourceIp -dIpAddr $destIp -ttl $ttl -goodChecksum $goodChecksum \
+              -ipDaMode $ipDaMode -ipDaCount $ipDaCount -igmpMode $igmpMode -igmpRepeatCount $igmpRepeatCount \
+	      -numFrames $numFrames -frameSize $frameSize -wTag $wTag -tagNo $tag -type $type -dataPattern $dataPattern \
+              -maxResponseTime $maxResponseTime -groupAddr $groupAddr -ipTotalLength $ipTotalLength \
+              -dontFrag $dontFrag -sIpMask $srcIpMask -dIpMask $dstIpMask\
+           -udfEnable $udfEnable -udfInitval $udfInitval -udfOffset $udfOffset -udfCountertype $udfCountertype -udfContinuousCount $udfContinuousCount -lengthOverride $lengthOverride -TOS $TOS -priority $priority -userPriority $userPriority]
+   result_debug "IGMPSent: $frameSent"
+   return $frameSent
+}
+
+################################################################## 
+# Procedure Name: SendArpFrame
+#   
+# Description: Sends ARP packet from txPortId to rxPortId
+#
+#     
+# Input args: args
+#
+#
+#
+# Output args: none
+# Return value: Retruns the frame sent
+# Typical usage:
+#          set frameSent [SendArpFrame -txPortId $portIdTx -sourceIp $srcIp -destIp $destIp -numFrames $nArpFrames];
+#
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: SendTraffic
+##################################################################
+proc SendArpFrame {args} {
+   parse_args SendArpFrame $args {
+     txPortId "1"
+     type "arpRequest"
+     sourceMac "default"
+     destMac "ff ff ff ff ff ff"
+     saMode "idle"
+     daMode "idle"
+     sourceIp "127.0.0.1"
+     destIp "127.0.0.1"
+     arpSaMode "arpIdle"
+     arpDaMode "arpIdle"
+     numFrames "1"
+     frameSize "64"
+     frameRate "default"
+     streamType "stopStream"
+     srcHwAddr "default"
+     destHwAddr "default"
+     srcHwAddrMode "arpIdle"
+     srcHwAddrRepeat "1"
+     destHwAddrMode "arpIdle"
+     destHwAddrRepeat "1"
+     tag "none"
+     arpSaRepeat "1"
+     arpDaRepeat "1"
+     percentage "0.01"
+     udfEnable "false"
+     udfInitval "00"
+     udfOffset "0"
+     udfCountertype "c8"
+     udfContinuousCount "false"
+     dontTx "0"
+   }
+   
+   global portMappingList
+
+   set portList [lindex $portMappingList [expr $txPortId-1]]
+   result_debug "INFO: DUT[lindex $portList 2] [lindex $portList 1] ingresses from portId [lindex $portList 0]"
+   set numIxiaCd [GetNumIxiaCd $txPortId]
+   set rxPo [MapIxiaPortId $txPortId chasisId card port]
+   if {$tag != "none" } { set wTag "true" } else {set wTag "false" }
+   global startCardNum
+   return [ixiaConf_2Ports_arp -numIxiaCd $numIxiaCd \
+              -txChas $chasisId -txCard $card -txPort $port -startCardNum $startCardNum \
+              -rxChas $chasisId -rxCard $card -rxPort $port -frameRate $frameRate \
+              -operation $type -sMacAddr $sourceMac -dMacAddr $destMac \
+              -sIpAddr $sourceIp -dIpAddr $destIp -numFrames $numFrames \
+	      -saMode $saMode -daMode $daMode -srcHwAddr $srcHwAddr -destHwAddr $destHwAddr \
+	      -destHwAddrMode $destHwAddrMode -destHwAddrRepeat $destHwAddrRepeat \
+	      -wTag $wTag -tagNo $tag -frameSize $frameSize -streamType $streamType \
+	      -arpSaMode $arpSaMode -arpDaMode $arpDaMode -percentage $percentage \
+	      -arpSaRepeat $arpSaRepeat -arpDaRepeat $arpDaRepeat -srcHwAddrMode $srcHwAddrMode \
+              -srcHwAddrRepeat $srcHwAddrRepeat -dontTx $dontTx -udfEnable $udfEnable \
+              -udfInitval $udfInitval -udfOffset $udfOffset -udfCountertype $udfCountertype \
+              -udfContinuousCount $udfContinuousCount]
+}
+
+################################################################## 
+# Procedure Name: SendDhcpFrame
+#   
+# Description: Sends DHCP frame from txPortId to rxPortId
+#
+#     
+# Input args:
+#      - <txPortId>   - Sending portId
+#      - <sourceMac>  - source Mac
+#      - <destMac>    - destination Mac
+#      - <sourceIp>   - source IP address
+#      - <destIp>     - destination IP address           
+#      - <numFrames>  - how many to send
+#      - <streamType> - how to send the frame
+#      - <clientHwAddr> - gateway mac
+#      - <opcode>     - DHCP code
+#      - <optionCodeList> - DHCP option
+#
+#
+# Output args: none
+# Return value: Retruns the frame sent
+# Typical usage:
+#          set frameSent [SendArpFrame -txPortId $portIdTx -sourceIp $srcIp -destIp $destIp -numFrames $nArpFrames];
+#
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: SendTraffic
+##################################################################
+proc SendDhcpFrame {args} {
+   parse_args SendDhcpFrame $args {
+     txPortId "1"
+     sourceMac "default"
+     destMac "00 e0 2b 00 00 01"
+     sourceIp "127.0.0.1"
+     destIp "127.0.0.1"
+     sourcePort "0"
+     destPort "0"
+     numFrames "1"
+     streamType "stopStream"
+     fcsError "good"
+     saMode "idle"
+     daMode "idle"
+     maxResponseTime "100"
+     clientHwAddr "00 00 86 52 55 CB"
+     clientIpAddr "0.0.0.0"
+     yourIpAddr "0.0.0.0"
+     opCode "dhcpBootRequest"
+     optionCodeList "{dhcpMessageType dhcpDiscover}"
+     tag "none"
+     dontTx "0"
+   }
+   global portMappingList
+
+   set portList [lindex $portMappingList [expr $txPortId-1]]
+   result_debug "INFO: DUT[lindex $portList 2] [lindex $portList 1] ingresses from portId [lindex $portList 0]"
+
+   
+   global portMappingList
+
+   set portList [lindex $portMappingList [expr $txPortId-1]]
+   result_debug "INFO: DUT[lindex $portList 2] [lindex $portList 1] ingresses from portId [lindex $portList 0]"
+   set numIxiaCd [GetNumIxiaCd $txPortId]
+   set rxPo [MapIxiaPortId $txPortId chasisId card port]
+   if {$tag != "none" } { set wTag "true" } else {set wTag "false" }
+   
+   global startCardNum
+   set frameSent [ixiaConf_2Ports_Dhcp -numIxiaCd $numIxiaCd \
+              -txChas $chasisId -txCard $card -txPort $port -startCardNum $startCardNum \
+              -rxChas $chasisId -rxCard $card -rxPort $rxPo \
+              -sMacAddr $sourceMac -dMacAddr $destMac -sIpAddr $sourceIp -dIpAddr $destIp \
+	      -srcPort $sourcePort -dstPort $destPort -numFrames $numFrames -streamType $streamType -fcsError $fcsError \
+	      -saMode $saMode -daMode $daMode -opCode $opCode \
+	      -optionCodeList $optionCodeList -clientHwAddr $clientHwAddr \
+	      -clientIpAddr $clientIpAddr -yourIpAddr $yourIpAddr -wTag $wTag -tagNo $tag -dontTx $dontTx]
+                    
+   if {$streamType != "contPacket" && $numFrames > 100 && $dontTx==0} {
+     ixiaCheckTxDone $chasisId $card $port $numFrames $txPortId
+   }    
+   return $frameSent           
+}
+
+################################################################## 
+# Procedure Name: SendArpRequest
+#   
+# Description: Sends ARP request from ixPortId for a given IP address. It returns the
+#              replier mac address
+#
+#     
+# Input args:
+#      - <txPortId> - Sending portId
+#      - <myIp> - source Ip address
+#      - <requestIp> - destination Ip address
+#      - <rxPortId> - optional receiving portId. Will enable protocol server
+#                     on this port if greater than 0, so it can reply to arp request
+#      - <numTries> - maximum number of tries before quiting and return
+#  Output Variables:
+#      - none
+#
+#  Return Value:
+#      - return the target MAC address if there is a reply, otherwise
+#        "NO_ARP_REPLY"
+#
+# Typical usage:
+#          set frameSent [SendArpRequest $rxPortId $destIp "194.1.1.1" -numTries "2"];
+#
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: SendTraffic
+##################################################################
+proc SendArpRequest {txPortId myIp requestIp {tag "none"} {rxPortId 0} {numTries 2} {returnFrame 0}} {
+
+   if {$rxPortId > 0} {
+      # Instead of the DUT replying to ARP requests, the caller wants the IXIA to reply.
+      SaveAndSetProtocolServer $rxPortId $requestIp $requestIp ixInfo -arpService true;
+   } else {
+      # With certain types of IXIA cards (e.g. LM1000T-5 running at 1 Gbps), if a
+      # protocol server is enabled, packets destined for that protocol server won't be
+      # available in the capture buffer.  Instead, they get returned as "blank" frames
+      # to IXIA's TCL HAL.  Since this function relies on ARP replies being in the
+      # capture buffer, the ARP protocol server will be temporarily disabled.
+      #SaveAndSetProtocolServer $txPortId $requestIp $requestIp ixInfo -arpService false;
+      SaveAndSetProtocolServer $txPortId $myIp  $requestIp ixInfo -arpService false;
+   }
+   StartPortsCapture $txPortId;
+
+   # GV 05-06-2011: Sleep needed here for some Ixia's before sending traffic
+   exSleep 2;
+
+   for {set index 0} {$index < $numTries} { incr index } {
+      set frameSent [SendArpFrame -txPortId $txPortId -sourceIp $myIp -destIp $requestIp -tag $tag];
+      # Ecooper change
+      result_debug "Sleeping for 500 ms.";
+      after 500;
+      result_debug "Sending an arp request to $requestIp from $myIp on portId $txPortId:";
+      result_debug "$frameSent";
+      set receivedList [GetCapturedFrames $txPortId];
+      foreach frameReceived $receivedList {
+         result_debug "Frames received on portId $txPortId:";
+         result_debug "$frameReceived";
+         set messageType [GetMessageType $frameReceived];
+         if {$messageType == "ARP_REPLY" } {
+            #assume the reply is for us
+            RestoreSavedProtocolServer ixInfo;
+            set mac [GetSenderMacAddress $frameReceived];
+            result_debug "Got an arp reply from $requestIp ($mac) on [expr $index + 1] tries";
+            if {$returnFrame == 1} {
+                return $frameReceived;
+            } else {
+                return $mac;
+            }
+         } elseif {$messageType == "ARP_REQUEST" } {
+            #this is done specifically for multinetting on BD, since the BD
+            #will send out and arp request in response to an arp request
+            result_debug "SourceIp: [GetSourceIPAddress $frameReceived] DestIp: [GetDestIPAddress $frameReceived]";
+            set mac [GetSourceMacAddress $frameReceived];
+            set frameSent [SendArpFrame -txPortId $txPortId -destMac $mac -type "arpReply" \
+                          -sourceIp $myIp -destIp $requestIp -tag $tag];
+            result_debug "Got an arp request. Sending an arp reply to $requestIp:";
+            result_debug "$frameSent";
+         }
+      }
+   }
+   RestoreSavedProtocolServer ixInfo;
+   result_debug "No arp reply after $numTries tries for $requestIp";
+   return "NO_ARP_REPLY";
+}
+
+################################################################## 
+# Procedure Name: SendFrameToOtherPort
+#   
+# Description: Sends IP packets from txPortId to rxPortId and checks for 
+#              number of packet sent equals number of packet received.
+#
+#     
+# Input args:
+#      - <txPortId>   - Sending portId
+#      - <rxPortId>   - Receiving portId
+#      - <destMac>    - Destination mac address
+#      - <sourceIp>   - Source IP Address
+#      - <destIp>     - Destination IP Address      
+#      - <percentage> - Percentage of the line rate to be sent default 100         
+#      - <destPort>   - Port number of destination 
+#      - <frameSize>  - Size of the package
+#  Output Variables:
+#      - none
+#
+#  Return Value:
+#
+#
+# Typical usage:
+#          SendFrameToOtherPort -txPortId 1 -rxPortId 8 -destMac $dut1mac \
+#                     -sourceIp "10.10.1.17" -destIp "10.20.1.2" \
+#                     -destPortnumber 80 -frameSize "120" -protocol $protocol
+#
+#
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: SendTraffic
+##################################################################
+proc SendFrameToOtherPort {args} {
+   parse_args SendFrameToOtherPort $args {
+      txPortId "1"
+      rxPortId "0"
+      destMac "default"
+      sourceIp "127.0.0.1"
+      destIp "127.0.0.1"
+      percentage "100"
+      destPortnumber "0"
+      srcPortnumber "0"
+      protocol "tcp"
+      frameSize "64"
+      dataPattern "0102030405"
+      flag "no"
+   }   
+
+   # ----- Environment variables setup
+   global DUTs_info;
+   global DUT1_CONNECT;
+   global DUT2_CONNECT;
+
+   # ----- Test variables setup
+   set txport $txPortId;
+   set rxport $rxPortId;
+
+   set dip $destIp;
+   set srip $sourceIp; 
+
+   # ----- send a stream of IP frames
+   # Send 10,000 frames at the begining because of the problem
+   if {$flag == "yes"} {
+       set frameSent [SendIpFrame -protocol $protocol -txPortId $txport -destMac $destMac \
+                  -destIp $dip -sourceIp $srip -dataPattern $dataPattern \
+                  -numFrames 10000 -percentage $percentage -destPort $destPortnumber \
+                  -sourcePort $srcPortnumber -frameSize $frameSize];                     
+      sleep 5
+   }
+   
+   ClearPortsStats "$txport $rxport";
+   set frameSent [SendIpFrame -protocol $protocol -txPortId $txport -destMac $destMac \
+                  -destIp $dip -sourceIp $srip -dataPattern $dataPattern \
+                  -numFrames 100000 -percentage $percentage -destPort $destPortnumber \
+                  -sourcePort $srcPortnumber -frameSize $frameSize];         
+   sleep 5;               
+   result_debug "frame($protocol) sent: $frameSent";
+   set numSent [GetNumFramesSent $txport];
+   set numRece [GetNumFramesReceived $rxport];
+
+   if {$numSent > $numRece} {
+       set diff [expr (100 - (($numRece * 100)/$numSent))];
+   } else {
+       set diff 0;
+   }    
+   set percent 4;
+   result_debug "No. Sent = $numSent : Received = $numRece : Percent = $diff";  
+   if {$diff <= $percent} {
+       report_start_test "No. of sent frames = $numSent and recieved frames = $numRece";
+       result_ok "No. of sent frames = $numSent and recieved frames = $numRece";
+   } else {
+       report_start_test "Warning: No. of sent frames <$numSent> is different than recieved frames <$numRece>";   
+       result_error "Warning: No. of sent frames <$numSent> is different than recieved frames <$numRece>";   
+   } 
+   report_end_test;
+}
+
+################################################################## 
+# Procedure Name: biSendFrame
+#   
+# Description: Sends bidirectional mac frame from a txPortId to rxPortId
+#     
+# Input args: txPortId, rxPortId, protocol, protocol, sourceMac, destMac, numFrames
+#             frameSize, frameSizeType, dataPattern, streamType, fcsError, saMode, daMode
+#             percentage, tag, tagPriority, frameRate
+# Output args: none
+# Typical usage:
+#             biSendFrame $txPortId
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: SendTraffic
+##################################################################
+proc biSendFrame {args} {
+   parse_args SendFrame $args {
+      txPortId "1"
+      rxPortId "0"
+      protocol "mac"
+      sourceMac "default"
+      destMac "default"
+      numFrames "1"
+      frameSize "64"
+      frameSizeType "sizeFixed"
+      dataPattern "1234"
+      frameType "08 00"
+      ethernetType "noType"
+      streamType "stopStream"
+      fcsError "good"
+      saMode "idle"
+      daMode "idle"
+      saCount ""
+      daCount ""
+      percentage "100"
+      tag "none"
+      tagPriority "0"	      
+      frameRate "null"
+      direction "2Way"
+      tagMode "vIdle"
+      tagRepeat 1
+      dontTx "0"
+
+   }
+   
+   MapIxiaPortId $txPortId txChasisId txCard txPort
+   if {$rxPortId == 0} {
+      set sendLearn "false"
+      set rxPort [MapIxiaPortId $txPortId rxChasisId rxCard rxPo]
+   } else {
+      set sendLearn "true"
+      MapIxiaPortId $rxPortId rxChasisId rxCard rxPort
+   }
+   
+   set numIxiaCd [GetNumIxiaCd $txPortId]
+   
+   if {$tag != "none" } { set wTag "true" } else {set wTag "false" }
+   global startCardNum
+   set frameSent [ixiaConf_2Ports -numIxiaCd $numIxiaCd -rate $frameRate \
+                  -txChas $txChasisId -txCard $txCard -txPort $txPort \
+		  -startCardNum $startCardNum -rxChas $rxChasisId \
+		  -rxCard $rxCard -rxPort $rxPort -sendLearn $sendLearn \
+		  -frameType $frameType -ethernetType $ethernetType \
+                  -protocol $protocol -numFrames $numFrames \
+		  -frameSize $frameSize -frameSizeType $frameSizeType \
+                  -dataPattern $dataPattern -streamType $streamType \
+		  -fcsError $fcsError -inSaMac $sourceMac -saMode $saMode \
+		  -inDaMac $destMac -daMode $daMode -percentage $percentage \
+		  -wTag $wTag -tagNo $tag -tagPriority $tagPriority \
+                  -tagMode $tagMode -tagRepeat $tagRepeat -direction $direction \
+                  -saCount $saCount -daCount $daCount -dontTx $dontTx ]
+   if {$streamType != "contPacket" && $numFrames > 100 && $dontTx==0} {
+       ixiaCheckTxDone $txChasisId $txCard $txPort $numFrames $txPortId
+   }
+  return $frameSent            
+}

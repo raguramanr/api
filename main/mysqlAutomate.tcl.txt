@@ -1,0 +1,1108 @@
+#!/usr/bin/tclsh
+
+package require http 1.0;
+package require Tclx
+set startTime [exec date]
+set manualRun 0
+# Default config file
+set cfgFile ../main/runReg.cfg
+
+# Source config file that has Regression PC information
+if [file exists $cfgFile] {
+    puts "Sourcing $cfgFile now"
+    catch {source $cfgFile} reason
+} else {
+    puts "!!! Configuration file $cfgFile not found !!!"
+    return 0
+}
+
+set common "../main/cfg/common.cfg"
+if [file exists $common] {
+    puts "Sourcing $common now"
+    catch {source $common} reason
+} else {
+    puts "!!! common.cfg file $common not found !!!"
+    return 0
+}
+
+global mysqlIP my_db MAIN DEVREG
+set host $mysqlIP
+set db $my_db
+
+# --- Sourcing Util/runReg.cfg would cause too many headaches ---
+#       Just redo the db variables here
+set DEVREG(mysql,localbackup)    "biltmore"
+set DEVREG(mysql,localdb)        "builddb"
+set DEVREG(mysql,localstatus)    ""
+set DEVREG(mysql,localhandler)   ""
+set DEVREG(mysql,centralserver)  "biltmore"
+set DEVREG(mysql,centraldb)      "builddb"
+set DEVREG(mysql,centralstatus)  ""
+set DEVREG(mysql,centralhandler) ""
+set DEVREG(mysql,UseDb)           1
+set DEVREG(mysql,testserver)     "biltmore"
+set DEVREG(mysql,testdb)         "testdb"
+set DEVREG(mysql,teststatus)     ""
+set DEVREG(mysql,testhandler)    ""
+set DEVREG(mysql,UseTestDb)      0
+
+#############################################################################################################
+#  [print_usage]
+#
+#  Prints the usage of utility in case any of the args are incorrect or insufficient
+#
+#  Input Variables:
+#                none
+#  Output Variables:
+#                none
+#
+#  Return Value:
+#      - none
+#
+#Usage:
+#     print_usage
+#
+#############################################################################################################
+proc print_usage {} {
+    puts "\r"
+    puts {USAGE OLD REGRESSION: }
+    puts {mysqlAutomate.tcl -regId <regression id> -module <module name> [-cliFlag <cliFlag>] [-help] [-obuild <build>] }
+
+    puts {USAGE NEW REGRESSION: }
+    puts {mysqlAutomate.tcl -platform <platform_name> -module <module name> [-cliFlag <cliFlag>]  \
+          -build <build_num> [-qId <regression queue id>] [-help] }
+
+    puts {   -regId:      Regression ID, i.e. 385}
+    puts {   -module :    e.g. BGP_RtRedistrib}
+    puts {   -cliFlag:    Optional only for "cli" regression (NO_REBOOT|NO_REBOOT_NO_DOWNLOAD) }
+    puts {   -platform:   Platform name to upload on \(from runReg.cfg\) - e.g: JAG_FUNC_IPR,1}
+    puts {   -build:      Build number to use when uploading - e.g: 11.5.0.13}
+    puts {   -obuild:     Only if CLI/UpgradeDowngrade regression. Give format as e.g 11.5.0.3}
+    puts {   -forstats:    if this is a valid regression result, if not run 1}
+    puts {   -callLocation: Text Desc of where it is called from since is is used all over}
+    puts {   -manual:     reimport using mysqlAutomateAll with manual = qId SC_######_###### or RTP_######_######}
+    puts {   -qId:        Regression system queue ID SC_######_###### or RTP_######_######}
+    puts {   -help:       Prints usage}
+    puts "\r"
+}
+
+#############################################################################################################
+#  [validateArgs]
+#
+#  Validates the arguments passed to the script
+#
+#  Input Variables:
+#                   argv p_regId p_module p_cliFlag p_runNumber regType
+#                none
+#  Output Variables:
+#                none
+#
+#  Return Value:
+#      - none
+#
+#Usage:
+#     validateArgs
+#
+#############################################################################################################
+proc validatemysqlAutomateArgs {argv p_regId p_module p_cliFlag p_runNumber p_platform p_build p_forstats} {
+
+    upvar $p_regId                   regId
+    upvar $p_module       	     module
+    upvar $p_cliFlag                 cliFlag
+    upvar $p_runNumber               runNumber
+    upvar $p_platform                platform
+    upvar $p_build                   build
+    upvar $p_forstats                forstats
+    
+    #puts " module $module"
+    #puts " regId $regId"
+    #puts " cliFlag $cliFlag"
+    #puts " runNumber $runNumber"
+
+    global runflag
+    global mysql_handler
+    global queueId
+    global logFileId
+    global defaultCfgShort
+
+    if { ([llength $argv]  == 0)  } {
+         puts $logFileId "Error: Some or All arguments not provided "
+         return 0
+    }
+    if {[lsearch $argv "-help"]  > -1} {
+        return 0
+    }
+
+    # this setting of build is for the qeueing syste
+    if { $build == "null" } {
+      set build "0.0.0.0"
+    }
+
+    # Module name must be supplied
+    if { $module == "null" } {
+        puts $logFileId "Error: Module name must be specified."
+        print_usage
+        exit
+    }
+
+    if { $regId != "null" } {
+        # is that regId actually a queueId ? - ex: SC_060614_124245
+        if [regexp -nocase {[a-z]} $regId] {
+          puts $logFileId "regId was queueId $regId"
+          set queueId $regId
+          # do we have platform?
+          if {$platform != "null"} {
+            set platformInfoList [DetermineCfgRegTypeSubTypeFromPlatform $platform]
+         
+            set defaultCfg [lindex $platformInfoList 0]
+            set regType    [lindex $platformInfoList 1]
+            puts "regType : $regType"
+
+            set regSubType [lindex $platformInfoList 2]
+            puts "regSubType : $regSubType"
+            set regPath    "[GetRegPath $regType $regSubType]"
+            puts "regPath : $regPath"
+          
+            
+            puts $logFileId "======= mysqlAutomate regId is not null ======\n\
+	                     defaultCfg: $defaultCfg regType: $regType  regSubType: $regSubType\n\
+			     regPath: $regPath" 
+            set platform_id [mysqlsel $mysql_handler \
+                            "SELECT platform_id FROM platform_table \
+                             WHERE platform_cfg_file_name='$defaultCfg'" -flatlist]
+            #result_debug "platform_id = $platform_id"
+            puts $logFileId " validateArgs platform_id = $platform_id"
+
+            set defaultCfgShortList [split $defaultCfg .]
+            set defaultCfgShort [lindex $defaultCfgShortList 0]
+            puts $logFileId " validateArgs defaultCfgShort = $defaultCfgShort"
+          } else {
+            set platform_id "null"
+          }
+
+          # do we have existing regId queueId build?
+          puts $logFileId "do we have existing regId queueId $queueId build $build platform_id $platform_id ?"
+          set regId [GetRegressionIdFromQueueId $queueId $build $platform_id $module ]
+          if { $regId == "" } {
+            set regId "null"
+          }
+        } else {
+          set queueId "null"
+        }
+    }
+
+    # Either regId or platform+build MUST exist
+    if { ($regId == "null") && ($queueId == "null") } {
+        # Regression ID is not given
+        if { ($platform == "null") || ($build == "null") } {
+            puts $logFileId "Error: Either Regression ID or Platform+Build must be supplied."
+            print_usage
+            exit
+        }
+    } else {
+        # Regression ID is given
+        if { ((($platform != "null") || (($build != "null") && ($build != "0.0.0.0"))) \
+               && ($queueId == "null")) } {
+            puts $logFileId "platform = $platform build = $build"
+            puts $logFileId "queueId = $queueId"
+            puts $logFileId "Error: Either Regression ID or Platform+Build must be supplied, but not any combination of the above."
+            print_usage
+            exit
+        }
+    }
+
+    if {$cliFlag == "" || $cliFlag == "NO_DOWNLOAD" || $cliFlag == "NO_REBOOT" \
+        || $cliFlag == "NO_DOWNLOAD_NO_REBOOT" || $cliFlag == "NO_REBOOT_NO_DOWNLOAD" } {
+
+#        if { ([regexp -nocase "cli" $regType]) && ($cliFlag == "") } {
+#    	    puts $logFileId "ERROR: Required Parameters: -cliFlag when regType is cli "
+#       	    return 0
+#        }
+   } else {
+       puts $logFileId "ERROR: Invalid cliFlag :$cliFlag"
+       return 0
+   }
+
+    if {[lsearch $argv "-noconfig"]  > -1} {
+	set runflag "noconfig"
+    } else {
+	set runflag "config"
+    }
+
+}
+
+#############################################################################################################
+# Procedure Name: getModuleNamesDirectories 
+# 
+#############################################################################################################
+proc getModuleNamesDirectories { module_names module_directories } {
+    global mysql_handler regSubType regType
+    upvar $module_names moduleNamesTmp
+    upvar $module_directories moduleDirectoriesTmp
+
+    #puts "regSubType regType =  $regSubType $regType"
+    set sel_clause "SELECT feature_name FROM feature_table WHERE status = 'Active' AND feature_type = '$regType' AND feature_sub_type = '$regSubType'"
+    set moduleNamesTmp [mysqlsel $mysql_handler $sel_clause -flatlist]
+
+    #puts "moduleNamesTmp $moduleNamesTmp"
+    set sel_clause "SELECT feature_directory FROM feature_table WHERE status = 'Active' AND feature_type = '$regType' AND feature_sub_type = '$regSubType'"
+    set moduleDirectoriesTmp [mysqlsel $mysql_handler $sel_clause -flatlist]
+    #puts "moduleDirectoriesTmp $moduleDirectoriesTmp"
+    global logFileId
+    puts $logFileId "======= In getModuleNamesDirectories to gather module names ======\n\
+       globals regSubType: $regSubType  regType: $moduleNamesTmp"
+}
+
+puts "######################################################################"
+puts "                        POSTTOMYSQL.TCL STARTED "
+puts "######################################################################"
+
+set LIB_PATH "../Lib"
+lappend auto_path $LIB_PATH
+
+source ../Lib/parse_args.tcl
+source ../Lib/mainLib.tcl
+load [lindex [glob "/usr/lib/libexpect*so*"] 0]
+set LIB_PATH "../Lib"
+lappend auto_path $LIB_PATH
+gen_index ../Lib
+gen_index .
+
+source ../Lib/mysqlLib.tcl
+
+catch { parse_args mysqlAutomate.tcl $argv {
+    regId "null"
+    queueId "null"
+    module "null"
+    reportDir "null"
+    regType "null"
+    regSubType "null"
+    platform "null"
+    build "null"
+    obuild ""
+    cliFlag ""
+    runNumber "-1"
+    forstats "no"
+    help ""
+    isFullRun "1"
+    callLocation "not specified"
+    qId "null"
+    sustaining "0"
+    manual  "false"
+  }
+} result
+
+if { $result != "" } {
+    puts "ERROR: $result"
+    print_usage
+    exit
+}
+
+set scmJob 0
+if {[regexp -nocase "regServer" $callLocation] && \
+      ![regexp -nocase "mainfail" $callLocation] && \
+      ![regexp -nocase "download" $callLocation]} {
+    set scmJob 1
+}
+
+puts "argv $argv"
+puts " module $module"
+puts " runNumber $runNumber"
+puts "This mysqlAutomate is called from $callLocation"
+puts " --------------------------------------------------------------------------------------"
+
+# connect to database
+puts "connecting to database $db at $host"
+set connStatus [conn_to_db $host $db]
+puts "database $db at $host - status $connStatus"
+
+# check if reportDir includes the word downloadImage
+if { [regexp -nocase "downloadImage" $reportDir] } {
+   puts "reportDir includes the word downloadImage"
+   set isDownloadImage 1
+} else {
+   puts "reportDir does not includes the word downloadImage"
+   set isDownloadImage 0
+}
+
+# Open log file
+set tmStr [clock format [clock seconds] -format "%Y-%m-%d %I.%M.%S%p"]
+
+set logRegId $regId
+set logQueueId $queueId
+
+if { $regId != "null" } {
+   # is that regId actually a queueId ? - ex: SC_060614_124245
+   if [regexp -nocase {[a-z]} $regId] {
+     set logQueueId $regId
+     # lets find logRegId
+     set logRegId [mysqlsel $mysql_handler "SELECT regression_id FROM regression_table \
+                                             WHERE queue_id='$logQueueId'" -flatlist]
+     puts "logRegId $logRegId queue_id $logQueueId \n";
+     if { [llength $logRegId] == 0} {
+       set logRegId "null"
+     }
+   } else {
+     # lets find logQueueId
+     set logQueueId [mysqlsel $mysql_handler "SELECT queue_id FROM regression_table \
+                                             WHERE regression_id='$regId'" -flatlist]
+     puts "logRegId $logRegId queue_id $logQueueId \n";
+     if { [llength $logQueueId] == 0} {
+       set logQueueId "null"
+     }
+   }
+}
+
+set logFileName "../main/Log/A $logRegId $logQueueId $platform $build $module $tmStr.txt"
+if { [catch {open $logFileName w} logFileId] } {
+   puts "ERROR:: Can't Open $logFileName"
+   puts $logFileId "ERROR:: Can't Open $logFileName"
+   return
+} 
+puts $logFileId "============= Called From $callLocation ==============="
+puts $logFileId "original input arguments argv $argv"
+puts $logFileId "database $db at $host - status $connStatus"
+
+
+# if it's download pass lets get the module from the reportDir
+if {$isDownloadImage} {
+  set reportDirPathList [split $reportDir /]
+  set module [lindex $reportDirPathList 6]
+  puts $logFileId "this download image pass module: $module"
+  puts "this download image pass module: $module"
+}
+
+if {[validatemysqlAutomateArgs $argv regId module cliFlag runNumber platform build forstats] == 0 } {
+    print_usage
+    exit
+}
+
+puts "mysqlAutomate starts with: \n \
+queueId: $queueId \n \
+regId: $regId \n \
+module: $module \n \
+reportDir: $reportDir \n \
+regType: $regType \n \
+regSubType: $regSubType \n \
+platform: $platform \n \
+build: $build \n \
+obuild: $obuild \n \
+cliFlag: $cliFlag \n \
+runNumber: $runNumber \n \
+forstats: $forstats \n \
+manual: $manual \n \
+sustaining: $sustaining \n \
+isFullRun: $isFullRun \n "
+
+
+puts $logFileId "mysqlAutomate starts starts with: \n \
+queueId: $queueId \n \
+regId: $regId \n \
+module: $module \n \
+reportDir: $reportDir \n \
+regType: $regType \n \
+regSubType: $regSubType \n \
+platform: $platform \n \
+build: $build \n \
+obuild: $obuild \n \
+cliFlag: $cliFlag \n \
+runNumber: $runNumber \n \
+sustaining: $sustaining \n \
+qId: $qId \n \
+manual: $manual \n \
+isFullRun: $isFullRun \n "
+
+if { $regId != "null" } {
+    #result_debug "regression_id is supplied, regId = $regId"
+    puts "regression_id is supplied, regId = $regId"
+    puts $logFileId "regression_id is supplied, regId = $regId"
+    
+    set cfgregTyperegSubTypeList [DetermineCfgRegTypeSubTypeFromRegId $regId]
+    
+    if { $cfgregTyperegSubTypeList == -1 } {
+        puts $logFileId "Nice try ... something wrong with your eyes?"
+        puts $logFileId "Regression ID $regId does not exist... please double check webpage and try again."
+        exit
+    }
+    
+    set defaultCfg [lindex $cfgregTyperegSubTypeList 0]
+    set regType    [lindex $cfgregTyperegSubTypeList 1]
+    set regSubType [lindex $cfgregTyperegSubTypeList 2]
+    set build [DetermineBuildNumFromRegId $regId]
+
+    set defaultCfgShortList [split $defaultCfg .]
+    set defaultCfgShort [lindex $defaultCfgShortList 0]
+    puts $logFileId "-------------------------------------------------------"
+    puts $logFileId "defaultCfgShort = $defaultCfgShort"
+    puts $logFileId "regType = $regType"
+    puts $logFileId "regSubType = $regSubType"
+    puts $logFileId "build from reg_id = $build"
+    puts $logFileId "-------------------------------------------------------"
+} else {
+    
+    #result_debug "regression_id is not supplied, try to find it or create it"
+    puts "regression_id is not supplied, try to find it or create it - platform $platform"
+    puts $logFileId "regression_id is not supplied, try to find it or create it - platform $platform"
+    
+    
+    if {$platform == "null"} {
+	# we have to have regType and regSubType
+	if { ($regType == "Functional") && ($regSubType == "standard")} {
+	    set platform "NON_FUNC_STD,1"
+	}
+	if { ($regType == "Functional") && ($regSubType == "ipRoute1")} {
+	    set platform "NON_FUNC_IPR,1"
+	}
+    }
+    
+    set platformInfoList [DetermineCfgRegTypeSubTypeFromPlatform $platform]
+    
+    set defaultCfg [lindex $platformInfoList 0]
+    puts "defaultCfg $defaultCfg"
+    puts $logFileId "defaultCfg $defaultCfg"
+    set regType    [lindex $platformInfoList 1]
+    puts "regType $regType"
+    puts $logFileId "regType $regType"
+    set regSubType [lindex $platformInfoList 2]
+    puts "regSubType $regSubType"
+    puts $logFileId "regSubType $regSubType"
+    set regPath    "[GetRegPath $regType $regSubType]"
+    puts "regPath $regPath"
+    puts $logFileId "regPath $regPath"
+
+    set defaultCfgShortList [split $defaultCfg .]
+    set defaultCfgShort [lindex $defaultCfgShortList 0]
+    puts $logFileId "defaultCfgShort = $defaultCfgShort"
+    
+    puts $logFileId "defaultCfg  = $defaultCfg"
+    set platform_id [mysqlsel $mysql_handler "SELECT platform_id FROM platform_table WHERE platform_cfg_file_name='$defaultCfg'" -flatlist]
+    #result_debug "platform_id = $platform_id"
+    puts $logFileId "platform_id = $platform_id"
+    
+    puts $logFileId "getting build_id from build $build"
+    if { $build != "null" } {
+        puts $logFileId "-------------------------------------------------------"
+        puts $logFileId "build for case where no reg_id is set = $build"
+        puts $logFileId "-------------------------------------------------------"
+	    set build_id [GetBuildIdFromBuild $build]
+    } else {
+	    set build_id "null"
+    }
+    
+    # this is needed for the queuing system
+    if {$isDownloadImage == 1} {
+	    set moduleWithDownl $module
+    } else {
+	    set moduleWithDownl "NULL"
+    }
+    set regId [GetRegressionId -queue_id $queueId -build_id $build_id \
+	    -platform_id $platform_id \
+	    -feature_type $regType -feature_sub_type $regSubType \
+	    -download_phase_module $moduleWithDownl]
+    
+}
+
+####################################################################################
+# Get Module Name, Module Directories
+#
+# from the database get the module names and the feature durectory names
+#
+####################################################################################
+getModuleNamesDirectories module_names module_directories 
+
+if { [llength $module_names] == 0} {
+    puts $logFileId "Error: No module names in the database";
+    exit;
+}
+if { [llength $module_directories] == 0} {
+    puts $logFileId "Error: No module directories in the database";
+    exit;
+}
+puts $logFileId "module_names: $module_names \n" 
+puts $logFileId "\nmodule_directories: $module_directories\n"
+
+###################################################################################
+# for the give configuration file
+# get platform_name,platform_id and  blade for the given configuration file
+#
+###################################################################################
+#get platform data
+set platform_id [mysqlsel $mysql_handler "SELECT platform_id FROM regression_table WHERE regression_id='$regId'" -flatlist]
+set platform_list [mysqlsel $mysql_handler "SELECT platform_name, platform_blade FROM platform_table WHERE platform_id = '$platform_id'" -flatlist]
+set platform_name [lindex $platform_list 0]
+set blade [lindex $platform_list 1]
+
+puts $logFileId "platform_name=$platform_name, platform_id=$platform_id, blade=$blade"
+
+####################################################################
+#
+# check for platform names for older releases
+#     
+####################################################################
+
+set build [DetermineBuildNumFromRegId $regId]
+puts $logFileId "----------       Another build name case    -----------"
+puts $logFileId "build from DetermineBuildNumFromRegId $regId = $build"
+puts $logFileId "-------------------------------------------------------"
+if {$build >= "11.3.0.0"} {
+    if {[regexp -nocase "aspen" $platform_name]} {
+	set platform_name "BD-88"
+    }
+} else {
+    if {[regexp -nocase "aspen" $platform_name]} {
+	set platform_name "Aspen"
+    }
+}
+
+if {[regexp -nocase "G60X" $blade]} {
+    set blade "G60X"
+}
+####################################################################
+#
+# change the platform name for OLYMPIC
+#     
+####################################################################
+if {[regexp -nocase "olympic" $platform_name]} {
+    set platform_name "BD-12804"
+}
+####################################################################
+#
+# change the platform name for TORINO
+#     
+####################################################################
+if {[regexp -nocase "torino" $platform_name]} {
+    set platform_name "BD-12802"
+}
+
+####################################################################
+#
+# change the platform name for Voyager
+#     
+####################################################################
+if {[regexp -nocase "Voyager" $platform_name]} {
+    set platform_name "BD-20808"
+}
+puts $logFileId "platform_id=$platform_id, regression_id = $regId\n"
+
+################################################################################
+# get the feature_id
+################################################################################
+puts $logFileId "DB Feature query - SELECT feature_directory FROM feature_table WHERE \
+feature_type='$regType' AND feature_sub_type='$regSubType' AND status = 'Active'"
+
+set feature_directory "NULL"
+set regressionModules [mysqlsel $mysql_handler "SELECT feature_directory FROM feature_table WHERE \
+	feature_type='$regType' AND feature_sub_type='$regSubType' AND status = 'Active'" -flatlist]
+    #set match ""
+    #set str ""
+    if {[lsearch -exact  $regressionModules $module] != -1} {
+        set feature_directory $module
+
+    }
+
+if { $feature_directory == "NULL" } {
+    puts $logFileId "\nERROR: Module name '$module' does not correspond to any feature name in the mysql database. Check spelling and try again."
+    exit
+}
+set module $feature_directory
+puts $logFileId "module = $module"
+
+set sel_clause "SELECT feature_id FROM feature_table WHERE  feature_directory = '$module' AND \
+	feature_type='$regType' AND feature_sub_type='$regSubType' AND status = 'Active'" 
+
+set feature_id_list [mysqlsel $mysql_handler $sel_clause -flatlist]
+if {[llength $feature_id_list] > 1} {
+    puts $logFileId "Error: In feature_table more than one feature_id for the feature :$module"
+    puts $logFileId "got feature_id_list: $feature_id_list"
+    exit 0
+}
+set feature_id [lindex $feature_id_list end]
+puts $logFileId "got feature_id: $feature_id"
+
+
+################################################################################
+# Set the path names 
+################################################################################
+set relativePath ".."
+#set thisDir [pwd]
+#cd  ".."
+set regPath "[GetRegPath $regType $regSubType]"
+puts $logFileId "------------------       Regression Path    -----------"
+puts $logFileId "Path from GetRegPath regtype $regType regsubtype $regSubType = $regPath"
+puts $logFileId "-------------------------------------------------------"
+
+################################################################################
+# Get the report directory
+# as the names are case sensitive in some tables, 
+# have to get the real name from module_directories list
+################################################################################
+set noCaseModule $module 
+foreach mod $module_directories {
+    if { [string compare -nocase $module $mod] == 0} {
+	set module $mod 
+	break;
+    }
+}
+set MAIN(feature_directory) $module
+set MAIN(RESULTBUILD)       $build
+puts $logFileId "\ngetting report directory  module=$module, noCaseModule=$noCaseModule\n"
+puts "\nDANY getting report directory  module=$module, noCaseModule=$noCaseModule\n"
+set dirList ""
+
+if { [regexp -nocase "upgrade" $regPath] } {
+    if { $obuild == "" } {
+	puts $logFileId "-obuild must be supplied for CLI/upgradedowngrade test."
+	exit
+    }
+    set fullbuild "$build:$obuild"
+} else {
+    set fullbuild $build
+}
+
+if {$reportDir == "null" || [string trim $reportDir] == ""} {
+   if {$qId != "null"} {
+       set mDir "$qId"
+       set sDir $mDir
+   } else {
+       set mDir "$defaultCfgShort *$fullbuild "
+       set sDir "$defaultCfgShort"
+   }
+   if {$manual != "false" && $manual == $qId} {
+       if {$runNumber==2} {
+           set rep2Dir "/var/spool/regression/imagesFinished/$qId/$module/Report1/" 
+           puts $logFileId "glob -nocomplain -- \"$rep2Dir\""
+           set dirList  [glob -nocomplain -- "$rep2Dir"]
+           set manualRun 2
+           _update_scm_db_from_report_txt -run "2" -log_pid $logFileId -module $module \
+                 -reportDir $rep2Dir -qId $qId  -scmJob "1"
+       } else {
+           set rep1Dir "/var/spool/regression/imagesFinished/$qId/$module/Report/"
+           puts $logFileId "glob -nocomplain -- \"$rep1Dir\""
+           set dirList  [glob -nocomplain -- "$rep1Dir"]
+           set manualRun 1
+           _update_scm_db_from_report_txt -run "1" -log_pid $logFileId -module $module \
+                 -reportDir $rep1Dir -qId $qId  -scmJob "1"
+       }
+   } else {
+       if {!$sustaining} {
+           puts $logFileId "glob -nocomplain -- \"$regPath/$module/Report/*$mDir*\""
+           set dirList  [glob -nocomplain -- "$regPath/$module/Report/*$mDir*"]
+       } else {
+           puts $logFileId "glob -nocomplain -- \"$regPath/$module/Report/*$sDir *\""
+           set dirList  [glob -nocomplain -- "$regPath/$module/Report/*$sDir *"]
+       }
+   }
+   puts $logFileId "\nsearch - dirList: $dirList" 
+   puts "\nsearch - dirList: $dirList" 
+   puts "\nregPath: $regPath" 
+   puts "\nmodule: $module" 
+   puts "\ndefaultCfgShort: $defaultCfgShort" 
+   puts "\nfullbuild $fullbuild" 
+
+   # this section is removed - cfg file name added to directory name
+  if {$dirList == ""} {
+      puts $logFileId "Error: There is no directory list"
+      exit 0
+  }
+  puts $logFileId "\n Directory List: $dirList\n"
+  #set module $noCaseModule 
+}
+
+##################################################################################
+# Sort based on the index of the directory and not lsort command to get the index
+##################################################################################
+set logDir ""
+if {$reportDir != "null" && [string trim $reportDir] != ""} { 
+  # report directory is supplied - done in the queuing system
+  set logDir $reportDir
+} else {
+  set highestIndx 0
+  set highestCreateTime 0
+  foreach tdir $dirList {
+      #get directory index
+      set splitDir [split $tdir " "]
+      # get the last element
+      set indx [lindex $splitDir end]
+      set createTimeThis [file mtime $tdir]
+      if {$logDir == ""} {
+          set logDir $tdir
+          set highestIndx $indx
+      } else {
+          if {($indx > $highestIndx) || (($indx == $highestIndx) && ($createTimeThis > $highestCreateTime))} {
+              set highestIndx $indx
+              set highestCreateTime $createTimeThis
+              set logDir $tdir
+              set creatTime [file mtime $logDir]
+              # puts $logFileId "this directory creation time: $creatTime"
+          }
+      }
+  }
+}
+
+if {$logDir == "" } {
+    puts $logFileId "Error: There is no Report Directory - reportDir = $reportDir"
+    exit
+}
+set sourceDir  "$regPath/$module"
+puts $logFileId " logDir: $logDir, sourceDir: $sourceDir"
+
+################################################################################
+# Get the run_number
+################################################################################
+set sel_clause "SELECT run_number FROM report_table WHERE \
+	regression_id = '$regId' and \
+	feature_id = '$feature_id' \
+	ORDER BY run_number ASC" 
+set run_number_list [mysqlsel $mysql_handler $sel_clause -flatlist]
+if {[llength $run_number_list] >= 1} { 
+    puts $logFileId "got run_number_list: $run_number_list"
+    set run_number [lindex $run_number_list end]
+} else {
+    set run_number 0
+}
+
+puts $logFileId "\nfound run_number=$run_number from report_table where regression_id = $regId, feature_id= $feature_id\n"
+
+##################################################################################
+# If the run numbers is greater than zero get the report id
+##################################################################################
+if {$run_number > 0} {
+    set sel_clause "SELECT report_id FROM report_table WHERE \
+        regression_id = '$regId' and \
+        feature_id = '$feature_id' \
+        ORDER BY run_number ASC"
+    set rId [mysqlsel $mysql_handler $sel_clause -flatlist]
+    puts $logFileId "\nFound Report ID: $rId"
+    puts "\n--------------------------------------------------------------"
+    puts "--------------------------------------------------------------"
+    puts " The $module Report ID for regId $regId is $rId"
+    puts "--------------------------------------------------------------"
+    puts "--------------------------------------------------------------"
+}
+
+
+
+#########################################################################################################################
+# Compare the run number found from the table (run_number) with that provided by the user (runNumber)
+# If runNumber provided by the user already exists, then delete the existing run and upload the new run at the same run
+#
+# Don;t insert same report multiple times
+# If a report alredy exists then compare the report start time with the one in the database and insert only if its a new
+# report
+#             regression_id= '$regId' AND
+#             run_number= '$run_number' AND 
+#             feature_id= '$feature_id' AND "
+#########################################################################################################################
+if {$run_number == 0} {
+    set insertNewRep 1
+    incr run_number 
+} elseif   { ($runNumber > 0) && ($runNumber <= $run_number) } {
+    puts $logFileId "WARN: Deleting run_number = $run_number from database and uploading the latest run in its place "
+    set run_number $runNumber
+    deleteReporWithLogs -regression_id $regId -run_number $run_number -feature_id $feature_id
+    set insertNewRep 1
+} else {
+    set sel_clause "SELECT report_id FROM report_table WHERE \
+	    regression_id= '$regId' AND \
+	    run_number= '$run_number' AND \
+	    feature_id= '$feature_id'"
+    
+    set report_id_list [mysqlsel $mysql_handler $sel_clause -flatlist]
+    set report_id [lindex $report_id_list end]
+    if {$report_id == ""} {
+	    exit
+    } 
+    puts $logFileId "\nfound run_number=$run_number from report_table where regression_id = $regId, feature_id= $feature_id,report_id=$report_id\n"
+    set sel_clause "SELECT test_report_file_content FROM report_table WHERE \
+	    report_id= '$report_id'"
+    
+    set file_report_list [mysqlsel $mysql_handler $sel_clause -flatlist]
+    puts $logFileId "\ncame back from mysql\n"
+    set report_text [lindex $file_report_list 0]
+    #puts $logFileId "\ngot report_text $report_text"
+    set report_text_list [split $report_text \n]
+    set foundSqlDate 0
+    foreach line $report_text_list {
+	if { [regexp {.*(Test starting time =).* (([0-9|-]+) ([0-9|\.]+)[A|P]M)(.*)} $line sqlMatch start sqlDate rest rest2 ] == 1 } {
+	    if { [info exist sqlMatch] && [info exist start] && [info exist sqlDate] } {
+		puts $logFileId "found sqlDate =$sqlDate"
+		set foundSqlDate 1
+		break
+	    }
+	}
+    }
+    if {$foundSqlDate == 0 } {
+	puts $logFileId "ERROR: Doesn't exist sqlMatch, start, sqlDate"
+	set sqlDate "noSqlDate"
+	#return
+    }
+    
+    set fname "$logDir/report.txt"
+    if { [catch {open $fname r} fileId] } {
+	puts $logFileId "ERROR:: Can't Open $fname"
+	return
+    } 
+    set foundReportDate 0
+    while { [gets $fileId line] >= 0} {
+	if { [regexp {.*(Test starting time =).* (([0-9|-]+) ([0-9|\.]+)[A|P]M)(.*)} $line match start reportDate rest ] == 1} {
+	    if { [info exist match] && [info exist start] && [info exist reportDate] } {
+		puts $logFileId "found reportDate =$reportDate"
+		set foundReportDate 1
+		break
+	    } 
+	}
+    }
+    
+    if {$foundReportDate == 0 } {
+	puts $logFileId "ERROR: Doesn't exist sqlMatch, start, reportDate"
+	set reportDate "noReportDate"
+	#return
+    }
+    if {[string compare $sqlDate $reportDate] == 0} {
+	set insertNewRep 0
+	puts $logFileId "ERROR: Report already exists. Report Will not be  inserted"
+    } else {
+	puts $logFileId "New report. Will be uploaded"
+	set insertNewRep 1
+	incr run_number
+    }
+}
+
+#########################################################################################################################
+# Insert new report.
+# Get the new report_id
+# first remove the old report/logs if any from previous runs
+# then insert the entries into report table and from it read the new run_number
+#
+#puts $logFileId "calling deleteReporWithLogs  regression_id $regId run_number $run_number feature_id $feature_id"
+#deleteReporWithLogs -regression_id $regId -run_number $run_number -feature_id $feature_id
+#########################################################################################################################
+set build_id [GetBuildIdFromBuild $build]
+
+
+if {(($insertNewRep == 1) && ($reportDir == "null")) || (($isDownloadImage == 0) && ($reportDir != "null"))} {
+    puts $logFileId "Uploading new report to database"
+    puts "--------- Uploading NEW Reprot to database -----------"
+
+    _update_scm_db_from_report_txt -run $run_number -log_pid $logFileId -module $module \
+           -reportDir $logDir -qId $qId -scmJob $scmJob
+
+   catch { 
+    InsertAllIntoReportTable -regression_id $regId \
+	    -feature_id $feature_id  \
+	    -run_number $run_number  \
+	    -run_type "results"  \
+        -build_id "$build_id" \
+	    -report_directory "$logDir"
+    set sel_clause "SELECT report_id FROM report_table WHERE \
+	    regression_id= '$regId' AND \
+	    run_number= '$run_number' AND \
+	    feature_id= '$feature_id'"
+    puts $logFileId "sel_clause to get report_id: $sel_clause"
+    set report_id_list [mysqlsel $mysql_handler $sel_clause -flatlist]
+    # get the last report_id in the list
+    set report_id [lindex $report_id_list end]
+    puts $logFileId "got report_id: $report_id"
+   } uploadReportFileResult
+   if { $uploadReportFileResult != "" } {
+      puts "uploadReportFileResult FAILED: $uploadReportFileResult"
+      puts $logFileId  "uploadReportFileResult FAILED: $uploadReportFileResult"
+   }
+    
+    if { [regexp -nocase "cli" $regType] } {
+	set sourceDir "../CLItest/cli-ew/$module"
+    }
+
+    puts "===== regType $regType module = $module feature_id = $feature_id ====="; 
+
+    catch { 
+    InsertAllIntoLogTable -report_id $report_id \
+            -feature_id $feature_id \
+            -build_id $build_id \
+            -logDir "$logDir" \
+            -sourceDir "$sourceDir"
+   } uploadLogFilesResult
+   if { $uploadLogFilesResult != "" } {
+      puts "uploadLogFilesResult FAILED: $uploadLogFilesResult"
+      puts $logFileId  "uploadLogFilesResult FAILED: $uploadLogFilesResult"
+   }
+    
+    # this is a first step - inser all the text (info) and
+    # binary files into xfile_table
+    # in this step upload the binary files into the report_table
+    # later only report.txt will be inserted there
+    
+   catch { 
+    # insert the text (info) files
+    InsertAllInfoFilesIntoXfileTable -report_id $report_id \
+	    -logDir $logDir
+   } uploadInfoXfilesResult
+   if { $uploadInfoXfilesResult != "" } {
+      puts "uploadInfoXfilesResult FAILED: $uploadInfoXfilesResult"
+      puts $logFileId  "uploadInfoXfilesResult FAILED: $uploadInfoXfilesResult"
+   }
+    
+   catch { 
+    # insert the binary (core dumps) files
+    InsertAllBinaryFilesIntoXfileTable -report_id $report_id \
+	    -logDir $logDir -host $host
+   } uploadBinaryXfilesResult
+   if { $uploadBinaryXfilesResult != "" } {
+      puts "uploadBinaryXfilesResult FAILED: $uploadBinaryXfilesResult"
+      puts $logFileId  "uploadBinaryXfilesResult FAILED: $uploadBinaryXfilesResult"
+   }
+    
+
+   # no report analysis in case of image download phase
+   if {!$isDownloadImage} {
+     catch { 
+        # let PHP analyze the report files and update log files
+        set regression_id_url [http_formatQuery regression_id $regId feature_id \
+                                               $feature_id run_number $run_number forstats $forstats] 
+        puts $logFileId " regression_id_url: $regression_id_url"
+        
+        if {$my_db == "autoweb_db_5" || $my_db == "autoweb_db_7"} {
+          set analyseURL "http://$host/phpdb4/failAnalysis.php"
+          catch { exec {tclsh} mysqlFailAnalysis.tcl -regression_id $regId -feature_id $feature_id \
+                -run_number $run_number -forstats $forstats &} result
+        } else {
+          set analyseURL "http://$host/failAnalysis.php"
+        }
+        set analyseURL [append analyseURL "?$regression_id_url"]
+        puts $logFileId " analyseURL: $analyseURL"
+        set token [http_get $analyseURL -timeout 1000000 ]
+        upvar #0 $token httpState
+        while { [string match eof $httpState(state)] != 1 } {
+            set incommingHttp "$httpState(state) [string match eof $httpState(state)]"
+	    puts $logFileId $incommingHttp
+	    puts stderr $incommingHttp
+	    flush stderr
+            if {$incommingHttp == "header 0"} {
+	      puts $logFileId we got $incommingHttp which causes a loop - terminating mysqlAutomate"
+              return
+            }
+	    after 100
+        }
+        if { [info exists httpState(error)] } {
+          set lasterror $httpState(http)
+          puts "GOT HTTP ERROR: $lasterror"
+          puts $logFileId "GOT HTTP ERROR: $lasterror"
+        }
+    
+     } httpResult
+     
+    
+     if { $httpResult != "" } {
+        puts "HTTP CRASH: $httpResult"
+        puts $logFileId "HTTP CRASH: $httpResult"
+     }
+   }
+
+} elseif {($isDownloadImage == 1) && ($reportDir != "null")} { 
+   catch { 
+     InsertAllIntoReportTable -regression_id $regId \
+	     -feature_id $feature_id  \
+         -build_id $build_id \
+	     -run_number '0'  \
+	     -run_type "downloadImage"  \
+	     -report_directory "$logDir"
+     set sel_clause "SELECT report_id FROM report_table WHERE \
+	     regression_id= '$regId' AND \
+	     run_number= '0' AND \
+	     feature_id= '$feature_id'"
+     set report_id_list [mysqlsel $mysql_handler $sel_clause -flatlist]
+     # get the last report_id in the list
+     set report_id [lindex $report_id_list end]
+     puts $logFileId "got report_id: $report_id"
+     puts "GOT REPORT_ID: $report_id"
+   } uploadReportFileResult
+   if { $uploadReportFileResult != "" } {
+      puts "uploadReportFileResult FAILED: $uploadReportFileResult"
+      puts $logFileId  "uploadReportFileResult FAILED: $uploadReportFileResult"
+   }
+
+   catch { 
+      # in this case - it's a queuing system - upload only info files
+      # insert the text (info) files
+        InsertAllInfoFilesIntoLimgFileTable -report_id $report_id \
+                -logDir $logDir
+   } uploadInfoLimgFilesResult
+   if { $uploadInfoLimgFilesResult != "" } {
+      puts "uploadInfoLimgFilesResult FAILED: $uploadInfoLimgFilesResult"
+      puts $logFileId  "uploadInfoLimgFilesResult FAILED: $uploadInfoLimgFilesResult"
+   }
+} else { 
+set recover_fa 1
+    if {$recover_fa} {
+     catch {
+        # let PHP analyze the report files and update log files
+        set regression_id_url [http_formatQuery regression_id $regId feature_id \
+                                               $feature_id run_number $run_number forstats $forstats]
+        puts $logFileId " regression_id_url: $regression_id_url"
+
+        if {$my_db == "autoweb_db_5" || $my_db == "autoweb_db_7"} {
+          puts "usha I am here"
+          puts "regId $regId"
+          puts "feature_id $feature_id"
+          puts "run_number $run_number"
+          set analyseURL "http://$host/phpdb4/failAnalysis.php" 
+          catch { exec {tclsh} mysqlFailAnalysis.tcl -regression_id $regId -feature_id $feature_id \
+                -run_number $run_number  -forstats $forstats &} result
+          puts "result $result"
+        } else {
+          set analyseURL "http://$host/failAnalysis.php"
+        }
+        puts "Already RAN mysqlFailAnalysis";
+        puts $logFileId "Already RAN mysqlFailAnalysis"
+        set analyseURL [append analyseURL "?$regression_id_url"]
+        puts $logFileId " analyseURL: $analyseURL"
+        puts " analyseURL: $analyseURL"
+        set token [http_get $analyseURL -timeout 1000000 ]
+        upvar #0 $token httpState
+        while { [string match eof $httpState(state)] != 1 } {
+            set incommingHttp "$httpState(state) [string match eof $httpState(state)]"
+            puts $logFileId $incommingHttp
+            puts stderr $incommingHttp
+            flush stderr
+            if {$incommingHttp == "header 0"} {
+              puts $logFileId "we got $incommingHttp which causes a loop - terminating mysqlAutomate"
+              return
+            }
+            after 100
+        }
+        if { [info exists httpState(error)] } {
+          set lasterror $httpState(http)
+          puts "GOT HTTP ERROR: $lasterror"
+          puts $logFileId "GOT HTTP ERROR: $lasterror"
+        }
+
+     } httpResult
+
+
+     if { $httpResult != "" } {
+        puts "HTTP CRASH: $httpResult"
+        puts $logFileId "HTTP CRASH: $httpResult"
+     }
+
+    }
+    puts $logFileId "No upload - the report already exists"
+    puts $logFileId "report $fname"
+    puts $logFileId "report_id=$report_id,  run_number=$run_number ,regression_id = $regId, feature_id= $feature_id\n"
+}
+
+########################## TEST EnD ##########################
+
+if {!$isDownloadImage} {
+  if [catch {set rr [http_data httpState]} reason] {
+    puts $logFileId "PHP FAIL ANALYSIS COULD NOT RUN DUE TO:\n$reason\n";
+    puts "PHP FAIL ANALYSIS COULD NOT RUN DUE TO:\n$reason\n";
+    return
+  }
+  puts $logFileId "PHP FAIL ANALYSIS DEBUG INFO\n";
+  puts $logFileId "$rr";
+}
+
+puts "######################################################################"
+puts "                        POSTTOMYSQL.TCL ENDED "
+puts " Log file: $logFileName"
+puts "######################################################################"

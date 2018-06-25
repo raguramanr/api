@@ -1,0 +1,1464 @@
+#!/usr/bin/tclsh
+
+
+################################################################
+#  Procedure Name: snmpConfigVrrpIf
+#  
+#  Description:
+#  This procedure creates a VRRP Interface for a given vlan. 
+#  Assigns ip address in the given DUT.
+#
+#  Input Variables:
+#    session    - Session identifier which identifies the connection
+#                 with the DUT
+#    ipa        - IP address of the VLAN on which VRRP interface. 
+#                 needs to be created.
+#    vrId       - Virtual router id of the VRRP domain which needs to be deleted
+#    primIpa    - IP address of the Master router for the VRRP domain. 
+# 
+#  Optional Args:
+#    adminState - Admin State of the VRRP Interface.
+#    priority   - Operational priority of the interface.
+#    authType   - Authentication type for the VRRP interface.
+#    authKey    - Authentication key for the VRRP interface.
+#    interval   - Advertisement interval.
+#    mode       - Preemt mode.
+#    fd - File descriptor for logging the command outputs   
+# 
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    Logs the error message - On failure 
+#
+#  Possible Usage:
+#    snmpConfigVrrpIf -session $sessionid -ipa "10.0.0.1" -vrId 123 -primIpa 
+#         10.0.0.1 -priority 155 -adminState 2 -authType 2 -authKey 12345678
+#         -interval 5 -mode 1
+###############################################################
+
+proc snmpConfigVrrpIf { args } {
+    parse_args snmpConfigVrrpIf $args {
+       session    ""
+       ipa        ""
+       vrId       ""
+       primIpa    ""
+       adminState ""
+       priority   ""
+       authType   ""
+       authKey    ""
+       interval   ""
+       mode       ""
+       protocol   ""
+       fd "NULL"
+    }
+ 
+    set func "snmpConfigVrrpIf:" 
+
+
+    if { $session == "" || $ipa == "" || $primIpa == "" || $vrId == ""} {
+       error "$func session, ipaddress and Virtual Router Id must be \
+                     specified"
+       return Error
+    }
+
+   if { $ipa == $primIpa && $priority != 255 } {
+       result_debug "$func Priority should be set to 255 for VRRP master"
+       return Error
+   }
+
+    snmpDebug DEBUG "$func session-$session ipaddress-$ipa fd-$fd -Start" $fd
+    result_debug "\n-- Enabling VRRP on the interface $ipa --"
+
+    set ifIndex [snmpGetIfIndexForIpAddr $session $ipa $fd]
+
+    if {$ifIndex == ""} {
+       result_debug "Ip address $ipa is not associated with any vlan"
+       return Error
+    }
+
+    set var "snmpSet -session $session -oid \
+             vrrpOperPrimaryIpAddr.$ifIndex.$vrId -type a -val $primIpa"
+
+    if {$adminState != ""} {
+       lappend var -oid vrrpOperAdminState.$ifIndex.$vrId -type i \
+                    -val $adminState
+    }
+ 
+    if {$priority != ""} {
+       lappend var -oid vrrpOperPriority.$ifIndex.$vrId -type i \
+                    -val $priority
+    }
+
+    if {$authType != ""} {
+       lappend var -oid vrrpOperAuthType.$ifIndex.$vrId -type i \
+                    -val $authType
+    }
+
+    if {$authKey != ""} {
+       lappend var -oid vrrpOperAuthKey.$ifIndex.$vrId -type s \
+                    -val $authKey
+    }
+
+    if {$interval != ""} {
+       lappend var -oid vrrpOperAdvertisementInterval.$ifIndex.$vrId -type i \
+                    -val $interval
+    }
+
+    if {$mode != ""} {
+       lappend var -oid vrrpOperPreemptMode.$ifIndex.$vrId -type i \
+                    -val $mode
+    }
+
+    if {$protocol != ""} {
+       lappend var -oid vrrpOperProtocol.$ifIndex.$vrId -type i \
+                    -val $protocol
+    }
+
+    lappend var -oid vrrpOperRowStatus.$ifIndex.$vrId -type i -val 4
+
+    # ---- Enable rip2IfConfStatus.for this interface
+    set result [eval $var]
+    snmpDebug LOG "$func snmpSet-$result" $fd
+    result_debug "Configuring VRRP interface $ipa is Successful"
+    return $result
+}
+
+################################################################
+#  Procedure Name: snmpUnconfigVrrpIf
+#  
+#  Description:
+#  This procedure creates a VRRP Interface for a given vlan. 
+#  ip address in the given DUT.
+#
+#  Input Variables:
+#    session    - Session identifier which identifies the connection
+#                 with the DUT
+#    ipa        - IP address of the VLAN on which VRRP should be disabled 
+#    vrId       - Virtual router id of the VRRP domain which needs to be deleted
+#  Optional Args:
+#    fd - File descriptor for logging the command outputs   
+# 
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    Logs the error message - On failure 
+#
+#  Possible Usage:
+#    snmpUnconfigVrrpIf -session $sessionid -ipa "10.0.0.1" -vrId 123 
+###############################################################
+
+proc snmpUnconfigVrrpIf { args } {
+    parse_args snmpUnconfigVrrpIf $args {
+       session ""
+       ipa     ""
+       vrId    ""
+       fd "NULL"
+    }
+ 
+    set func "snmpUnconfigVrrpIf:" 
+
+
+    if { $session == "" || $ipa == "" || $vrId == ""} {
+       error "$func session, ipaddress and Virtual Router Id must be \
+                     specified"
+       return Error
+    }
+
+    snmpDebug DEBUG "$func session-$session ipaddress-$ipa \
+                      vrId-$vrId fd-$fd -Start" $fd
+
+    set ifIndex [snmpGetIfIndexForIpAddr $session $ipa $fd]
+
+    if {$ifIndex == ""} {
+       result_debug "$func address $ipa is not associated with any vlan"
+       return Error
+    }
+
+    result_debug "-- Unconfiguring VRRP interface $ipa --"
+
+    set result [snmpSet -session $session -oid \
+                vrrpOperAdminState.$ifIndex.$vrId -type i -val 2 -oid \
+                vrrpOperRowStatus.$ifIndex.$vrId -type i -val 6]
+
+    return $result
+}
+
+################################################################
+#  Procedure Name: snmpVrrpVerifyIf
+#  
+#  Description:
+#  This procedure verifies VRRP Interface for the specified . 
+#  parameters.                 
+#
+#  Input Variables:
+#    session - Session identifier which identifies the connection
+#              with the DUT
+#    ipa  - IP address of the VLAN for which VRRP parameters needs 
+#                 to be verified
+#    vrId - Virtual router Id for which VRRP parameters needs 
+#                 to be verified
+# 
+#  Optional Args:
+#    adminState - Admin State of the VRRP Interface to be verified.
+#    priority   - Operational priority of the interface to be verified.
+#    authType   - Authentication type for the VRRP interface to be verified.
+#    authKey    - Authentication key for the VRRP interface to be verified.
+#    interval   - Advertisement interval to be verified.
+#    mode       - Preemt mode to be verified.
+#    macAddr    - Virtual Mac address
+#    operState  - oparation state of the VRRP router.
+#    addrCount  - Address count for the VRRP domain.
+#    masterAddr - IP address of the Master VRRP router
+#    rtrUpTime  - Time stamp when the virtual router is transitioned out of
+#                 initialised state
+#    protocol   - protocol being controlled by this Virtual Router
+#    fd         - File descriptor for logging the command outputs   
+#    comment    - User comments for purpose of calling this function
+# 
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    Logs the error message - On failure 
+#
+#  Possible Usage:
+#    snmpVrrpVerifyIf -session $sessionid -ipa "10.0.0.1" -vrId 123 
+#                     -primIpa 10.0.0.1 -priority 255 -operState 3 -adminState 2
+#                     -fd $fd_res -comment "verifying VRRP oper status 
+###############################################################
+
+proc snmpVrrpVerifyIf { args } {
+    parse_args snmpVrrpVerifyIf $args {
+       session    ""
+       ipa        ""
+       vrId       ""
+       primIpa    ""
+       adminState ""
+       priority   ""
+       authType   ""
+       authKey    ""
+       interval   ""
+       mode       ""
+       macAddr    ""
+       operState  ""
+       addrCount  ""
+       masterAddr ""
+       rtrUpTime  ""
+       protocol   ""
+       fd         "NULL"
+       comment    "Verifying VRRP parameters on the interface"
+    }
+ 
+    set func "snmpVrrpVerifyIf:" 
+
+    if { $session == "" || $ipa == "" || $vrId == ""} {
+       error "$func session, ipaddress and Virtual Router Id must be \
+                     specified"
+       return Error
+    }
+
+    set ifIndex [snmpGetIfIndexForIpAddr $session $ipa $fd]
+
+    if {$ifIndex == ""} {
+       result_error "Ip address $ipa is not associated with any vlan"
+       return
+    }
+
+    report_start_test $comment
+
+    if {$primIpa != ""} {
+       set var [snmpGet -session $session -oid \
+                          vrrpOperPrimaryIpAddr.$ifIndex.$vrId]
+       snmpDebug DEBUG "$func snmpGet-$var" $fd
+       set val [snmpUtilGetVal ipaddr $var]
+       snmpDebug LOG "$func VRRP primary ip address is $val" $fd
+
+       if {$val != $primIpa} {
+          result_error "$func Primary Ip address expected $primIpa but got $val"
+       } else {
+          result_ok "$func Primary Ip address expected $primIpa and got $val"
+       }
+    }
+
+    if {$adminState != ""} {
+       if { $adminState == 1 } {
+          set adminState up
+       } elseif { $adminState == 2 } {
+          set adminState down
+       }
+
+       set var [snmpGet -session $session -oid \
+                          vrrpOperAdminState.$ifIndex.$vrId]
+       set val [snmpUtilGetVal inttext $var]
+
+       snmpDebug DEBUG "$func snmpGet-$var" $fd
+       snmpDebug LOG "$func VRRP admin state is $val" $fd
+
+       if {$val != $adminState} {
+          result_error "$func admin state expected $adminState but got $val"
+       } else {
+          result_ok "$func admin state expected $adminState and got $val"
+       }
+
+    }
+ 
+    if {$priority != ""} {
+       set var [snmpGet -session $session -oid \
+                          vrrpOperPriority.$ifIndex.$vrId]
+       set val [snmpUtilGetVal int $var]
+
+       snmpDebug DEBUG "$func snmpGet-$var" $fd
+       snmpDebug LOG "$func VRRP priority is $val" $fd
+
+       if {$val != $priority} {
+          result_error "$func priority expected $priority but got $val"
+       } else {
+          result_ok "$func priority expected $priority and got $val"
+       }
+    }
+
+    if {$authType != ""} {
+       if { $authType == 1 } {
+          set authType noAuthentication
+       } elseif { $authType == 2 } {
+          set authType simpleTextPassword
+       } elseif { $authType == 3 } {
+          set authType ipAuthenticationHeader
+       }
+
+       set var [snmpGet -session $session -oid \
+                          vrrpOperAuthType.$ifIndex.$vrId]
+       set val [snmpUtilGetVal inttext $var]
+
+       snmpDebug DEBUG "$func snmpGet-$var" $fd
+       snmpDebug LOG "$func VRRP auth type is $val" $fd
+
+       if {$val != $authType} {
+          result_error "$func auth type expected $authType but got $val"
+       } else {
+          result_ok "$func auth type expected $authType and got $val"
+       }
+    }
+
+    if {$authKey != ""} {
+       set var [snmpGet -session $session -oid vrrpOperAuthKey.$ifIndex.$vrId]
+       set val [snmpUtilGetVal str $var]
+
+       snmpDebug DEBUG "$func snmpGet-$var" $fd
+       snmpDebug LOG "$func VRRP auth key is $val" $fd
+
+       if {$val != $authKey} {
+          result_error "$func auth key expected $authKey but got $val"
+       } else {
+          result_ok "$func auth key expected $authKey and got $val"
+       }
+    }
+
+    if {$interval != ""} {
+       set var [snmpGet -session $session -oid \
+                          vrrpOperAdvertisementInterval.$ifIndex.$vrId]
+       set val [snmpUtilGetVal intsec $var]
+
+       if {$val != $interval} {
+          result_error "$func interval expected $interval but got $val"
+       } else {
+          result_ok "$func interval expected $interval and got $val"
+       }
+    }
+
+    if {$mode != ""} {
+
+       if { $mode == 1 } {
+          set mode true
+       } elseif { $mode == 2 } {
+          set mode false
+       }
+
+       set var [snmpGet -session $session -oid \
+                          vrrpOperPreemptMode.$ifIndex.$vrId]
+       set val [snmpUtilGetVal inttext $var]
+
+       snmpDebug DEBUG "$func snmpGet-$var" $fd
+       snmpDebug LOG "$func VRRP preempt mode is $val" $fd
+
+       if {$val != $mode} {
+          result_error "$func mode expected $mode but got $val"
+       } else {
+          result_ok "$func mode expected $mode and got $val"
+       }
+    }
+
+    if { $macAddr != "" } {
+       set var [snmpGet -session $session -oid \
+                          vrrpOperVirtualMacAddr.$ifIndex.$vrId]
+       set val [snmpUtilGetVal mac $var]
+
+       snmpDebug DEBUG "$func snmpGet-$var" $fd
+       snmpDebug LOG "$func VRRP Mac address is $val" $fd
+
+       if {$val != $macAddr} {
+          result_error "$func virtual mac address expected $macAddr but \
+                          got $val"
+       } else {
+          result_ok "$func virtual mac address expected $macAddr and \
+                          got $val"
+       }
+    }
+
+    if {$operState != ""} {
+
+       if { $operState == 1 } {
+          set operState initialize
+       } elseif { $operState == 2 } {
+          set operState backup
+       } elseif { $operState == 3 } {
+          set operState master
+       }
+
+       set var [snmpGet -session $session -oid vrrpOperState.$ifIndex.$vrId]
+       set val [snmpUtilGetVal inttext $var]
+
+       snmpDebug DEBUG "$func snmpGet-$var" $fd
+       snmpDebug LOG "$func VRRP oper state is $val" $fd
+
+       if {$val != $operState} {
+          result_error "$func operState expected $operState but got $val"
+       } else {
+          result_ok "$func operState expected $operState and got $val"
+       }
+    }
+
+    if {$addrCount !=  ""} {
+       set var [snmpGet -session $session -oid \
+                          vrrpOperIpAddrCount.$ifIndex.$vrId]
+       set val [snmpUtilGetVal int $var]
+
+       snmpDebug DEBUG "$func snmpGet-$var" $fd
+       snmpDebug LOG "$func VRRP ip address count is $val" $fd
+
+       if {$val != $addrCount} {
+          result_error "$func ip address count expected $addrCount but got $val"
+       } else {
+          result_ok "$func ip address count expected $addrCount and got $val"
+       }
+    }
+
+    if {$masterAddr != ""} {
+       set var [snmpGet -session $session -oid \
+                          vrrpOperMasterIpAddr.$ifIndex.$vrId]
+       set val [snmpUtilGetVal ipaddr $var]
+
+       snmpDebug DEBUG "$func snmpGet-$var" $fd
+       snmpDebug LOG "$func VRRP master ip address is $val" $fd
+
+       if {$val != $masterAddr} {
+          result_error "$func master Ip address expected $masterAddr but \
+           got $val"
+       } else {
+          result_ok "$func master Ip address expected $masterAddr and got $val"
+       }
+    }
+
+    if {$rtrUpTime != ""} {
+       set var [snmpGet -session $session -oid \
+                          vrrpOperVirtualRouterUpTime.$ifIndex.$vrId]
+       set val [snmpUtilGetVal tick $var]
+
+       snmpDebug DEBUG "$func snmpGet-$var" $fd
+       snmpDebug LOG "$func VRRP router up time is $val" $fd
+
+       result_ok "$func Router up time is $val"
+    }
+
+    if {$protocol != ""} {
+
+       if { $protocol == 1 } {
+          set protocol ip
+       } elseif {$protocol == 2 } {
+          set protocol bridge
+       } elseif {$protocol == 3 } {
+          set protocol decnet
+       } elseif {$protocol == 4 } {
+          set protocol other
+       }
+
+       set var [snmpGet -session $session -oid vrrpOperProtocol.$ifIndex.$vrId]
+       set val [snmpUtilGetVal inttext $var]
+
+       snmpDebug DEBUG "$func snmpGet-$var" $fd
+       snmpDebug LOG "$func VRRP protocol is $val" $fd
+
+       if {$val != $protocol} {
+          result_error "$func protocol expected $protocol but got $val"
+       } else {
+          result_ok "$func protocol expected $protocol and got $val"
+       }
+    }
+    report_end_test
+    return success
+}
+
+
+################################################################
+#  Procedure Name: snmpVrrpVerifyRtrStats
+#  
+#  Description:
+#  This procedure verifies VRRP Interface statistics for the . 
+#  pspecified arameters
+#
+#  Input Variables:
+#    session     - Session identifier which identifies the connection
+#                  with the DUT
+#  Optional Args:
+#    checkSumError   - Total number of packets received with checksum error
+#                      for VRRP
+#    vrIdError       - Total number of packets received with invalid VID
+#    versionError    - Total number of packets received with unsupported 
+#                      VRRP version
+#    fd              - File descriptor for logging the command outputs   
+#    comment         - User comments for purpose of calling this function
+# 
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    Logs the error message - On failure 
+#
+#  Possible Usage:
+#    snmpVrrpVerifyRtrStats -session $sessionid -ipa "10.0.0.1" -vrid 123
+#                        -invalidAuthType 3 -pktLenError 4 -zeroPrioPktSent 5
+#                        -fd $fd_res -comment "verifying authentication error
+#                         statistics"
+###############################################################
+
+proc snmpVrrpVerifyRtrStats { args } {
+    parse_args snmpVrrpVerifyRtrStats $args {
+       session         ""
+       checkSumError   ""
+       vrIdError       ""
+       versionError    ""
+       status          "eq"
+       fd              "NULL"
+       comment         "Verifying Router statistic parameters"
+    }
+ 
+    set func "snmpVrrpVerifyRtrStats:"
+
+    if { $session == ""} {
+       error "$func session Id must be specified"
+       return Error
+    }
+
+    report_start_test $comment
+
+    set status [string tolower $status]
+
+    if {$checkSumError != ""} {
+       set var [snmpGet -session $session -oid vrrpRouterChecksumErrors.0]
+       set val [snmpUtilGetVal counter $var]
+
+       snmpDebug DEBUG "$func snmpGet-$var" $fd
+       snmpDebug LOG "$func VRRP checksum error is $val" $fd
+
+       if {$status == "eq"} {
+          if {$val != $checkSumError} {
+            result_error "$func vrrpRouterChecksumErrors expected \
+                          $checkSumError but got $val"
+          } else {
+            result_ok "$func vrrpRouterChecksumErrors expected \
+                          $checkSumError and got $val"
+          }
+       } elseif {$status == "gt"} {
+          if {$val > $checkSumError} {
+            result_ok "$func vrrpRouterChecksumErrors expected more than \
+                          $checkSumError and got $val"
+          } else {
+            result_error "$func vrrpRouterChecksumErrors expected more than \
+                          $checkSumError but got $val"
+          }
+       } elseif {$status == "lt"} {
+          if {$val < $checkSumError} {
+            result_ok "$func vrrpRouterChecksumErrors expected less than \
+                          $checkSumError and got $val"
+          } else {
+            result_error "$func vrrpRouterChecksumErrors expected less than \
+                          $checkSumError but got $val"
+          }
+       } elseif {$status == "ge"} {
+          if {$val > $checkSumError} {
+            result_ok "$func vrrpRouterChecksumErrors expected more than \
+                        or equal to $checkSumError and got $val"
+          } else {
+            result_error "$func vrrpRouterChecksumErrors expected more than \
+                          or equal to $checkSumError but got $val"
+          }
+       } elseif {$status == "le"} {
+          if {$val <= $checkSumError} {
+            result_ok "$func vrrpRouterChecksumErrors expected less than \
+                       or equal to $checkSumError and got $val"
+          } else {
+            result_error "$func vrrpRouterChecksumErrors expected less than \
+                          or equal to $checkSumError but got $val"
+          }
+       }
+    }
+
+    if {$vrIdError != ""} {
+       set var [snmpGet -session $session -oid vrrpRouterVrIdErrors.0]
+       set val [snmpUtilGetVal counter $var]
+
+       snmpDebug DEBUG "$func snmpGet-$var" $fd
+       snmpDebug LOG "$func VRRP VRID is $val" $fd
+
+       if {$status == "eq"} {
+          if {$val != $vrIdError} {
+            result_error "$func vrrpRouterVrIdErrors expected \
+                          $vrIdError but got $val"
+          } else {
+            result_ok "$func vrrpRouterVrIdErrors expected \
+                          $vrIdError and got $val"
+          }
+       } elseif {$status == "gt"} {
+          if {$val > $vrIdError} {
+            result_ok "$func vrrpRouterVrIdErrors expected more than \
+                          $vrIdError and got $val"
+          } else {
+            result_error "$func vrrpRouterVrIdErrors expected more than \
+                          $vrIdError but got $val"
+          }
+       } elseif {$status == "lt"} {
+          if {$val < $vrIdError} {
+            result_ok "$func vrrpRouterVrIdErrors expected less than \
+                          $vrIdError and got $val"
+          } else {
+            result_error "$func vrrpRouterVrIdErrors expected less than \
+                          $vrIdError but got $val"
+          }
+       } elseif {$status == "ge"} {
+          if {$val > $vrIdError} {
+            result_ok "$func vrrpRouterVrIdErrors expected more than \
+                        or equal to $vrIdError and got $val"
+          } else {
+            result_error "$func vrrpRouterVrIdErrors expected more than \
+                          or equal to $vrIdError but got $val"
+          }
+       } elseif {$status == "le"} {
+          if {$val <= $vrIdError} {
+            result_ok "$func vrrpRouterVrIdErrors expected less than \
+                       or equal to $vrIdError and got $val"
+          } else {
+            result_error "$func vrrpRouterVrIdErrors expected less than \
+                          or equal to $vrIdError but got $val"
+          }
+       }
+    }
+
+    if {$versionError != ""} {
+       set var [snmpGet -session $session -oid vrrpRouterVersionErrors.0]
+       set val [snmpUtilGetVal counter $var]
+
+       snmpDebug DEBUG "$func snmpGet-$var" $fd
+       snmpDebug LOG "$func VRRP version error is $val" $fd
+
+       if {$status == "eq"} {
+          if {$val != $versionError} {
+            result_error "$func vrrpRouterVersionErrors expected \
+                          $versionError but got $val"
+          } else {
+            result_ok "$func vrrpRouterVersionErrors expected \
+                          $versionError and got $val"
+          }
+       } elseif {$status == "gt"} {
+          if {$val > $versionError} {
+            result_ok "$func vrrpRouterVersionErrors expected more than \
+                          $versionError and got $val"
+          } else {
+            result_error "$func vrrpRouterVersionErrors expected more than \
+                          $versionError but got $val"
+          }
+       } elseif {$status == "lt"} {
+          if {$val < $versionError} {
+            result_ok "$func vrrpRouterVersionErrors expected less than \
+                          $versionError and got $val"
+          } else {
+            result_error "$func vrrpRouterVersionErrors expected less than \
+                          $versionError but got $val"
+          }
+       } elseif {$status == "ge"} {
+          if {$val > $versionError} {
+            result_ok "$func vrrpRouterVersionErrors expected more than \
+                        or equal to $versionError and got $val"
+          } else {
+            result_error "$func vrrpRouterVersionErrors expected more than \
+                          or equal to $versionError but got $val"
+          }
+       } elseif {$status == "le"} {
+          if {$val <= $versionError} {
+            result_ok "$func vrrpRouterVersionErrors expected less than \
+                       or equal to $versionError and got $val"
+          } else {
+            result_error "$func vrrpRouterVersionErrors expected less than \
+                          or equal to $versionError but got $val"
+          }
+       }
+    }
+
+    report_end_test
+    return success
+}
+################################################################
+#  Procedure Name: snmpVrrpVerifyStats
+#  
+#  Description:
+#  This procedure verifies VRRP Interface statistics for the . 
+#  pspecified arameters
+#
+#  Input Variables:
+#    session     - Session identifier which identifies the connection
+#                  with the DUT
+#    ipa         - IP address of the VLAN for which VRRP parameters needs 
+#                   to be verified
+#    vrId        - Virtual router Id for which VRRP parameters needs 
+#                  to be verified
+#    toMaster    - Total number of times that this virtual router's state
+#                  has transitioned to MASTER       
+#    advRecv     - Total number of adverisements received.        
+#    intvError   - Total number of VRRP advertisement packets received
+#                  for which the advertisement interval is different than the
+#                  one configured for the local virtual router     
+#    authFailure - The total number of VRRP packets received that do not pass
+#                  the authentication check   
+#    ttlError    - The total number of VRRP packets received by the virtual
+#                  router with IP TTL (Time-To-Live) not equal to 255   
+#    zeroPrioPktRecv - Total number of VRRP packets received by the virtual
+#                      router with a priority of '0'
+#    zeroPrioPktSent - Total number of VRRP packets sent by the virtual router
+#                      with a priority of '0'
+#    invalidPktsRecv - Total number of VRRP packets received by the virtual 
+#                      router with an invalid value in the 'type' field.
+#    addrListError   - Total number of packets received for which the address
+#                      list does not match the locally configured list for the
+#                      virtual router
+#    invalidAuthType - Total number of packets received with an unknown
+#    authMismatch    - total number of packets received with 'Auth Type' not
+#                      equal to the locally configured authentication method
+#    pktLenError     - Total number of packets received with a packet length
+#                      less than the length of the VRRP header
+# 
+#  Optional Args:
+#    fd - File descriptor for logging the command outputs   
+# 
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    Logs the error message - On failure 
+#
+#  Possible Usage:
+#    snmpVrrpVerifyStats -session $sessionid -ipa "10.0.0.1" -vrid 123
+#                        -invalidAuthType 3 -pktLenError 4 -zeroPrioPktSent 5
+###############################################################
+
+proc snmpVrrpVerifyStats { args } {
+    parse_args snmpVrrpVerifyStats $args {
+       session         ""
+       ipa             ""
+       vrId            ""
+       toMaster        ""
+       advRecv         ""
+       intvError       ""
+       authFailure     ""
+       ttlError        ""
+       zeroPrioPktRecv ""
+       zeroPrioPktSent ""
+       invalidPktsRecv ""
+       addrListError   ""
+       invalidAuthType ""
+       authMismatch    ""
+       pktLenError     ""
+       status          "eq"
+       comment         "Verifying interface statistic parameters"
+       fd              "NULL"
+    }
+ 
+    set func "snmpVrrpVerifyStats:"
+
+    if { $session == "" || $ipa == "" || $vrId == ""} {
+       error "$func session, ipaddress and Virtual Router Id must be \
+                     specified"
+       return Error
+    }
+
+    set ifIndex [snmpGetIfIndexForIpAddr $session $ipa $fd]
+
+    if {$ifIndex == ""} {
+       result_error "Ip address $ipa is not associated with any vlan"
+       return
+    }
+
+    report_start_test $comment
+
+    set status [string tolower $status]
+
+    if {$toMaster != ""} {
+       set var [snmpGet -session $session -oid \
+                         vrrpStatsBecomeMaster.$ifIndex.$vrId]
+       set val [snmpUtilGetVal counter $var]
+
+       snmpDebug DEBUG "$func snmpGet-$var" $fd
+       snmpDebug LOG "$func VRRP to master is $val" $fd
+
+       if {$status == "eq"} {
+          if {$val != $toMaster} {
+            result_error "$func vrrpStatsBecomeMaster expected $toMaster but \
+                           got $val"
+          } else {
+            result_ok "$func vrrpStatsBecomeMaster expected $toMaster and got \
+                       $val"
+          }
+       } elseif {$status == "gt"} {
+          if {$val > $toMaster} {
+            result_ok "$func vrrpStatsBecomeMaster expected more than $toMaster\
+                       and got $val"
+          } else {
+            result_error "$func vrrpStatsBecomeMaster expected more than \
+                          $toMaster but got $val"
+          }
+       } elseif {$status == "lt"} {
+          if {$val < $toMaster} {
+            result_ok "$func vrrpStatsBecomeMaster expected less than $toMaster\
+                       and got $val"
+          } else {
+            result_error "$func vrrpStatsBecomeMaster expected less than \
+                          $toMaster but got $val"
+          }
+       } elseif {$status == "ge"} {
+          if {$val >= $toMaster} {
+            result_ok "$func vrrpStatsBecomeMaster expected more than or equal \
+                       to $toMaster and got $val"
+          } else {
+            result_error "$func vrrpStatsBecomeMaster expected more than or \
+                          equal to $toMaster but got $val"
+          }
+       } elseif {$status == "le"} {
+          if {$val <= $toMaster} {
+            result_ok "$func vrrpStatsBecomeMaster expected less than or equal \
+                       to $toMaster and got $val"
+          } else {
+            result_error "$func vrrpStatsBecomeMaster expected less than or \
+                          equal to $toMaster but got $val"
+          }
+       }
+    }
+
+    if {$advRecv != ""} {
+
+       set var [snmpGet -session $session -oid \
+                          vrrpStatsAdvertiseRcvd.$ifIndex.$vrId]
+       set val [snmpUtilGetVal counter $var]
+
+       snmpDebug DEBUG "$func snmpGet-$var" $fd
+       snmpDebug LOG "$func VRRP advertisment received is $val" $fd
+
+       if {$status == "eq"} {
+          if {$val != $advRecv} {
+             result_error "$func advertisement received statistic expected \
+                           $advRecv but got $val"
+          } else {
+             result_ok "$func advertisement received  statistic expected \
+                           $advRecv and got $val"
+          }
+       } elseif {$status == "gt"} {
+          if {$val > $advRecv} {
+             result_ok "$func advertisement received statistic expected \
+                        more than $advRecv and got $val"
+          } else {
+             result_error "$func advertisement received statistic expected \
+                           more than $advRecv but got $val"
+          }
+       } elseif {$status == "lt"} {
+          if {$val < $advRecv} {
+             result_ok "$func advertisement received statistic expected \
+                        less than $advRecv and got $val"
+          } else {
+             result_error "$func advertisement received statistic expected \
+                           less than $advRecv but got $val"
+          }
+       } elseif {$status == "ge"} {
+          if {$val >= $advRecv} {
+             result_ok "$func advertisement received statistic expected \
+                        more than or equal to $advRecv and got $val"
+          } else {
+             result_error "$func advertisement received statistic expected \
+                           more than or equal to $advRecv but got $val"
+          }
+       } elseif {$status == "le"} {
+          if {$val <= $advRecv} {
+             result_ok "$func advertisement received statistic expected \
+                        less than or equal to $advRecv and got $val"
+          } else {
+             result_error "$func advertisement received statistic expected \
+                           less than or equal to $advRecv but got $val"
+          }
+       }
+
+    }
+ 
+    if {$intvError != ""} {
+       set var [snmpGet -session $session -oid \
+                          vrrpStatsAdvertiseIntervalErrors.$ifIndex.$vrId]
+       set val [snmpUtilGetVal counter $var]
+
+       snmpDebug DEBUG "$func snmpGet-$var" $fd
+       snmpDebug LOG "$func VRRP interval error is $val" $fd
+       
+       if {$status == "eq"} {
+          if {$val != $intvError} {
+             result_error "$func interval error  expected $intvError but \
+                           got $val"
+          } else {
+             result_ok "$func interval error  expected $intvError and got $val"
+          }
+       } elseif {$status == "gt"} {
+          if {$val > $intvError} {
+             result_ok "$func interval error expected more than $intvError \
+                        and got $val"
+          } else {
+             result_error "$func interval error expected more than $intvError \
+                        but got $val"
+          }
+       } elseif {$status == "lt"} {
+          if {$val < $intvError} {
+             result_ok "$func interval error expected less than $intvError \
+                        and got $val"
+          } else {
+             result_error "$func interval error expected less than $intvError \
+                        but got $val"
+          }
+       } elseif {$status == "ge"} {
+          if {$val >= $intvError} {
+             result_ok "$func interval error expected more than or equal to \
+                        $intvError and got $val"
+          } else {
+             result_error "$func interval error expected more than or eqal to \
+                        $intvError but got $val"
+          }
+       } elseif {$status == "le"} {
+          if {$val <= $intvError} {
+             result_ok "$func interval error expected less than or equal to \
+                        $intvError and got $val"
+          } else {
+             result_error "$func interval error expected less than or eqal to \
+                        $intvError but got $val"
+          }
+       }
+    }
+
+    if {$authFailure != ""} {
+
+       set var [snmpGet -session $session -oid \
+                          vrrpStatsAuthFailures.$ifIndex.$vrId]
+       set val [snmpUtilGetVal counter $var]
+
+       snmpDebug DEBUG "$func snmpGet-$var" $fd
+       snmpDebug LOG "$func VRRP authentication failure error is $val" $fd
+       
+       if {$status == "eq"} {
+         if {$val != $authFailure} {
+            result_error "$func auth failure expected $authFailure but got $val"
+         } else {
+            result_ok "$func auth failure expected $authFailure and got $val"
+         }
+       } elseif {$status == "gt"} {
+         if {$val > $authFailure} {
+            result_ok "$func auth failure expected more than $authFailure \
+                       and got $val"
+         } else {
+            result_error "$func auth failure expected more than $authFailure \
+                          but got $val"
+         }
+       } elseif {$status == "lt"} {
+         if {$val < $authFailure} {
+            result_ok "$func auth failure expected less than $authFailure \
+                       and got $val"
+         } else {
+            result_error "$func auth failure expected less than $authFailure \
+                          but got $val"
+         }
+       } elseif {$status == "ge"} {
+         if {$val >= $authFailure} {
+            result_ok "$func auth failure expected more than or equal to \
+                       $authFailure and got $val"
+         } else {
+            result_error "$func auth failure expected more than or equal to \
+                       $authFailure but got $val"
+         }
+       } elseif {$status == "le"} {
+         if {$val <= $authFailure} {
+            result_ok "$func auth failure expected less than or equal to \
+                       $authFailure and got $val"
+         } else {
+            result_error "$func auth failure expected less than or equal to \
+                       $authFailure but got $val"
+         }
+       }
+    }
+
+    if {$ttlError != ""} {
+       set var [snmpGet -session $session -oid \
+                          vrrpStatsIpTtlErrors.$ifIndex.$vrId]
+       set val [snmpUtilGetVal counter $var]
+  
+       snmpDebug DEBUG "$func snmpGet-$var" $fd
+       snmpDebug LOG "$func VRRP TTL error is $val" $fd
+       
+       if {$status == "eq"} {
+          if {$val != $ttlError} {
+             result_error "$func ttl error expected $ttlError but got $val"
+          } else {
+             result_ok "$func ttl error expected $ttlError and got $val"
+          }
+       } elseif {$status == "gt"} {
+          if {$val > $ttlError} {
+             result_ok "$func ttl error expected more than $ttlError and \
+                        got $val"
+          } else {
+             result_error "$func ttl error expected more than $ttlError but \
+                           got $val"
+          }
+       } elseif {$status == "lt"} {
+          if {$val < $ttlError} {
+             result_ok "$func ttl error expected less than $ttlError and \
+                        got $val"
+          } else {
+             result_error "$func ttl error expected less than $ttlError but \
+                           got $val"
+          }
+       } elseif {$status == "ge"} {
+          if {$val >= $ttlError} {
+             result_ok "$func ttl error expected more than or equal to \
+                       $ttlError and got $val"
+          } else {
+             result_error "$func ttl error expected more than or equal to \
+                       $ttlError but got $val"
+          }
+       } elseif {$status == "le"} {
+          if {$val <= $ttlError} {
+             result_ok "$func ttl error expected less than or equal to \
+                       $ttlError and got $val"
+          } else {
+             result_error "$func ttl error expected less than or equal to \
+                       $ttlError but got $val"
+          }
+       }
+    }
+
+    if {$zeroPrioPktRecv != ""} {
+       set var [snmpGet -session $session -oid \
+                          vrrpStatsPriorityZeroPktsRcvd.$ifIndex.$vrId]
+
+       set val [snmpUtilGetVal counter $var]
+
+       snmpDebug DEBUG "$func snmpGet-$var" $fd
+       snmpDebug LOG "$func VRRP zero priority packet received is $val" $fd
+
+       if {$status == "eq"} {
+          if {$val != $zeroPrioPktRecv} {
+             result_error "$func zero packet receive counter expected \
+                            $zeroPrioPktRecv but got $val"
+          } else {
+             result_ok "$func zero packet receive counter expected \
+                            $zeroPrioPktRecv and got $val"
+          }
+       } elseif {$status == "gt"} {
+          if {$val > $zeroPrioPktRecv} {
+             result_ok "$func zero packet receive counter expected more than\
+                            $zeroPrioPktRecv and got $val"
+          } else {
+             result_error "$func zero packet receive counter expected more than\
+                            $zeroPrioPktRecv but got $val"
+          }
+       } elseif {$status == "lt"} {
+          if {$val < $zeroPrioPktRecv} {
+             result_ok "$func zero packet receive counter expected less than\
+                            $zeroPrioPktRecv and got $val"
+          } else {
+             result_error "$func zero packet receive counter expected less than\
+                            $zeroPrioPktRecv but got $val"
+          }
+       } elseif {$status == "ge"} {
+          if {$val >= $zeroPrioPktRecv} {
+             result_ok "$func zero packet receive counter expected more than\
+                        or equal to $zeroPrioPktRecv and got $val"
+          } else {
+             result_error "$func zero packet receive counter expected more than\
+                           or equal to $zeroPrioPktRecv but got $val"
+          }
+       } elseif {$status == "le"} {
+          if {$val <= $zeroPrioPktRecv} {
+             result_ok "$func zero packet receive counter expected less than\
+                        or equal to $zeroPrioPktRecv and got $val"
+          } else {
+             result_error "$func zero packet receive counter expected less than\
+                           or equal to $zeroPrioPktRecv but got $val"
+          }
+       }
+    }
+
+    if {$zeroPrioPktSent != ""} {
+       set var [snmpGet -session $session -oid \
+                          vrrpStatsPriorityZeroPktsSent.$ifIndex.$vrId]
+
+       set val [snmpUtilGetVal counter $var]
+
+       snmpDebug DEBUG "$func snmpGet-$var" $fd
+       snmpDebug LOG "$func VRRP zero priority packet sent is $val" $fd
+
+       if {$status == "eq"} {
+          if {$val != $zeroPrioPktSent} {
+             result_error "$func zero packet sent counter expected \
+                            $zeroPrioPktSent but got $val"
+          } else {
+             result_ok "$func zero packet sent counter expected \
+                            $zeroPrioPktSent and got $val"
+          }
+       } elseif {$status == "gt"} {
+          if {$val > $zeroPrioPktSent} {
+             result_ok "$func zero packet sent counter expected more than \
+                            $zeroPrioPktSent and got $val"
+          } else {
+             result_error "$func zero packet sent counter expected more than \
+                            $zeroPrioPktSent but got $val"
+          }
+       } elseif {$status == "lt"} {
+          if {$val < $zeroPrioPktSent} {
+             result_ok "$func zero packet sent counter expected less than \
+                            $zeroPrioPktSent and got $val"
+          } else {
+             result_error "$func zero packet sent counter expected less than \
+                            $zeroPrioPktSent but got $val"
+          }
+       } elseif {$status == "ge"} {
+          if {$val >= $zeroPrioPktSent} {
+             result_ok "$func zero packet sent counter expected more than \
+                            or equal to $zeroPrioPktSent and got $val"
+          } else {
+             result_error "$func zero packet sent counter expected more than \
+                            or equal to $zeroPrioPktSent but got $val"
+          }
+       } elseif {$status == "le"} {
+          if {$val <= $zeroPrioPktSent} {
+             result_ok "$func zero packet sent counter expected less than \
+                            or equal to $zeroPrioPktSent and got $val"
+          } else {
+             result_error "$func zero packet sent counter expected less than \
+                            or equal to $zeroPrioPktSent but got $val"
+          }
+       }
+    }
+
+    if {$invalidPktsRecv != ""} {
+
+       set var [snmpGet -session $session -oid \
+                          vrrpStatsInvalidTypePktsRcvd.$ifIndex.$vrId]
+       set val [snmpUtilGetVal counter $var]
+
+       snmpDebug DEBUG "$func snmpGet-$var" $fd
+       snmpDebug LOG "$func VRRP invalid packet type error is $val" $fd
+
+       if {$status == "eq"} {
+          if {$val != $invalidPktsRecv} {
+             result_error "$func invalid packet received expected \
+                           $invalidPktsRecv but got $val"
+          } else {
+             result_ok "$func invalid packet received expected \
+                           $invalidPktsRecv and got $val"
+          }
+       } elseif {$status == "gt"} {
+          if {$val > $invalidPktsRecv} {
+             result_ok "$func invalid packet received expected more than \
+                           $invalidPktsRecv and got $val"
+          } else {
+             result_error "$func invalid packet received expected more than \
+                           $invalidPktsRecv but got $val"
+          }
+       } elseif {$status == "lt"} {
+          if {$val < $invalidPktsRecv} {
+             result_ok "$func invalid packet received expected less than \
+                           $invalidPktsRecv and got $val"
+          } else {
+             result_error "$func invalid packet received expected less than \
+                           $invalidPktsRecv but got $val"
+          }
+       } elseif {$status == "ge"} {
+          if {$val >= $invalidPktsRecv} {
+             result_ok "$func invalid packet received expected more than \
+                        or equal to $invalidPktsRecv and got $val"
+          } else {
+             result_error "$func invalid packet received expected more than \
+                           or equal to $invalidPktsRecv but got $val"
+          }
+       } elseif {$status == "le"} {
+          if {$val <= $invalidPktsRecv} {
+             result_ok "$func invalid packet received expected less than \
+                        or equal to $invalidPktsRecv and got $val"
+          } else {
+             result_error "$func invalid packet received expected less than \
+                           or equal to $invalidPktsRecv but got $val"
+          }
+       }
+    }
+
+    if { $addrListError != "" } {
+       set var [snmpGet -session $session -oid \
+                          vrrpStatsAddressListErrors.$ifIndex.$vrId]
+       set val [snmpUtilGetVal counter $var]
+ 
+       snmpDebug DEBUG "$func snmpGet-$var" $fd
+       snmpDebug LOG "$func VRRP address list error is $val" $fd
+
+       if {$status == "eq"} {
+          if {$val != $addrListError} {
+             result_error "$func address list error expected $addrListError \
+                           but got $val"
+          } else {
+             result_ok "$func address list error expected $addrListError and \
+                          got $val"
+          }
+       } elseif {$status == "gt"} {
+          if {$val > $addrListError} {
+             result_ok "$func address list error expected more than \
+                        $addrListError and got $val"
+          } else {
+             result_error "$func address list error expected more than \
+                        $addrListError but got $val"
+          }
+       } elseif {$status == "lt"} {
+          if {$val < $addrListError} {
+             result_ok "$func address list error expected less than \
+                        $addrListError and got $val"
+          } else {
+             result_error "$func address list error expected less than \
+                        $addrListError but got $val"
+          }
+       } elseif {$status == "ge"} {
+          if {$val >= $addrListError} {
+             result_ok "$func address list error expected more than or equal to\
+                        $addrListError and got $val"
+          } else {
+             result_error "$func address list error expected more than or \
+                           equal to $addrListError but got $val"
+          }
+       } elseif {$status == "le"} {
+          if {$val <= $addrListError} {
+             result_ok "$func address list error expected less than or equal to\
+                        $addrListError and got $val"
+          } else {
+             result_error "$func address list error expected less than or \
+                           equal to $addrListError but got $val"
+          }
+       }
+    }
+
+    if {$invalidAuthType != ""} {
+
+       set var [snmpGet -session $session -oid \
+                         vrrpStatsInvalidAuthType.$ifIndex.$vrId]
+       set val [snmpUtilGetVal counter $var]
+
+       snmpDebug DEBUG "$func snmpGet-$var" $fd
+       snmpDebug LOG "$func VRRP authentication type error is $val" $fd
+
+       if {$status == "eq"} {
+          if {$val != $invalidAuthType} {
+             result_error "$func invalidAuthType expected $invalidAuthType but \
+                           got $val"
+          } else {
+             result_ok "$func invalidAuthType expected $invalidAuthType and \
+                        got $val"
+          }
+       } elseif {$status == "gt"} {
+          if {$val > $invalidAuthType} {
+             result_ok "$func invalidAuthType expected more than \
+                        $invalidAuthType and got $val"
+          } else {
+             result_error "$func invalidAuthType expected more than \
+                        $invalidAuthType but got $val"
+          }
+       } elseif {$status == "lt"} {
+          if {$val < $invalidAuthType} {
+             result_ok "$func invalidAuthType expected less than \
+                        $invalidAuthType and got $val"
+          } else {
+             result_error "$func invalidAuthType expected less than \
+                        $invalidAuthType but got $val"
+          }
+       } elseif {$status == "ge"} {
+          if {$val >= $invalidAuthType} {
+             result_ok "$func invalidAuthType expected more than or equal to \
+                        $invalidAuthType and got $val"
+          } else {
+             result_error "$func invalidAuthType expected more than or equal to\
+                        $invalidAuthType but got $val"
+          }
+       } elseif {$status == "le"} {
+          if {$val <= $invalidAuthType} {
+             result_ok "$func invalidAuthType expected less than or equal to \
+                        $invalidAuthType and got $val"
+          } else {
+             result_error "$func invalidAuthType expected less than or equal to\
+                        $invalidAuthType but got $val"
+          }
+       }
+    }
+
+    if {$authMismatch !=  ""} {
+       set var [snmpGet -session $session -oid \
+                          vrrpStatsAuthTypeMismatch.$ifIndex.$vrId]
+       set val [snmpUtilGetVal counter $var]
+
+       snmpDebug DEBUG "$func snmpGet-$var" $fd
+       snmpDebug LOG "$func VRRP authentication mismatch error is $val" $fd
+
+       if {$status == "eq"} {
+          if {$val != $authMismatch} {
+             result_error "$func authMismatch count expected $authMismatch \
+                           but got $val"
+          } else {
+             result_ok "$func authMismatch count expected $authMismatch \
+                        and got $val"
+          }
+       } elseif {$status == "gt"} {
+          if {$val > $authMismatch} {
+             result_ok "$func authMismatch count expected more than \
+                        $authMismatch and got $val"
+          } else {
+             result_error "$func authMismatch count expected more than \
+                           $authMismatch but got $val"
+          }
+       } elseif {$status == "lt"} {
+          if {$val < $authMismatch} {
+             result_ok "$func authMismatch count expected less than \
+                        $authMismatch and got $val"
+          } else {
+             result_error "$func authMismatch count expected less than \
+                           $authMismatch but got $val"
+          }
+       } elseif {$status == "ge"} {
+          if {$val >= $authMismatch} {
+             result_ok "$func authMismatch count expected more than \
+                        or equal to $authMismatch and got $val"
+          } else {
+             result_error "$func authMismatch count expected more than \
+                           or equal to $authMismatch but got $val"
+          }
+       } elseif {$status == "le"} {
+          if {$val <= $authMismatch} {
+             result_ok "$func authMismatch count expected less than \
+                        or equal to $authMismatch and got $val"
+          } else {
+             result_error "$func authMismatch count expected less than \
+                           or equal to $authMismatch but got $val"
+          }
+       }
+    }
+
+    if {$pktLenError != ""} {
+       set var [snmpGet -session $session -oid \
+                          vrrpStatsPacketLengthErrors.$ifIndex.$vrId]
+       set val [snmpUtilGetVal counter $var]
+
+       snmpDebug DEBUG "$func snmpGet-$var" $fd
+       snmpDebug LOG "$func VRRP packet length error is $val" $fd
+
+       if {$status == "eq"} {
+          if {$val != $pktLenError} {
+             result_error "$func packet length error expected $pktLenError but \
+              got $val"
+          } else {
+             result_ok "$func packet length error expected $pktLenError and \
+              got $val"
+          }
+       } elseif {$status == "gt"} {
+          if {$val > $pktLenError} {
+             result_ok "$func packet length error expected more than \
+                       $pktLenError and got $val"
+          } else {
+             result_error "$func packet length error expected more than \
+                           $pktLenError but got $val"
+          }
+       } elseif {$status == "lt"} {
+          if {$val < $pktLenError} {
+             result_ok "$func packet length error expected less than \
+                       $pktLenError and got $val"
+          } else {
+             result_error "$func packet length error expected less than \
+                           $pktLenError but got $val"
+          }
+       } elseif {$status == "ge"} {
+          if {$val >= $pktLenError} {
+             result_ok "$func packet length error expected more than \
+                       or equal to $pktLenError and got $val"
+          } else {
+             result_error "$func packet length error expected more than \
+                           or equal to $pktLenError but got $val"
+          }
+       } elseif {$status == "le"} {
+          if {$val <= $pktLenError} {
+             result_ok "$func packet length error expected less than \
+                       or equal to $pktLenError and got $val"
+          } else {
+             result_error "$func packet length error expected less than \
+                           or equal to $pktLenError but got $val"
+          }
+       }
+    }
+    report_end_test
+    return success
+}
+
+################################################################
+#  Procedure Name: snmpGetIpAddrOfVlan
+#  
+#  Description:
+#  This procedure returns the ip address of a required vlan. 
+#
+#  Input Variables:
+#    session    - Session identifier which identifies the connection
+#                 with the DUT
+#    vlanId     - VLAN Id of the specified VLAN whose ip address is 
+#                 returned
+#  Optional Args:
+#    fd - File descriptor for logging the command outputs   
+# 
+#  Output Variables: 
+#     None
+#
+#  Return Variables:
+#    Logs the error message - On failure 
+#    ip address of the Vlan on success
+#
+#  Possible Usage:
+#    snmpGetIpAddrOfVlan -session $sessionid -vlanId 62
+###############################################################
+proc snmpGetIpAddrOfVlan { args } {
+    parse_args snmpGetIpAddrOfVlan $args {
+       session         ""
+       vlanId          ""
+       fd              "NULL"
+    }
+ 
+    set func "snmpGetIpAddrOfVlan:"
+    if {$session == "" || $vlanId == ""} {
+       error "$func session, Vlan Id must be specified"
+       return Error
+    }
+    set res [snmpGet -session $session -oid extremeVlanIpNetAddress.$vlanId]
+    result_debug "$func SNMP Get returns $res"
+
+    set val [snmpUtilGetVal ipaddr $res]
+       snmpDebug LOG "$func snmpGet value is $val" $fd
+    return $val
+}

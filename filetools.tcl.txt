@@ -1,0 +1,274 @@
+# --------------------------------------------------------------------
+# proc showLocalFileInfo
+#
+#
+# --------------------------------------------------------------------
+proc showLocalFileInfo {myFile} {
+    puts  "file name: $myFile"
+    if ![ file  exists  $myFile ] {
+        puts "The file, $myFile does not exist"
+        return;
+    }
+    puts  "exists: [ file  exists  $myFile ]"
+    puts  "----------------"
+    puts  "type: [ file  type  $myFile ]"
+    puts  "size: [ file  size  $myFile ]"
+    puts  ""
+    puts  "atime: [ file  atime  $myFile ]"
+    puts  "mtime: [ file  mtime  $myFile ]"
+    puts  ""
+    puts  "pathtype: [ file  pathtype  $myFile ]"
+    puts  "dirname: [ file  dirname  $myFile ]"
+    puts  "separator: [ file  separator  $myFile ]"
+    puts  "nativename: [ file  nativename  $myFile ]"
+    puts  "normalize: [ file  normalize  $myFile ]"
+    puts  "rootname: [ file  rootname  $myFile ]"
+    puts  "tail: [ file  tail  $myFile ]"
+    puts  "extension: [ file  extension  $myFile ]"
+    puts  "join: [ file  join  $myFile ]"
+    puts  ""
+    puts  "attributes: [ file  attributes  $myFile ]"
+    puts  "owned: [ file  owned  $myFile ]"
+    puts  "readable: [ file  readable  $myFile ]"
+    puts  "writable: [ file  writable  $myFile ]"
+    puts  "executable: [ file  executable  $myFile ]"
+    puts  ""
+    puts  "channels: [ file  channels  $myFile ]"
+    puts  "system: [ file  system  $myFile ]"
+}
+# --------------------------------------------------------------------
+#   proc _createSupportDirectories
+# 
+#       Create a list of directories in the current location
+#   args:  list of directories to verify or create
+#          out - None
+# 
+# 
+# 
+#
+# --------------------------------------------------------------------              
+proc _createSupportDirectories {args} {
+    parse_args _createSupportDirectories  $args {
+        dirList "Tmp"
+        owner   "null"
+        chmodall "1"
+    }
+
+    foreach d $dirList {
+        if {![file isdirectory $d]} {
+            if [catch {file mkdir $d} rea] {
+                puts "WARNING: failed to create directory $d"
+                # - The directory create failed.
+                # - determine who the owner of the parent is
+                set folderList [file split $d]
+                if {[llength $folderList] == 1} {
+                    if {![file owned [pwd]]} {
+                        # Note - Tclx provides these id commands
+                        set preId [id effective userid]
+                        file lstat [pwd] fInfo
+                        set fUid $fInfo(uid);
+                        catch {id userid $fUid} oopsid
+                        if [catch {file mkdir $d} rea] {
+                            if [catch {exec mkdir $d} rea] {
+                                puts "Well we tried.  Assuming this was important, so EXIT"
+                                error "Could not create directory $d";
+                            }
+                        }
+                        id userid $preId;# Back to the original id
+                    } 
+                } else {
+                    # pop the last folder and see who owns that
+                }
+            } else {
+                if {$owner != "null"} {
+                    if {[catch {exec chown $owner $d} res]} {
+                        puts "Error changing ownership of $d"
+                    }
+                }
+                if {$chmodall} {
+                    if {[catch {exec chmod 777 $d} res]} {
+                        puts "Error executing chmod 777 $d"
+                    }
+                }
+            }
+        }
+    }
+}
+# --------------------------------------------------------------------
+#   proc _verifyRegPathArg
+#
+#      **** N O T E   to be called only from the main dir ****
+#      This proc maintains the original ability to match short, regex
+#      directory names.
+#
+#   args : In - regPath value to be compared with
+#          out -
+# --------------------------------------------------------------------
+proc _verifyRegPathArg {args} {
+    
+    parse_args _verifyRegPathArg $args {
+        regPath      "Functional"
+        initPath     ".."
+    }
+
+    set rl [split $regPath "/"]
+    if {[llength $rl] > 1} {
+        set rll [llength $rl]
+        set regPath [lindex $rl [expr $rll - 1]]
+    }    
+
+    set regressions [glob -- ${initPath}/*]
+    set regNames ""
+    set regPath [string trim $regPath "."]
+    set regPath [string trim $regPath "/"]
+    
+    foreach regName $regressions {
+       if {[file isdir $regName]} {
+          lappend regNames $regName
+       }
+    }
+    foreach regName $regNames {
+       set match ""
+       set str ""
+       if {[regexp -nocase "(^.*/$regPath.*)" $regName match str]} {
+          return $str
+       }
+    }
+    puts "\n\n!!!!! ERROR \n$regPath does not match any regression type directories \n!!!!!"
+    exit;
+}
+# --------------------------------------------------------------------
+#   proc _setCurrentAutoDir
+#
+#   Clean the path up to the base required for sourcing files and executing.
+#
+#   In  - none
+#   Out - normalized dir
+#
+# --------------------------------------------------------------------
+proc _setCurrentAutoDir {} {
+    set curLocation [pwd]
+    set curDirList [split [string trim [string trim $curLocation ".."] "/"] "/"]
+    set v 0;
+    set pathList ""
+    set curAutoRoot ""
+    foreach cd $curDirList {
+        if {$cd == "main" || $cd == "Lib" || $cd == "Util"} {
+            for {set x 0} {$x<$v} {incr x} {
+                lappend pathList [lindex $curDirList $x]
+            }
+            set curAutoRoot "/[join $pathList "/"]"
+        } else {
+            incr v;
+        }
+    }
+    return $curAutoRoot;
+}
+# --------------------------------------------------------------------
+# proc _cleanAutoPath
+# 
+# Initial purpose is to strip any ixia variables from the environment
+# We want to use values from the common.cfg
+#
+#
+#    In args - none
+#    out     - cleaned path
+#
+# --------------------------------------------------------------------
+proc _cleanAutoPath {args} {
+    global auto_path
+
+    parse_args _cleanAutoPath $args {
+        remove "ixia"                        
+    }
+
+    set auto_path_temp ""
+    foreach var $auto_path {
+       set var1 [split $var "/"]
+       if {![regexp -nocase "$remove" $var1]} {
+          lappend auto_path_temp $var
+       }
+    }
+    return $auto_path_temp;
+
+}
+# --------------------------------------------------------------------
+# proc _getRepoVersion  
+#
+#     get the svn or... later git version of the directory under test
+#
+# --------------------------------------------------------------------
+proc _getRepoVersion {} {
+    global regLogin regPassword
+
+    set x [catch {exec svn info --username $regLogin --password $regPassword} what]
+
+    set lines [split $what "\n"]
+    foreach line $lines {
+        set words [split $line " "]
+        set i 0
+        foreach word $words {
+            if {[string tolower $word] == "revision:"} {
+                set rev [lindex $words [expr $i + 1]]
+                if {$rev > 1000} {
+                    return $rev
+                } else {
+                    return "null"
+                }
+            } else {
+                incr i
+            }
+        }
+    }
+}
+# --------------------------------------------------------------------
+# Procedure: _setAllDirFilePrivs
+#
+# set priv in Tmp dir to all 777s
+#
+# --------------------------------------------------------------------
+proc _setAllDirFilePrivs {args} {
+    global MAIN
+    parse_args _setAllDirFilePrivs  $args {
+        dir       "Tmp"
+        filestr   "*"
+        sudouser  "autotest-rtp"
+        priv      "777"
+    }
+
+    set fList [glob -types {f} -path ${dir}/ $filestr]
+    if {[info exists MAIN(user)] && $MAIN(user) == "$sudouser"} {
+        puts "chmod sudo as autotest-rtp"
+        foreach f $fList {
+            if {[catch {exec sudo chmod $priv ${f}} rea]} {
+                puts "Failed the chmod $priv tmp file: $rea"
+            }
+        }
+    } else {
+        puts "hmm user set file privs"
+        foreach f $fList {
+            puts "sudo chmod $priv ${f}"
+            if {[catch {exec sudo chmod $priv ${f}} rea]} {
+                puts "Failed the chmod $priv tmp file: $rea"
+            }
+        }
+    }
+}
+# --------------------------------------------------------------------
+proc _walkDirs {args} {
+    global MAIN
+    parse_args _walkDirs  $args {
+        action    "cleanTmp"
+    }
+    set AllDirs [glob -type d *]
+    set h [pwd]
+    foreach d $AllDirs {
+        cd $d
+        puts "cd to $d"
+        catch {glob -type d *} subDirs
+        if {[lsearch $subDirs "Tmp"] >= 0} {
+            _setAllDirFilePrivs -dir "Tmp"
+        }
+        cd $h
+    }
+}

@@ -1,0 +1,1309 @@
+
+# Utilities for result file manipulation
+global LIB_PATH
+
+# Various Internal Variables
+set EX_RESULT_LEVEL 2
+set EX_DEBUG 1
+
+# The output_level definitiions
+
+set EX_RESULT_LEVEL_INFO(0) {debug log print}
+set EX_RESULT_LEVEL_INFO(1) {warning error debug log print}
+set EX_RESULT_LEVEL_INFO(2) {warning error h1 h2 h3 p ok skip debug perfData log print}
+set EX_RESULT_LEVEL_INFO(3) {warning error h1 h2 h3 p ok skip pre debug perfData log print}
+set EX_RESULT_LEVEL_INFO(4) {warning error h1 h2 h3 p ok skip pre debug perfData log print}
+
+
+################################################################## 
+# Procedure Name: fmt_add
+#   
+# Description: internal lib command to define result_* commands
+#              Adds the selected format to the formatting commands.
+#              uses result_format.tcl file to define the procs
+#
+# Input args: fmt, defs
+# Output args: none
+# Return value: none
+# Typical usage:
+# fmt_add h3 {
+# 	color "blue"
+# 	htmlstart "<h3>"
+# 	start ""
+# 	line "** %% **"
+# 	end ""
+# 	htmlend "</h3>"
+# }
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+##################################################################
+proc show_text_date { txt {extended no}} {
+    global whichDutNow
+    if {$extended == "yes"} {
+        set tm [exec date "+%m/%d/%y %H:%M:%S"]
+    } else {
+        set tm [exec date "+%H:%M:%S"]
+    }
+    append txt " - "
+    append txt $tm
+    return $txt
+}
+
+proc show_text_date_dut { txt {extended no}} {
+    global whichDutNow
+    if {$extended == "yes"} {
+        set tm [exec date "+%m/%d/%y %H:%M:%S"]
+    } else {
+        set tm [exec date "+%H:%M:%S"]
+    }
+    if {[info exists whichDutNow]} {
+        append txt " - DUT${whichDutNow} - "
+    } else {
+        append txt " - "
+    }
+    append txt $tm
+    return $txt
+}
+
+proc fmt_add {fmt defs {newColor "null"}} {
+    global EX_RESULT_FORMAT erf
+
+    set cmd ""
+
+    # Set the defaults
+    set erf($fmt,color) "white"
+    set erf($fmt,htmlstart) ""
+    set erf($fmt,start) ""
+    set erf($fmt,line) "%%"
+    set erf($fmt,end) ""
+    set erf($fmt,htmlend) ""
+
+    # Search through the format list and add each key to the
+    # EX_RESULT_FORMAT array.
+    foreach {key value} $defs {
+        if {$key == "cmd"} {
+            # if the key is cmd, then we need to store it
+            set cmd $value
+        } else {
+            if {$key == "color" && $newColor != "null"} {
+                set erf($fmt,$key) $newColor
+            } else {
+                set erf($fmt,$key) $value
+            }
+        }
+    }
+
+    # If we got cmd (and it's not NULL)
+    if {$cmd != ""} {
+        # We need ot make a new procedure that executs cmd as well
+        # as the normal result_fmt command.
+        if {($fmt == "perfData") || ($fmt == "log")} {
+               proc "result_$fmt" "text" "$cmd \$text;\nresult_fmt $fmt \[show_text_date_dut \$text\]"
+            } elseif { ($fmt == "debug") || ($fmt == "error")} {
+               if  { ($fmt == "debug")} {
+                 proc "result_$fmt" "text" "$cmd;\nresult_fmt $fmt \$text;\nshowDebugInfo $fmt"
+               } else {
+                 proc "result_$fmt" "text" "$cmd;\nresult_fmt $fmt \[show_text_date_dut \$text\];\
+                            \nshowDebugInfo $fmt;\n_analyzeFailure \$text;"
+               }
+            } elseif {$fmt == "h1"} {
+               proc "result_$fmt" "text" "$cmd;\nresult_fmt $fmt \[show_text_date \$text yes\]"
+            } else {
+               proc "result_$fmt" "text" "$cmd;\nresult_fmt $fmt \[show_text_date_dut \$text\]"
+            }
+    } else {
+        # Otherwise, we just call the result_fmt command
+        switch -exact -- $fmt {
+           "h1" {
+                proc "result_$fmt" "text" "puts \"\"; result_fmt $fmt \[show_text_date \$text yes\]"
+           }
+           "h2" {
+                proc "result_$fmt" "text" "puts \"\"; result_fmt $fmt \[show_text_date \$text\]"
+           }
+           "p" {
+                proc "result_$fmt" "text" "puts \"\"; result_fmt $fmt \[show_text_date_dut \$text\]"
+           }
+           "print" {
+                proc "result_$fmt" "text" "puts \"\"; result_fmt $fmt \[show_text_date_dut \$text\]"
+           }
+           default {
+                proc "result_$fmt" "text" "puts \"\"; result_fmt $fmt \[show_text_date \$text\]"
+           }
+        }
+    }
+}
+
+# Load the format definitions
+# Don't move this line - It have to be here !!!
+#source "../../Lib/result_format.tcl"
+source "$LIB_PATH/result_format.tcl"
+source "$LIB_PATH/pdList.tcl"
+
+################################################################## 
+# Procedure Name: ex_cat
+#   
+                   #proc "result_$fmt" "text" "$cmd;\nshowDebugInfo $fmt;\nresult_fmt $fmt \$text"
+# Description: internal lib command to read and return the data from a file
+#
+# Input args: file
+# Output args: none
+# Return value: string read from file
+# Typical usage:
+#	set data [ex_cat $report]
+#
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+#############################################################
+proc ex_cat {file} {
+	if {![file exists $file]} {
+		return ""
+	}
+	
+	set fid [open $file]
+	set data [read $fid]
+	close $fid
+	
+	return $data
+}
+
+################################################################## 
+# Procedure Name: get_result_dir
+#   
+# Description: Returns the result directory. If it does not exist, it will be created.
+#
+# Input args: none  
+#  
+# Output args: none
+# 
+# Return value: String value of result directory
+#
+# Typical usage: 
+#              get_result_dir
+#
+# Category: setup
+##################################################################
+proc get_result_dir {{randomIndex "unknown"}} {
+   # Need to understand before change this global variable! 
+   global resultDir MAIN
+
+   if {$resultDir == "NULL"} {
+     set resultDir [find_new_result_dir $randomIndex]
+     set MAIN(RESULTDIR) $resultDir
+     #
+     # EY-03-22-2013: Instead of just checking for permission denied errors,
+     # check for any abnormal return code and print out the error.
+     if {[catch {eval [file mkdir $resultDir]} reason]} {
+         puts stderr "get_result_dir: Couldn't create $resultDir directory: $reason";
+         flush stderr;
+         return "";
+     }
+#     if [regexp -nocase "permission denied" $reason] {
+#             puts stderr "$reason"
+#             return ""
+#     }
+   }
+
+   return $resultDir
+}
+
+################################################################## 
+# Procedure Name: find_new_result_dir
+#   
+# Description: Uses the current date to find a new result directory.
+#
+# Input args: none  
+#  
+# Output args: 
+#             result directory        
+#
+# Typical usage: 
+#             find_new_result_dir
+#
+# Category: setup
+##################################################################
+proc find_new_result_dir { randomIndex } {
+    global tStartDateString MAIN
+
+    if {![info exists tStartDateString]} {
+        set tStartDateString [clock format [clock seconds] -format "%Y-%m-%d_%I.%M.%S%p"]
+    }
+    
+    if {![info exists MAIN(RESULTPATH)]} {
+        set MAIN(RESULTPATH) "Result"
+        set tmp "Result"
+    } else {
+        set tmp $MAIN(RESULTPATH)
+    }
+    # Make sure that the result directory does not exist.
+    #puts "find_new_result_dir startDate: $tStartDateString"
+    set pwd [pwd]
+    if {[regexp -nocase "clitest" $pwd]} {
+       global resultPath
+       set tmp $resultPath
+    }
+    
+    if { $randomIndex == "unknown"} {
+      set range 1000000
+      set randomIndex [expr {int(rand()*$range)}]
+    }
+    set dname [format %s_%s $tStartDateString $randomIndex]
+    set dir "$tmp/$dname"
+
+    return $dir
+}
+
+################################################################## 
+# Procedure Name: open_result_file
+#   
+# Description: Opens result file
+#
+# Input args: 
+#              test name - test case name  
+#              mode - read/write
+#
+# Output args:.. 
+#             file descriptor        
+#
+# Typical usage: 
+#             open_result_file $test $mode
+#
+# Category: setup
+##################################################################
+proc open_result_file {test {mode "a"}} {
+	global EX_RESULT_FILE EX_RESULT_FILE_HTML MAIN
+
+    set MAIN(APPROXTIME1) [clock seconds]
+    set MAIN(CURRENTTESTCASE) $test
+
+    #Code to FAKE run test cases just to get their testNo
+    if {[info exists MAIN(GETTESTNUMS)] && $MAIN(GETTESTNUMS)} {
+        return -code return $test
+    }
+
+	# set the result files
+	set EX_RESULT_FILE [open "[get_result_dir]/$test.txt" "$mode"]
+
+    # Update the file that holds all test case mappings
+    set r [catch {info level [expr [info level] - 1]} e]
+    if {$r} {
+        #puts "Called directly by the interpreter (e.g.: .tcl on the partyline)."
+    } else {
+        map_proc_to_result_file $e $test
+    }
+
+    # SKIP FEATURE SECTION STILL HAS SMALL RESULT TEXT FILES SO UPLOAD WORKS
+    if {[info exists MAIN(MAKESKIPRESULTFILE)] && $MAIN(MAKESKIPRESULTFILE)} {
+        global title fd_res
+        set fd_res $EX_RESULT_FILE
+        #_setShowOutput -screen off -log on -res_fmt on
+        if {[info exists title]} {
+            result_h1 "$title";
+            report_start_test "$title";
+        } else {
+            result_h1 "$test will be skipped. No Feature support on platform";
+            report_start_test "$test will be skipped. No Feature support on platform";
+        }
+        result_skip "$test Skipped due to platform Support"
+        report_end_test;
+        #_setShowOutput -screen on -log on -res_fmt on
+        close $fd_res
+        set EX_RESULT_FILE ""
+        return -code return $test
+    }
+	# !! WARNING !!
+	# DO NOT USE THIS DISCRIPTOR, IT MAY BE GONE IN FUTURE VERSIONS
+	return $EX_RESULT_FILE
+}
+proc map_proc_to_result_file {testproc resultfile} {
+    global LISTINFO PHPLSTCOUNT
+
+    if {![info exists LISTINFO("any")]} {
+        return; #Variable has not been set yet
+    }
+    if {[lsearch $LISTINFO("any") $testproc] < 0} {
+        return; #This is not a proc in the completetests.lst
+    }
+    if {[info exists LISTINFO($testproc)]} {
+        set l $LISTINFO($testproc)
+    } else {
+        set l "not_set"
+    }
+
+    set fd_me [open "[get_result_dir]/testfile_map.txt" "a"]
+    puts $fd_me "#proc: $testproc file: $resultfile.txt list: $l"
+    puts $fd_me "lappend procs_executed \"$testproc\""
+    puts $fd_me "set procFile(\"$testproc\") \"$resultfile.txt\""
+    close $fd_me
+
+    if {[info exists PHPLSTCOUNT]} {incr PHPLSTCOUNT;} else {set PHPLSTCOUNT 0}
+    set fd_php [open "[get_result_dir]/testfile_php_map.txt" "a"]
+    puts $fd_php "\$tcllists\[\"$l\"]\[$PHPLSTCOUNT] = \"$testproc\"; \$testlist\[\"$testproc\"] = \"$l\";"
+    close $fd_php
+
+}
+################################################################## 
+# Procedure Name: close_result_file
+#   
+# Description: closes the current result file. 
+#
+# Input args: none
+#
+# Output args: 
+#              none        
+#
+# Typical usage: 
+#             close_result_file $fid
+#
+# Category: setup
+##################################################################
+proc close_result_file {{fid ""}} {
+#	global EX_RESULT_FILE EX_RESULT_FILE_HTML
+	global EX_RESULT_FILE
+	
+	set fid $EX_RESULT_FILE
+        #regex is just to make sure fid is a valid fid
+        #if {[regexp -nocase {[0-9a-zA-Z]} $fid]} {
+        #   dumpStackUtilizationInfo
+        #}
+	if {$fid != ""} {
+		close $fid
+	}
+
+	set EX_RESULT_FILE ""
+}
+
+################################################################## 
+# Procedure Name: iswhite
+#   
+# Description: Returns true if char is a white space (space, tab, new line, or
+# carriage return), fales if it isn't.
+#
+# Input args: char
+# Output args: none
+# Return value: 1 or 0
+# Typical usage:
+#	set result [iswhite "abc"]
+#
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+#############################################################
+proc iswhite {char} {
+	return [regexp {[ \t\n\r]} $char]
+}
+
+################################################################## 
+# Procedure Name: get_next_char
+#   
+# Description: Returns the next character in string relative to index. We also
+# incriment index so successive calls to get_next_char will always
+# return the next character.
+#
+# Input args: str
+# Output args: index
+# Return value: integer
+# Typical usage:
+#     set char [get_next_char $str i]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+#############################################################
+proc get_next_char {str index} {
+	upvar $index i
+	incr i
+	return [string index $str [expr {$i - 1}]]
+}
+
+################################################################## 
+# Procedure Name: clip_string_with_wrap
+#   
+# Description: Changes a string (str) into a list of lines. Wrapps the lines
+# at col. This function should work on a single line, or two hundered
+# lines. It is horribly inefficient and should be re-written in C.
+#
+# Input args: str,col
+# Output args: none
+# Return value: string
+# Typical usage:
+#  set para [clip_string_with_wrap $p [expr {78 - [string length $erf($style,line)] + 2}]]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+#############################################################
+proc clip_string_with_wrap {str col} {
+	# Initialize our variables
+	set ret {}
+	set pos 0
+	set line ""
+        set strLength [string length $str]
+
+	# Loop until we are done with the string
+	for {set i 0} {$i < $strLength } {incr i} {
+		# Get the nex character
+		set char [string index  $str $i]
+		
+		# Test to see if we are past the column limit
+		if {($pos) >= $col} {
+			# If we are, append the current line to the return list
+			lappend ret $line
+			# Re-initialize the line
+			set line ""
+			# Append the character to the line
+			append line $char
+			# Set the position to 1 (we already have 1 character)
+			set pos 1
+		} else {
+			# Oterwise, append the character to the line
+			append line $char
+			# Incriment the position
+			incr pos
+		}
+	}
+
+	# Figure out how long the line was, and subtract that from our
+	# column limit. The purpose of this is to padd the last line
+	# with spaces so that any surrounding formatting appears as it should.
+        # commented out. Creates problems. Seems unncessary
+
+	#set i [expr {$col - [string length $line]}]
+	#while {$i > 0} {
+	#	#append line " "
+	#	incr i -1
+	#}
+
+	# Append the last line to ret.
+	lappend ret $line
+
+	# Return the list of lines.
+	return $ret
+}
+
+################################################################## 
+# Procedure Name: mputs
+#   
+# Description: 
+# Put multiple argumets to multiple file descriptors. The first argument
+# fdl is a list of file descriptors. All remaining arguments are then
+# put to the file descriptors WITH OUT NEW LINES. So, the following
+#
+# Input args: fd, args
+# Output args: none
+# Return value: none
+# Typical usage:
+#   mputs {stdout stderr} "Testing, " "the" " system\n"
+#
+# puts "Testing, the system\n" to standard out. (The \n is a literal new
+# line).
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+#############################################################
+proc mputs {fdl args} {
+	foreach fd $fdl {
+		foreach str $args {
+			puts -nonewline $fd $str
+		}
+	}
+}
+
+################################################################## 
+# Procedure Name: put_ansi_out
+#   
+# Description: 
+# Puts a string of text to a file descriptor with ANSI escaped colors.
+# "style" 
+#
+# Input args: fd, stype, str
+# Output args: none
+# Return value: none
+# Typical usage:
+#  put_ansi_out "stdout" $style $text
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+#############################################################
+proc put_ansi_out {fd style str} {
+    global MAIN EX_RESULT_FORMAT erf
+    #upvar #0 EX_RESULT_FORMAT erf
+
+    if {![info exists MAIN(REPORT_COLS)]} {set MAIN(REPORT_COLS) 138}
+
+	# We want to break the string at the new lines into paragraphs.
+	set plist [split $str "\n"]
+
+	# We then operate on each paragraph.
+	foreach p $plist {
+		# Put the color escape sequence to the file descriptors
+		mputs $fd [get_color_from_name $erf($style,color)]
+
+		# If the start is non-NULL, then put it to the file
+		if {$erf($style,start) != ""} {
+			mputs $fd $erf($style,start) "\n"
+		}
+
+		# Break the paragraph into lines
+		# Init wrap at 78 replaced with $MAIN(REPORT_COLS) from common.cfg
+		set para [clip_string_with_wrap $p [expr {$MAIN(REPORT_COLS) - [string length $erf($style,line)] + 2}]]
+
+		# Then, operate on each line and put it to the file.
+		foreach l $para {
+			regsub {%%} $erf($style,line) $l line
+			mputs $fd $line "\n"
+		}
+
+		# If the end sequence is non-NULL, put it to the file.
+		if {$erf($style,end) != ""} {
+			mputs $fd $erf($style,end) "\n"
+		}
+
+		# Now, end the output by putting "normal" escape sequence (and
+		# a new line character)
+		mputs $fd [get_color_from_name "none"]
+	}
+}
+
+################################################################## 
+# Procedure Name: put_ascii_out
+#   
+# Description: 
+# Same as above, but without ANSI escape sequences
+#
+# Input args: fd, style, str
+# Output args: none
+# Return value: none
+# Typical usage:
+# put_ascii_out $EX_RESULT_FILE $style $text
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+#############################################################
+proc put_ascii_out {fd style str} {
+    global MAIN EX_RESULT_FORMAT erf
+    #upvar #0 EX_RESULT_FORMAT erf
+    
+    if {![info exists MAIN(REPORT_COLS)]} {set MAIN(REPORT_COLS) 138}
+
+    set plist [split $str "\n"]
+
+	foreach p $plist {
+		if {$erf($style,start) != ""} {
+			mputs $fd $erf($style,start) "\n"
+		}
+        # Original wrapping of 78 chars replaced with $MAIN(REPORT_COLS) from common.cfg 
+		set para [clip_string_with_wrap $p [expr {$MAIN(REPORT_COLS) - [string length $erf($style,line)] + 2}]]
+		foreach l $para {
+			regsub {%%} $erf($style,line) $l line
+			mputs $fd $line "\n"
+		}
+		if {$erf($style,end) != ""} {
+			mputs $fd $erf($style,end) "\n"
+		}
+	}
+}
+
+################################################################## 
+# Procedure Name: get_color_from_name
+#   
+# Description: Returns the ANSI escape sequence for color "name"
+#
+# Input args: name
+# Output args: none
+# Return value: integer
+# Typical usage:
+# mputs $fd [get_color_from_name "none"]
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+#############################################################
+proc get_color_from_name {name} {
+	global tcl_platform
+
+	if {$tcl_platform(platform) != "unix"} {
+		return ""
+	}
+	set b 0
+	set c 7
+	switch -- [string tolower $name] {
+		"black" {
+			set c 0
+		} "darkred" {
+			set c 1
+		} "darkgreen" {
+			set c 2
+		} "brown" {
+			set c 3
+		} "darkblue" {
+			set c 4
+		} "darkmagenta" {
+			set c 5
+		} "darkcyan" {
+			set c 6
+		} "gray" {
+			set c 7
+		} "none" {
+			return "\033\[0m"
+		} "darkgray" {
+			set c 0
+			set b 1
+		} "blue" {
+			set c 4
+			set b 1
+		} "green" {
+			set c 2
+			set b 1
+		} "cyan" {
+			set c 6
+			set b 1
+		} "red" {
+			set c 1
+			set b 1
+		} "magneta" {
+			set c 5
+			set b 1
+		} "yellow" {
+			set c 3
+			set b 1
+		} "white" {
+			set c 7
+			set b 1
+		}
+		default {
+			set c 0
+		}
+	}
+
+	if {$b} {
+		return "\033\[1;3${c}m"
+	} else {
+		return "\033\[3${c}m"
+	}
+}
+
+################################################################################### 
+# Procedure Name: result_fmt
+#   
+# Description: Puts text to all result files formatted by style
+#
+# Input args: style, text
+# Output args: none
+# Return value: none
+# Typical usage:
+# proc "result_$fmt" "text" "$cmd;\nresult_fmt $fmt \$text"
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+###################################################################################
+proc result_fmt {style text} {
+	global EX_RESULT_FILE EX_RESULT_LEVEL EX_RESULT_LEVEL_INFO MAIN
+
+    _initOutputOptions
+    if {$MAIN(SHOWRESULT_FMT)} {
+        if {[lsearch $EX_RESULT_LEVEL_INFO($EX_RESULT_LEVEL) $style] > -1} {
+            put_ansi_out "stdout" $style $text
+        } 
+    }
+    if {$MAIN(PRINTTOLOG)} {
+        put_ascii_out $EX_RESULT_FILE $style $text
+    }
+}
+
+################################################################## 
+# Procedure Name: ex_output
+#   
+# Description: Internal proc, sets the output level
+#
+# Input args: level
+# Output args: none
+# Return value: none
+# Typical usage:
+#     ex_output 2
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+#############################################################
+proc ex_output {{level -1}} {
+	global EX_RESULT_LEVEL
+
+	if {$level > 4} {
+		error "Bad level $level"
+	}
+
+	if {$level < 0} {
+		return $EX_RESULT_LEVEL
+	} else {
+		set EX_RESULT_LEVEL $level
+	}
+}
+
+################################################################## 
+# Procedure Name: ex_debug
+#   
+# Description: Turns on or off debugging. Internal proc only
+#
+# Input args: debug
+# Output args:  none
+# Return value: none
+# Typical usage:
+# cmd {if {![ex_debug]} {return}}
+#
+# Category Types (Setup,GetSwitchInfo,SendTraffic,CaptureTraffic,VerifySwitchOutput
+#                          VerifyTraffic)
+# Category: Setup
+#############################################################
+proc ex_debug {{debug ""}} {
+	global EX_DEBUG
+
+	if {$debug == ""} {
+		return $EX_DEBUG
+	} else {
+		set EX_DEBUG $debug
+	}
+}
+
+
+##################################################################
+# Procedure Name: GetLatestResultDir
+#
+# Description: gets the latest result directory for the module
+#
+# Input args:
+#              module name, regType, home of the automation tree`
+#              version
+#
+# Output args: none
+#
+# Return value: result directory name
+# Typical usage:
+#              GetLatestResultDir $modulename $regType ""
+#
+# Category: setup
+################################################################
+proc GetLatestResultDir {testModule regType {home "/auto/branch/automation"}} {
+
+   set lt 0
+   set ctimeList ""
+
+
+   set regType [ string tolower $regType ]
+   switch  -regexp $regType {
+     "func*" { set resultDir "$home/Functionaltest" }
+     "perf*" { set resultDir "$home/PerformanceTest" }
+     "scala*" { set resultDir "$home/Scalabilitytest" }
+     "bench*" { set resultDir "$home/Benchmarktest" }
+     "cli" { set resultDir "$home/CLItest/uploadanddownload" }
+     default { set resultDir " " }
+   }
+   set resultDir "$resultDir/$testModule/Result"
+   result_debug "Result dir = $resultDir"
+   set dirList [glob -nocomplain -- "$resultDir/*"]
+   foreach di $dirList {
+      file lstat $di damn
+      #puts "ctime $damn(ctime)"
+      lappend ctimeList [set damn(ctime)]    ;# NOTE: ctime changed to ino attribute of file.
+   }
+   set latestcTime [lindex [lsort -integer $ctimeList] [expr [llength $ctimeList]-1]]
+   set finalIndex [lsearch -exact $ctimeList $latestcTime]
+   set finalDirectory [file tail [lindex $dirList $finalIndex]]
+   set latestResultDirectory "$resultDir/$finalDirectory"
+   #puts "latestResultDirectory $latestResultDirectory"
+   return $latestResultDirectory
+}
+
+##################################################################
+# Procedure Name: GetMainResultDir
+#
+# Description: gets the result directory for the module created by main.tcl
+#
+# Input args:
+#              module name, regType, randomIndex home of the automation tree`
+#              version
+#
+# Output args: none
+#
+# Return value: result directory name
+# Typical usage:
+#              GetLatestResultDir $modulename $regType ""
+#
+# Category: setup
+################################################################
+proc GetMainResultDir {testModule regType randomIndex {home "/auto/branch/automation"}} {
+
+   set regType [ string tolower $regType ]
+   switch  -regexp $regType {
+     "func*" { set resultDir "$home/Functionaltest" }
+     "perf*" { set resultDir "$home/PerformanceTest" }
+     "scala*" { set resultDir "$home/Scalabilitytest" }
+     "bench*" { set resultDir "$home/Benchmarktest" }
+     "cli" { set resultDir "$home/CLItest/uploadanddownload" }
+     default { set resultDir " " }
+   }
+   set resultDir "$resultDir/$testModule/Result"
+   result_debug "Result dir = $resultDir"
+   puts "Result dir = $resultDir"
+   set dirList [glob -nocomplain -- "$resultDir/*"]
+   foreach di $dirList {
+
+      if {[regexp -nocase $randomIndex $di]} {
+        result_debug "mainResultDir $di"
+        set mainResultDir $di
+        puts "mainResultDir $mainResultDir"
+        return $mainResultDir
+      }
+
+   }
+   result_error "did not find the Result directory"
+   puts "did not find the Result directory"
+   return error
+}
+
+##################################################################
+# Procedure Name: create_report_directory
+#
+# Description: creates report directory
+#              with a more informative name
+#
+# Input args:
+#              create -if yes create the direcory otherwise create reportdir.tct file
+#              module name
+#              version
+#
+# Output args: none
+#
+# Return value: report directory name
+# Typical usage:
+#              create_report_directory yes $modulename $version
+#
+# Category: setup
+################################################################
+proc create_report_directory { {sourceFile "null"} {create "yes"} {modulename ""} {version ""} {subversion ""} {qId ""}} {
+global DUTs_info
+   global env
+   global tcl_platform
+   global reportDir 
+
+   set tmp "Report"
+   set pwd [pwd]
+
+   set sourceFile [file tail $sourceFile]
+   set sourceFileList [split $sourceFile .]
+   set sourceFile [lindex $sourceFileList 0]
+
+   if {[regexp -nocase "clitest" $pwd]} {
+       global reportPath
+       set tmp $reportPath
+   }
+
+   set bladeType [getModule]
+   set date  [clock format [clock seconds] -format "%Y-%m-%d"]
+   set Platform $DUTs_info(DUT1,platform)
+
+   global NEWBUILD
+   global OLDBUILD
+   if {[regexp -nocase "upgradedowngrade" $pwd]} {
+#      set ImageVer [format %s_%s $DUTs_info(DUT1,priImage) $DUTs_info(DUT1,secImage)]
+      set ImageVer [format %s:%s $NEWBUILD $OLDBUILD]
+   } else {
+     if {$version != ""} {
+        set ImageVer $version
+     } else {
+        set ImageVer $DUTs_info(DUT1,version)
+     }
+   }
+   set ImageVer [string tolower $ImageVer]
+   if {($subversion != "") && ($subversion != "NULL") } {
+      set ImageVer $ImageVer-$subversion
+   } 
+   puts "ImageVer :: $ImageVer"
+
+   set index 0
+   set goOn 1
+   while {$goOn == 1} {
+     set reportDirList [glob -nocomplain -- "$tmp/*$sourceFile*$Platform*$bladeType*$modulename*$ImageVer*$qId $index"]
+     if {[llength $reportDirList] > 0} {
+       incr index
+     } else {
+       set goOn 0
+     }
+   }
+   set reportDir "$tmp/$date $sourceFile $Platform $bladeType $modulename $ImageVer $qId $index"
+   puts "reportDir $reportDir"
+   ;# create report directory
+   if {$create == "yes"} {
+     if {![file exists $reportDir]} {
+         puts "Creating report directory <$reportDir>."
+         catch {exec mkdir $reportDir} output
+     }
+   }
+   if {$create != "yes"} {
+     set resultDir [get_result_dir]
+     puts "create_report_dir - resultDir = $resultDir"
+     # lets write the new report directory string into a file: reportdir.txt
+     set fdRD [open "$resultDir/reportdir.txt" "w"]
+     puts $fdRD "$reportDir\n"
+     close $fdRD;
+   }
+   return $reportDir
+}
+
+##################################################################
+# Procedure Name: move_file_result_directory
+#
+# Description: moves ta single file in theresult directory to report directory
+#
+# Input args:
+#              file name
+#
+# Output args: none
+#
+# Return value:
+# Typical usage:
+#              move_file_result_directory $fileName 
+#
+# Category: setup
+################################################################
+
+proc move_file_result_directory {fileName} {
+
+   global reportDir
+
+   ;# Move fileName File if it exists.
+   if [file exists [get_result_dir]/$fileName] {
+       puts "Moving file [get_result_dir]/$fileName to report directory <$reportDir>."
+       catch {exec mv [get_result_dir]/$fileName $reportDir} output
+   }
+}
+
+################################################################## 
+# Procedure Name: move_result_directory
+#   
+# Description: move the complete result directory to report directory
+#              with a more informative name
+#
+# Input args:  
+#              module name
+#              version
+#  
+# Output args: none        
+#
+# Return value: 
+# Typical usage: 
+#              move_result_directory $modulename $version
+#
+# Category: setup
+################################################################
+proc move_result_directory { {modulename ""} {version ""} {execTimeFile ""} } {
+   global DUTs_info MAIN
+   global env
+   global tcl_platform
+   global reportDir
+       
+   set tmp "Report"
+   set pwd [pwd]
+   if {[regexp -nocase "clitest" $pwd]} {
+       global reportPath
+       set tmp $reportPath
+   }
+   
+   set bladeType [getModule]
+   set date  [clock format [clock seconds] -format "%Y-%m-%d"]
+   set Platform $DUTs_info(DUT1,platform)
+   
+   global NEWBUILD
+   global OLDBUILD
+   if {[regexp -nocase "upgradedowngrade" $pwd]} {
+#      set ImageVer [format %s_%s $DUTs_info(DUT1,priImage) $DUTs_info(DUT1,secImage)]
+      set ImageVer [format %s:%s $NEWBUILD $OLDBUILD]
+   } else {
+     if {$version != ""} {
+        set ImageVer $version
+     } else {       
+        set ImageVer $DUTs_info(DUT1,version)
+     }
+   }
+   set ImageVer [string tolower $ImageVer]
+
+# adding e-mail-report-to-tester feature
+   if {[info exist MAIN(feature_directory)] && [info exist env(mailto)] && 
+       ![regexp -nocase "windows" $tcl_platform(platform)]} {
+       set subj "Test summary: $ImageVer $Platform $bladeType $modulename $MAIN(feature_directory)"
+       exec /bin/cat "[get_result_dir]/report.txt" | /bin/mail -s $subj $env(mailto)
+   }
+   
+   #Remove the report.exr from original result dir
+   set exrFile "[get_result_dir]/report.exr"
+   if {[file exists $exrFile]==1} {
+      file delete $exrFile
+   }
+   #Remove the reportdir.txt file
+   set reportdirFile "[get_result_dir]/reportdir.txt"
+   if {[file exists $reportdirFile]==1} {
+     file delete $reportdirFile
+   }
+
+   #puts "Directory contents are:\n[glob -directory [get_result_dir] *]"
+   set fileList [glob -directory [get_result_dir] *]
+
+   foreach fileThis [glob -directory [get_result_dir] *] {
+     if { [file rename -force  $fileThis $reportDir] != "" } {
+       puts "Failed to move results file $fileThis to report directory."
+       puts "Make sure all opened files are closed."
+     }
+   }
+   if [file isdirectory [get_result_dir]] {
+     file delete [get_result_dir]
+   }
+
+   ;# Move executionTime File if it exists.
+   if [file exists [get_result_dir]/$execTimeFile] {
+       puts "Moving execution time file [get_result_dir]/$execTimeFile to report directory <$reportDir>."
+       catch {exec mv $execTimeFile $reportDir} output
+   }
+   
+   # Move core file if any to Report directory
+   moveCoreDumpsToReportDir
+   moveConfigDiffToReportDir
+
+   # Change report permissions to wide open
+   catch {exec chmod 777 $reportDir -R } output
+
+}
+
+################################################################## 
+# Procedure Name: getModule
+#   
+# Description: Get blade type - HW module type
+#
+# Input args:  none
+#                
+# Output args: 
+#              module name             
+#
+# Return value: string
+#
+# Typical usage: 
+#              getModule 
+#
+# Category: setup
+################################################################
+proc getModule {} {
+ global sourceFile
+ set module ""
+ global stackable i386Stackable
+ global DUTs_info
+
+ set cfgFile [file tail $sourceFile]
+ set Platform $DUTs_info(DUT1,platform)
+
+ if {[regexp -nocase "$stackable|$i386Stackable" $Platform]} {
+    return $module
+ }
+ if { [file exists ../../main/runReg.cfg] } {
+    set module [get_platform_blade $cfgFile]
+    if {$module == "not_found"} {
+      set module [getModuleNoRunRegCfg]
+    }
+  } else {
+    set module [getModuleNoRunRegCfg]
+  }
+ return $module
+}
+
+
+proc getModuleNoRunRegCfg {} {
+   global portMappingList
+   global DUTs_info
+  set module ""
+  set dut DUT
+  set connect _CONNECT
+   
+  set Platform $DUTs_info(DUT1,platform)
+  global stackable i386Stackable
+  if {[regexp -nocase "$stackable|$i386Stackable" $Platform]} {
+     return $module
+  }
+  
+  lappend parameterList "{HW Module Type:} 1"
+if { 0 } {
+  if {![info exists portMappingList]} {
+     global DUT1_CONNECT
+     Login $DUT1_CONNECT
+     set hwTypes [GetKeyValue "show slot" $parameterList]
+     unset parameterList
+     lappend parameterList "{State:} 1"
+     set states [GetKeyValue "show slot" $parameterList]
+     for {set i 0} {$i<[llength $states]} {incr i} {
+        if {[lindex $states $i]=="Operational"} {
+           unset parameterList
+           return [lindex $hwTypes $i]
+           break
+        }
+     }
+  }
+} else {
+  if {![info exists portMappingList]} {
+     global DUT1_CONNECT
+     Login $DUT1_CONNECT
+     lappend parameter1List "{State:} 1"
+     for {set i 1} {$i<=8} {incr i} {
+        set state [GetKeyValue "show slot $i" $parameter1List]
+	if {$state == "Operational"} {
+	   unset parameter1List
+	   set hwType [GetKeyValue "show slot $i" $parameterList]
+	   unset parameterList
+	   return $hwType
+	}
+     }
+  }
+}
+
+  if {[info exists DUTs_info(DUT1,bladeType)]} {
+     return $DUTs_info(DUT1,bladeType)
+  }
+
+  set slotList ""
+  set dutList ""
+  foreach portId $portMappingList {
+     if {[lsearch -regexp $portId :]!=-1} {
+        set slot [lindex [split [lindex $portId 1] :] 0]
+        set temp [lindex $portId 2]
+        
+        set index [lsearch $slotList $slot]
+        set flag 0
+        if {($index!=-1)} {
+           if {[lindex $dutList $index]==$temp} {
+              set flag 1
+           }
+        }
+        
+        if {($index==-1) && ($flag==0)} {
+           global $dut$temp$connect
+           Login [expr $$dut$temp$connect]
+           set hwType [GetKeyValue "show slot $slot" $parameterList]
+           if {[lsearch -regexp $module $hwType]==-1} {
+              append module $hwType
+           }
+        }
+        lappend slotList $slot
+        lappend dutList $temp
+     }
+  }
+  return $module 
+}
+
+################################################################## 
+# Procedure Name: GetLastTestRun
+#   
+# Description: Internal proc to get ctime based latest test run from
+#              resultDir location. Mainly meant to be used to 
+#              continue remaining tests after prev aborted.
+#
+# NOTE: Since ctime is messes up lastTestRun in case 0 sec taken by many tests,
+#       reply on largest value of ino.
+# Input args: 
+#              resultDir
+#                
+# Output args: None
+#
+# Return value: Returns the value of latest test that was run based on ctime of a file.
+#
+# Typical usage: 
+#              set lastTest [GetLastTestRun "[get_result_dir]"]
+#
+# Category: setup
+################################################################## 
+proc GetLastTestRun {resultDir} {
+   
+   set lt 0
+   set ctimeList ""
+   set dirList [glob -nocomplain -- "$resultDir/*"]
+   foreach di $dirList {
+      file lstat $di damn
+      lappend ctimeList [set damn(ino)]    ;# NOTE: ctime changed to ino attribute of file.
+   }
+   set latestcTime [lindex [lsort -integer $ctimeList] [expr [llength $ctimeList]-1]]
+   set finalIndex [lsearch -exact $ctimeList $latestcTime]
+   set finalFile [file tail [lindex $dirList $finalIndex]]
+   regsub -nocase ".txt" $finalFile "" lt
+   #result_debug "the last test run was $lt"
+   return $lt
+}
+
+proc result_step { step } {
+   result_debug "\n<STEP> $step <STEP>\n"
+}
+
+################################################################## 
+# Procedure Name: showDebugInfo
+#   
+# Description: Calls the showDebugInfo proc of individual modules as per the debug level
+#              This information is then added onto log-file and stdout 
+# Input args: 
+#            reason : tells from where the proc is called, from result_debug or from result_error
+#                
+# Output args: none
+#
+# return Value: none
+#
+# Typical usage: 
+#              showDebugInfo "debug"
+#              showDebugInfo "error"
+#
+# Category: setup
+################################################################## 
+
+proc showDebugInfo {fmt} {
+    
+    global showErrorData EX_RESULT_FORMAT erf
+    global debugStart
+    global debugLevel
+    
+    if {![info exists debugStart]} {
+        set debugStart 0
+    }
+    if { $debugStart == 1 } {
+        set module [lindex [split [pwd] /] end]
+        if { [llength [info procs showDebugInfo$module]] == 1  } {
+            set printColor $erf(print,color)
+            if {[string compare $fmt "error"] == 0} {
+                set erf(print,color) "darkmagenta"
+                if {$showErrorData > 0 } {
+                    result_print "***  START_DEBUG_INFO, REASON=$fmt , iLevel [info level] debugLevel=$showErrorData *****" 
+                    showDebugInfo$module $showErrorData 
+                    result_print "***  END_DEBUG_INFO, REASON=$fmt , debugLevel=$showErrorData *****" 
+                }
+            }
+            if {[string compare $fmt "debug"] == 0} {
+                set erf(print,color) "darkmagenta"
+        
+                set level 0
+                if {[info exists debugLevel] } { 
+                    if {$debugLevel > 0} {
+                        set level $debugLevel
+                        if {$showErrorData > 0} {
+                            set level $showErrorData
+                        }
+                    }
+
+                    if {$level > 0} {
+                        result_print "***  START_DEBUG_INFO, REASON=$fmt , iLevel [info level] debugLevel=$level *****" 
+                        showDebugInfo$module $level
+                        result_print "***  END_DEBUG_INFO, REASON=$fmt , debugLevel=$level *****" 
+                    }
+                }
+            }
+            set erf(print,color) $printColor
+        }
+    }
+}

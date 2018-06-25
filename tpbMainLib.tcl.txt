@@ -1,0 +1,1091 @@
+#
+# tpb test login stuff
+#
+proc logout_dutnum {dut {mm ""}} {
+    global DUT${dut}_CONNECT
+    if {$mm != ""} {
+        global DUT${dut}_CONNECT$mm
+    }
+
+    if {[info exists DUT${dut}_CONNECT${mm}]} {
+        set connect [set DUT${dut}_CONNECT${mm}]
+        Login $connect -CheckOperational 0
+        logout
+    }
+}
+proc logout_alldut {} {
+    set nDUT 1
+    for {set x 1} {$x<30} {incr x} {
+        global DUT${x}_CONNECT
+        global DUT${x}_CONNECTB
+    }
+    while { [info exists DUT${nDUT}_CONNECT] } {
+        lappend procList "logout_dutnum ${nDUT}"
+        if {[info exists DUT${nDUT}_CONNECTB]} {
+            lappend procList "logout_dutnum ${nDUT} B"
+        }
+        incr nDUT 1
+    }
+    result_debug "\n@@@\n@@@Calling MultiTask To Logout of ALL DUTs\n@@@\n$procList\n@@@"
+    MultiTask $procList
+
+}
+####################################################################
+# proc GetCleanTestList
+#
+#
+####################################################################
+proc GetCleanTestList {lst} {
+    global DUTs_info
+    if {![info exists DUTs_info(DUT1,version)]} {
+        set DUTs_info(DUT1,version) 50.1.1.1
+    }
+    set testsToRun [calculateTestToRun $lst [GetPlatform]]
+    array set tests_to_run $testsToRun
+    #build a list of all test cases that will run
+    if { [array size tests_to_run] == 0 } {
+        ;# Convert old list style to array
+        if {[string trim $testsToRun] == ""} {
+            set tempList ""
+        } else {
+            set tempList $tests_to_run
+            unset tests_to_run
+        }
+        set tests_to_run(all) $tempList
+        puts "set tests_to_run(all) $tempList"
+    }
+
+    set testtorunNo 1
+
+    ;# Array of tests_to_run() lists. i.e. tests_to_run(all), tests_to_run(7.0),etc.
+    set indexList [array names tests_to_run]
+    mainSort indexList
+
+    set what ""
+    foreach arrayIndex $indexList {
+        set ver [string tolower $arrayIndex]
+        if { ("$ver" == "all") || ("$ver" == "null") \
+              || [CompareRelease $ver [GetVersion DUT1 ]] <= 0 } {
+            set mytests [string trim $tests_to_run($ver)]
+            regsub -all "\n" $mytests "zzz" mytests
+            set myTestList [split $mytests "zzz"]
+            foreach myNewTest $myTestList {
+                set myTrimTest [string trim $myNewTest]
+                set myTrimTest [string trim $myTrimTest ";"]
+                if {$myTrimTest != ""} {
+                    set lineList [split $myTrimTest "#"]
+                    if {[llength $lineList] >=2} {
+                        set l [lindex $lineList 0]
+                        regsub -all ";" $l "" myTrimTest
+                        set myTrimTest [string trim $myTrimTest]
+                    }
+                    if {$myTrimTest != ""} {
+                        lappend what "$myTrimTest"
+                    }
+                }
+            }
+        } else {
+            puts "\n======\n======\nNOTHING MATCHED FOR $ver\n======\n======"
+        }
+    }
+    return $what
+}
+####################################################################
+# proc GetVerSkipList 
+#
+#
+####################################################################
+proc GetVerSkipList {lst} {
+    set testsToRun [calculateTestToRun $lst [GetPlatform]]
+    array set tests_to_run $testsToRun
+    #build a list of all test cases that will run
+    if { [array size tests_to_run] == 0 } {
+        ;# Convert old list style to array
+        set tempList $tests_to_run
+        unset tests_to_run
+        set tests_to_run(all) $tempList
+        puts "set tests_to_run(all) $tempList"
+    }
+
+    set testtorunNo 1
+
+    ;# Array of tests_to_run() lists. i.e. tests_to_run(all), tests_to_run(7.0),etc.
+    set indexList [array names tests_to_run]
+    mainSort indexList
+
+    set what ""
+    foreach arrayIndex $indexList {
+        set ver [string tolower $arrayIndex]
+        if { ("$ver" != "all") && ("$ver" != "null") && [string trim $ver] != "" \
+              && [CompareRelease $ver [GetVersion DUT1 ]] > 0 } {
+            set mytests [string trim $tests_to_run($ver)]
+            regsub -all "\n" $mytests "zzz" mytests
+            set myTestList [split $mytests "zzz"]
+            foreach myNewTest $myTestList {
+                set myTrimTest [string trim $myNewTest]
+                set myTrimTest [string trim $myTrimTest ";"]
+                if {$myTrimTest != ""} {
+                    set lineList [split $myTrimTest "#"]
+                    if {[llength $lineList] >=2} {
+                        set l [lindex $lineList 0]
+                        regsub -all ";" $l "" myTrimTest
+                        set myTrimTest [string trim $myTrimTest]
+                    }
+                    if {$myTrimTest != ""} {
+                        lappend what "$myTrimTest"
+                    }
+                }
+            }
+        }
+    }
+    return $what
+}
+####################################################################
+# proc GetEndArray
+#
+# return an array of endProcByInitProc(initProc) endProc
+####################################################################
+proc GetEndArray {allCTProcs} {
+   set endByInit(a) -1
+   set initIndexList [lsearch -all -regexp $allCTProcs init]
+   set endIndexList [lsearch -all -regexp $allCTProcs end]
+   set hit 0
+   # -----------------------------------------------------
+   # Find init and end pairs
+   # -----------------------------------------------------
+   foreach i $initIndexList {
+       set endByInit($i) -1
+       set iVal [lindex $allCTProcs $i]
+       regsub -all "\.init" $iVal "" iVal
+       foreach e $endIndexList {
+           if {$e <= $i} {
+               continue;
+           }
+           set eVal [lindex $allCTProcs $e]
+           regsub -all "\.end" $eVal "" eVal
+           if {$iVal == $eVal && !$hit} {
+               set hit 1
+               set endByInit($i) "$e"
+               #puts "pair: $iVal == $eVal  index: $i $e"
+           }
+           unset eVal
+       }
+       unset iVal
+       if {!$hit} {
+           set endByInit($i) -1
+       }
+       set hit 0
+   }
+   return [array get endByInit]
+}
+####################################################################
+# proc GetTestCaseCTListArrays
+#
+# upvar arrays initByProc endByProc procsByInit
+#    initByProc(1.1.1) 1.init
+#    endByProc(1.1.1) 1.end
+#    procsByInit(1.init) "1.1.1 1.1.2 1.1.3 1.1.4 1.1.5 1.1.6 1.1.7 ...."
+####################################################################
+proc GetTestCaseCTListArrays {allCTProcs initByProc endByProc procsByInit} {
+
+   upvar initByProc iByProc
+   upvar endByProc eByProc
+   upvar procsByInit pByInit
+   array set endByInit [GetEndArray $allCTProcs]
+   set initIndexList [lsearch -all -regexp $allCTProcs init]
+   set endIndexList [lsearch -all -regexp $allCTProcs end]
+   if {[lsearch $allCTProcs "1.init"] >= 0} {set hit1Init 1} else {set hit1Init 0}
+   set hitSomething 0
+   set noEnd 0
+   set top [llength $allCTProcs]
+   set pByInit(A) ""
+   set lastUsedIndex -1
+   for {set a 0} {$a<$top} {incr a} {
+       foreach i $initIndexList {
+           if {$a > $i && $a < $endByInit($i)} {
+               if {[lsearch $endIndexList $a] < 0 && [lsearch $initIndexList $a] < 0} {
+                   if {![info exists iByProc([lindex $allCTProcs $a])]} {
+                       set iByProc([lindex $allCTProcs $a]) [lindex $allCTProcs $i]
+                   } else {
+                       lappend iByProc([lindex $allCTProcs $a]) [lindex $allCTProcs $i]
+                   }
+                   if {![info exists eByProc([lindex $allCTProcs $a])]} {
+                       set eByProc([lindex $allCTProcs $a]) [lindex $allCTProcs $endByInit($i)]
+                   } else {
+                       lappend eByProc([lindex $allCTProcs $a]) [lindex $allCTProcs $endByInit($i)]
+                   }
+                      # puts "iByProc([lindex $allCTProcs $a]) $iByProc([lindex $allCTProcs $a]) \
+                      #        eByProc([lindex $allCTProcs $a]) $eByProc([lindex $allCTProcs $a])"
+                   if {[info exists pByInit([lindex $allCTProcs $i])]} {
+                       lappend pByInit([lindex $allCTProcs $i]) [lindex $allCTProcs $a]
+                   } else {
+                        set pByInit([lindex $allCTProcs $i]) [lindex $allCTProcs $a]
+                   }
+                   set hitSomething 1
+                   set hitEnd 0
+                   set lastUsedIndex $i
+               }
+           } elseif {$a > $i && $endByInit($i) < 0 && [lindex $allCTProcs $i] != "1.init" && \
+                     $i > $lastUsedIndex} {
+               if {[lsearch $endIndexList $a] < 0 && [lsearch $initIndexList $a] < 0} {
+                   if {![info exists iByProc([lindex $allCTProcs $a])]} {
+                       set iByProc([lindex $allCTProcs $a]) [lindex $allCTProcs $i]
+                   } else {
+                       lappend iByProc([lindex $allCTProcs $a]) [lindex $allCTProcs $i]
+                   }
+                   if {[info exists pByInit([lindex $allCTProcs $i])]} {
+                       lappend pByInit([lindex $allCTProcs $i]) [lindex $allCTProcs $a]
+                   } else {
+                       set pByInit([lindex $allCTProcs $i]) [lindex $allCTProcs $a]
+                   }
+                   set noEnd 1
+                   set lastUsedIndex $i
+               }
+           }
+       }
+       if {$noEnd} {
+           set noEnd 0
+           continue
+       } elseif {$hitSomething && [info exists eByProc([lindex $allCTProcs $a])]} {
+           set eByProc([lindex $allCTProcs $a]) [lreverse $eByProc([lindex $allCTProcs $a])]
+           set hitSomething 0
+           continue
+       } elseif {$lastUsedIndex >= 0 && $endByInit($lastUsedIndex) < 0} {
+           set iByProc([lindex $allCTProcs $a]) [lindex $allCTProcs $lastUsedIndex]
+           if {[info exists pByInit([lindex $allCTProcs $lastUsedIndex])]} {
+               lappend pByInit([lindex $allCTProcs $lastUsedIndex]) [lindex $allCTProcs $a]
+           } else {
+               set lappend pByInit([lindex $allCTProcs $lastUsedIndex]) [lindex $allCTProcs $a]
+           }           
+       } elseif {$hit1Init && [lsearch $endIndexList $a] < 0 && [lsearch $initIndexList $a] < 0} {
+           set iByProc([lindex $allCTProcs $a]) "1.init"
+           if {[info exists pByInit(1.init)]} {
+               lappend pByInit(1.init) [lindex $allCTProcs $a]
+           } else {
+               set pByInit(1.init) [lindex $allCTProcs $a]
+           }
+       } else {
+           #puts "No pre [lindex $allCTProcs $a]"
+       }
+       set hitSomething 0
+   }
+   return 1
+}
+#################################################################################
+# Gather proc info
+#################################################################################
+# procname
+proc GetCurrentProcName { } {
+    return [lindex [split [info level [expr [info level] - 1]]] 0]
+}
+# returns: the actual procname
+
+#################################################################################
+# Gather proc info
+#################################################################################
+# preprocname
+proc PreProcName { } {
+    return [lindex [split [info level [expr [info level] - 2]]] 0]
+}
+# returns: the name of the previous proc
+#################################################################################
+# Gather proc info
+#################################################################################
+# evaltree
+proc ProcEvalTree { } {
+    set result [list]
+    set level [info level]
+    incr level -1
+    for { set i 1 } { $i <= $level } { incr i 1 } {
+        lappend result [lindex [info level $i] 0]
+    }
+    return $result
+}
+# returns: a list with all previous and the actual procname; the calling proc is this first element
+#################################################################################
+# Main db checking proc and execution for TPB
+#################################################################################
+proc executeTestsToRunTPB {tbf {useSocket 0}} {
+    global numDUT TESTPRE TESTPOST
+    global connect
+    global script
+    global debugStart
+    global lastInit
+    global origFailCount
+    global failCount passCount skipCount
+    global TestsRemaining
+    global DUTs_info
+    global licenseList
+    global license_to_run
+    global currentTestIndex
+    global initFile
+    global EX_REPORT_DATA_1
+    global EX_REPORT_DATA
+    global EX_REPORT_STATUS
+    global TrafficGen
+    global MGMT_REG
+    global pID
+    global qId
+    global modName
+    global regPath
+    global randomIndex
+    global passSubTestsArr auto_path
+    global failSubTestsArr
+    global skipSubTestsArr
+    global ALLPLATTESTS
+    global ALLPLATDEV
+    global ALLPLATDEBUG
+    global ALLPLATEDGE
+    global SKIPVERTESTS
+    global TPBRESULTLIST TPBRESULTVALUES
+    global INITBYENDSCRIPT
+    global MAIN FEATMAIN
+    # socket variables
+    global getjson getok initsend mySock ineed
+
+    array set endByInit [GetEndArray $ALLPLATTESTS]
+    set res [GetTestCaseCTListArrays $ALLPLATTESTS initByProc endByProc procsByInit]
+
+    if {![info exists EX_REPORT_DATA]} {
+        set EX_REPORT_DATA ""
+    }
+    set DBOK 1
+    if {[catch {mysqlconnect -host otps -user user -password extreme -db tpb_queues} mysql_handler]} {
+        set DBOK 0
+    }
+    set TestsRemaining $ALLPLATTESTS
+    set TestsExecuted ""
+    set resStr(1) "PASS"
+    set resStr(0) "FAIL"
+    set cTest ""
+    set tpbRes 0
+    set prevcase ""
+    set currInit ""
+    set init1Run 0
+    set skipTheRest 0
+    set skipFailTheRest 0
+    set lastFailCount 0
+    set tclCrashCount 0
+    set TPBRESULTLIST ""
+    set TPBRESULTVALUES ""
+    set filesToUpload ""
+    set filesToDownload ""
+    set INITFilesExecuted ""
+    set EndFilesExecuted ""
+    set useSocket 1
+    if {![info exists ineed]} {
+        set ineed ""
+    }
+   
+    # Executiion Time File
+    set fdin_execTime [open $MAIN(timeFile) "RDWR APPEND CREAT"]
+    ;# Dump tests to run, so we can see what we intended to run.
+    flush $fdin_execTime
+ 
+    while {$cTest != "kill" && $cTest != "killfinal"} {
+        # Lists for building the elist
+        #catch {mysqlconnect -host otps -user user -password extreme -db tpb_queues} mysql_handler
+        if {!$useSocket} {
+             set cTestList [mysqlsel $mysql_handler "SELECT mod_run_id, mod_current_test, tc_externalid, \
+                                  dispatch_id FROM \
+                                  tpb_modules WHERE queue_id = '$qId' \
+                                  AND mod_dir = '$regPath' AND mod_name = '$modName' \
+                                  ORDER By mod_run_id ASC" -flatlist]
+            puts "@ Checking Database Cases - mod_dir $regPath mod_name $modName queue_id $qId @"
+            puts "WAITING FOR TEST <qid>"
+            puts ""
+            exSleep 2
+            set disid "[lindex $cTestList 3]"
+            set extid "[lindex $cTestList 2]"
+            set cTest "[lindex $cTestList 1]"
+            set mId [lindex $cTestList 0]
+            # prepare to pull all run directories after killfinal
+            set tList [split $cTest " "]
+            set cTest [lindex $tList 0]
+            set mods [lrange $tList 1 end]
+            puts "cTest value = $cTest mods $mods"
+            puts $tbf "Used Database"
+        } else {
+            set timeStart [clock seconds];
+            result_debug "Using TPB Socket Control Waiting for a Client to Send in test cases"
+            vwait getmyjson
+            puts "RX: $ineed"
+            set ineed [string trim $ineed]
+            if {![regexp -nocase "(sock\[0-9]+)\=(\{\"\[a-zA-Z]+\": *\{\"\[a-zA-Z_\-]+\":\"\[a-zA-Z0-9_&\-]+\".*\}\})$" \
+                          $ineed ignore s j]} {
+                puts "JSON not correctly formatted";
+                set ts [lindex [split $ineed "="] 0];
+                handleOutput $ts "JSON Format Error:"
+                set bjson [lindex [split $ineed "="] 1];
+                handleOutput $ts "$bjson"
+                handleOutput $ts "SWITCHING TO DB MODE"
+                set useSocket 0;
+                if {$DBOK} {
+                    puts $tbf "Used Socket Failed Going to DB"
+                    return testCompleted
+                    continue;
+                } else {
+                    puts $tbf "Used Socket Failed AND DB Failed"
+                    return SOCK_DB_FAIL
+                }
+            } else {
+                puts $tbf "Used Socket Response from TPB Received"
+                puts "Response from TPB Recieved";
+                set mySock $s
+                #puts "JSON = $j"
+                set parsed [json::json2dict $j]
+                puts $parsed
+                foreach {key val} $parsed {
+                    foreach {key val} $val {
+                        set case($key) $val
+                    }
+                }
+                set mQId $case(queue_id);
+                set Module $case(mod_name);
+                set testDir $case(mod_dir);
+                set cTest $case(mod_current_test);
+                set extid $case(tc_externalid);
+                set disid $case(dispatch_id);
+                set tpbTime $case(time);
+                set mods $Module
+                set vList [list "queue_id" "$mQId" "mod_name" "$Module" "mod_dir" "$testDir" \
+                     "mod_current_test" "$cTest" \
+                     "tc_externalid" "$extid" "dispatch_id" "$disid" "time" "$tpbTime"]
+                handleOutput $s "[listToJson -mlist $vList -elem "TPBVerify"]"
+                puts "Verify sent to TPB. Waiting for Execute Command"
+                puts $tbf "Verify sent to TPB. Waiting for Execute Command"
+                vwait getexec
+                handleOutput $s "Starting Test Case Execution"
+                if {$cTest == "pause"} {
+                    set tcOut [catch {eval ClearTestbedSessions} freason];
+                    if {$tcOut != 0} {
+                        puts $tbf "     ClearTestbedSessions TCL EXCEPTION: $freason"
+                        handleOutput $s "Clear Consoles Failed:"
+                    }
+                    set tcOut2 [catch {eval ClearTestbedTelnetPIDs} freason2];
+                    if {$tcOut2 != 0} {
+                        puts $tbf "     ClearTestbedTelnetPIDs TCL EXCEPTION: $freason2"
+                        handleOutput $s "Clear Console Telnet PIDs Failed:"
+                    }
+                    puts "\n  --  Received a pause command from TPB at $tpbTime --  \n"
+                    puts $tbf "PAUSE test bed at $tpbTime"
+                    set init1Run 0
+                    set TestsExecuted ""
+                    set INITFilesExecuted ""
+                    set rList [list "mod_current_test" "$cTest" "mod_name" "$modName" "queue_id" "$qId" \
+                         "mod_results" "complete"]
+                    handleOutput $s "[listToJson -mlist $rList -elem "TCLResult"]"
+                    vwait freepause
+
+                    #After the pause is released, run cleanup to make sure next case is ready to go
+                    #CleanTestBedCfgs;
+                    continue;
+                }
+            }
+        }
+        puts "cTest value = $cTest"
+        puts $tbf "================ cTest value = $cTest ==================="
+        if {$cTest != "" && $cTest != "kill" && $cTest != "killfinal"} {
+            set tcTCLError 0
+            set tpbStat 1
+            if {[lsearch $TestsExecuted $cTest] >= 0 && $cTest != "ClearTestbedSessions"} {
+               if {[info exists FEATMAIN(TCRESULTS,$cTest)]} {
+                   if {[regexp -nocase "pass" $FEATMAIN(TCRESULTS,$cTest)]} {
+                       set tpbRes 1
+                   } else {
+                       set tpbRes 0
+                   }
+                   puts "Test case $cTest already executed - result $FEATMAIN(TCRESULTS,$cTest)"
+                   puts $tbf "     Test case $cTest already executed - result $FEATMAIN(TCRESULTS,$cTest) tpbRes $tpbRes"
+               } else {
+                   puts "Test case $cTest already executed - global not set"
+                   puts $tbf "     Test case $cTest already executed - tbpRes 0"
+                   set tpbRes 0
+               }
+            } elseif {[catch {source ${cTest}.tcl} reason] && $cTest != "cleanup" \
+                     && $cTest != "ClearTestbedSessions"} {
+               puts "Test case $cTest does not exist"
+               puts $tbf "     Test case [pwd] $cTest does not exist - tbpRes 0"
+               puts $tbf "        error from not exists: $reason"
+               set tpbRes 0
+            } elseif {$skipTheRest} {
+               puts "\nFEATURE SKIPPED NO SUPPORT - FROM INIT FILE"
+               puts $tbf "     FEATURE SKIPPED NO SUPPORT - FROM INIT FILE - tbpRes 0"
+               set tpbRes 0
+            } elseif {[lsearch $ALLPLATDEV $cTest]>=0 && $cTest != "cleanup" \
+                     && $cTest != "ClearTestbedSessions"} {
+               puts "Test case $cTest is in the DEV list"
+               puts $tbf "     Test case $cTest is in the DEV list - tbpRes 0"
+               set tpbRes 0
+            } elseif {[lsearch $ALLPLATDEBUG $cTest]>=0 && $cTest != "cleanup" \
+                     && $cTest != "ClearTestbedSessions"} {
+               puts "Test case $cTest is in the DEBUG list"
+               puts $tbf "     Test case $cTest is in the DEBUG list - tbpRes 0"
+               set tpbRes 0
+            } elseif {[lsearch $ALLPLATEDGE $cTest]>=0 && $cTest != "cleanup" \
+                     && $cTest != "ClearTestbedSessions"} {
+               puts "Test case $cTest is in the EDGE SKIP list"
+               puts $tbf "     Test case $cTest is in the EDGE SKIP list - tbpRes 0"
+               set tpbRes 0
+            } elseif {[lsearch $SKIPVERTESTS $cTest]>=0 && $cTest != "cleanup" \
+                     && $cTest != "ClearTestbedSessions"} {
+               puts "Test case $cTest is not supported in this software version"
+               puts $tbf "     Test case $cTest is not supported in this software version - tbpRes 0"
+               set tpbRes 0
+            }  elseif {[lsearch $ALLPLATTESTS $cTest]<0 && $cTest != "cleanup" \
+                     && $cTest != "ClearTestbedSessions"} {
+               puts "Test case $cTest not supported on this platform or software version"
+               puts $tbf "     Test case $cTest not supported on this platform or software version - tbpRes 0"
+               set tpbRes 0
+            } elseif {$skipFailTheRest} {
+               puts "\nFEATURE SKIP/FAIL due to prerequisite setup failure "
+               puts $tbf "     FEATURE SKIP/FAIL due to prerequisite setup failure - tbpRes 0"
+               set tpbRes 0
+            } else {
+                # If completetests does not have init/end files we need to set to null.
+                if {![info exists initByProc($cTest)]} {set initByProc($cTest) "NULL"}
+                if {![info exists endByProc($cTest)]} {set endByProc($cTest) "NULL"}
+                puts $tbf "     Lib init/end list : Pre $initByProc($cTest) $cTest Post $endByProc($cTest)"
+                puts "     Lib init/end list : Pre $initByProc($cTest) $cTest Post $endByProc($cTest)"
+                # END STUFF
+                if {[info exists TESTPOST($prevcase)]} {
+                    puts "      Previous end $TESTPOST($prevcase)"
+                    if {[info exists TESTPOST($cTest)]} {
+                        puts "      This end $TESTPOST($cTest)"
+                        if {$TESTPOST($cTest) != $TESTPOST($prevcase) && $TESTPOST($prevcase) != "NULL"} {
+                            set mEnd $TESTPOST($prevcase)
+                            puts "\n@@\n@@\nI am going to execute this end -- $TESTPOST($prevcase)"
+                            set tcOut [catch {eval $TESTPOST($prevcase)} freason];
+                            puts $tbf "     END TEST CASE: $TESTPOST($prevcase) :: tcOut $tcOut"
+                            if {$tcOut != 0} {
+                                puts "THERE WAS A TCL EXCEPTION RUNNING $mEnd END CASE: $freason"
+                            }
+                            lappend EndFilesExecuted $mEnd;# end files executed.  When run, remove the matching init.
+                            if {![info exists INITBYENDSCRIPT($mEnd)]} {
+                                set INITBYENDSCRIPT($mEnd) NULL
+                            }
+                            if {[lsearch $INITFilesExecuted $INITBYENDSCRIPT($mEnd)] >= 0} {
+                                puts "    Remove $INITBYENDSCRIPT($mEnd) from executed init files because matching $mEnd executed"
+                                set INITFilesExecuted [ldelete $INITFilesExecuted $INITBYENDSCRIPT($mEnd)]
+                            }
+                        } else {
+                            puts "DO NOT END -- $TESTPOST($cTest)"
+                        }
+                    }
+                }
+                # INIT STUFF
+                if {[info exists initByProc($cTest)]} {
+                    if {$initByProc($cTest) != "NULL"} {
+                        foreach p $initByProc($cTest) {
+                            if {[lsearch $INITFilesExecuted $p] < 0} {
+                                puts "Executing init file -- $p"
+                                set tcOut [catch {eval $p} freason];
+                                puts $tbf "     INIT TEST CASE: $p :: tcOut $tcOut"
+                                if {$freason == "testSkipped" || [regexp -nocase "testSkipped" $tcOut]} {
+                                    set skipTheRest 1
+                                    set sTcOut $tcOut
+                                    puts $tbf "     FEATURE SKIPPED NO SUPPORT - FROM INIT FILE"
+                                    puts "\nFEATURE SKIPPED NO SUPPORT - FROM INIT FILE"
+                                    break;
+                                }
+                                if {$freason == "testSkippedFail" || [regexp -nocase "testSkippedFail" $tcOut]} {
+                                    set skipFailTheRest 1
+                                    set sTcOut $tcOut
+                                    puts $tbf "     FEATURE SKIP/FAIL due to prerequisite setup failure"
+                                    puts "\nFEATURE SKIP/FAIL due to prerequisite setup failure"
+                                    break;
+                                }
+                                if {$tcOut != 0} {
+                                    puts "THERE WAS A TCL EXCEPTION RUNNING $p Init CASE: $freason"
+                                }
+                                lappend INITFilesExecuted $p;# init files that have been executed.
+                            } else {
+                                puts "ALREADY Executed -- $p"
+                            }
+                        }
+                    }
+                }
+                #
+                if {[info exists skipTheRest] && $skipTheRest} {
+                    puts "Skipping $cTest due to the init file skip"
+                    puts $tbf "Skipping $cTest due to the init file skip"
+                } elseif {[info exists skipFailTheRest] && $skipFailTheRest} {
+                    puts "$cTest SKIP/FAIL due to prerequisite setup failure"
+                    puts $tbf "$cTest SKIP/FAIL due to prerequisite setup failure"
+                } else {
+                    lappend TestsExecuted $cTest;# Big list of all scripts that have been executed.
+                    puts "Execute Current TEST $cTest"
+
+                    set tcOut [catch {eval $cTest} freason];
+                    if {$tcOut != 0} {
+                        puts $tbf "     Exception in Test Case $cTest"
+                        puts $tbf "     THERE WAS A TCL EXCEPTION: $freason"
+                        puts "THERE WAS A TCL EXCEPTION: $freason"
+                        set tcTCLError 1
+                        # -- Clean up the test bed of cli left behind at the time of the crash --
+                        if {![regexp -nocase "No response from the switch" $freason]} {
+                            CleanTestBedCfgs
+                            if {$initByProc($cTest) != "NULL"} {
+                                foreach p $initByProc($cTest) {
+                                    set INITFilesExecuted [ldelete $INITFilesExecuted $p]
+                                }
+                            }
+                        } elseif {0 && [regexp -nocase {No response from the switch DUT([0-9]+)} $freason a md]} {
+                            PowerCycleDUT $md
+                            if {$initByProc($cTest) != "NULL"} {
+                                foreach p $initByProc($cTest) {
+                                    set INITFilesExecuted [ldelete $INITFilesExecuted $p]
+                                }
+                            }
+                        }
+                        incr tclCrashCount
+                        if {$tclCrashCount > 2} {
+                            puts $tbf "     SEND PAUSE ALERT TO TPB CTRL - $cTest"
+                            puts "\n\n@@@ TCL Exception loop.  Pause to recover. @@@\n"
+                            set tclCrashCount 0
+                        }
+                    } else {
+                        set tclCrashCount 0
+                    }
+                    if {$freason == "testSkipped" || [regexp -nocase "testSkipped" $tcOut]} {
+                        set skipTheRest 1
+                        puts $tbf "     FEATURE SKIPPED NO SUPPORT - FROM INIT FILE"
+                        puts "\nFEATURE SKIPPED NO SUPPORT - FROM INIT FILE"
+                    }
+                    if {$freason == "testSkippedFail" || [regexp -nocase "testSkippedFail" $tcOut]} {
+                        set skipFailTheRest 1
+                        puts $tbf "     FEATURE SKIP/FAIL due to prerequisite setup failure"
+                        puts "\nFEATURE SKIP/FAIL due to prerequisite setup failure"
+                    }
+                    puts $tbf "     tcOut = $tcOut"
+                    puts "tcOut = $tcOut"
+                }
+                if {[info exists passCount]} {
+                    puts "pass at end $passCount"
+                    puts $tbf "     pass at end $passCount"
+                }
+                if {[info exists failCount]} {
+                    puts "fail at end $failCount"
+                    puts $tbf "     fail at end $failCount"
+                    if {$failCount > 0 && $failCount > $lastFailCount} {
+                        puts $tbf "      Reset the tpbStat 0  -  set lastFailCount $failCount"
+                        set tpbStat 0
+                        set lastFailCount $failCount
+                    }
+                }
+                if {[info exists skipCount]} {
+                    puts $tbf "     Skip Count is set at end count: $skipCount"
+                    puts "skip at end $skipCount"
+                }
+                set length [string length $EX_REPORT_DATA]
+                set tmp1 [expr $length - 4]
+                set tmp2 [expr $length - 2]
+                set tmp3 [expr $length - 3]
+                set tmp4 [expr $length - 1]
+                set tail [string range $EX_REPORT_DATA $tmp1 $tmp2]
+                set tail2 [string range $EX_REPORT_DATA $tmp1 $tmp4]
+                puts "DEBUG End of result = $tail2"
+                #puts "\n##### TAIL = $tail"
+                set tpbRes  [string trimleft $tail "\} "]
+                set tpbRes2 [string trimleft $tail2]
+                #puts "tpbRes $tpbRes"
+                puts $tbf "     TPBRES from EX_REPORT_DATA : tpbRes $tpbRes : tpbRes2 $tpbRes2"
+                set tpbRes [string trim $tpbRes]
+                if {[info exists skipTheRest] && $skipTheRest} {
+                    puts "Init file skip: tpbRes 0"
+                    puts $tbf "     Init file skip :: set tpbRes to 0"
+                    set tpbRes 0
+                } elseif {[info exists skipFailTheRest] && $skipFailTheRest} {
+                    puts "Init SKIP/FAIL due to prerequisite setup failure  : tpbRes 0"
+                    puts $tbf "     SKIP/FAIL due to prerequisite setup failure :: set tpbRes to 0"
+                    set tpbRes 0
+                } elseif {!$tpbStat} {
+                    puts "Good result parse: $tpbStat"
+                    puts $tbf "     Good result parse: $tpbStat :: set tpbRes to 0"
+                    set tpbRes 0
+                } elseif {$tpbRes == 1 || $tpbRes == 0} {
+                    puts "Good result parse: $tpbRes"
+                    puts $tbf "     Good result parse: $tpbRes"
+                } elseif {[regexp -nocase "kip" $tpbRes]} {
+                    puts "Hit Test Case Skipped Case"
+                    puts $tbf "     Hit Test Case Skipped Case :: set tpbRes to skipped"
+                    set tpbRes "skipped"
+                } elseif {[regexp -nocase "\} \{" $tpbRes2]} {
+                    puts "Hit Test Case returned without Skip, OK or Error"
+                    puts $tbf "     Hit Test Case returned without Skip, OK or Error :: set tpbRes to Fix TCL"
+                    set tpbRes "Fix TCL"
+                } else {
+                    puts "Bad result parse:: tail $tail - tbpRes = $tpbRes"
+                    puts $tbf "     Bad result parse:: tail $tail - tbpRes = 0"
+                    set tpbRes 0
+                }
+                if {$tcTCLError} {
+                    puts "Hit TCL Error in Catch statement"
+                    puts $tbf "     Hit TCL Error in Catch statement :: set tpbRes 0"
+                    set tpbRes 0
+                }
+                set prevcase $cTest;# This the previous EXECUTED test.
+            }
+            #set TestsRemaining [ldelete "$TestsRemaining" "$cTest"]; 
+            puts "\n\n\ntpbRes $tpbRes\n\n"
+            puts "\n------------------------------------------------------------------"
+            puts $tbf "     FINAL tpbRes $tpbRes"
+            #puts "CASELIST - $TPBRESULTLIST"
+            #puts "CASEVALUES - $TPBRESULTVALUES"
+            set TPBRESULTLIST ""
+            set TPBRESULTVALUES ""
+            if {!$useSocket} {
+                if {[catch {mysqlexec $mysql_handler "DELETE FROM tpb_modules WHERE queue_id = '$qId' \
+                                     AND mod_dir = '$regPath' AND mod_name = '$modName' AND mod_current_test = '$cTest'"} mres]} {
+                    puts "@@@\n@@@\nMYSQL DELETE ERROR - mysql_handler = $mysql_handler :\n\
+                          DELETE FROM tpb_modules WHERE queue_id = $qId \
+                          AND mod_dir = $regPath AND mod_name = $modName AND mod_current_test = $cTest\
+                          \n $mres\n@@@\n@@@"
+                    if {[catch {mysqlconnect -host otps -user user -password extreme -db tpb_queues} mysql_handler]} {
+                        puts "@@@\n@@@\nMYSQL COULD NOT RECONNECT ERROR\n$mysql_handler\n@@@\n@@@"
+                    } else {
+                        catch {mysqlexec $mysql_handler "DELETE FROM tpb_modules WHERE queue_id = '$qId' \
+                               AND mod_dir = '$regPath' AND mod_name = '$modName' AND mod_current_test = '$cTest'"} newres
+                    }
+                }
+            }
+            save_incrementally_run_data $cTest
+            if {$tpbRes == 1 || $tpbRes == 0} {
+                puts $tbf "     $cTest Result for TPB is $resStr($tpbRes)"
+            } else {
+                puts $tbf "     $cTest Result for TPB is Neither 1 or 0 WTH"
+            }
+            if {!$useSocket} {
+                set insert_clause ""
+                set insert_clause [append insert_clause "insert into tpb_results (mod_run_id, "]
+                set insert_clause [append insert_clause "mod_current_test, "]
+                set insert_clause [append insert_clause "mod_name, "]
+                set insert_clause [append insert_clause "queue_id, "]
+                set insert_clause [append insert_clause "mod_results)"]
+    
+                set insert_clause [append insert_clause "values (\"$mId\", "]
+                set insert_clause [append insert_clause "\"$cTest\", "]
+                set insert_clause [append insert_clause "\"$modName\", "]
+                set insert_clause [append insert_clause "\"$qId\", "]
+                set insert_clause [append insert_clause "\"$tpbRes\")"]
+    
+                if {[catch {mysqlexec $mysql_handler $insert_clause} ires]} {
+                    puts "@@@\n@@@\nMYSQL insert ERROR\n$ires\n@@@\n@@@"
+                    puts $tbf "MYSQL insert FAIL $ires"
+                }
+            } else {
+                set rList [list "mod_current_test" "$cTest" "mod_name" "$modName" "queue_id" "$qId" \
+                     "mod_results" "$tpbRes"]
+                handleOutput $s "[listToJson -mlist $rList -elem "TCLResult"]"
+                puts $tbf "     Return json: [listToJson -mlist $rList -elem "TCLResult"]"
+                # Set the end time and write duration to the execTime file
+                set timeEnd [clock seconds];
+                global duration
+                set duration [expr $timeEnd - $timeStart]
+                ;# write to testcase and duration to execTime.txt
+                ;# Write out duration to Execution Time File
+                ;# Add testcase: and duration: for easier parsing
+                result_debug "testcase:$cTest    duration:$duration"
+
+                puts $fdin_execTime "testcase:$cTest\tduration:$duration"
+                flush $fdin_execTime
+            }
+            #set prevcase $cTest;# 05082018 - moved into the exec path b/c end scripts only run in exec path
+            puts $tbf "     Set the previous test case to: $cTest"
+        } elseif {$cTest == "kill" || $cTest == "killfinal"} {
+            if [info exists endByProc($prevcase)] {
+                if {$endByProc($prevcase) != "NULL"} {
+                    #if there was an end proc for a case that ran just before a kill
+                    foreach ep $endByProc($prevcase) {
+                        set tcOut [catch {eval $ep} freason];
+                        puts $tbf "     RUN the LAST END: $ep :: tcOut $tcOut"
+                        if {$tcOut != 0} {
+                            puts "THERE WAS A TCL EXCEPTION RUNNING KILL END CASE: $freason"
+                        }
+                    }
+                }
+            }
+            if {!$useSocket} {
+                mysqlexec $mysql_handler "DELETE FROM tpb_modules WHERE mod_run_id = '$mId'"
+            } else {
+                handleOutput $s "Received Kill 1";
+            }
+        }
+    }
+    set tcOut [catch {eval cleanup} freason];
+    if {$tcOut != 0} {
+        puts "THERE WAS A TCL EXCEPTION IN CLEANUP: $freason"
+        puts $tbf "THERE WAS A TCL EXCEPTION IN CLEANUP: $freason"
+        set tcTCLError 1
+    }
+    if {!$useSocket} {
+        if {[catch {mysqlexec $mysql_handler "DELETE FROM tpb_modules WHERE queue_id = '$qId'"} mres]} {
+            puts "@@@\n@@@\nMYSQL DELETE ERROR - mysql_handler = $mysql_handler :\n\
+                    DELETE FROM tpb_modules WHERE queue_id = $qId $mres\n@@@\n@@@"
+            if {[catch {mysqlconnect -host otps -user user -password extreme -db tpb_queues} mysql_handler]} {
+                puts "@@@\n@@@\nMYSQL COULD NOT RECONNECT ERROR\n$mysql_handler\n@@@\n@@@"
+            } else {
+                catch {mysqlexec $mysql_handler "DELETE FROM tpb_modules WHERE queue_id = '$qId'"} newres
+            }
+        }
+
+        if {[info exists mysql_handler]} {
+            catch {mysqlclose $mysql_handler} result
+        }
+    }
+    close $fdin_execTime
+    puts "returning testCompleted $mods"
+    puts $tbf "RETURNING testCompleted $mods"
+    return "testCompleted $mods"
+}
+proc TPBMainClearConsole {qId module regPath useSocket} {
+    # socket variables
+    global getjson getok initsend mySock
+
+    set inClear 0
+    if {!$useSocket} {
+        catch {mysqlconnect -host otps -user user -password extreme -db tpb_queues} mysql_handler
+        set cTestList [mysqlsel $mysql_handler "SELECT mod_run_id, mod_current_test FROM \
+                            tpb_modules WHERE queue_id = '$qId' \
+                            AND mod_dir = '$regPath' AND mod_name = '$module' \
+                            ORDER By mod_run_id ASC" -flatlist]
+        set mod_curr_test "[lindex $cTestList 1]"
+        set mod_run_id "[lindex $cTestList 0]"
+        if {$mod_curr_test == "ClearTestbedSessions"} {
+            set inClear 1
+            set clearOut [catch {eval ClearTestbedSessions} creason];
+            if {[catch {mysqlexec $mysql_handler "DELETE FROM tpb_modules WHERE queue_id = '$qId' \
+                                  AND mod_run_id = '$mod_run_id'"} mres]} {
+                puts "@@@\n@@@\nMYSQL DELETE ERROR - mysql_handler = $mysql_handler :\n\
+                      DELETE FROM tpb_modules WHERE queue_id = $qId \
+                      AND mod_run_id = $mod_run_id \
+                      \n $mres\n@@@\n@@@"
+                if {[catch {mysqlconnect -host otps -user user -password extreme -db tpb_queues} mysql_handler]} {
+                    puts "@@@\n@@@\nMYSQL COULD NOT RECONNECT ERROR\n$mysql_handler\n@@@\n@@@"
+                } else {
+                    catch {mysqlexec $mysql_handler "DELETE FROM tpb_modules WHERE queue_id = '$qId' \
+                           AND mod_run_id = '$mod_run_id' "} newres
+                }
+            }
+            while {$inClear} {
+                set mod_current_test ""
+                puts "Test Bed is locked for troubleshooting.  Sleep for 30 secs then check for unlock\n";
+                sleep 30
+                set cTestList [mysqlsel $mysql_handler "SELECT mod_run_id, mod_current_test FROM \
+                                  tpb_modules WHERE queue_id = '$qId' \
+                                  AND mod_dir = '$regPath' AND mod_name = '$module' \
+                                  ORDER By mod_run_id ASC" -flatlist]
+                set mod_curr_test "[lindex $cTestList 1]"
+                set mod_run_id "[lindex $cTestList 0]"
+                if {$mod_curr_test != ""} {
+                    set inClear 0
+                }
+            }
+        }
+        if {[info exists mysql_handler]} {
+           catch {mysqlclose $mysql_handler} result
+        }
+    }
+}
+# -----------------------------------------------------------------------------------------
+# proc _TPBLynxExecution
+#
+#    - Case were the harness hits a feature that is skipped for lynx
+#    TPB still needs to send in cases to receive the result of skipped
+#
+#
+# -----------------------------------------------------------------------------------------
+proc _TPBLynxExecution {args} {
+    global randomIndex ineed MAIN
+
+    parse_args _TPBLynxExecution $args {
+        wait "future"
+        name "dynamic"
+    }
+
+    if {[set tbf [open "[get_result_dir { $randomIndex }]/tpblogfile.txt" \
+       "w"]] == -1} {
+          puts "Opening the tpblogfile failed"
+    }
+    puts $tbf "Lynx - Skip all TPB cases for this feature"
+    # socket variables
+    global getjson getok initsend mySock ineed
+    set useSocket 1
+    if {![info exists ineed]} {
+        set ineed ""
+    }
+    set cTest "";
+    while {$cTest != "kill" && $cTest != "killfinal"} {
+        result_debug "Using TPB Socket Control Waiting for a Client to Send in test cases"
+        vwait getmyjson
+        puts "RX: $ineed"
+        set ineed [string trim $ineed]
+        if {[regexp -nocase "(sock\[0-9]+)\=(\{\"\[a-zA-Z]+\": *\{\"\[a-zA-Z_\-]+\":\"\[a-zA-Z0-9_&\-]+\".*\}\})$" \
+                              $ineed ignore s j]} {
+            puts $tbf "Used Socket"
+            set mySock $s
+            set parsed [json::json2dict $j]
+            foreach {key val} $parsed {
+                foreach {key val} $val {
+                    set case($key) $val
+                }
+            }
+            set qId $case(queue_id);
+            set modName $case(mod_name);
+            set testDir $case(mod_dir);
+            set cTest $case(mod_current_test);
+            set extid $case(tc_externalid);
+            set disid $case(dispatch_id);
+            set tpbTime $case(time);
+            set mods $modName
+            set vList [list "queue_id" "$qId" "mod_name" "$modName" "mod_dir" "$testDir" \
+                "mod_current_test" "$cTest" \
+                "tc_externalid" "$extid" "dispatch_id" "$disid" "time" "$tpbTime"]
+            handleOutput $s "[listToJson -mlist $vList -elem "TPBVerify"]"
+            vwait getexec
+            handleOutput $s "Starting Test Case Execution"
+            if {$cTest == "pause"} {
+                set tcOut [catch {eval ClearTestbedSessions} freason];
+                if {$tcOut != 0} {
+                    puts $tbf "     ClearTestbedSessions TCL EXCEPTION: $freason"
+                    handleOutput $s "Clear Consoles Failed:"
+                }
+                puts $tbf "PAUSE test bed at $tpbTime"
+                set rList [list "mod_current_test" "$cTest" "mod_name" "$modName" "queue_id" "$qId" \
+                "mod_results" "complete"]
+                handleOutput $s "[listToJson -mlist $rList -elem "TCLResult"]"
+                vwait freepause
+                continue;
+            }
+            set MAIN(MAKESKIPRESULTFILE) 1;# create the tc.txt result files and put entries in report.txt
+            if {[regexp -nocase "init|end" $cTest]} {
+                #continue;
+            } else {
+                if {[catch {eval $cTest} tc]} {
+                }
+            }
+            set MAIN(MAKESKIPRESULTFILE) 0
+            set rList [list "mod_current_test" "$cTest" "mod_name" "$modName" "queue_id" "$qId" \
+                 "mod_results" "testSkipped"]
+            handleOutput $s "[listToJson -mlist $rList -elem "TCLResult"]"
+            puts $tbf "     Return json: Skiptest [listToJson -mlist $rList -elem "TCLResult"]"
+        } else {
+            puts "JSON not correctly formatted";
+            set ts [lindex [split $ineed "="] 0];
+            handleOutput $ts "JSON Format Error:"
+            set bjson [lindex [split $ineed "="] 1];
+            handleOutput $ts "$bjson"
+            handleOutput $ts "@@@@ Skipped for Lynx platform @@@@"
+        }
+    }
+    close $tbf
+}
+# ----------------------------------------------------------------------------------------
+# proc _buildModuleTestLsts
+#
+#    Build all of the possible lists from the completetests.lst
+#
+#
+# ----------------------------------------------------------------------------------------
+proc _buildModuleTestLsts {args} {
+    global MAIN FEATMAIN
+
+    parse_args _buildModuleTestLsts $args {
+        module   "null"
+        regPath  "null"
+    }
+
+    set regPath [string trim $regPath "."]
+    set regPath [string trim $regPath "/"]
+
+puts "Start find [pwd]"
+
+    set myDir [pwd]
+    cd $MAIN(autoRoot)/main
+puts "after change to main [pwd]"
+    set regPath [_verifyRegPathArg -regPath $regPath];#
+    set modulePath [_verifyModuleNameArg $regPath $module]
+puts "After find path [pwd]"
+
+    cd $modulePath
+puts "In the feature dir $module [pwd]"
+
+    set what [GetCleanTestList dev]
+    set verList [GetVerSkipList dev]
+    puts "*****\n*****ALL:\n$what\n*****\n*****"
+    puts "*****\n*****VERSKIP:\n$verList\n*****\n*****"
+    set mydev [GetCleanTestList devonly]
+    puts "*****\n*****DEVONLY:\n$mydev\n*****\n*****"
+    set mydebug [GetCleanTestList debugonly]
+    puts "*****\n*****DEBUGONLY:\n$mydebug\n*****\n*****"
+
+    set elist ""
+    if {[file isfile license.lst] && \
+        [regexp $bcmLynx $DUTs_info(DUT1,platform)]} {
+        source license.lst
+        foreach edgetc $license_to_run(edge) {
+            lappend elist $edgetc
+        }
+        puts "Found EDGE: $elist"
+    }
+    set ALLPLATTESTS $what
+    set ALLPLATDEV $mydev
+    set ALLPLATDEBUG $mydebug
+    set ALLPLATEDGE $elist
+    set SKIPVERTESTS $verList
+    set currInit ""
+    set currEnd ""
+    set hitPair 0
+    set numInit "A"
+    set numEnd "B"
+    foreach w $what {
+        if {[regexp -nocase "init" $w]} {
+            if {!$hitPair} {
+                set currInit ""
+                set numInit ""
+                set currEnd ""
+                set numEnd ""
+            }
+            regsub -all "\.init" $w "" myInit
+            set currInit $w
+            set numInit $myInit
+        }
+        if {[regexp -nocase "end" $w]} {
+            regsub -all "\.end" $w "" myEnd
+            set currEnd $w
+            set numEnd $myEnd
+        }
+        if {$numEnd == $numInit} {
+            puts "found pair $currInit - $currEnd"
+            set initEndScript($currInit) $currEnd
+            set INITBYENDSCRIPT($currEnd) $currInit
+            set currInit ""
+            set numInit ""
+            set currEnd ""
+            set numEnd ""
+            set hitPair 1
+        }
+    }
+    set currInit "NULL"
+    set currEnd ""
+    foreach w $what {
+        if {[regexp -nocase "init" $w]} {
+            set currInit $w
+        } elseif {[regexp -nocase "end" $w]} {
+            set currInit NULL
+        } else {
+            if {[info exists initEndScript($currInit)]} {
+               set blockEnd $initEndScript($currInit)
+            } else {
+               set blockEnd "NULL"
+            }
+            set TESTPRE($w) $currInit
+            set TESTPOST($w) $blockEnd
+            puts "Prereq $currInit  TestCase $w  TestCleanup $blockEnd"
+        }
+    }
+
+    #cd "$MAIN(autoRoot)/main"
+    cd $myDir
+
+}

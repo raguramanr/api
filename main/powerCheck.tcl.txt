@@ -1,0 +1,181 @@
+#!/usr/bin/tclsh
+
+package require Tclx
+
+proc print_usage {} {
+    puts "\r"
+    puts {Usage: powerCheck.tcl -cfg <cfg.cfg> -mode <null|on|off>}
+    puts {      [<cfg>]: f48_std.cfg}
+    puts {      [<mode>]: reboot|off|on|null default null verify PDU}
+    puts "\r"
+}
+
+# checking command parameters
+if {$argc<2} {
+    puts "Not enough parameters"
+    print_usage
+    exit
+}
+
+set LIB_PATH "../Lib"
+lappend auto_path $LIB_PATH
+
+source ../Lib/parse_args.tcl
+source ../Lib/mainLib.tcl
+source ../Lib/downLoadCode.tcl
+source ../Lib/poweroutlet.tcl
+##################################################################################
+#  Parse Args
+##################################################################################
+parse_args LoadCode $argv {
+    cfg     "null"
+    mode    "null"
+}
+set module "CheckPower"
+gen_index "../Lib"
+##################################################################################
+#  Source the config files
+##################################################################################
+set sourceFile ""
+if [catch {source "../main/cfg/common.cfg"} rea] {
+    puts "*** WARNING: Unable to source common.cfg:$rea............... ***"
+    puts "*** WARNING: Application level variables may not be defined. ***"
+    exit -1
+}
+
+if {[regexp -nocase "on|off|re" $mode]} {
+   puts "Turn Test Bed $mode"
+} else {
+   puts "Illegal mode.  Must be on or off"
+   exit;
+}
+
+puts "CFG is $cfg"
+if {$cfg != "null"} {
+    set sourceFile $cfg
+    if {([regexp -nocase "^short" $sourceFile]&&[regexp -nocase {/} $sourceFile]) || \
+    [regexp -nocase "^pt" $sourceFile]} {
+        set sourceFile [format %s/%s/%s $regType $module $sourceFile]
+        set sourceFile [string trim $sourceFile];
+        puts "Using config file: ($sourceFile)"
+    } elseif {![regexp -nocase "^cfg" $sourceFile] && ![regexp -nocase {/} $sourceFile]} {
+        if {[file exists $sourceFile]==0} {
+            set sourceFile [format %s/%s cfg $sourceFile]
+            set sourceFile [string trim $sourceFile];
+            puts "Using config file: ($sourceFile)"
+        } else {
+            puts "$sourceFile does not exist [file exists $sourceFile]"
+        }
+    } else {
+        if {[file exists $sourceFile]} {
+            set sourceFile [string trim $sourceFile];
+            puts "Using config file: ($sourceFile) pwd [pwd]"
+            source $sourceFile
+        } else {
+            puts "$sourceFile does not exist [file exists $sourceFile]"
+        }
+        puts "Hit last case $sourceFile"
+    }
+}
+if {[file exists $sourceFile] == 0} {
+    puts "Cannot find config file: $sourceFile\n"
+    exit
+}
+catch {source $sourceFile} reason
+# ----- load {expect52.dll}
+if {$tcl_platform(platform) == "windows"} {
+    load "expect52.dll"
+} else {
+    load [lindex [glob "/usr/lib/libexpect*so*"] 0]
+}
+
+log_user 0
+
+if {$tcl_platform(platform) == "windows"} {
+    lappend auto_path "C:/Program Files/Ixia/TclScripts/Lib/ixTcl1.0"
+} else {
+    lappend auto_path [file join $env(HOME) "ixia/lib/mpexpr-1.0"]
+    lappend auto_path [file join $env(HOME) "ixia/lib/ixTcl1.0"]
+    lappend auto_path [file join $env(HOME) "ixia/lib/dp4.0"]
+}
+
+set auto_path [linsert $auto_path 0 . ]
+
+if {![file isdirectory Report]} {
+    file mkdir Report
+}
+if {![file isdirectory Result]} {
+    file mkdir Result
+}
+if {![file isdirectory Tmp]} {
+    file mkdir Tmp
+}
+if {![file isdirectory Log]} {
+    file mkdir Log
+}
+
+gen_index .
+############################################################
+set tStartTime [clock seconds]
+set tStartDate [clock format [clock seconds] -format "%Y-%m-%d %I.%M.%S%p"]
+set passCount       0
+set failCount       0
+set skipCount       0
+set testDuration    0
+set testHour        0
+set testMin         0
+set testSec         0
+set resultDir       "NULL"
+set skipCopy        1
+set DUT(bug)        1
+set DUT(LoadImage)  1
+set DUT(xmod)       0
+set numDUT  1
+set ReportLoginError "no"
+
+# ------------------------------------------------------------------------
+# ------------------------------------------------------------------------
+puts "\n==========================================================================\n\
+       Verify power controller connections to test bed DUTs\n\
+      =========================================================================="
+# ------------------------------------------------------------------------
+# ------------------------------------------------------------------------
+
+##############################################################################
+##  Power off all DUTs
+##############################################################################
+set fd_res [open_result_file "PowerDatDUT"]
+
+set numDUT 1
+if {[regexp -nocase "off|re" $mode] } {
+    while { [info exists DUT${numDUT}_CONNECT] } {
+        set connect [set DUT${numDUT}_CONNECT]
+        lappend connectList $connect
+        puts "***** DUT${numDUT}_CONNECT=$connect ***** "
+        puts "***** numDUT=$numDUT ***** "
+        PowerOffDUT $numDUT "off"
+        incr numDUT 1
+    } 
+}
+set numDUT 1
+if {[regexp -nocase "on|re" $mode]} {
+    while { [info exists DUT${numDUT}_CONNECT] } {
+        set connect [set DUT${numDUT}_CONNECT]
+        lappend connectList $connect
+        puts "***** DUT${numDUT}_CONNECT=$connect ***** "
+        puts "***** numDUT=$numDUT ***** "
+        PowerOffDUT $numDUT "on"
+        incr numDUT 1
+    }
+}
+
+
+set tEndTime [clock seconds]
+set testDuration [expr $tEndTime-$tStartTime]
+set testSec  [expr $testDuration % 60]
+set testMin  [expr $testDuration / 60]
+set testHour [expr $testMin / 60]
+set testMin  [expr $testMin % 60]
+
+close_result_file
+

@@ -1,0 +1,438 @@
+
+#load {expect52.dll}
+set auto_path [linsert $auto_path 0 . ]
+
+##################################################################    
+# Procedure Name: ixiaGenMap
+# Description:
+#     	Generate ixia one2one map by adding all ixia ports.
+# Input args: {numIxiaCd} {startCardNum} {ixMapOption} {direction} {chid}
+# Output args: None
+# Typical usage: 
+#	ixiaGenMap $numIxiaCd $startCardNum $ixMapOption $direction $chid
+# Category: SetupTestTool
+##################################################################
+proc ixiaGenMap {{txPortId 1}
+                 {rxPortId 2}
+                 {ixMapOption standard}
+                 {direction 2Way}
+                 {chid 1}} {
+
+   global one2oneArray
+   set portList ""
+
+   map new 	-type   one2one
+   map config 	-type 	one2one
+
+   switch $ixMapOption {
+   	standard {
+           for {set p $txPortId} {$p<=$rxPortId} {incr p} {
+               set rxPort [MapIxiaPortId $p chas card port]
+               lappend portList "{$chas $card $port}"
+           }
+           for {set i 0} {$i<[llength $portList]} {incr i 2} {
+              set txPort [lindex [lindex $portList $i] 0]
+              set rxPort [lindex [lindex $portList [expr $i+1]] 0]
+              map add [lindex $txPort 0] [lindex $txPort 1] [lindex $txPort 2] [lindex $rxPort 0] [lindex $rxPort 1] [lindex $rxPort 2]
+              if {$direction == "2Way"} {
+                 map add [lindex $rxPort 0] [lindex $rxPort 1] [lindex $rxPort 2] [lindex $txPort 0] [lindex $txPort 1] [lindex $txPort 2]
+              }
+           }
+	}
+   }
+}
+
+##################################################################    
+# Procedure Name: ixiaConf_clearStat
+# Description:
+#     	Clear all ports statistics on the specified ixia chassis/card.
+# Input args: {cardNo} {chid}
+# Output args: None
+# Typical usage: 
+#	ixiaConf_clearStat $cardNo
+# Category: SetupTestTool
+##################################################################
+proc ixiaConf_clearStat {{cardNo 1} {chid 1}} {
+   global one2oneArray
+   set numPorts [findNumPortPerIxiaCard $cardNo]
+   for {set p 1} {$p<=$numPorts} {incr p 1} {zeroPortStats $chid $cardNo $p}
+}
+
+##################################################################    
+# Procedure Name: ixiaStartCaptureCards
+# Description:
+#     	Start capture on all ports of the specified ixia card range.
+# Input args: {numIxiaCd} {startCardNum} {chid}
+# Output args: None
+# Typical usage: 
+#	ixiaStartCaptureCards $numIxiaCd $startCardNum
+# Category: SetupTestTool
+##################################################################
+proc ixiaStartCaptureCards {{numIxiaCd 1} {startCardNum 1} {chid 1}} {
+   set lastCardNum [expr $startCardNum + $numIxiaCd - 1]
+   for {set c $startCardNum} {$c<=$lastCardNum} {incr c 1} {
+      set numPorts [findNumPortPerIxiaCard $c]
+      for {set p 1} {$p<=$numPorts} {incr p 1} {
+         startPortCapture $chid $c $p
+      }
+   }
+}
+
+##################################################################    
+# Procedure Name: ixiaStopCaptureCards
+# Description:
+#     	Stop capture on all ports of the specified ixia card range.
+# Input args: {numIxiaCd} {startCardNum} {chid}
+# Output args: None
+# Typical usage: 
+#	ixiaStopCaptureCards $numIxiaCd $startCardNum
+# Category: SetupTestTool
+##################################################################
+proc ixiaStopCaptureCards {{numIxiaCd 1} {startCardNum 1} {chid 1}} {
+   set lastCardNum [expr $startCardNum + $numIxiaCd - 1]
+   for {set c $startCardNum} {$c<=$lastCardNum} {incr c 1} {
+      set numPorts [findNumPortPerIxiaCard $c]
+      for {set p 1} {$p<=$numPorts} {incr p 1} {
+         stopPortCapture $chid $c $p
+      }
+   }
+}
+
+##################################################################    
+# Procedure Name: ixiaStopTxCards
+# Description:
+#     	Stop transmission on all ports of the specified ixia card range.
+# Input args: {numIxiaCd} {startCardNum} {chid}
+# Output args: None
+# Typical usage: 
+#	ixiaStopTxCards $numIxiaCd $startCardNum
+# Category: SetupTestTool
+##################################################################
+proc ixiaStopTxCards {{numIxiaCd 1} {startCardNum 1} {chid 1}} {
+   set lastCardNum [expr $startCardNum + $numIxiaCd - 1]
+   for {set c $startCardNum} {$c<=$lastCardNum} {incr c 1} {
+      set numPorts [findNumPortPerIxiaCard $c]
+      for {set p 1} {$p<=$numPorts} {incr p 1} {
+         stopPortTx $chid $c $p
+      }
+   }
+}
+
+##################################################################    
+# Procedure Name: ixiaCheckTxDone
+# Description:
+#     	 Check if ixia transmission is done as expected no. of frames.
+# Input args: {chid} {c} {p} {targetTxNum}
+# Output args: None
+# Typical usage: 
+#	ixiaCheckTxDone $chid $card $port $targetTxNum
+# Category: VerifyTraffic
+##################################################################
+proc ixiaCheckTxDone {{chid 1}
+                      {c 1}
+                      {p 1}
+                      {targetTxNum 1}
+                      {txPortId 1}} {
+        global DUTs_info;
+        global whichDutNow;
+       
+	set timeout	[expr 60 + $targetTxNum/10]
+	set retCode 0
+
+	if { [stat get statFramesSent $chid $c $p] } {
+		logMsg "Error getting Tx statistics for $chid $c $p"
+		set retCode 1
+	}
+    	set numTxFrames [stat cget -counterVal]
+
+	while {$numTxFrames < $targetTxNum} {
+		if { [stat get statFramesSent $chid $c $p] } {
+			logMsg "Error getting Tx statistics for $chid $c $p"
+			set retCode 1
+		}
+        	set numTxFrames [stat cget -counterVal]
+        	after 100
+		incr timeout -1
+		if { $timeout == 0 } {
+		   result_warning "Error checking Tx Done on $chid $c $p. Timeout after [expr $timeout/10] seconds"
+
+         	   set retCode 1
+		   break
+		}
+	}
+
+    if {$retCode == 0} { return $numTxFrames
+    } else {             return 0 }
+}
+
+################################################################## 
+# Procedure Name: findNumPortPerIxiaCard   
+# Description: 
+#	Find the right number of ports on the specified Ixia card
+# Input args: {cardNum}
+# Output args: none
+# Typical usage: 
+#	set numPorts [findNumPortPerIxiaCard $c]
+# Category: Utility
+##################################################################
+proc findNumPortPerIxiaCard {{cardNum 1}} {
+   if {[card get 1 $cardNum] == 0} {
+     set cardType [card cget -type]
+     switch $cardType {
+	2  -
+	6  -
+	26 		{ set numPorts 4 }
+	3  -
+	7  -
+	28 		{ set numPorts 2 }
+	42 -
+	46 -
+	61 		{ set numPorts 1 }
+	57 		{ set numPorts 8 }
+        167             { set numPorts 1}
+        default 	{ set numPorts 4 }
+     }
+   } else {
+     set numPorts 0
+   }   
+   return $numPorts
+}
+
+################################################################## 
+# Procedure Name: decideFrameRate   
+# Description: 
+#	Decide the ixia frame rate based on the given portSpeed, FrameSize, 
+#	& percentage bandwidth
+# Input args: {portSpeed} {frameSize} {percentage}
+# Output args: none
+# Typical usage: 
+#	set frameRate [decideFrameRate $txSpeed $frameSize $percentage]
+# Category: Utility
+##################################################################
+proc decideFrameRate {{portSpeed 100}
+                      {frameSize 64}
+		      {percentage 100}} {
+   switch $frameSize {
+            	64	{ set frameRate 1488.1	}
+            	128	{ set frameRate 844.6	}
+		256	{ set frameRate 452.9	}
+		512	{ set frameRate 235.0	}
+		1024	{ set frameRate 119.8	}
+		1280	{ set frameRate 96.2		}
+		1518	{ set frameRate 81.3 	}
+		default { set frameRate [expr (1488.1*64)/$frameSize] }
+   }
+
+   set frameRate [expr $frameRate * $portSpeed * $percentage / 100 ]
+   return $frameRate
+}
+
+################################################################## 
+# Procedure Name: GetPortIdSpeed   
+# Description: 
+#	Get the ixia port speed on the specified port ID
+# Input args: {portId}
+# Output args: none
+# Typical usage: 
+#	set txSpeed [GetPortIdSpeed $portID]
+# Category: Utility
+##################################################################
+proc GetPortIdSpeed { {portId 1} } {
+    global TrafficGen
+    switch -exact -- $TrafficGen {
+        stc -
+        stcvm {
+            puts "Not used temporarily"
+            return 1000
+        }
+        ixia -
+        ixvm {
+   MapIxiaPortId $portId chasisId card port
+   port get $chasisId $card $port
+   return [port cget -speed]
+        }
+        ept {
+        }
+        default {
+        }
+    }
+   
+}   
+
+##################################################################
+# Procedure Name: decidePercentage
+# Description:
+#       Decide the ixia percentage given portSpeed, FrameSize,
+#       & frameRate
+# Input args: {portSpeed} {frameSize} {frameRate}
+# Output args: none
+# Typical usage:
+#         set percentage [decidePercentage $txSpeed $frameSize $frameRate]
+# Category: Utility
+##################################################################
+proc decidePercentage {{portSpeed 100}
+                      {frameSize 64}
+                      {frameRate default}} {
+   switch $frameSize {
+                64      { set full [expr 1488.1* $portSpeed]}
+                128     { set full [expr 844.6*$portSpeed]      }
+                256     { set full [expr 452.9*$portSpeed]      }
+                512     { set full  [expr 235.0*$portSpeed]     }
+                1024    { set full  [expr 191.8*$portSpeed]     }
+                1280    { set full  [expr 96.2*$portSpeed]      }
+                1518    { set full  [expr 81.3*$portSpeed]      }
+                default { set full [expr (1488.1*64*$portSpeed)/$frameSize] }
+   }
+
+   set percentage [expr $frameRate * 100 / $full]
+   return $percentage
+}
+
+##################################################################
+# Procedure Name: decideLoopCount
+# Description:
+#       Decides the loopCount if numFrames > 16Mil due to ixia bug
+# Input args: {portSpeed} {frameSize} {frameRate}
+# Output args: none
+# Typical usage:
+# decideLoopCount $numFrames $streamType
+# Category: Utility
+##################################################################
+proc decideLoopCount {numFrames streamType} {
+ 
+      if {$numFrames>16777215} {
+         for {set i 1} {$i<900000} {incr i 1} {
+            set framesCount [mpexpr $numFrames/[mpexpr 1e$i]]
+            if {$framesCount<16770000} {
+               break
+            }
+         }
+         stream config -numFrames  $framesCount
+         stream config -loopCount [expr 1e$i]
+         stream config -dma    firstLoopCount
+      } else {
+         stream config -dma    $streamType
+      }
+   return
+}
+
+proc SetIxiaEnv {ixiaPath} {
+global env
+   if {![info exists env(IXIA_HOME)]} {
+      set env(IXIA_HOME) "$ixiaPath"
+   }
+   set env(DEFAULT_IXIA_HOME) $env(IXIA_HOME)
+   set env(IXIA_HOME) "$ixiaPath"
+   set TCLver 8.3
+
+# USER MAY NEED TO CHANGE THESE IF USING OWN TCL LIBRARY 
+   set env(TCL_HOME) "$ixiaPath"
+
+# USER NORMALLY DOES NOT CHANGE ANY LINES BELOW
+   set env(IxiaLibPath) "$env(IXIA_HOME)/lib"
+   set env(IxiaBinPath) "$env(IXIA_HOME)/bin"
+   set env(TCLLibPath) "$env(TCL_HOME)/lib"
+   set env(TCLBinPath) "$env(TCL_HOME)/bin"
+   set env(TCL_LIBRARY) "$env(TCLLibPath)/tcl$TCLver"
+   set env(TK_LIBRARY) "$env(TCLLibPath)/tk$TCLver"
+
+   # EY-03-08-2007: Check if variable exists when referencing.
+   set env(PATH) "$env(IxiaBinPath):.:$env(TCLBinPath):[expr {[info exists env(PATH)] ? $env(PATH) : ""}]";
+
+   set env(TCLLIBPATH) "$env(IxiaLibPath)"
+
+   # EY-03-08-2007: Check if variable exists when referencing.
+   set env(LD_LIBRARY_PATH) "$env(IxiaLibPath):$env(TCLLibPath):[expr {[info exists env(LD_LIBRARY_PATH)] ? $env(LD_LIBRARY_PATH) : ""}]";
+   set env(IXIA_RESULTS_DIR) "$env(IXIA_HOME)/results"
+   set env(IXIA_LOGS_DIR) "$env(IXIA_HOME)/logs"
+   set env(IXIA_TCL_DIR) "$env(IxiaLibPath)"
+   set env(IXIA_SAMPLES) "$env(IxiaLibPath)/ixTcl1.0"
+
+   #
+   # EY-04-25-2012: Added IxOS v6.20.
+   # EY-07-17-2012: Added IxOS v6.20.800.12 EA SP1.
+   # EY-07-25-2012: Added IxOS v6.30.850.7.
+   # EY-10-29-2012: Added IxOS v6.30.850.23.
+   # EY-02-07-2013: Added IxOS v6.40.900.6.
+   if {[regexp -nocase "5_00" $ixiaPath]} {
+      set env(IXIA_VERSION) 5.00.300.20
+   } elseif {[regexp -nocase "4_10" $ixiaPath]} {
+      set env(IXIA_VERSION) 4.10.250.15
+   } elseif {[regexp -nocase "5_10" $ixiaPath]} {
+      set env(IXIA_VERSION) 5.10.350.28
+   } elseif {[regexp -nocase "5_20" $ixiaPath]} {
+      set env(IXIA_VERSION) 5.20.400.3
+   } elseif {[regexp -nocase "5_30" $ixiaPath]} {
+      set env(IXIA_VERSION) 5.30.450.31
+   } elseif {[regexp -nocase "5_60" $ixiaPath]} {
+      set env(IXIA_VERSION) 5.60.550.7
+   } elseif {[regexp -nocase "5_50" $ixiaPath]} {
+      set env(IXIA_VERSION) 5.50.500.27
+   } elseif {[regexp -nocase "5_70" $ixiaPath]} {
+      set env(IXIA_VERSION) 5.70.600.5;
+   } elseif {[regexp -nocase "6_00" $ixiaPath]} {
+      set env(IXIA_VERSION) 6.00
+   } elseif {[regexp -nocase "6_10" $ixiaPath]} {
+      set env(IXIA_VERSION) 6.10.750.13;
+   } elseif {[regexp -nocase "6_20_800_9" $ixiaPath]} {
+      set env(IXIA_VERSION) 6.20.800.9;
+   } elseif {[regexp -nocase "6_20_800_12" $ixiaPath]} {
+      set env(IXIA_VERSION) 6.20.800.12;
+   } elseif {[regexp -nocase "6_20" $ixiaPath]} {
+      set env(IXIA_VERSION) 6.20.800.12;
+   } elseif {[regexp -nocase "6_30_850_7" $ixiaPath]} {
+      set env(IXIA_VERSION) 6.30.850.7;
+   } elseif {[regexp -nocase "6_30_850_23" $ixiaPath]} {
+      set env(IXIA_VERSION) 6.30.850.23;
+   } elseif {[regexp -nocase "6_30" $ixiaPath]} {
+      set env(IXIA_VERSION) 6.30.850.23;
+   } elseif {[regexp -nocase "6_40" $ixiaPath]} {
+      set env(IXIA_VERSION) 6.40.900.6;
+   } elseif {[regexp -nocase "6_30" $ixiaPath]} {
+      set env(IXIA_VERSION) 6.30.850.7;
+   } elseif {[regexp -nocase "6_50" $ixiaPath]} {
+      set env(IXIA_VERSION) 6.50.948.17;
+   } elseif {[regexp -nocase "6_50_950_4" $ixiaPath]} {
+      set env(IXIA_VERSION) 6.50.950.4;
+   } elseif {[regexp -nocase "6_70" $ixiaPath]} {
+      set env(IXIA_VERSION) 6.70.1050.16;
+   } elseif {[regexp -nocase "6_80" $ixiaPath]} {
+      set env(IXIA_VERSION) 6.80.1100.7;
+   } elseif {[regexp -nocase "6_90" $ixiaPath]} {
+      set env(IXIA_VERSION) 6.90.1150.14;
+   } else {
+      set env(IXIA_VERSION) 5.60.550.7;
+   }
+
+}
+
+#############################################################################################
+# Procedure Name: getIxiaPortType
+#
+# Description: This proc returns the type of a ixia port.
+# ex:
+# 1     port10100BaseTX
+# 8     portGbic
+# 63    port10100Txs
+# 82    port1000Stxs4
+# see Ixia manual for more definitions
+#
+# Input args:
+#
+#  -ixPort             - Ixia port
+#
+# Output args: none
+#
+# Typical usage: getIxiaPortType 8
+#
+##############################################################################################
+proc getIxiaPortType {ixPort} {
+
+MapIxiaPortId $ixPort chasis card port
+  result_debug "chasis : $chasis card : $card port : $port"
+  port get $chasis $card $port
+  set portType [port cget -type]
+  result_debug "portType - $portType"
+  return $portType
+}
+

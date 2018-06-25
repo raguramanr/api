@@ -1,0 +1,72 @@
+####################################################################
+# Procedure: killExosProcess
+#
+# inArgs:  -process       = process name
+#          -waitForReboot = true|false  default=true
+#
+#
+####################################################################
+proc killExosProcess {args} {
+    global DUTs_Info MAIN connectionTimeout
+
+    parse_args killExosProcess $args {
+        process        "null"
+        waitForReboot  "true"
+        time           "null"
+    }
+
+    if {$process == "null"} {
+        result_warning "No process passed in to kill"
+    }
+    if {$time == "null"} {
+        set time {s: 10 i: 20 f: 60}
+    }
+    EnableDebugMode
+    ShellSend "!sh"
+    ShellSend "ps -ef | grep $process"
+    ShellSend "killall -9 $process"
+    ShellSend "exit"
+
+    if {$waitForReboot == "true"} {
+        set com "Wait for switch to reboot after epm reboot due to process $process killed"
+        WaitForReboot 90 $com 1
+        VerifyExosProcessState -process $process -time $time
+        return 1
+    } else {
+        return 0
+    }
+}
+####################################################################
+# Procedure: VerifyExosProcessState
+#
+# inArgs:  -process = process|null   default=null checks all procs are ready
+#          -state   = Ready|crashed  default=Ready
+#
+#
+####################################################################
+proc VerifyExosProcessState {args} {
+    global DUTs_Info MAIN connectionTimeout
+
+    parse_args VerifyExosProcessState $args {
+        process      "null"
+        state        "Ready"
+        time         "null"
+    }
+
+    if {$process == "null"} {
+        result_debug "-process is a required arg.  Else output is too large"
+        return 0;
+        set state "Ready|Init|No license"
+        set parameterList ""
+        lappend parameterList "{epmpcb {state}} {$state} regexExist"
+        return [CheckDictValue -cmd "show process" -parameterList $parameterList \
+           -comment "Check that all processes are $state" -yesorno "Yes" \
+           -debugjson "false" -time "$time"]
+    } else {
+        set parameterList ""
+        lappend parameterList "{epmpcb {name state}} {$process $state} exist"
+        return [CheckDictValue -cmd "show process $process" -parameterList $parameterList \
+           -comment "Check that all processes are $state" -yesorno "Yes" \
+           -debugjson "false" -time "$time"]
+    }
+}

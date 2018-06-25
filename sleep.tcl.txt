@@ -1,0 +1,318 @@
+# ---------------------------------------------------------------------------------------
+# proc _platformSleep
+#
+# Args: In: platformStringVar from common.cfg list
+#           time List
+#           dut
+# ---------------------------------------------------------------------------------------
+proc _platformSleep {args} {
+    global DUTs_info MAIN
+
+    parse_args _platformSleep $args {
+        labelList   "null"
+        sysTypes    "null"
+        delayList   "null"
+        dut         "1"
+    }
+
+    set i 0;
+    foreach sysT $sysTypes {
+        if {[regexp -nocase "$sysT" $DUTs_info(DUT$dut,sysType)] ||    
+            [regexp -nocase "$sysT" $DUTs_info(DUT$dut,platform)]} {
+puts "Why no print: $MAIN(SHOWRESULT_FMT)"
+            result_debug "Platform [lindex $labelList $i] waiting [lindex $delayList $i] seconds"
+            exSleep [lindex $delayList $i]
+        }
+        incr i
+    }
+}
+##################################################################
+# Procedure Name: PlatformDelay
+#
+#
+# Description: Single location proc to add platform delays
+#
+# Input args: args
+#
+#        delayReason - general or a common cli which can be added as necessary
+#        sleepTime - if set to none defaults are taken
+#        printM - a message to be printed leaving none will take defaults
+#        delayPlatform - pioneer|broadcom|genesis to make it platform specific
+#
+#        No args has a default delay of pioneer=30 broadcom=5 genesis=1
+# Output args:
+#             
+#
+# Typical usage:
+#   PlatformDelay -delayReason "sync fdb"
+#
+# Category: Utility
+##################################################################
+proc PlatformDelay {args } {
+    parse_args PlatformDelay $args {
+        delayReason "general"
+        sleepTime "none"
+        printM "none"
+        delayPlatform "none"
+    }
+    global whichDutNow
+    global DUTs_info
+
+    ## -------------------------------------------------------------------------------
+    ##   Pioneer delay cases
+    ## -------------------------------------------------------------------------------
+    global pioneerPlatform
+    if {[regexp -nocase $pioneerPlatform $DUTs_info(DUT$whichDutNow,platform)]} {
+        if {$delayPlatform != "none" && ![regexp -nocase "pioneer" $delayPlatform]} {
+            return;
+        }
+        switch $delayReason {
+            "clear fdb" { ;# clear fdb needs a delay
+                set theDelay 15
+                if {$sleepTime!="none"} {set theDelay $sleepTime;}
+                set outMessage "Sleeping $theDelay seconds awaiting Pioneer clear fdb ... "
+            }
+            "show fdb" { ;# show fdb needs a delay
+                set theDelay 20
+                if {$sleepTime!="none"} {set theDelay $sleepTime;}
+                set outMessage "Sleeping $theDelay seconds awaiting Pioneer show fdb ... "
+            }
+            "sync fdb" { ;# Delay needed for fdb sync
+                set theDelay 15
+                if {$sleepTime!="none"} {set theDelay $sleepTime;}
+                set outMessage "Sleeping $theDelay seconds awaiting Pioneer sync fdb ... "
+            }
+            "tag change" { ;# Needs to done after tag change on pioneer
+                set theDelay 15
+                if {$sleepTime!="none"} {set theDelay $sleepTime;}
+                set outMessage "Sleeping $theDelay seconds awaiting Pioneer sync fdb ... "
+            }
+            "port change" { ;# Needs to done after a port move change on pioneer
+                set theDelay 15
+                if {$sleepTime!="none"} {set theDelay $sleepTime;}
+                set outMessage "Sleeping $theDelay seconds awaiting Pioneer add/remove a port ... "
+            }
+            "esrp_eaps change" { ;# Needs to done after a esrp or eaps change on pioneer
+                set theDelay 20
+                if {$sleepTime!="none"} {set theDelay $sleepTime;}
+                set outMessage "Sleeping $theDelay seconds awaiting Pioneer eaps/esrp ... "
+            }
+            "general" { ;# default delay
+                if {$sleepTime!="none"} {set theDelay $sleepTime;} else {set theDelay 30;}
+                if {$printM == "none"} {
+                    set outMessage "Pioneer Delay $theDelay seconds!"
+                } else {
+                    set outMessage "$printM"
+                }
+            }
+            default {
+                return;
+            }
+        }
+        result_print "\n$outMessage";
+        exSleep $theDelay
+    }
+    ## -------------------------------------------------------------------------------
+    ##   Everest delay cases
+    ## -------------------------------------------------------------------------------
+    if {[regexp -nocase "BD-X8" $DUTs_info(DUT$whichDutNow,platform)]} {
+        if {$delayPlatform != "none" && ![regexp -nocase "everest" $delayPlatform]} {
+            return;
+        }
+        switch $delayReason {
+            "tag change" { ;# Needs to done after tag change on everest
+                set theDelay 15
+                if {$sleepTime!="none"} {set theDelay $sleepTime;}
+                set outMessage "Sleeping $theDelay seconds awaiting Everest vlan tag change ... "
+            }
+            "port change" { ;# Needs to done after a port move change on everest
+                set theDelay 15
+                if {$sleepTime!="none"} {set theDelay $sleepTime;}
+                set outMessage "Sleeping $theDelay seconds awaiting Everest add/remove a port ... "
+            }
+            "general" { ;# default delay
+                if {$sleepTime!="none"} {set theDelay $sleepTime;} else {set theDelay 5;}
+                if {$printM == "none"} {
+                    set outMessage "Broadcom Delay $theDelay seconds!"
+                } else {
+                    set outMessage "$printM"
+                }
+            }
+            default {
+                return;
+            }
+        }
+        result_print "\n$outMessage";
+        exSleep $theDelay
+    }
+    ## -------------------------------------------------------------------------------
+    ##   VPEX delay cases
+    ## -------------------------------------------------------------------------------
+    if {[regexp -nocase "vpex" $DUTs_info(DUT$whichDutNow,platform)]} {
+        if {$delayPlatform != "none" && ![regexp -nocase "vpex" $delayPlatform]} {
+            return;
+        }
+        switch $delayReason {
+            "tag change" { ;# Needs to done after tag change on VPEX
+                set theDelay 15
+                if {$sleepTime!="none"} {set theDelay $sleepTime;}
+                set outMessage "Sleeping $theDelay seconds awaiting Everest vlan tag change ... "
+            }
+            default {
+                return;
+            }
+        }
+        result_print "\n$outMessage";
+        exSleep $theDelay
+    }
+    ## -------------------------------------------------------------------------------
+    ##   Broadcom delay cases
+    ## -------------------------------------------------------------------------------
+    global bcmPlatform
+    if {[regexp -nocase $bcmPlatform $DUTs_info(DUT$whichDutNow,platform)]} {
+        if {$delayPlatform != "none" && ![regexp -nocase "broadcom" $delayPlatform]} {
+            return;
+        }
+        switch $delayReason {
+            "show fdb" { ;# show fdb needs a delay
+                set theDelay 15
+                if {$sleepTime!="none"} {set theDelay $sleepTime;}
+                set outMessage "Sleeping $theDelay seconds awaiting Broadcom show fdb ... "
+            }
+            "esrp_eaps change" { ;# Needs to done after a esrp or eaps change
+                set theDelay 5
+                if {$sleepTime!="none"} {set theDelay $sleepTime;}
+                set outMessage "Sleeping $theDelay seconds awaiting Broadcom eaps/esrp ... "
+            }
+            "general" { ;# default delay
+                if {$sleepTime!="none"} {set theDelay $sleepTime;} else {set theDelay 5;}
+                if {$printM == "none"} {
+                    set outMessage "Broadcom Delay $theDelay seconds!"
+                } else {
+                    set outMessage "$printM"
+                }
+            }
+            default {
+                return;
+            }
+        }
+        result_print "\n$outMessage";
+        exSleep $theDelay
+    }
+    ## -------------------------------------------------------------------------------
+    ##   Genesis delay cases
+    ## -------------------------------------------------------------------------------
+    global gnssPlatform
+    if {[regexp -nocase $gnssPlatform $DUTs_info(DUT$whichDutNow,platform)]} {
+        if {$delayPlatform != "none" && ![regexp -nocase "genesis" $delayPlatform]} {
+            return;
+        }
+        switch $delayReason {
+            "esrp_eaps change" { ;# Needs to done after a esrp or eaps change
+                set theDelay 5
+                if {$sleepTime!="none"} {set theDelay $sleepTime;}
+                set outMessage "Sleeping $theDelay seconds awaiting Genesis eaps/esrp ... "
+            }
+            "general" { ;# default delay
+                if {$sleepTime!="none"} {set theDelay $sleepTime;} else {set theDelay 1;}
+                if {$printM == "none"} {
+                    set outMessage "Genesis Delay $theDelay seconds!"
+                } else {
+                    set outMessage "$printM"
+                }
+            }
+            default {
+                return;
+            }
+        }
+        result_print "\n$outMessage";
+        exSleep $theDelay
+    }
+}
+##################################################################
+# Procedure Name: exSleep
+#
+# Description: Sleep function that prints time left each second
+#
+# Input args:
+#              sec - Number of seconds to sleep
+#
+# Output args:
+#              output to stdout
+#
+# Typical usage:
+#      exSleep 10
+#
+# Category: Utility
+##################################################################
+proc exSleep { sec } {
+
+    result_debug "Sleeping for $sec sec"
+    set sleepTime $sec
+    puts "\n"
+    while {$sec} {
+        puts -nonewline "Sleeping $sec of $sleepTime seconds      \r"
+        flush stdout
+        incr sec -1
+        after 1000
+    }
+}
+# ---------------------------------------------------------------------
+# proc _getHourMinSec
+#
+#
+#
+#
+#
+#
+#
+# ---------------------------------------------------------------------
+proc _getHourMinSec {} {
+
+    return [clock format [clock seconds] -format "%I:%M:%S"]
+
+
+}
+# ---------------------------------------------------------------------
+# proc _getEpoc
+#
+#
+#
+#
+#
+#
+#
+#
+# ---------------------------------------------------------------------
+proc _getEpoc {} {
+
+    return [clock seconds]
+
+}
+#######################################################################
+# Procedure: _UncSwitchDelay
+#
+#
+#
+#
+#
+#
+#
+#
+#######################################################################
+proc _UncSwitchDelay {args} {
+    global DUTs_info
+
+
+    parse_args _UncSwitchDelay $args {
+        dut   "1"
+    }
+
+    if {[info exists DUTs_info(DUT$dut,UncSwAdditionalTime)]} {
+        result_debug "\n\nAdditional $DUTs_info(DUT$dut,UncSwAdditionalTime) Delay for Unconfig Switch. default.xsf Reboot"
+        exSleep $DUTs_info(DUT$dut,UncSwAdditionalTime)
+    } else {
+        result_debug "\n\nNo Additional Unconfig Sleep Required"
+    }
+
+}

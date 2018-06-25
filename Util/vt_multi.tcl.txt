@@ -1,0 +1,311 @@
+#!/usr/bin/tclsh
+############################### MAIN #################################
+source /auto/automation/Util/runReg.cfg
+source /auto/automation/Lib/mysqlLib.tcl
+global curAutoRoot
+global DUTs_info
+
+source ../Lib/mainLib.tcl
+package require Tclx
+
+load [lindex [glob "/usr/lib/libexpect*so*"] 0]
+
+set curLocation [pwd]
+set curDirList [split [string trim [string trim $curLocation ".."] "/"] "/"]
+set v 0;
+set pathList ""
+set curAutoRoot ""
+set skipCC 0
+foreach cd $curDirList {
+    if {$cd == "main" || $cd == "Lib" || $cd == "Util"} {
+        for {set x 0} {$x<$v} {incr x} {
+            lappend pathList [lindex $curDirList $x]
+        }
+        set curAutoRoot "/[join $pathList "/"]"
+    } else {
+        incr v;
+    }
+}
+puts "CURRENT PATH: $curAutoRoot"
+set cDir [file tail [pwd]]
+set LIB_PATH "./../Lib"
+lappend auto_path $LIB_PATH
+puts "DEBUG: Appending $LIB_PATH to autopath:$auto_path"
+
+gen_index "./../Lib"
+source ./regtoolsLib.tcl
+
+proc print_usage {} {
+    puts "\r"
+    puts {Usage: vt_multi.tcl}
+    puts "\r"
+}
+
+# checking command parameters
+set incfgs ""
+if {$argc==1} {
+    puts "We got $argv"
+    set incfgs $argv
+}
+
+fconfigure stdin -blocking 1
+while {1} {
+    puts "\n\n";
+    set choice "21.1.0.31"
+    puts -nonewline "What build do you want to verify against\[$choice\]: ";
+    flush stdout;
+    gets stdin userChoice;
+    if {$userChoice==""} {
+       set userChoice $choice
+    }
+    if {[regexp -nocase -all "\[0-9]{2,2}\.\[0-9]{1,1}\.\[0-9]{1,1}\.\[0-9]+" $userChoice]} {
+       set build $userChoice
+       break;
+    } else {
+       puts "Error: Build is in the wrong format.  Should be ##.#.#.##";
+       continue;
+    }
+}
+while {1} {
+    puts "";
+    set choice "secondary"
+    puts -nonewline "What bank should be booted with the image? \[$choice\]: ";
+    flush stdout;
+    gets stdin userChoice;
+    if {$userChoice==""} {
+       set userChoice $choice
+    }
+    if {[regexp -nocase -all "pri" $userChoice] || [regexp -nocase -all "sec" $userChoice] } {
+       set target $userChoice
+       break;
+    } else {
+       puts "Error: Should be primary or secondary";
+       continue;
+    }
+}
+while {1} {
+    set choice n
+    puts -nonewline "Will you need a reboot to get to the version to check (y/n)\[$choice\]: ";
+    flush stdout;
+    gets stdin userChoice;
+    if {$userChoice==""} {
+       set userChoice $choice
+    }
+    if {[regexp -nocase "y" $userChoice] || [regexp -nocase "n" $userChoice]} {
+        if {[regexp -nocase "y" $userChoice]} {
+            set bank $target
+        } else {
+            set bank null
+        }
+       puts ""
+       break;
+    } else {
+       puts "Error: Config selection must be either y or n"
+       continue
+    }
+}
+set chInts "1 2"
+if {[regexp -nocase "rdureg|salemreg" $HOST]} {
+    set mList {"RDUREG/SALEMREG" "RDU Automation"}
+} elseif {[regexp -nocase "autoregrdu" $HOST]} {
+    set mList {"RDU Automation" "RDUREG/SALEMREG"}
+} else {
+    set mList {"RDU Automation" "RDUREG/SALEMREG"}
+}
+set site [NumberedMenu -head "Server Run Type" \
+            -question1 "Select the Server you are on" \
+            -choices $mList \
+            -menuWidth        75 \
+            -keyWidth         3 \
+            -headerPadChar    "=" \
+            -chAppendList     "null" \
+            -chPrependList    "null" \
+            -barChar          "-" \
+            -clearXterm       "yes" \
+            -simple   "yes" ]
+
+if {$site == "RDUREG/SALEMREG"} {
+    set server "swdev"
+} else {
+    set server "production"
+}
+
+if {$server == "swdev"} {
+    set cfgList [getlocked]
+    set cfgList [concat $cfgList [getUserLocks]]
+    #puts "Locked List $lockedList"
+    set cfgList [swsharedbeds $cfgList]
+    #puts "$server Locked List $cfgList"
+    set cfgList [NumberedMenu -head "Available Test Beds" \
+                -question1 "Select test beds to run verify test beds on" \
+                -choices $cfgList \
+                -menuWidth        75 \
+                -keyWidth         3 \
+                -headerPadChar    "=" \
+                -chAppendList     "null" \
+                -chPrependList    "null" \
+                -barChar          "-" \
+                -clearXterm       "yes" \
+                -clearXtermInfo   "" ]
+} else {
+    while {0} {
+        puts "";
+        set choice "21.1"
+        puts -nonewline "Enter a release \[$choice\]: ";
+        flush stdout;
+        gets stdin userChoice;
+        if {$userChoice == ""} {
+            set userChoice $choice
+        }
+        if {[regexp -nocase "^\[0-9]{2,2}\.\[0-9]{1,1}$" $userChoice]} {
+            set rel 
+            set rel $userChoice
+            set cfgList [get_test_beds $userChoice];
+            #puts "\nMAIN cfglist $cfgList";
+            break;
+        } else {
+            puts "Error: Your choice must be in the format 21.1";
+            continue;
+        }
+    }
+    #set rel $build
+    set cfgList [get_test_beds $build];
+    while {1} {
+        puts "";
+        set choice "No"
+        puts ""
+        puts "HIT ENTER TO SKIP"
+        puts -nonewline "Regex filter on cfg and owner.  Enter the string '440_G|450_G|620|mix'\[$choice\]: ";
+        flush stdout;
+        gets stdin userChoice;
+        if {$userChoice==""} {
+            set autoUserBeds ""
+            set userChoice $choice
+        }
+        if {[regexp -nocase "^n|^no" $userChoice]} {
+            #puts "return nothing"
+            break;
+        } else {
+            set newCList [get_filtered_test_beds $cfgList $userChoice]
+            if {[llength $newCList] <= 0} {
+                puts "No match.  Using the entire release based cfg file list"
+                break;
+            } else {
+                set cfgList $newCList;
+                break;
+            }
+        }
+    }
+
+    set mainL [maintestbeds];
+    set ccL [cctestbeds];
+    set qlL [qltestbeds];
+    set vtL [vttestbeds];
+    set lcL [lctestbeds];
+    set cfgLen [llength $cfgList];
+    set newCfgList ""
+    for {set x 0} {$x<$cfgLen} {incr x} {
+        if {[lsearch $mainL [lindex $cfgList $x]] >=0} {
+            puts "Cfg [lindex $cfgList $x] is running main.tcl";
+            continue;
+        }
+        if {[lsearch $ccL [lindex $cfgList $x]] >=0} {
+            puts "Cfg [lindex $cfgList $x] is running checkConnections.tcl";
+            continue;
+        }
+        if {[lsearch $qlL [lindex $cfgList $x]] >=0} {
+            puts "Cfg [lindex $cfgList $x] is running QLoadImage.tcl";
+            continue;
+        }
+        if {[lsearch $vtL [lindex $cfgList $x]] >=0} {
+            puts "Cfg [lindex $cfgList $x] is running verifyTestBed.tcl";
+            continue;
+        }
+        if {[lsearch $lcL [lindex $cfgList $x]] >=0} {
+            puts "Cfg [lindex $cfgList $x] is sitting a loadConsoles";
+            continue;
+        }
+        if {[llength $incfgs] > 0} {
+            if {[lsearch $incfgs [lindex $cfgList $x]] < 0} {
+                puts "Using Args Cfg [lindex $cfgList $x] is not passed in";
+                continue;
+            }
+        }
+        lappend newCfgList [lindex $cfgList $x]
+    }
+    set cfgList $newCfgList
+
+    set cfgList [NumberedMenu -head "Available Test Beds" \
+                -question1 "Select test beds" \
+                -choices $cfgList \
+                -menuWidth        75 \
+                -keyWidth         5 \
+                -headerPadChar    "=" \
+                -chAppendList     "null" \
+                -chPrependList    "null" \
+                -barChar          "-" \
+                -clearXterm       "yes" \
+                -clearXtermInfo   "" ]
+
+}
+
+
+while {1} {
+    set choice y
+    puts -nonewline "Run Verify TestBed on these test beds(y/n)\[$choice\]: ";
+    flush stdout;
+    gets stdin userChoice;
+    if {$userChoice==""} {
+       set userChoice $choice
+    }
+    if {[regexp -nocase "y" $userChoice] || [regexp -nocase "n" $userChoice]} {
+        if {[regexp -nocase "y" $userChoice]} {
+            set go 1
+        } else {
+            set go 0
+        }
+       puts ""
+       break;
+    } else {
+       puts "Error: Config selection must be either y or n"
+       continue
+    }
+}
+cd ../main
+foreach cfg $cfgList {
+    after 1500
+    if {$cfg != "null"} {
+        if {![regexp -nocase "^cfg" $cfg] } {
+            puts "matched start with cfg"
+            set cfgFile [format %s/%s cfg $cfg]
+            set cfgFile [string trim $cfgFile];
+        } else {
+            puts "matched catch all"
+            set cfgFile $cfg
+        }
+    }
+    puts "Using config file: ($cfgFile)"
+
+    if {[file exists $cfgFile] == 0} {
+        puts "Cannot find config file: $cfgFile\n"
+        puts stderr "Cannot find config file: $cfgFile"
+        return
+    }
+
+    puts "************** ABOUT TO source $cfgFile *****************"
+    catch {source $cfgFile } reason
+
+    set mydir [pwd]
+    puts "launching Verify TestBed for cfg $cfgFile in xterm"
+    puts "/Util/bash_vt $cfgFile $cfgFile"
+
+    if {1} {
+        if {[catch {exec /usr/bin/xterm -e \
+                 "../Util/bash_vt $cfgFile $bank $build $target $cfgFile $quick" &} reason]} {
+             puts "OOOPPPSSSSS"
+        }
+    }
+        after 2000
+        puts "\n\n"
+        cd $mydir
+}

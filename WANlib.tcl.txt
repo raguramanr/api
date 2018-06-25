@@ -1,0 +1,555 @@
+proc vman_setup {DUT slot} {
+    Login $DUT
+
+    if [regexp -nocase "mixed" $slot] {
+        set i 1
+        foreach j {2 3 4} {
+            SendACmd "config default del port $j:25-$j:32"
+            for {set k 25} {$k < 33} {incr k} {
+                SendACmd "del vlan vl$i"
+                SendACmd "create vlan vl$i"
+                SendACmd "config vlan vl$i add port 1:$i, $j:$k"
+                incr i
+            }
+        }
+    } else {
+        SendACmd "config default del port $slot:1-$slot:24"
+        for {set i 1} {$i < 25} {incr i} {
+            SendACmd "del vlan vl$i"
+            SendACmd "create vlan vl$i"
+            SendACmd "config vlan vl$i add port 1:$i, $slot:$i"
+        } 
+    } 
+}
+
+proc dut_setup {DUT ipadd mask_bit_count defaultRouter} {
+    global image_smm
+    global image_slot
+    global bladeArray
+    global ${DUT}_SETUP
+    global ABU_BLADE
+ 
+    if [info exist image_smm] {
+       lappend ${DUT}_SETUP "use image $image_smm"
+    }
+
+    lappend ${DUT}_SETUP "unconfig switch all"
+    lappend ${DUT}_SETUP "config default delete port all"
+    lappend ${DUT}_SETUP "config mgmt ipa  $ipadd/$mask_bit_count"
+    lappend ${DUT}_SETUP "config ipr add default $defaultRouter"
+    lappend ${DUT}_SETUP "enable port mgmt"
+
+    if [info exist image_slot] {
+       lappend ${DUT}_SETUP "use image slot $bladeArray($DUT,$ABU_BLADE) $image_slot"
+       lappend ${DUT}_SETUP "restart slot   $bladeArray($DUT,$ABU_BLADE)"
+    }
+}
+
+proc waitForPPPAuth {DUT_IP MAX_TIME_WAIT} {
+	#Wait for authentication before checking states
+	#sleep 60
+	Login $DUT_IP
+	set t1 [clock seconds]
+	set timerA [clock seconds]
+
+	send "sh ppp info \r"
+	while {1} {
+		set timerB [clock seconds]
+		set timer [expr $timerB-$timerA]
+		if {$timer >= $MAX_TIME_WAIT} {
+			set t2 [clock seconds]
+			set authTime [expr $t2-$t1]
+			puts "\nMAX_TIME_WAIT ($MAX_TIME_WAIT seconds) reached\n"
+			send "\033"
+			set authStatus "MAX_TIME_WAIT EXCEEDED"
+			break
+		}
+		expect {
+			"No Phys Link" {
+				continue
+			}
+			"Connecting" {
+				continue
+			}
+			"Starting" {
+				continue
+			}
+			"Established * Failed" {
+				continue
+			}
+			"Failed * Failed" {
+				set t2 [clock seconds]
+				set authTime [expr $t2-$t1]
+				puts "\nAuthentication Failed at $authTime seconds\n"
+				send "\033"
+				set authStatus "Failed-FailedAuth"
+				break
+			}
+			"Disabled * Failed" {
+				set t2 [clock seconds]
+				set authTime [expr $t2-$t1]
+				puts "\nAuthentication Disabled at $authTime seconds\n"
+				send "\033"
+				set authStatus "Disabled-FailedAuth"
+				break
+			}
+			"Disabled" {
+				set t2 [clock seconds]
+				set authTime [expr $t2-$t1]
+				puts "\nNo Authentication Disabled at $authTime seconds\n"
+				send "\033"
+				set authStatus "Disabled-NoAuth"
+				break
+			}
+			"Established     Successful * *CP Successful" {
+				set t2 [clock seconds]
+				set authTime [expr $t2-$t1]
+				puts "\nEstablished Auth Successful at $authTime seconds\n"
+				send "\033"
+				set authStatus "Successful-Auth"
+				break
+			}
+			"Established * *CP Successful" {
+				set t2 [clock seconds]
+				set authTime [expr $t2-$t1]
+				puts "\nEstablished NoAuth at $authTime seconds\n"
+				send "\033"
+				set authStatus "Successful-noAuth"
+				break
+			}
+		}
+	}
+	send "\r"
+	send "\r"
+	sleep 2
+	return [list $authStatus $authTime]
+}
+
+proc AbuSendFrame {args} {
+   parse_args AbuSendFrame $args {
+      txPortId "1"
+      rxPortId "0"
+      protocol "mac"
+      sourceMac "default"
+      destMac "default"
+      numFrames "1"
+      frameSize "64"
+      frameSizeType "sizeFixed"
+      dataPattern "1234"
+      streamType "stopStream"
+      fcsError "good"
+      saMode "idle"
+      daMode "idle"
+      percentage "100"
+      tag "none"
+      tagPriority "0"
+      frameRate "default"	      
+   }
+   
+   MapIxiaPortId $txPortId txChasisId txCard txPort
+   if {$rxPortId == 0} {
+      set sendLearn "false"
+      set rxPort [MapIxiaPortId $txPortId rxChasisId rxCard rxPo]
+   } else {
+      set sendLearn "true"
+      MapIxiaPortId $rxPortId rxChasisId rxCard rxPort
+   }
+   
+   set numIxiaCd [GetNumIxiaCd $txPortId]
+   
+   if {$tag != "none" } { set wTag "true" } else {set wTag "false" }
+   global cardSpeed
+   set frameSent [abu_ixiaConf_2Ports -numIxiaCd $numIxiaCd -cardSpeed $cardSpeed \
+                  -txChas $txChasisId -txCard $txCard -txPort $txPort \
+                  -rxChas $rxChasisId -rxCard $rxCard -rxPort $rxPort -sendLearn $sendLearn \
+                  -protocol $protocol -numFrames $numFrames -frameSize $frameSize -frameSizeType $frameSizeType \
+                  -dataPattern $dataPattern -streamType $streamType -fcsError $fcsError \
+                  -inSaMac $sourceMac -saMode $saMode -inDaMac $destMac -daMode $daMode \
+                  -percentage $percentage -wTag $wTag -tagNo $tag -tagPriority $tagPriority\
+                  -frameRate $frameRate]
+  if {$streamType != "contPacket" && $numFrames > 100} {
+    ixiaCheckTxDone $txChasisId $txCard $txPort $numFrames $txPortId
+  }    
+  return $frameSent            
+}
+
+
+#############################################
+###########################################################################
+# Ixia control - TX from a port & RX from another port. 
+# Uni-direction or bi-direction.
+#
+# The parameters are:
+#
+#      numIxiaCd :		Number of Ixia cards involved (1-16)
+#                       for statistics & capture purpose
+#	   cardSpeed :		Ixia card speed	(10, 100, 1000)
+#	   startCardNum :	Starting Ixia card slot number (1-16)
+#      direction :		uni-direction (1Way) or bi-direction (2Way)
+#      txChas :			TX Ixia chassis id
+#      txCard :			TX Ixia card number
+#      txPort :			TX Ixia port number
+#      rxChas :			RX Ixia chassis id
+#      rxCard :			RX Ixia card number
+#      rxPort :			RX Ixia port number
+#      inSaMac :		Input source MAC address
+#      inDaMac :		Input destination MAC address
+#      numFrames :		Number of frames to send per Ixia port
+#      frameSize :		Frame size
+#      dataPattern :	Packet data pattern 
+#      streamType :		advance, contBurst, contPacket, firstLoopCount,
+#						gotofirst, stopStream (Note: see Ixia manual)
+#      patternOffset :	For "filterPallette" (Note: see Ixia manual)
+#      fcsError :		good, alignErr, bad, dribbleErr, none
+#						(Note: see Ixia manual)
+#      wTag :			With Tag (true, false)
+#	   tagNo :			Tag number
+#      priority :		Priority for the packet
+#      protocol :		mac, ip, ipx
+#      saMode :			contDecrement, contIncrement, ctrRandom,
+#						decrement, idle, increment (Note: see Ixia manual)
+#      daMode :			contDecrement, contIncrement, ctrRandom,
+#						decrement, idle, increment (Note: see Ixia manual)
+#      percentage :		For TX speed - Percentage of the line rate
+#      sendLearn :		To send learning frames? (true, false)
+#      numLearnFrames :	Number of the learning frames
+#      chid :			Ixia chassis id
+#      userStatFltrSA1		MAC address filter for user stat 1
+#      userStatFltrDA1		MAC address filter for user stat 1
+# 
+###########################################################################
+
+proc abu_ixiaConf_2Ports {args} {
+   parse_args abu_ixiaConf $args {
+      numIxiaCd "1"
+	  cardSpeed "100"
+	  startCardNum "1"
+      direction "1Way"
+      txChas "1"
+      txCard "1"
+      txPort "1"
+      rxChas "1"
+      rxCard "1"
+      rxPort "2"
+      inSaMac "default"
+      inDaMac "default"
+      numFrames "1"
+      frameSizeType "sizeFixed"
+      frameSize "64"
+      dataPattern "0000"
+      streamType "stopStream"
+      patternOffset "32"
+      fcsError "good"
+      priority "0"
+      protocol "mac"
+      saMode "idle"
+      daMode "idle"
+      percentage "100"
+      sendLearn "false"
+      numLearnFrames "1"
+      wTag "false"
+      tagNo "002"
+      tagCfi "resetCFI"
+      tagMode "vIdle"
+      tagRepeat "1"
+      tagPriority "0"	  
+      chid "1"
+      userDefinedStat1SA "00:00:00:00:00:00"
+      userDefinedStat1DA "00:00:00:00:00:00"
+      frameRate "default"
+   }
+
+   global spawn_id
+   global one2oneArray
+   global macBroadcast
+   global preambleSize
+   globalSetDefault
+
+   set date [clock format [clock seconds] -format "%m-%d-%Y %I.%M.%S%p"]
+   result_debug "*** date=$date for <ixiaConf_2Ports>"
+   set time1 [clock seconds]
+ #remove this, MapIxiaPort will account for this
+ #  2portsNum_adjust $startCardNum $cardSpeed numIxiaCd txCard txPort rxCard rxPort
+
+   set macBroadcast	{ff ff ff ff ff ff}
+   set preambleSize	8
+
+   # Create mapping
+   map new -type	one2one
+   map config -type one2one
+   map add $txChas $txCard $txPort $rxChas $rxCard $rxPort
+   if { $direction == "2Way" } {
+      map add $rxChas $rxCard $rxPort $txChas $txCard $txPort
+   }
+   if { $sendLearn == "true" } {
+      learn config -numframes $numLearnFrames
+      send_learn_frames one2oneArray
+   }
+   #-----------------------------------------------------------------
+   # Config streams for validation traffic
+   foreach txMap [lsort [array names one2oneArray]] {
+      scan $txMap					"%d,%d,%d" chid c p
+      port get						$chid $c $p
+      set txSpeed					[port cget -speed]
+      stream config -numFrames		$numFrames
+      stream config -name 			S_${c}_${p}
+      stream config -framesize		$frameSize
+      #random size
+      if {$frameSizeType == "sizeRandom"} {
+         stream config -frameSizeType		$frameSizeType
+         stream config -frameSizeMAX      1500
+         stream config -frameSizeMIN      64
+      }
+      stream config -dma 			$streamType
+      #set frameRate [decideFrameRate $cardSpeed $frameSize $percentage]
+      set ifg [calculateGap $frameRate $frameSize $preambleSize $txSpeed]
+
+      # Now we configure the stream
+      stream config -fcs			$fcsError
+      stream config -ifg			$ifg
+      stream config -isg			$ifg
+      stream config -ibg			$ifg
+#      stream config -fir			true		;# for timestamp
+      stream config -patternType nonRepeat  ;#needed for version 3.1
+      stream config -dataPattern	userpattern -pattern $dataPattern
+      set srcAddr					[port cget -MacAddress]
+      set rxMap						$one2oneArray($txMap)
+      scan [join $rxMap]			"%d %d %d" rxch rxc rxp
+      port get						$rxch $rxc $rxp
+      set destAddr					[port cget -MacAddress]
+
+      stream config -saRepeatCounter $saMode 
+      stream config -daRepeatCounter $daMode 
+      if { $saMode != "idle" } { stream config -numSA $numFrames }
+      if { $daMode != "idle" } { stream config -numDA $numFrames }
+
+      if { $inSaMac == "default" } { stream config -sa $srcAddr
+      } else {                       stream config -sa $inSaMac }				    
+      if { $inDaMac == "default" } { stream config -da $destAddr
+      } else {                       stream config -da $inDaMac }
+
+      protocol setDefault
+	  protocol config -name					$protocol
+	  protocol config -enable802dot1qTag	$wTag
+	  #ipx
+#	  if { $protocol == "ipx" } {
+#	   puts "NetbiosOOOOOOOOOO"
+#	   ipx config -packetType "typeNetBios"
+#	   ipx config -destSocket "socketNetBios"
+#	   puts [ipx cget -packetType] }
+
+      vlan config -cfi						$tagCfi
+      vlan config -mode						$tagMode
+      vlan config -repeat					$tagRepeat
+      vlan config -vlanID					$tagNo
+      vlan config -userPriority					$tagPriority
+      vlan set								$chid $c $p
+
+      stream set							$chid $c $p 1
+
+	# Define filter & capture
+
+      filterPallette config -DA1 			$destAddr
+      filterPallette config -pattern1			$dataPattern
+      filterPallette config -patternOffset1 		$patternOffset
+      filterPallette set				$rxch $rxc $rxp
+
+      filter config -captureFilterEnable		true
+      filter config -captureTriggerEnable		true
+  
+      #user defined stats settings
+      if { ( $userDefinedStat1DA != "00:00:00:00:00:00" ) || \
+           ( $userDefinedStat1SA != "00:00:00:00:00:00" ) }  {
+        filter config -userDefinedStat1Enable		true
+        if { $userDefinedStat1DA != "00:00:00:00:00:00" } {
+          filterPallette config -DA1 			$userDefinedStat1DA
+          filter config -userDefinedStat1DA		addr1
+        }
+        if { $userDefinedStat1SA != "00:00:00:00:00:00" } {
+          filterPallette config -SA1 			$userDefinedStat1SA
+          filter config -userDefinedStat1SA		addr1
+        }
+        filterPallette set				$rxch $rxc $rxp
+      } else {
+        filter config -userDefinedStat1Enable		false
+        filter config -userDefinedStat1DA		addr1
+      }      
+      filter config -captureFilterPattern		anyPattern
+      filter config -captureTriggerPattern		anyPattern
+      filter config -captureTriggerDA			anyAddr
+      filter config -captureFilterDA			anyAddr
+      filter set								$rxch $rxc $rxp
+   }
+   writeConfigToHardware one2oneArray
+   for {set c 1} {$c<=$numIxiaCd} {incr c 1} { ixiaConf_clearStat $c }
+   #just in case some previous function stop capture on these ports
+   ixStartPortCapture $txChas $txCard $txPort
+   ixStartPortCapture $rxch $rxc $rxp
+   startTx one2oneArray
+   set time2 [clock seconds]
+   result_debug "*** Time for Ixia TX setup = [expr $time2-$time1] secs"
+   #get the stream so we can return it later
+   stream get $txChas $txCard $txPort 1
+   set streamSent [stream cget -packetView]
+
+   # Make sure TX done
+   if { $streamType == "stopStream" } {
+      if { ($saMode != "contIncrement") && ($saMode != "contDecrement") &&   \
+           ($daMode != "contIncrement") && ($daMode != "contDecrement") } {
+         ixiaCheckTxDone $txChas $txCard $txPort $numFrames $txPort
+         if { $direction == "2Way" } {
+            ixiaCheckTxDone $rxChas $rxCard $rxPort $numFrames $txPort
+         }
+      }
+   }
+   after 500
+   set time3 [clock seconds]
+   result_debug "*** Time for Ixia TX done = [expr $time3-$time2] secs\n"
+   return $streamSent
+}
+
+proc DOWNLOADIMAGE {TFTPServerIP filename {image_type "image"} {slot {}} {compartment {}}} {
+   result_debug "--- Send download $image_type $slot $TFTPServerIP $filename $compartment"
+   send "download $image_type $slot $TFTPServerIP $filename $compartment\n"
+   expect {
+      "(Y/N)" {
+         send "y\n"
+      }
+      timeout {
+         result_debug "Error in downloading image"
+         return "error"
+      }
+   }
+
+   catch {SaveOutputBuffer $expect_out(buffer)} reason
+   set timeout 300
+   set flag "ok"
+   expect {
+      timeout {
+         result_debug "Error in download config. Can't get a prompt after download"
+         return "error"
+      }
+      "Error: Access violation" {
+         set flag "error"
+      }
+      "ERROR:" {
+         set flag "error"
+      }
+      "failed" {
+         set flag "error"
+      }
+      "#" {
+      }
+   }
+   catch {SaveOutputBuffer $expect_out(buffer)} reason
+#   puts "flag: $flag"
+   return $flag
+}
+
+proc SENDaCMD {{cmd "NULL"} 
+               {fd_result "NULL"} 
+               {fd_input  "NULL"}
+               {showError  "true"}} {
+   global spawn_id
+   global connectionTimeout
+   
+   if ![info exists retry_cmd] {
+       set retry_cmd 3
+   }
+   set attempt 0
+
+   set timeout $connectionTimeout
+   set result ""
+   set flag 1
+   set commandFlag "true"
+#   set time1 [clock seconds]
+   result_debug "--- Send $cmd"
+   #need to clear out buffer
+   send "$cmd\r"
+   expect $cmd
+   #puts SEND:$expect_out(buffer)
+
+   while { $flag == 1 } {
+      expect {
+         timeout {
+            result_error "No response from the switch for $timeout seconds"
+            send "\r"
+            expect *
+            if {$attempt < $retry_cmd} {
+                result_error ">>> RE-TRYING: $cmd"
+                send "\r$cmd\r"
+                expect $cmd
+                if {[regexp -nocase "Ambi" $expect_out(buffer)] || \
+                    [regexp -nocase "Synt" $expect_out(buffer)]} {
+                    result_error ">>> FAILED-RETRY: $cmd"
+                    send "\r$cmd\r"
+                }
+                incr attempt
+                continue    
+            }
+            catch {SaveOutputBuffer $expect_out(buffer)} reason
+            close_result_file
+            error "No response from the switch for $timeout seconds"
+         }      
+         full_buffer {
+            set flag 1
+         } 
+         "ERROR"   { set commandFlag "false" }
+         "Error"   { set commandFlag "false" }
+         "error"    { set commandFlag "false" }
+         "nvalid"   { set commandFlag "false" }
+         "llegal"   { set commandFlag "false" }
+         "Warning"   { set commandFlag "false" }
+         "warning"   { set commandFlag "false" }
+         "not valid"   { set commandFlag "false" }
+         "xception"  { set commandFlag "false" }
+         "quit:" {
+            set flag 1
+            send " "
+         }
+         -nocase -re "summit.* # "   {set flag 0}
+         -nocase -re "msm.* # "   {set flag 0}
+         -nocase -re "bd.* # "   {set flag 0}
+         -nocase -re "alpine.* # "   {set flag 0}
+         -nocase -re "enetswitch.* # "   {set flag 0}
+         -nocase -re "godzilla.* # "   {set flag 0}
+      	 "\\?" {
+            set flag 1
+	         send "y\r"
+         }
+         "yes, no, or cancel)" {
+            set flag 0
+            send "n/r"
+         }
+         "n)\\?  " {
+            result_debug "--- (y/n)?  "
+            set flag 0
+            send "y/r"
+         }
+         "\\-> " {    ;#nofeep command
+            set flag 0
+      	 }
+      	 "ESC\\->" {
+      	    #wait for data to come
+      	    sleep 4
+      	    #send esc characters
+      	    send "\033"
+             set flag 1
+      	 }
+      }
+      set exp_out_buf ""
+      regsub -all "\n\r" $expect_out(buffer) "\n" exp_out_buf
+      regsub -all "\t" $exp_out_buf " " exp_out_buf
+      if {$fd_input != "NULL" } { puts -nonewline $fd_input $exp_out_buf }
+      append result $exp_out_buf
+   }
+   #display buffer if there is error
+   if { ($commandFlag == "false") && ($showError == "true") } {
+      result_debug "========================== CHECK COMMAND ========================="
+      puts "$result"   ;#result_debug does not print out correct to console
+      set returnFlag "false"
+   }
+   result_pre $result
+#   result_debug "Time for $cmd = [expr $time2-$time1] secs"
+   return $commandFlag
+}

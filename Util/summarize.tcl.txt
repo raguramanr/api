@@ -1,0 +1,258 @@
+
+proc print_usage {} {
+   puts "\r"
+   puts {Usage: summarize.tcl <buildName> <BladeType> <RegressionType>}
+   puts {      <buildName>: Name of the build e.g. 6.1.7b16/617b16}
+   puts {      <BladeType>: Type of the blade e.g. FM24T/FM32/GM4X/F48T/F32T/G8X/F96T/F32F/G8T/Alpine3804/Alpine3808/MSM64/Summit7i/Summit48i/Summit5i/Summit24e3}
+   puts {      <RegressionType>: Type of the regression e.g. standard(L2,L3 and others)/cli/routing/OSPF}
+   puts "\r"
+}
+# ---------------------------------------------------------------------
+
+
+# checking command parameters
+if {$argc==3} {
+   set arg0 [lindex $argv 0]
+   set arg1 [lindex $argv 1]
+   set arg2 [lindex $argv 2]
+} else {
+   print_usage
+   exit
+}
+
+# Check the build name
+if {[regexp -nocase {\.} $arg0]==0} {
+   scan $arg0 %db%d release buildNum
+   if {[string length $release]==3} {
+      set f [string index $release 0]
+      set s [string index $release 1]
+      set t [string index $release 2]
+      set build [format %d.%d.%db%d $f $s $t $buildNum]
+   } else {
+      puts "Error: Wrong build $arg0"
+      print_usage
+      exit
+   }
+} else {
+   set build $arg0
+}
+
+# check the blade name
+if {[regexp -nocase "FM24T|FM32|GM4X|F48T|F32T|G8X|F96T|F32F|G8T" $arg1]} {
+   set blade [string toupper $arg1]
+} elseif {[regexp -nocase "Summit48i|Summit7i|Summit5i|Summit24e3" $arg1]} {
+   # since glob is case sensitive, make the right string here for glob to work later on
+   set fir [string toupper [string index $arg1 0]]
+   set temp [string tolower [string range $arg1 1 5]]
+   set last [string tolower [string range $arg1 6 end]]
+   set blade [format %s%s%s $fir $temp $last]
+} elseif {[regexp -nocase "Alpine3804|Alpine3808" $arg1]} {
+   set fir [string toupper [string index $arg1 0]]
+   set temp [string tolower [string range $arg1 1 end]]
+   set blade [format %s%s $fir $temp]
+} elseif {[regexp -nocase "MSM64" $arg1]} {
+   set fir [string toupper [string index $arg1 0 2]]
+   set temp [string tolower [string range $arg1 3 end]]
+   set blade [format %s%s $fir $temp]
+} else {
+   puts "Error: Invalid blade name :$arg1"
+   print_usage 
+   exit
+}
+
+# Check the regression type
+if {[regexp -nocase "standard|routing|ospf|cli" $arg2]} {
+   set regType [format %s%s [string tolower $arg2] "RegressionModules"]
+} else {
+   puts "Error: Invalid RegressionType: $arg2"
+   print_usage
+   exit
+}
+
+############################################################
+# Index Generation
+############################################################
+
+proc gen_index {dir} {
+	set old_dir [pwd]
+	cd $dir
+	auto_mkindex .
+	cd $old_dir
+}
+
+gen_index ./
+gen_index ../Lib
+
+lappend auto_path ../Lib
+
+set _lock_state [check_auto_lock]
+
+if $_lock_state {
+	puts stderr "Found lock (/tmp/sqa_automation_lock) for pid $_lock_state."
+	puts stderr "If this session is no longer running, please delte the lock file."
+	exit 1
+}
+
+grab_auto_lock
+
+
+# This is necessary to get an absolute path for logging
+set REG_PATH [pwd]
+
+#load {expect52.dll}
+if {$tcl_platform(platform) == "windows"} {
+  load "expect52.dll"
+} else {
+  #load "/usr/lib/libexpect.so"
+  #load [file join $env(HOME) "ixia/lib/libdp40.so"]
+	load [lindex [glob "/usr/lib/libexpect*so*"] 0]
+}
+
+log_user 0
+
+set LIB_PATH "../Lib"
+if {$tcl_platform(platform) == "windows"} {
+	lappend auto_path "C:/Program Files/Ixia/TclScripts/Lib/ixTcl1.0"
+} else {
+  lappend auto_path [file join $env(HOME) "ixia/lib/ixTcl1.0"]
+  lappend auto_path [file join $env(HOME) "ixia/lib/dp4.0"]
+}
+
+set auto_path [linsert $auto_path 0 . ]
+
+set resultDir "NULL"
+
+# Procedure to summarize all the Failures from report.txt files to a common summary file.
+proc SummarizeAllFailures {buildName bladeType regType fd} {
+
+   # Get all the modules to be summarized
+   set sourceFile "modulesToBeSummarized.cfg"
+   if {[file exists $sourceFile] == 0} {
+      puts "Error: Cannot find config file: $sourceFile, please contact admin.\n"
+      puts $fd "SETUPERROR: Can not find the config file $sourceFile, please contact the admin."
+      return -1
+   }
+   source $sourceFile
+   set key "FAILED"
+   set regressionType [expr $$regType]
+#   set rightDirList ""
+   set origBladeType $bladeType
+   foreach module $regressionType {
+      # Get the first report dir from a list of many dirs for bladeType and buildName
+      if {[regexp -nocase "cli" $regType]} {
+         set bladeType "$origBladeType $module"
+         set module "cli"
+         puts $fd "###############################################"
+         puts $fd "           Module:cli/$bladeType               "
+      } else {
+         puts $fd "###############################################"
+         puts $fd "           Module:$module                      "
+      }
+      set dirList [glob -nocomplain -- "../regression/$module/Report/*$bladeType*$buildName*"]
+      #check here how many dir we want to grab
+ #     unset rightDirList
+      if {[regexp -nocase $module "qos"]} {
+         set rightDirList [lrange $dirList 0 3]    ;# 4 dirs for QoS
+      } elseif {[regexp -nocase $module "ospf"]} {
+         set rightDirList [lrange $dirList 0 5]    ;# 6 dirs for OSPF
+      } else {
+         set rightDirList [lrange $dirList 0 0]    ;# 1 dir for everything else
+      }
+
+      if {$rightDirList==""} {
+         puts "Error: NO report.txt file for $module !!!\n"
+         puts $fd "Error: NO report.txt for module:$module for $bladeType and $buildName !!!"
+         puts $fd "###############################################\n"
+         continue
+      } else {
+         puts $fd "           Report Dir: "
+         puts "Found report.txt for $module in Dir:"
+         foreach rd $rightDirList {
+            puts $fd "               $rd."
+            puts "$rd."
+         }
+      }
+      puts "\n"
+      
+      set count 0
+      # unset the paragraph for earlier module if exists
+      if {[info exists paragraph]} {
+         unset paragraph
+      }
+      foreach rightDir $rightDirList {
+         set fd_in [open "$rightDir/report.txt" "r"]
+         while {[gets $fd_in line] != -1} {
+            set paragraph($count) $line
+            incr count
+         }
+         close $fd_in
+      }
+      set thisPara ""
+      set prevFailed 0
+      for {set i 0} {$i<[array size paragraph]} {incr i} {
+         set line $paragraph($i)
+         if {$line==""} {
+            set fl [verifyResult $thisPara $fd]
+            set thisPara ""
+            if {$fl!="-1"} {
+               set prevFailed 1
+            }
+            continue
+         } else {
+            lappend thisPara $line
+         }
+      }
+      set failed [verifyResult $thisPara $fd]
+      if {($failed==-1)&&($prevFailed==0)} {
+         puts "OK: No Test case failed for $module in dir $rightDir )))"
+         puts $fd "OK: No Test case failed for $module in dir $rightDir )))"
+      }
+      puts $fd "###############################################\n"
+   }
+   return 1
+}
+
+
+proc verifyResult {para fd} {
+
+   #Separately put the time consumption inside the heading
+   set timeValueKay "Total test time|hours.*minutes.*seconds"
+   for {set i 0} {$i<[llength $para]} {incr i} {
+      if {[regexp $timeValueKay [lindex $para $i]]==1} {
+#         puts "timeValueKay: |$timeValueKay| line: |[lindex $para $i]|"
+         puts $fd [lindex $para $i]
+      }
+   }
+
+   set key "FAILED"
+   set flag -1
+   for {set i 0} {$i<[llength $para]} {incr i} {
+      if {[regexp $key [lindex $para $i]]==1} {
+#         puts "Key: |$key| line: |[lindex $para $i]|"
+         set flag $i
+      }
+   }
+   if {$flag!="-1"} {
+      for {set j 0} {$j<=$flag} {incr j} {
+      if {(([regexp "OK" [lindex $para $j]]!=1)&&([regexp {[0-9].[0-9]} [lindex $para $j]]==1)) || \
+          ([regexp -nocase "System Setup|Total test time|hours.*minutes.*seconds" [lindex $para $j]]) || \
+          ([regexp $key [lindex $para $j]])} {
+           puts $fd [lindex $para $j]
+        }
+      }
+   }
+   
+   return $flag
+}
+
+if {![file isdirectory Summary]} {
+	file mkdir Summary
+}
+
+set fd [open "Summary/$build-$blade-summary.txt" "w"]
+SummarizeAllFailures $build $blade $regType $fd
+close $fd
+
+puts "Summary written to Summary/$build-$blade-summary.txt"
+release_auto_lock
+

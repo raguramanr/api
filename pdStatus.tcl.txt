@@ -1,0 +1,289 @@
+#!/usr/bin/expect --
+
+load [lindex [glob "/usr/lib/libexpect*so*"] 0]
+source SiebelAccess.tcl
+source "../main/mainLib.tcl"
+
+set pdList ""
+set openPdList ""
+
+array set pdStatusArray ""
+array set pdAgeArray ""
+array set moduleArray ""
+
+set mailTo "sqaauto@extremenetworks.com"
+
+set secInDay 86400
+#PD older then 90 days will be reported as very old PDs
+set threshold 90 
+
+#*******************************************************************
+# This procedure is used to prepare SQL query to fetch the requiored
+# data for the PD.
+#
+# Input : pd name
+# Output : SQL Query string
+#*****************************************************************
+
+proc getSql { pd } {
+     set SQL "select owner.login PD_Owner, pd.created, created.login PD_Created_by,\
+         pd.status_cd from siebel.s_employee owner, siebel.s_employee created,\
+         siebel.s_prod_defect  pd where owner.row_id = pd.OWNER_EMP_ID and \
+         created.row_id = pd.created_by and  pd.defect_num ='$pd'"
+     return $SQL
+}
+
+#*******************************************************************
+# This procedure is used to prepare a list of PDs found on autoweb.
+# It will insert the PDs into the list only if it is distinct
+# (no duplicate PD names).
+#
+# Input : pd name
+# Output :  pd list 
+#*****************************************************************
+
+proc addPDtoList { pd } {
+   global pdList;
+   set ret [lsearch  $pdList $pd]
+   if { $ret == -1 } {
+       lappend pdList $pd
+   }
+}
+
+#*******************************************************************
+# This procedure is used to calculate the age of a PD in terms of 
+# number of days since the PD was created.
+#
+# Input : pd name, pd creation date
+# Output : age of the pd 
+#*****************************************************************
+proc getPdAge {pd pdDate } {
+   global secInDay
+   set age 0
+   set today [clock seconds]
+   set  ret [regsub -all {[-]} $pdDate " " pdCreateDate]
+   if { $pdCreateDate != "Not Found" } {
+        set initialDate [clock scan $pdCreateDate]
+        set diff [expr $today - $initialDate]
+        set age [expr $diff/$secInDay]
+   }
+   return $age
+}
+
+#*******************************************************************
+# This procedure will grep the lines of autoweb reports containing 
+# PD number. It will prepare a file with all the lines containing
+# PD numbers for a particular release.
+#
+# Input :  Release number
+# Output : pdfile.txt
+#*****************************************************************
+
+proc getPdListFile { release } {
+     set dataDir "/var/www/cgi-bin/cgi.tcl/data"
+     cd $dataDir
+     exec clear
+     puts "\nPreparing pdlist.txt....it will take 1-5 min."
+     if { [catch {exec grep -r "PD2-" $release >/tmp/pdfile.txt} ] } {
+         puts "ERROR: Unable to grep PDs"
+         return -1;
+     }
+    return 0
+}
+
+#*******************************************************************
+# This procedure will send the email notification to automation team.
+# The email body will be file having detailed status of the PDs.
+#
+# Input :  email id, subject and filename
+# Output : None
+#*****************************************************************
+
+proc sendEmail { mailTo sub filename} {
+   puts "Sending email to $mailTo subject: $sub with file : $filename"
+   if { [catch { exec mail -s \"$sub\" $mailTo < $filename }] } {
+       puts "ERROR: Unable to send email"
+   }
+   if { [catch { exec rm -f $filename }] } {
+       puts "ERROR: Unable to delete the message file : $filename"
+   }
+}
+
+#*******************************************************************
+# This procedure is used to prepare the assoction between PD and 
+# affected test cases for a particuler module. It will prepare a
+# associated array with PD as index and all the affected test cases
+# as data for that index.
+#
+# Input : pd and line containing the PD and test case
+# Output : None
+#*****************************************************************
+
+proc addToTestCaseArray { pd line } {
+   global  testCaseArray
+
+   set last [string length $line]
+   set first [string last "/" $line]
+   incr first
+   set testCase [string range $line $first $last]
+   # check if valid PD containing string.Ex. Mirroring.txt:1.9.2-PD2-210667901
+   if { ![regexp  -nocase {.*(:)[0-9].*} $testCase] } {
+      return
+   }
+   regsub ".txt" $testCase {} testCase
+   set idx [string first "PD" $testCase]
+   incr idx -2
+   set testCase [string range $testCase 0 $idx]
+   set str "" 
+   if { ![info exists testCaseArray($pd)] } {
+       append str "$testCase,"
+       set testCaseArray($pd) $str
+   } else {
+         set str $testCaseArray($pd)
+         set ret [string first $testCase $str]
+         if { $ret == -1 } {
+             append str "$testCase,"
+             set testCaseArray($pd) $str
+         }
+  }
+}
+
+#*******************************************************************
+# This procedure will print the usage of this script.
+#*******************************************************************
+proc printUsage { } {
+     puts "\r"
+     puts "Usage:pdStatus.tcl  <buildNumber>"
+     puts "buildNumber: format xxxbzz Ex. 711b36"
+}
+
+#************************************************************************
+#                  MAIN CODE 
+#************************************************************************
+
+if { $argc<1 } {
+      printUsage
+      exit
+}
+
+if { [lsearch $argv "-help"] > -1} {
+      printUsage
+      exit
+}
+
+if { [lsearch $argv "?"] > -1} {
+      printUsage
+      exit
+}
+set build [lindex $argv 0]
+set buildName [getBuildNumber $build]
+if { $buildName == 0 } {
+    puts "ERROR: Wrong build name. Build name Ex.711b16 is required!!"
+    exit
+}
+set rel [string range $buildName 0 2]
+if { [ getPdListFile $rel ] == -1 } {
+   puts "ERROR: Can't create pdlist file : pdfile.txt"
+   exit
+}
+if { [file exists "/tmp/pdfile.txt"] } {
+    if { [catch { set fd [open "/tmp/pdfile.txt" r] } ] } {
+       puts "ERROR: Unable to open the file : /tmp/pdfile.txt"
+       exit
+    }
+    
+    while { [gets $fd line ] != -1 } {
+          set ret [regexp {(PD)[0-9](-)([0-9]+)} $line pd]
+          if { $ret == 1 } { #----------PD found
+             addToTestCaseArray $pd $line
+             set ret [regexp -nocase {/([a-z0-9A-Z_&-.]+).txt} $line match md]
+             if { $ret == 1 } {
+                set moduleArray($pd) $md
+             }
+             addPDtoList $pd
+          }
+    }
+   close $fd
+}
+puts "pd list = $pdList"
+
+set lda [OpenSiebelSession]
+set hdl [LoginSiebel $lda]
+
+set statusFile "/tmp/pdStatus.txt"
+if { [catch { set sfd [open $statusFile w] } ] } {
+       puts "ERROR: Unable to open the file : $statusFile"
+       exit
+}
+
+puts "\nPD STATUS FOR THE RELEASE : $rel"
+puts $sfd "\nPD STATUS FOR THE RELEASE : $rel"
+puts "-----------------------------------\n\n"
+puts $sfd "-----------------------------------\n\n"
+puts "[format "%-15s %-15s %-20s %-18s %-18s %-10s" "PD#" "STATUS" "MODULE" "SUBMITTER" "ASSIGNEE" "DATE"]"
+puts "[format "%-13s %-15s %-20s %-18s %-18s %-10s" "-----" "----------" "--------------" \
+       "---------------" "-----------------" "------------"]"
+puts $sfd "[format "%-15s %-15s %-20s %-18s %-18s %-10s" "PD#" "STATUS" "MODULE" "SUBMITTER" "ASSIGNEE" "DATE"]"
+puts $sfd "[format "%-13s %-15s %-20s %-18s %-18s %-10s" "-----" "----------" "--------------" \
+       "---------------" "-----------------" "------------"]"
+
+foreach pd $pdList {
+        array set row  ""
+        set sql [getSql $pd]
+        set ret [GetPdInfo $hdl $sql  row]
+        set module $moduleArray($pd)
+        if { $ret == 0 } {
+            puts "[format "%-15s %-15s %-20s %-18s %-18s %-10s" "$pd" "$row(STATUS_CD)" "$module" \
+                 "$row(PD_CREATED_BY)" "$row(PD_OWNER)" "$row(CREATED)"]"
+            puts $sfd "[format "%-15s %-15s %-20s %-18s %-18s %-10s" "$pd" "$row(STATUS_CD)" "$module" \
+                 "$row(PD_CREATED_BY)" "$row(PD_OWNER)" "$row(CREATED)"]"
+            set  pdStatusArray($pd) "$row(STATUS_CD)"
+            if { $row(STATUS_CD) != "Closed" } {
+                 lappend openPdList $pd
+            }
+        } else {
+            puts "ERROR: Unable to fetch PD info."
+        }
+        unset sql
+        unset module
+        unset row
+}
+
+if { [getPdCreateDate $hdl $openPdList pdAgeArray] == -1 } {
+   puts "ERROR: Unable to get the PD create date"
+   exit
+}
+
+LogoutSiebel $hdl
+CloseSiebelSession $lda
+
+puts "\nVERY OLD PDs IN THE RELEASE : $rel"
+puts $sfd "\nVERY OLD PDs IN THE RELEASE : $rel"
+puts "-----------------------------------\n"
+puts $sfd "-----------------------------------\n"
+foreach pd [array names pdAgeArray] {
+    set crDate $pdAgeArray($pd)
+    set status $pdStatusArray($pd)
+    set age [getPdAge $pd $crDate]
+    if { $age > $threshold } {
+      puts "[format "%-15s %-15s %-25s %-10s" "$pd" "($status)" "Created on: $pdAgeArray($pd)" "Age = $age Days"]"
+      puts $sfd "[format "%-15s %-15s %-25s %-10s" "$pd" "($status)" "Created on: $pdAgeArray($pd)" "Age = $age Days"]"
+    }
+}
+
+puts "\nPDs AND AFFECTED TEST CASES"
+puts $sfd "\nPDs AND AFFECTED TEST CASES"
+puts "-----------------------------------"
+puts $sfd "-----------------------------------"
+puts "\nPD	     	            TESTCASES"
+puts "-----------------------------------------"
+array set testCaseArray ""
+foreach pd [array names testCaseArray] {
+  puts "[format "%-20s %0s" "$pd"  "$testCaseArray($pd)"]"
+  puts $sfd "[format "%-20s %0s" "$pd"  "$testCaseArray($pd)"]"
+}
+close $sfd
+
+sendEmail $mailTo  "PD Status : Release $rel" $statusFile
+exec rm -f $statusFile
+

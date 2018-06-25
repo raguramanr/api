@@ -1,0 +1,100 @@
+
+##################################################################
+# Procedure Name: GetCLIPort
+# Description:
+#       This function converts the specified list of portIds to
+#       to the list of corresponding DUT port numbers.
+# Input args: {portIdString} {cliportList}
+# Output args: none
+# Return value: integer or : separated list of integers
+# Typical usage:
+#       SendACmd  "config vlan1 add port [GetCLIPort 3-5,7 "cliActivePortList"]"
+# Category: Utility
+##################################################################
+proc GetCLIPort { {portIdString 1}
+                  {active "active"} } {
+
+   global cliActivePortList MAIN;
+   global cliNonActivePortList;
+   set portString "";
+   if { $active == "active"} { 
+      set cliPortList $cliActivePortList;
+   } else {
+      set cliPortList $cliNonActivePortList;
+   }
+
+   #first filter the comma
+   regsub -all {,} $portIdString { } portRangeList
+   foreach portRange $portRangeList {
+      if { [regexp {[0-9]-[0-9]} $portRange] == 1} {
+         #if in range format
+
+         #puts "Range: $portRange"
+         set temp [split $portRange "-"]
+         set startRange [lindex $temp 0]
+         set endRange [lindex $temp 1]
+         #puts "RangeProcessed: |$temp|$startRange|$endRange|"
+         for {set i $startRange} {$i <= $endRange} {incr i} {
+            set DUTPort [lindex $cliPortList [expr ($i + 1)]]
+            if {[info exists MAIN(PRINTTopoInfo)]} {
+               if {$MAIN(PRINTTopoInfo)} {
+                  result_debug "INFO: CLI $active port# $i is $DUTPort"
+               }
+            }
+            if {$DUTPort != ""} { append portString ", $DUTPort"; }
+         }
+      } elseif {[regexp {[0-9]} $portRange] == 1 } {
+         #or just a single number
+         #puts "Single: $portRange DUTId:$DUTId"
+         set DUTPort [lindex $cliPortList [expr ($portRange + 1)]]
+         if {[info exists MAIN(PRINTTopoInfo)]} {
+            if {$MAIN(PRINTTopoInfo)} {
+               result_debug "INFO: CLI $active port# $portRange is $DUTPort"
+            }
+         }
+          if {$DUTPort != ""} { append portString ", $DUTPort"; }
+      } else {
+         result_error "GetCLIPort: Unknown portId format $portRange"
+         error "GetCLIPort: Unknown portId format $portRange"
+      }
+   }
+   #remove the first comma
+   regsub {, } $portString {} newString
+   return $newString
+}
+
+
+##################################################################
+# Procedure Name: GetActiveCLIPort
+# Description:
+#       This function converts the specified list of portIds to
+#       to the active cli ports
+# Input args: {portIdString}
+# Output args: none
+# Return value: integer or : separated list of integers
+# Typical usage:
+#       SendACmd  "config vlan1 add port [GetActiveCLIPort 3-5,7]"
+# Category: Utility
+##################################################################
+proc GetActiveCLIPort { {portIdString 1} } {
+   return [GetCLIPort $portIdString "active"];
+}
+
+
+##################################################################
+# Procedure Name: GetNonActiveCLIPort
+# Description:
+#       This function converts the specified list of portIds to
+#       to the non-active cli ports
+# Input args: {portIdString}
+# Output args: none
+# Return value: integer or : separated list of integers
+# Typical usage:
+#       SendACmd  "config vlan1 add port [GetNonActiveCLIPort 3-5,7]"
+# Category: Utility
+##################################################################
+proc GetNonActiveCLIPort { {portIdString 1} } {
+   return [GetCLIPort $portIdString "nonActive"];
+}
+
+

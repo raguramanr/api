@@ -1,0 +1,359 @@
+#!/usr/bin/tclsh
+
+    global webServerDirName
+    global newPlatforms
+    global regplatform
+    array set modOwnList [ list {bootprelay} {mathurv} \
+                          {dhcp} {dmunuswamy} \
+                          {fdbvalidation} {pamin} \
+                          {flowredirect} {pamin} \
+                          {igmpsnooping} {rramachandran} \
+                          {staticigmp} {rramachandran} \
+                          {ipx} {pamin} \
+                          {jumboframe} {kgopanna} \
+                          {l2} {kgopanna} \
+                          {l3} {mathurv} \
+                          {loadsharing} {sharanb} \
+                          {macsecurity} {mathurv} \
+                          {macbased} {mathurv} \
+                          {mirroring} {spalanivel} \
+                          {multinetting} {mathurv} \
+                          {ip-multinetting} {sganesan} \
+                          {nat} {mathurv} \
+                          {qos} {spalanivel} \
+                          {radius} {rpalaniappan} \
+                          {sntp&dns} {dmunuswamy} \
+                          {swredun} {sharanb} \
+                          {tacacs} {dmunuswamy} \
+                          {vlanaggregation} {mathurv} \
+                          {ipfrag&pmtu} {kgopanna} \
+                          {management} {sganesan} \
+                          {dos} {dmunuswamy} \
+                          {dot1x} {dmunuswamy} \
+                          {rip} {rramachandran} \
+                          {bgp} {skuppuswamy} \
+                          {dvmrp} {sganesan} \
+                          {eaps} {hkrishna} \
+                          {fdbimprovement} {pamin} \
+                          {isis} {sganesan} \
+                          {pim-sm} {sganesan} \
+                          {pim-dm} {sganesan} \
+                          {spanningtree} {rramachandran} \
+                          {ospf} {hkrishna} \
+                          {emistp} {hkrishna} \
+                          {esrp} {skuppuswamy} \
+                          {vrrp} {skuppuswamy} \
+                          {elrp} {rramachandran} \
+                          {diffserve} {spalanivel} \
+                          {stpdot1w} {hkrishna} \
+                          {staticrouting} {rramachandran}] 
+
+   global summitList
+   global ownerList
+
+
+                   
+set summitList "summit7i|summit48i|summit5i|summit24e3|summit48si|summit2|summit4"
+
+proc print_usage {} {
+    puts "\r"
+    puts {USAGE: mailDState.tcl -build <imageName> -mailinginterval <hours> \
+                -pollinterval <hours> -status <start/stop>}
+    puts {      -build:    Name of image e.g. 6.1.7b16/617b16/620b56}
+    puts {      -mailinginterval: The duration in hours when the mail will be \
+                 sent to the module owners}
+    puts {      -pollinterval: The duration in hours when the autoweb should \
+                 be scanned to get the information of the modules in D state}
+    puts {      -status: Whether to start the application or stop. To stop you \
+                 just need to give the build number and the keyword stop }
+    puts "\r"
+}
+
+proc formMailingInfo {platform blade module mailinginterval} {
+    global ownerList
+    if {$ownerList == "" } {
+       informDState $platform $blade $module
+    } elseif {[lsearch $ownerList $platform$blade$module] == -1} {
+       informDState $platform $blade $module
+    } else {
+       for { set i 0 } { $i < [llength $ownerList] } { incr i 3} {
+          set searchval $platform$blade$module
+          if { $searchval == [lindex $ownerList $i] } {
+             set prevtime [lindex $ownerList [expr $i + 2]]
+             set currtime [clock seconds]
+             set calctime [expr $currtime - $prevtime]
+             if { $calctime >= [expr $mailinginterval * 3600] } {
+                informDState $platform $blade $module
+                break
+             } else {
+                break
+          }
+       }
+    }
+  }
+}
+
+proc informDState {platform blade module} {
+    global modOwnList
+    global testModule
+    global ownerList
+    global autowebLink
+    global buildName
+    global fd_log
+
+    set mod [string tolower $module]
+    lappend ownerList "$platform$blade$module"
+    set owner $modOwnList($mod)
+    lappend ownerList "$owner"
+    # Send email notification
+    set subject "Build v$buildName Module $testModule in D State"
+    set mailTo "$owner@extremenetworks.com"
+    set ccList "mverma@extremenetworks.com,schawla@extremenetworks.com"
+    set body "Please look into the module $testModule in $platform$blade which \
+              is in D state. Refer the autoweb for more information. \
+                \nBUILD: v$buildName \
+                \nMODULES: $testModule
+                \nAUTOWEB: $autowebLink"
+
+    set mailtime [clock format [clock seconds] -format "%m-%d-%Y"]
+    set timestamp [clock seconds]
+    lappend ownerList $timestamp
+    puts $fd_log "Mail sent to $owner for build v$buildName module $module \
+                  which is in D state on $mailtime"
+
+
+#   exec /bin/mail -s "$subject" schawla@extremenetworks.com << "$body" &
+
+   exec /bin/mail -s "$subject" $mailTo << "$body"  -c "$ccList" &
+
+}
+
+proc UtilGetPID { name } {
+   set output [exec /bin/ps -e | grep $name]
+   if {[info exists output]} {
+      foreach item [split $output "\n"] {
+         if { [regexp $name $item] && ![regexp "grep" $item] } {
+            set mailPID [lindex $item 0]
+            if { $mailPID != -1} {
+               exec /bin/kill -s SIGHUP $mailPID
+            }
+
+         }
+      }
+  }
+
+  # Process id not found
+  return -1
+}
+
+load [lindex [glob "/usr/lib/libexpect*so*"] 0]
+
+log_user 1
+source ../Lib/parse_args.tcl
+
+catch { parse_args mailDState.tcl $argv {
+    build           ""
+    mailinginterval "8"
+    pollinterval    "4"
+    status          "start"
+   }
+} result
+
+   if { $result != "" } {
+      puts "ERROR: $result"
+      print_usage
+      exit
+   }
+   if {[catch {open "DStatelog.txt" w  0777} fd_log]} {
+      puts "ERROR: Cannot open file for logging"
+   }
+   
+   if { [string compare [string tolower $status] "stop"] == 0 } {
+      set ownerList [list]
+      if { [UtilGetPID mailDState.tcl] == -1} {
+          puts "No mail utility to kill"
+      }
+      close $fd_log
+      exit
+   }
+
+   if {$build=="" && [string compare [string tolower $status] "start"] == 0 } {
+       puts "ERROR: Required Parameters: -build $build invalid or missing"
+       exit
+   }
+  
+   source ./mainLib.tcl
+   set sourceFile "./../Autoweb/cgi-bin/cgiScripts/modulesToBeSummarized.cfg"
+   if {[file exists $sourceFile] == 0} {
+      puts "ERROR: Cannot find config file: $sourceFile, please contact admin\n"
+      puts "SETUP ERROR: Cannot find the config file $sourceFile, \
+                    please contact the admin."
+      exit
+   }
+   source $sourceFile
+
+   
+   set bgpList "BGP_RFCConform|BGP_RtDamp|BGP_Cli|BGP_RtRedistrib|BGP_RtReflect|BGP_Confeder|BGP_Neighbor|BGP_RtMapnFilt"
+   set qosList "QOS-ACL|QOS-Basic|QOS-IRS|QOS-ISQ|QOS-PRI"
+   set ospfList "ospf-addressrange|ospf-basic|ospf-dynamicChanges|ospf-areas|ospf-convergance|ospf-lsdb"
+   set pollinterval [expr $pollinterval*60]
+   set cfgFile ./runReg.cfg
+   
+   set fd_log [open "mailDstate.txt" "w+"]
+   set buildName [getBuildNumber $build]
+   puts $fd_log "The bulid number is $buildName"
+   source $cfgFile
+
+   set ownerList [list]
+
+   while { 1 } {
+    
+   foreach testBlade [array names regplatform] {
+
+       # Parse out BD1,1 from regplatform(BD1,1) {config}
+       regexp (.*),(.*) $testBlade ignore targetPlatformPC index
+
+       set platform    [lindex $regplatform($testBlade) 0]
+       set blade       [lindex $regplatform($testBlade) 1]
+       set regType     [lindex $regplatform($testBlade) 3]
+       set regSubType  [lindex $regplatform($testBlade) 4]
+      
+      if { $regType == "" } {
+          set regType "functional"
+      }
+
+      if { $regSubType == "" } {
+          set regSubType "standard"
+      }
+      if {$regType == "snmp"} {
+           if {$regSubType == "uploadanddownload"} {
+                continue
+           }
+       }
+      puts "Checking $platform $blade $regType $regSubType for D state \
+                   in webServerDirName $webServerDirName"
+
+       #Change the webserver directory name if the SNMP testing is carried out
+       if {$regType == "snmp"} {
+          set webmoduleDirName $webServerDirName/snmpData
+       } elseif {$regType == "scal"} {
+          set webmoduleDirName $webServerDirName/scalData
+       } elseif {[regexp -nocase "functional" $regType]} {
+          set webmoduleDirName $webServerDirName/functionalData
+       } elseif {[regexp -nocase "performance" $regType]} {
+          set webmoduleDirName $webServerDirName/perfData
+       } else {
+          set webmoduleDirName $webServerDirName/data
+       }
+
+       set regressionModules ""
+       # The regressionModules are defined in modulesToBeSummarized.cfg.  \
+       # The list is accessed as $regType($regSubType)
+
+       set regressionModules [getRegressionModuleList $regType $regSubType]
+       if {$regressionModules == "" } {
+          return "Module List was empty!"
+       }
+
+       set regressionModules [lrange $regressionModules 1 [expr [llength \
+                             $regressionModules] - 1] ]
+
+       foreach testModule $regressionModules {
+          set curDir [pwd]
+          cd "$webmoduleDirName"
+          puts $fd_log "Checking $platform $blade $regType $regSubType for D \
+                        state in webServerDirName $webmoduleDirName"
+
+    if {[regexp -nocase $newPlatforms $platform]} {
+        set relName $platform
+    } else {
+        set relName [string range $buildName 0 2]
+    }
+
+    switch -- $platform \
+    "BD" {
+        set pl "BD"
+    } "Alpine" {
+        set pl $platform
+    } "BT" {
+        set pl "BT"
+    } "Godzilla" {
+        set pl "GZ"
+    } default {
+        set pl $platform
+    }
+    if {[regexp -nocase $summitList $platform]} {
+        set pl ""
+    }
+
+    if [regexp -nocase "ipr" $regSubType] {
+        global Iproute
+        set thisDir "$relName/$buildName/[lindex $Iproute 0]"
+
+    } elseif {[regexp -nocase "cli" $regType]} {
+        set thisDir "$relName/$buildName/cli$pl$blade"
+
+    } else {
+        set thisDir "$relName/$buildName/$pl$blade"
+    }
+
+          set webFileName "$thisDir/$testModule.txt";
+          puts "webfilename is $webFileName"
+          if {[catch {open $webFileName r} fd_in]} {
+              cd $curDir
+              puts $fd_log "** ERROR: Unable to open $webFileName."
+              continue
+          } else {
+              set count 0
+              set para($count) 0
+              while {[gets $fd_in line] != -1} {
+                  set para($count) $line
+                  incr count
+              }
+              close $fd_in
+              for {set ind 0} {$ind<[array size para]} {incr ind} {
+                  set state ""
+                  set test ""
+                  regexp {([0-9]+[.][0-9a-z_.-]*)([a-zA-Z]+)} $para($ind) \
+                          match test state
+                  # check if state is D for a particular module
+                  puts "number of paras are $para($ind)"
+                  puts "The value of STATUS is $state module $testModule platform $platform"
+                  if {$state==""} {
+                     break;
+                  }
+                  if {$state=="D"} {
+                     if {[regexp -nocase $bgpList $testModule]} {
+                       set testModule "BGP"
+                     }
+                     if {[regexp -nocase $ospfList $testModule]} {
+                       set testModule "OSPF"
+                     }
+                     if {[regexp -nocase $qosList $testModule]} {
+                       set testModule "QOS"
+
+                     }
+                     formMailingInfo $platform $blade $testModule \
+                                   $mailinginterval  
+                   #no need to find out all test cases in D.If 1 test is in D \
+                   #is enuf for the module to be in D state
+                     break;
+                  }
+              }
+              if [info exists para] {
+                 unset para
+              }  
+           }
+        }
+     }
+     set freq [expr $pollinterval*60]
+     puts -nonewline $fd_log "Sleeping $freq seconds    \r"
+     while {$freq} {
+        incr freq -1
+        after 1000
+    }
+    if { $ownerList == ""} {
+       close $fd_log
+       exit
+    }  
+ }

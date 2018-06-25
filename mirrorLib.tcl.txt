@@ -1,0 +1,1032 @@
+proc CheckOprationalVirtualSlot {} {
+global DUT1_CONNECT
+global DUT2_CONNECT
+global bd8kChassis
+global chassis
+global DUTs_info
+global platform
+global stacking
+
+ for {set k 1} {$k <= 2} {incr k} {
+   set platform [GetPlatform DUT${k}]
+   Login [set DUT${k}_CONNECT]
+   result_debug "platform : $platform"
+   if {[regexp -nocase "$stacking" $DUTs_info(DUT${k},platform)]} {
+       set slotName $DUTs_info(DUT${k},hwList)
+       puts "slotName value is $slotName"
+        set Slot 1
+        foreach i $slotName {
+              if {"$i" != "Empty"} {
+                 result_debug "slot is $Slot"
+                 lappend parameterList "{State:.*Operational} exist"
+                 CheckKeyValue "show slot $Slot" $parameterList -time  {s: 1 i: 5 d: 200 f: 200 r} \
+                        -comment "Check slot$Slot are in operational state from DUT$k"
+                 unset parameterList
+              }
+        incr Slot
+       }
+
+   } elseif {[regexp -nocase "BD-X8|$chassis" $DUTs_info(DUT${k},platform)]} {
+        set slotName $DUTs_info(DUT${k},hwList)
+        set Slot 1
+        foreach i $slotName {
+              if {"$i" != "Empty"} {
+                 result_debug "slot is $Slot"
+                 lappend parameterList "{State:.*Operational} exist"
+                 CheckKeyValue "show slot $Slot" $parameterList -time  {s: 1 i: 5 d: 200 f: 200 r} \
+                        -comment "Check slot$Slot are in operational state from DUT$k"
+                 unset parameterList
+              }
+        incr Slot
+       }
+   }
+ }
+}
+
+proc findslotsystemdump1 {} {
+global DUT1_CONNECT
+global DUT2_CONNECT
+global bd8kChassis
+global chassis
+global DUTs_info
+global bladeType
+global platform
+global stacking
+global gnssPlatform
+
+for {set k 1} {$k <= 2} {incr k} {
+   set platform [GetPlatform DUT${k}]
+   Login [set DUT${k}_CONNECT]
+   result_debug "platform : $platform"
+   if {[regexp -nocase "$stacking" $DUTs_info(DUT${k},platform)]} {
+       set slotName $DUTs_info(DUT${k},hwList)
+       puts "slotName value is $slotName"
+        set Slot 1
+        foreach i $slotName {
+        puts "I value is : $i"
+              if {"$i" != "Empty"} {
+                 result_debug "slot is $Slot"
+                 lappend parameterList "{core_dump_info} notExist"
+                 if { [CheckKeyValue "show debug system-dump slot $Slot" $parameterList -comment "Check core in slot-$Slot DUT$k"] != "ok" } {
+                 SendACmd "clear debug system-dump slot $Slot"
+                 result_debug "system-dump cleared on slot-$Slot DUT$k"
+                 }
+                 unset parameterList
+              }
+        incr Slot
+       }
+
+   } elseif {[regexp -nocase "BD-X8|$chassis" $DUTs_info(DUT${k},platform)]} {
+        set slotName $DUTs_info(DUT${k},hwList)
+       puts "slotName value is $slotName"
+        set Slot 1
+        foreach i $slotName {
+        puts "I value is : $i"
+              if {"$i" != "Empty"} {
+                 result_debug "slot is $Slot"
+                 lappend parameterList "{core_dump_info} notExist"
+                 if { [CheckKeyValue "show debug system-dump slot $Slot" $parameterList -comment "Check core in slot-$Slot DUT$k"] != "ok" } {
+                 SendACmd "clear debug system-dump slot $Slot"
+                 result_debug "system-dump cleared on slot-$Slot DUT$k"
+                 }
+                 unset parameterList
+              }
+        incr Slot
+       }
+        lappend msm_key "{M(S)?M-A} Operational inLine Exist"
+        if {[CheckKeyValue "show slot" $msm_key -comment "Checking MSM availability"] == "ok" } {
+            SendACmd "show debug system-dump msm a"
+               lappend parameterList "{core_dump_info} notExist"
+               if { [CheckKeyValue "show debug system-dump msm a" $parameterList -comment "Check core in MSM-A DUT$k"] != "ok" } {
+                        SendACmd "clear debug system-dump msm a"
+                        result_debug "system-dump cleared on MSM-A DUT$k"
+                  }
+        }
+        unset msm_key
+	if {[regexp -nocase $bd8kChassis $DUTs_info(DUT1,platform)]} {
+        result_debug "system $bd8kChassis"
+        lappend msm_key "{MSM-B} Operational inLine Exist"
+        if {[CheckKeyValue "show slot" $msm_key -comment "Checking MSM availability"] == "ok" } {
+            SendACmd "show debug system-dump msm b"
+                lappend parameterList "{core_dump_info} notExist"
+               if { [CheckKeyValue "show debug system-dump msm b" $parameterList -comment "Check core in MSM-B DUT$k"] != "ok" } {
+                        SendACmd "clear debug system-dump msm b"
+                        result_debug "system-dump cleared on MSM-B DUT$k"
+                  }
+        }
+	}
+   } else {
+                set parameterList ""
+                lappend parameterList "{core_dump_info} notExist"
+               if {[CheckKeyValue "show debug system-dump" $parameterList -comment "Check core in DUT$k"] != "ok"} {
+                        SendACmd "clear debug system-dump"
+                        result_debug "system-dump cleared on DUT$k"
+                  }
+                unset parameterList
+                result_debug "Stand Alone switch is $k"
+          }
+}
+}
+
+
+proc get_links_speed_factors {ixiaPortsList trunkPortsList ixiaPortFactors trunkPortsFactors } {
+  upvar $ixiaPortFactors ixiaFactors
+  upvar $trunkPortsFactors trunkFactors
+
+  set lowestSpeed ""
+  # find the lowest speed among ixia ports
+  set ixiaPortsSpeedList {}
+  foreach ixiaPort $ixiaPortsList {
+    #get port speed
+    set ixiaPortSpeed [GetPortIdSpeed $ixiaPort]
+    result_debug "ixiaPortSpeed $ixiaPortSpeed"
+    lappend ixiaPortsSpeedList $ixiaPortSpeed
+    if { ($lowestSpeed == "") || ($ixiaPortSpeed < $lowestSpeed) } {
+      set lowestSpeed $ixiaPortSpeed
+    }
+  }
+  # see if any trunk is slower then that
+  # each element in trunkPortsList is a list of 2 elements
+  # 1. Port - ex: 2:3
+  # 2. DUT - ex 2
+  set trunkPortsSpeedList {}
+  foreach trunkPort $trunkPortsList {
+    set port [lindex $trunkPort 0]
+    set dut [lindex $trunkPort 1]
+    result_debug "trunkPort $trunkPort"
+    set trunkPortSpeed [getDutPortSpeed -dut $dut -port $port]
+    result_debug "trunkPortSpeed $trunkPortSpeed"
+    lappend trunkPortsSpeedList $trunkPortSpeed
+    if { ($lowestSpeed == "") || ($trunkPortSpeed < $lowestSpeed) } {
+      set lowestSpeed $trunkPortSpeed
+    }
+  }
+  # lets create the result lists
+  set ixiaFactors {}
+  foreach ixiaPortSpeed $ixiaPortsSpeedList {
+    set a "$ixiaPortSpeed.0"
+    set b "$lowestSpeed.0"
+    set ixiaPortFactor [expr $b/$a] 
+    result_debug "ixiaPortFactor $ixiaPortFactor"
+    lappend ixiaFactors $ixiaPortFactor
+  }
+  set trunkFactors {}
+  foreach trunkPortSpeed $trunkPortsSpeedList {
+    set a "$trunkPortSpeed.0"
+    set b "$lowestSpeed.0"
+    set trunkPortFactor [expr $b/$a] 
+    result_debug "trunkPortFactor $trunkPortFactor"
+    lappend trunkFactors $ixiaPortFactor
+  }
+  result_debug "ixiaFactors $ixiaFactors"
+  result_debug "trunkFactors $trunkFactors"
+}
+
+#############################################################################
+# Procedure Name: SetTwoPortSameChip                                       ##
+# Sets two  ports on same chip and third port  on diff chip                ##
+# usage: SetTwoPortSameChip "4"                                            ##
+# returns : $portSetList if all ports are on same chip.                    ##
+# DUT physical ports list {egress mtp ingress} if they are different.      ##
+#############################################################################
+proc SetTwoPortSameChip { numPorts } {
+
+set j $numPorts
+
+for {set i 1} { $i <=$numPorts } {incr i} {
+   for {set j $numPorts} {$j >= 1} {set j [expr {$j - 1}]} {
+      if { $i == $j} {
+         continue;
+      } else {
+         if { [GetBcomSameChip [MapDUTPortId $j ] [MapDUTPortId $i ] ] == 1 } {
+            lappend sameAsicList [MapDUTPortId $i ]
+            lappend sameAsicList [MapDUTPortId $j ]
+            set j 1
+            set i 10
+            break
+         }
+      }
+   }
+}
+if ![info exists sameAsicList] {
+   return -1;
+}
+
+
+for {set k 1} { $k <=$numPorts } {incr k} {
+   if {([lsearch [MapDUTPortId $k ] [lindex $sameAsicList 0]] == -1) && ([lsearch [MapDUTPortId $k ] [lindex $sameAsicList 1]] == -1)} {
+     if { [GetBcomSameChip [MapDUTPortId $k ] [lindex $sameAsicList 0]] != 1 } {
+         lappend notSameAsicList [MapDUTPortId $k]
+         break
+     }
+   }
+}
+
+
+if ![info exists notSameAsicList] {
+   return -1;
+} else {
+   set port1 [lindex $sameAsicList 0]
+   set port2 [lindex $sameAsicList 1]
+   set port3 [lindex $notSameAsicList 0]
+   set portSetList ""
+   lappend portSetList "$port1 $port2 $port3"
+}
+
+foreach item $portSetList {
+   result_debug "$item"
+}
+
+return $portSetList
+}
+######################################################################
+# Procedure Name: SetThreePortDiffChip
+# Sets three ports on different chip a
+# usage: SetEgressMtpSameChip "4"
+# returns : $portSetList  if all ports are on different chip. DUT physical ports list\
+# {egress mtp ingress} if they are in  different asic.
+#######################################################################
+proc SetThreePortDiffChip { numPorts } {
+
+set j $numPorts
+
+for {set i 1} { $i <=$numPorts } {incr i} {
+   for {set j $numPorts} {$j >= 1} {set j [expr {$j - 1}]} {
+      if { $i == $j} {
+         continue;
+      } else {
+         if { [GetBcomSameChip [MapDUTPortId $j ] [MapDUTPortId $i ] ] == 0 } {
+            lappend sameAsicList1 [MapDUTPortId $i ]
+            lappend sameAsicList2 [MapDUTPortId $j ]
+            set j 1
+            set i 10
+            break
+         }
+      }
+   }
+}
+
+if ![info exists sameAsicList1] {
+   return -1;
+}
+
+for {set k 1} { $k <=$numPorts } {incr k} {
+   if {([lsearch [MapDUTPortId $k ] [lindex $sameAsicList1 0]] == -1) && ([lsearch [MapDUTPortId $k ] [lindex $sameAsicList2 1]] == -1)} {
+     if { ([GetBcomSameChip [MapDUTPortId $k ] [lindex $sameAsicList1 0]] != 1) && ([GetBcomSameChip [MapDUTPortId $k ] [lindex $sameAsicList2 0]] != 1) } {
+         lappend sameAsicList3 [MapDUTPortId $k]
+         break
+     }
+   }
+}
+
+if ![info exists sameAsicList3] {
+   return -1;
+} else {
+   set port1 [lindex $sameAsicList1 0]
+   set port2 [lindex $sameAsicList2 0]
+   set port3 [lindex $sameAsicList3 0]
+   set portSetList ""
+   lappend portSetList "$port1 $port2 $port3"
+}
+
+foreach item $portSetList {
+   result_debug "$item"
+}
+
+return $portSetList
+}
+
+#####################################################################################
+#Procedure Name: returnIxiaLogicalPortID                                           ##
+#returnIxiaLogicalPortID retuns the logical port based on DUT's physical port      ##
+#usage: returnIxiaLogicalPortID "4:1" "1"                                          ##
+##returns : Logical Ixia port                                                      ##
+#####################################################################################
+
+proc returnIxiaLogicalPortID {actualport dutno} {
+global  portMappingList
+foreach subList $portMappingList {
+if {[lindex $subList 1]== "$actualport" }  {
+  if {[lindex $subList 2]== $dutno} {
+     return [lindex $subList 0]
+    }
+}
+}
+return -1
+}
+##################################################################
+# Procedure Name: GetL2DataPattern
+# Category: Setup
+##################################################################
+
+proc GetL2DataPattern { dataFrame } {
+   return [string range $dataFrame 36 40]
+}
+
+##################################################################
+# Procedure Name: GetL2DataPatternTag
+# Category: Setup
+##################################################################
+
+proc GetL2DataPatternTag { dataFrame } {
+   return [string range $dataFrame 48 52]
+}
+
+##################################################################
+# Procedure Name: GetL3DataPattern
+# Category: Setup
+##################################################################
+
+proc GetL3DataPattern { dataFrame } {
+   return [string range $dataFrame 102 106]
+}
+
+##################################################################
+# Procedure Name: GetL3DataPatternTag
+#  Category: Setup
+##################################################################
+
+proc GetL3DataPatternTag { dataFrame } {
+   return [string range $dataFrame 114 118]
+}
+
+##################################################################
+# Procedure Name: findOperSlots
+# Description: To find the no of operational slots in Chassi          
+# Input args: none
+# Output args: none
+# Return value: Num of slots, Slot no list
+# Typical usage:
+#       findOperSlots
+# Category: Utility
+##################################################################
+
+
+proc findOperSlots {} {
+
+global DUT1_CONNECT
+global NumActiveSlots
+global slotList
+
+## taking the no of active slots (operational)
+set NumActiveSlots 0
+set slotList ""
+
+Login $DUT1_CONNECT
+
+set fd_in [open "Tmp/tmp_showslotinfo" "w"]
+SendACmd "show slot" "NULL" $fd_in
+close $fd_in
+
+set fd_in [open "Tmp/tmp_showslotinfo" "r"]
+
+while {[gets $fd_in line] != -1} {
+   set cookedLine [cookString $line]
+   set aList [split $cookedLine]
+   # Gather the slot state for all 10 slots
+   for {set slotNum 1} {$slotNum<=10} {incr slotNum 1} {
+      if { ([lindex $aList 0] == "Slot-$slotNum") &&
+           (([lindex $aList 1] == "Operational") ||
+           ([lindex $aList 2] == "Operational") ||
+           ([lindex $aList 3] == "Operational")) } {
+           incr NumActiveSlots 1
+           lappend slotList $slotNum
+         }
+      }
+   }
+
+close $fd_in
+file delete "Tmp/tmp_showslotinfo"
+result_debug "The no of slots in this stack : $NumActiveSlots"
+
+}
+
+##################################################################
+# Procedure Name: findSlotList
+# Description: To find the no of operational slots in Chassi          
+# Input args: none
+# Output args: none
+# Return value: Num of slots, Slot no list
+# Typical usage:
+#       findOperSlots
+# Category: Utility
+##################################################################
+
+
+proc findSlotList {} {
+
+global DUT1_CONNECT
+global DUTs_info
+global bcmx650;
+global stacking
+global bcmChassis
+global NumActiveSlots
+global slot
+global slotList
+global totalPorts
+global totalPortsList
+global gnssPlatform
+
+set maxFilter 128
+
+
+if {[regexp -nocase "$gnssPlatform" [GetPlatform DUT1]]} {
+      set maxFilter 64
+}
+
+## taking the no of active slots (operational)
+
+Login $DUT1_CONNECT
+
+   ##To find the no of operational slots,Slotlist and then Ports in the Slots
+
+   findOperSlots
+   result_debug "slotlist : $slotList"
+
+   set totalPorts 0
+   set origPorts 0
+   set valuefound 0
+   set valuefound1 0
+   set parameterList ""
+   set platform [GetPlatform DUT1]
+   set portList ""
+
+   lappend portList [MapDUTPortId 1] [MapDUTPortId 2] [MapDUTPortId 3] [MapDUTPortId 4] \
+   [GetATrunkPort 1 2 1] [GetATrunkPort 1 2 2] [GetATrunkPort 1 2 3]
+
+   lappend totalPortsList [MapDUTPortId 1] [MapDUTPortId 2] [MapDUTPortId 3] [MapDUTPortId 4] \
+   [GetATrunkPort 1 2 1] [GetATrunkPort 1 2 2] [GetATrunkPort 1 2 3]
+
+   set totalPorts [llength $totalPortsList]
+
+   foreach slot $slotList {
+
+   lappend parameterList  "Slot-$slot.*Operational 1"
+   set valuefound [GetKeyValue "show slot" $parameterList]
+   unset parameterList
+   set valuefound1 [lindex $valuefound 0]
+
+
+      set slotType [lindex $DUTs_info(DUT1,hwList) [expr $slot -1]]
+      result_debug "SlotType: $slotType"
+
+      set totalPorts [expr ($totalPorts + $valuefound1)]
+
+      if { $totalPorts > $maxFilter}  {
+           set addPorts [expr $maxFilter + 1 - $origPorts]
+           set count 0
+
+            for {set i 1}  {$i<= $valuefound1} {incr i} {
+                set port1  $slot:$i
+                if {  $count < $addPorts } {
+                        if { [lsearch -regexp $portList $port1] == -1} {
+                         lappend totalPortsList $slot:$i
+                         incr count
+                        }
+                }
+            }
+   
+     } else {
+
+      for {set i 1} {$i<=$valuefound1} {incr i} {
+
+         if { [regexp -nocase "$bcmx650" $slotType] } {
+         # For tiger, skipping ports 23 and 24  used as stacking ports.
+   
+           if {($i == 23) || ($i ==24)} {
+                 result_debug "Skipping 1:23 and 1:24 for Tiger platform"
+                 set totalPorts [expr ($totalPorts - 1)]
+                 continue
+              }
+         }
+
+         set port1  $slot:$i
+         if { ([lsearch -regexp $portList $port1] == -1)} {
+                   lappend totalPortsList $slot:$i
+         }
+     }
+
+    }
+     set totalPorts [llength $totalPortsList]
+     set origPorts $totalPorts
+   }
+
+   result_debug "Total ports in FindSlotList is  : $totalPorts"
+   result_debug "Total portList in FindSlotList is  : $totalPortsList"
+
+}
+
+##################################################################
+# Procedure Name: findNewSlot
+# Description: If active ports are not sufficient, configure 
+#              module to add some ports.
+# Input args: none
+# Output args: none
+# Return value: Num of slots, Slot no list
+# Typical usage:
+#       findOperSlots
+# Category: Utility
+##################################################################
+
+
+proc findNewSlot {} {
+
+global DUT1_CONNECT
+global NumActiveSlots
+global slotList
+global newSlot
+global bcmChassis;
+global stacking;
+
+Login $DUT1_CONNECT
+
+set newSlot 0 
+set addPorts 0 
+set cardList ""
+
+###find the new slot that is to be added
+
+set platform [GetPlatform DUT1]
+
+if {[regexp -nocase "$bcmChassis" $platform]} {
+   
+     if {[regexp -nocase "$stacking" $platform]} { 
+        lappend cardList 1 2 3 4 5 6 7 8 
+     } else {
+        lappend cardList 1 2 3 4 5 6   
+     } 
+   } else {
+    ## FOR GENESIS AND PIONEER 
+    if {[regexp -nocase "BD-20804" $platform]} {
+       lappend cardList 1 2 3 4
+    } elseif {[regexp -nocase "BD-12804" $platform]} {
+       lappend cardList 1 2 5 6
+    } elseif {[regexp -nocase "BD-12802" $platform]} {
+       lappend cardList 1 2
+    } else {
+       lappend cardList 1 2 3 4 5 6 7 8
+    }
+   } 
+  
+   foreach card1 $cardList {
+       if {([lsearch -exact $slotList $card1] == -1)} {
+            set newSlot $card1
+            lappend slotList $card1
+            result_debug "findNewSlot: slotList=$slotList, newSlot=$newSlot"
+            break;
+          } 
+   }
+}
+
+
+##################################################################
+# Procedure Name: findMirrorFilters
+# Description: To find the no of mirroring filters          
+# Input args: none
+# Output args: none
+# Return value: list of total filters
+# Typical usage:
+#       findMirrorFilters
+# Category: Utility
+##################################################################
+
+
+proc findMirrorFilters {} {
+
+global DUT1_CONNECT
+global slotList;
+global slot;
+global newSlot;
+global bcmChassis;
+global bcmStackable;
+global gnssChassis;
+global gnssPlatform
+global pioneerChassis;
+global stacking;
+global tftpServerList
+global mirrFilterList;
+global totalPorts; 
+global totalPortsList;
+global listOfNewSlots 
+global everestChassis
+global flag
+global new_slot
+global newslotflag
+global bd8kChassis
+set noPortsInSlot 0
+set maxFilter 128
+set newslotflag "";
+
+if {[regexp -nocase "$gnssPlatform" [GetPlatform DUT1]]} {
+   set maxFilter 64
+}
+
+set tftpServer  [lindex $tftpServerList 0]
+set platform [GetPlatform DUT1]
+result_debug "platform : $platform"
+set dut1Ver [GetVersion DUT1 1];
+
+puts "$dut1Ver"
+result_debug "Image version : $dut1Ver"
+result_debug "platform : $platform"
+set flag 0
+
+if {[regexp -nocase "$stacking" $platform]} {
+        if {([CompareRelease $dut1Ver "15.4"]) >= 0} {
+             set addSlot "X670V-48x"
+             set noPortsInSlot 48
+             set flag 1
+         puts "$addSlot"
+
+        } else {
+             set addSlot "X450e-48p"
+             set noPortsInSlot 48
+         puts "$addSlot"
+        }
+}
+
+
+if {[regexp -nocase "$bd8kChassis" $platform]} {
+     
+  if {[CompareRelease [GetVersion DUT1] 15.3.1.4]>=0} {
+                set addSlot "G48Xc"
+                set noPortsInSlot 48
+            } else {
+                set addSlot "8900-G48T-xl"
+                set noPortsInSlot 48
+            }
+# EY-01-10-2014: Added missing close-brace.
+} else {         
+     
+     # FOR GENESIS / PIONEER PLATFORMS 
+    if {[regexp -nocase "BD-20" $platform]} {
+       set addSlot "GM-40XB"
+       set noPortsInSlot 40
+    } elseif {[regexp -nocase "BD-12" $platform]} {
+       set addSlot "GM-20XTR"
+       set noPortsInSlot 20
+    } elseif {[regexp -nocase "BD-10" $platform]} {
+       set addSlot "G60T"
+       set noPortsInSlot 60
+    } elseif {[regexp -nocase "BD-X8" $platform]} {
+       set addSlot "BDXA-10G48X"
+       set noPortsInSlot 48
+    }
+
+}
+
+###   Check for Aspen/Stacking and StandAlone BCM platforms
+
+if {[regexp -nocase "$bcmStackable" $platform]} {
+
+   #### Stand Alone Switches
+
+   set totalPortsList ""
+   result_debug "Summit platform"
+
+  if {[regexp -nocase "E4G-200" $platform]} {
+   set totalPorts 12
+  } elseif {[regexp -nocase "E4G-400" $platform]} {
+   set totalPorts 28
+  } elseif {[regexp -nocase "NWI-E450A" $platform]} {
+   set totalPorts 13
+  } elseif {[regexp -nocase "X440-L2-48t|X440-L2-24t" $platform]} {
+    set val1 [lindex [split $platform -] 2]
+    set totalPorts [lindex [split $val1 "x|t|p"] 0]
+  } else {
+	Login $DUT1_CONNECT
+	SendACmd "configure vlan default add ports all"
+
+	set parameterList ""
+	lappend parameterList "{Default}  5 0"
+	set totalPorts [string range  [GetKeyValue "show vlan" $parameterList] 1 end]
+	SendACmd "configure vlan default delete ports all"
+
+
+  }
+
+   result_debug "Total Ports in the summit Switch is :$totalPorts"
+  
+   ## Ixia Connection 3 is used as the Monitor port 
+   ## Ixia Connection 2-5 Active Mirroring Filters 
+
+   set portList ""
+   lappend portList [MapDUTPortId 1] [MapDUTPortId 2] [MapDUTPortId 3] [MapDUTPortId 4] \
+   [GetATrunkPort 1 2 1] [GetATrunkPort 1 2 2] [GetATrunkPort 1 2 3]
+
+   # Find the list of dummy mirroring filters, by excluding the above active ports
+   set mirrFilterList ""
+   set count 0
+   
+   for {set i 1} {$i<=$totalPorts} {incr i} {
+
+      if {([lsearch -exact $portList $i] == -1)} {
+         lappend mirrFilterList $i 
+         set count [llength $mirrFilterList]
+      }
+
+   }
+    result_debug "MirrorFilterList excluding active ports : $mirrFilterList"
+  
+
+} else {
+ 
+   set totalPortsList ""
+   set totalPorts 0
+   findSlotList
+
+   ##Check if the total ports is > than Max Mirroring filters else add \
+   ##more slots with required ports 
+
+   while {$totalPorts <= $maxFilter } {
+     findNewSlot
+     if {$newSlot == 0} {
+        break
+     }
+     lappend listOfNewSlots $newSlot
+     set addPorts [expr $maxFilter + 1 - $totalPorts]
+     SendACmd "configure slot $newSlot module  $addSlot"
+     lappend newslotflag $newSlot
+     for {set i 1} {$i<=$addPorts} {incr i} {
+             if  {$i <= $noPortsInSlot} {
+               lappend totalPortsList $newSlot:$i
+             }
+      }
+     unset addPorts
+     set totalPorts [llength $totalPortsList]
+   }
+
+  result_debug "\n totalPortsList : $totalPortsList"
+  result_debug "\n Total no of Ports     : $totalPorts"
+      
+  ## The Port [MapDUTPortId 3]   is used as the Monitor port to mirror the pkts.
+  ## The other ports  [MapDUTPortId 1],[MapDUTPortId 2] , [MapDUTPortId 4],
+  ## [GetATrunkPort 1 2 1], [GetATrunkPort 1 2 2] are used as ACTIVE Mirroring Ports 
+   
+  set portList ""
+  lappend portList [MapDUTPortId 1] [MapDUTPortId 2] [MapDUTPortId 3] [MapDUTPortId 4] \
+  [GetATrunkPort 1 2 1] [GetATrunkPort 1 2 2] [GetATrunkPort 1 2 3]
+
+  # Find the list of dummy mirroring filters, by excluding the above active ports
+
+  result_debug "\n\nPortList :$portList\n"
+  foreach port1 $totalPortsList {
+       if {([lsearch -exact $portList $port1] == -1)} {
+          lappend mirrFilterList $port1
+       } 
+   }
+    set count 0 
+    set count [llength $mirrFilterList]
+    result_debug "FiltersCount: $count"
+    result_debug "\n MirrorFiltersList excluding active ports: $mirrFilterList"
+
+  }
+}
+
+
+################################################################################
+# Procedure Name: FindTrafficRate 
+# Description:
+#     This proc is used to find the minimum traffic rate for linerate forwarding
+#
+#
+# Input args : None
+# Output args: None
+# return     : Rate
+# Typical Usage: FindTrafficRate
+################################################################################
+
+proc FindTrafficRate {} {
+
+global DUT1_CONNECT
+global DUT2_CONNECT
+global DUT3_CONNECT
+
+lappend portSpeedList [GetPortIdSpeed 1]
+lappend portSpeedList [GetPortIdSpeed 2]
+lappend portSpeedList [GetPortIdSpeed 3]
+lappend portSpeedList [GetPortIdSpeed 4]
+
+lappend portSpeedList [GetPortIdSpeed 9]
+lappend portSpeedList [GetPortIdSpeed 10]
+lappend portSpeedList [GetPortIdSpeed 11]
+lappend portSpeedList [GetPortIdSpeed 12]
+
+
+set portlist [lsort -integer $portSpeedList]
+set lowspeed [lindex $portlist 0]
+
+##setting up the frame rate for diff speeds
+
+switch -- $lowspeed  "100" {
+   set maxframerate 100000
+} "1000" {
+   set maxframerate 1000000
+} "10000" {
+   set maxframerate 10000000
+} "10" {
+   set maxframerate 10000
+} default {
+   set maxframerate 100000
+}
+
+result_debug "\nLinerate Traffic rate for the setup: $maxframerate pps\n\n"
+
+return $maxframerate
+}
+
+#################################################################
+# Procedure Name: CheckMSMIsInSync
+#
+# Description: runs "show switch" until all MSMs are in sync
+#              or 10 minutes
+# Input args: CheckMSMsIsInSync
+# Optional Args: none
+# Output args: none
+# Typical usage:
+#
+#
+##################################################################
+
+
+proc CheckMSMIsInSync {} {
+    lappend parameterList "BACKUP {In Sync} inLine";
+    set timeOut "start: 60 interval: 3 dummy: 3 fail: 600";
+
+    set returnCode [CheckKeyValue "show switch" $parameterList -time $timeOut];
+    if {$returnCode != "ok"} {
+        result_error "MSMs not in sync after 420 seconds.";
+        return 0;
+    } else {
+        return 1;
+    }
+}
+
+
+proc ConfMirroring {args} {
+
+   parse_args ConfMirroring $args {
+      port "NULL"
+      vlan "NULL"
+      direction " "
+   }
+
+   global whichDutNow
+   global gnssPlatform
+
+   set platform [GetPlatform DUT${whichDutNow}]
+   if {[regexp -nocase "$gnssPlatform" $platform]} {
+      set direction ""
+   }
+
+   if {$port == "NULL"} {
+      if {$vlan == "NULL"} {
+         result_error "Invalid arg in ConfMirroring: port not set."
+      } else {
+         SendACmd "configure mirror add vlan $vlan $direction"
+      }
+   } else {
+      if {$vlan != "NULL"} {
+         SendACmd "configure mirror add port $port vlan $vlan $direction"
+      } else {
+         SendACmd "configure mirror add port $port $direction"
+      }
+   }
+   exSleep 1
+}
+
+proc GetMaxNumFilters {newfilters {platform "default"}} {
+
+   global whichDutNow
+   global gnssPlatform
+   global mirrFilterList
+
+   if {$platform == "default"} {
+      set platform [GetPlatform DUT${whichDutNow}]
+   }
+   set existingFitlers [llength $mirrFilterList]
+   set totFilters [expr $existingFitlers + $newfilters]
+
+   if {[regexp -nocase "$gnssPlatform" $platform]} {
+      set filterCnt 64
+   } else {
+      set filterCnt 128
+   }
+   if {$totFilters <= $filterCnt} {
+      set filterCnt $totFilters
+   }
+   return $filterCnt
+}
+
+
+set  CLF_PROT_FOUND 1
+set  CLF_PROT_NOT_FOUND 0
+set udpPortId 1;
+set tcpPortId 2;
+
+set ipAddrUdp      "192.1.1.100"; # IP address from the RX port used t send TCP
+set ipAddrTcp      "192.1.2.100"; # IP address from the TX port used t send UDP
+set ipAddrRxPort       "192.1.1.100"; # IP address from the RX port used t send TCP
+set ipAddrTxPort       "192.1.2.100"; # IP address from the TX port used t send UDP
+
+set macAddrRxPort      "00 A1 F1 00 00 01"; # mac  address for the RX port
+set macAddrTxPort      "00 A1 F1 00 00 02"; # mac  address for the Tllllll
+set macAddrUdpPort     "00 A1 F1 00 00 01"; # mac  address for the RX port
+set macAddrTcpPort     "00 A1 F1 00 00 02"; # mac  address for the Tllllll
+set vlan1IpAddr        "192.1.1.9"
+set vlan2IpAddr        "192.1.2.9"
+##################################################################
+# Procedure Name: configVlansAndIxia
+#
+# Description: 
+# ->Configure the Vlans for the ClearFlow tests
+# Will create two Vlans. 
+# Vlan1 with IXIA port 1, and Vlan2 with Ixia port 2 
+# ->Send ARp packets from one each Ixia ports to the DUTs 
+# -> Set the Receiving filters on each Ixia port
+# This is a fixed filter based on the SrcIp and Pattern
+# -> Clear the port Stats
+#
+# Input args: Up or Down
+# By default Uses ports from uppper part of the so as to use MSM A
+# If want to use the lower ports, pass Down as an argument
+#
+# Output args: none
+#
+# Typical usage: 
+#
+# Category Types 
+# Category: Setup
+##################################################################
+
+proc configVlansAndIxia { args} {
+global DUT1_CONNECT;
+Login   $DUT1_CONNECT;
+set  dutMac [GetDUTMac DUT1]
+
+set rxPortId 1;
+set txPortId 2;
+global udpPortId 
+global tcpPortId 
+
+global ipAddrUdp
+global ipAddrTcp
+global macAddrUdpPort
+global macAddrTcpPort
+
+global ipAddrRxPort
+global ipAddrTxPort
+global macAddrRxPort
+global macAddrTxPort
+global vlan1IpAddr 
+global vlan2IpAddr
+
+####  if the Down argument is passed, choose only those ixia ports that are 
+####  connected to the lower ports on the DUT
+set lowerPorts ""
+if {([llength $args] >= 1) && ($args == "Down") } {
+    # the first 8 ixia ports are connected to the DUT1.
+    for {set i 1}  {$i <= 8} {incr i} {
+
+        set dutPort [MapDUTPortId $i 1]
+        puts "PORT : $dutPort"
+
+        set lport [lindex [split $dutPort :] 1]
+        if {( ($lport > 15) && ($lport <= 30)) || ($lport >= 46) } {
+            lappend lowerPorts $lport
+        }
+    }
+    puts "Lower Ports :  [llength $lowerPorts] :: $lowerPorts"
+
+
+    if { [llength $lowerPorts ] < 2 } {
+        return 1 ; # didn't find two lower ports
+    } else {
+        set udpPort [lindex $lowerPorts 0]
+        set tcpPort [lindex $lowerPorts 1]
+    }
+}
+
+SendACmd        "create vlan vlan1";
+if {$args == "tag"} {SendACmd "config vlan vlan1 tag 13"}
+SendACmd        "configure vlan1 ipaddr $vlan1IpAddr/24";
+SendACmd        "configure vlan1 add port [MapDUTPortId $udpPortId 1]";
+SendACmd        "enable ipforwarding vlan1";
+SendACmd        "clear counter";
+
+SendACmd        "create vlan vlan2";
+if {$args == "tag"} {SendACmd "config vlan vlan1 tag 14"}
+SendACmd        "configure vlan2 ipaddr $vlan2IpAddr/24";
+SendACmd        "configure vlan2 add port [MapDUTPortId $tcpPortId 1]";
+SendACmd        "enable ipforwarding vlan2";
+SendACmd        "clear counter";
+
+#Send ARP from the udpPort
+set frameSent [SendArpFrame -txPortId $udpPortId -sourceIp $ipAddrUdp -destIp $vlan1IpAddr \
+        -sourceMac $macAddrUdpPort -destMac $dutMac -numFrames 2];
+
+#Send ARP from the tcpPort
+set frameSent [SendArpFrame -txPortId $tcpPortId -sourceIp $ipAddrTcp -destIp $vlan2IpAddr \
+        -sourceMac $macAddrTcpPort -destMac $dutMac -numFrames 2];
+return 0
+}

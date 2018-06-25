@@ -1,0 +1,59 @@
+#!/usr/bin/tclsh
+source /auto/automation/Util/runReg.cfg   ;# need to change it when run from elsewhere
+set autoPath "/auto/automation/"
+set qs [getFromRegRunWhere id_label "status = 'Running' OR status = 'Queued'"]
+
+# Decide which queue_ids will be store on the local server
+set DEVREG(server,HOST)              [exec hostname -s]
+
+if {[regexp -nocase "devreg|rdu" $DEVREG(server,HOST)]} {
+    # rdu case -
+    set match RTP
+} elseif {[regexp -nocase "sal" $DEVREG(server,HOST)]} {
+    set match SALEM
+} else {
+    #SC case.. set all of these to Complete
+    set match SC
+}
+
+# set current time
+set cNum [format %s [clock format [clock seconds] -format %y%m%d]]
+puts "The Number $cNum"
+set krList ""
+foreach q $qs {
+    if {[regexp -nocase "$match" $q]} {
+        set qList [split $q "_"]
+        set qNums [lindex $qList 1] 
+        # rdu
+        if {![file isdirectory $DEVREG(server,imagesQueuedDir)/$q] && ![file isdirectory $DEVREG(server,imagesRunningDir)/$q]} {
+            puts "$q (DB Running or Queued) doesn't exist in either Q = $DEVREG(server,imagesQueuedDir)/$q R = $DEVREG(server,imagesRunningDir)/$q"
+            if {1} {
+                puts "KillReg in the DB as running and queue files do not exist"
+                dbKillReg $q
+                #if {[catch {updateRegIdStatus -status "Complete" -id_label "$q"} reason]} {
+                #    puts "Update label $q to Complete failed: $reason"
+                #} else {
+                #    puts "Update successfully $q to Complete"
+                #}
+            }
+        } elseif {[expr $cNum - $qNums] > 14} {
+            puts "KillReg in the DB Says Running or Queued but queueID running or queue files Exist"
+            dbKillReg $q
+            lappend krList $q
+        } else {
+            puts "$q seems to be running get modules"
+            set rId [getRegIdFromQId $q]
+            #set plats [getFromRegRunWhere "platform" "(status = 'Queued' OR status = 'Running') AND type = 'Private' AND id_label = '$q'"]
+            #foreach p $plats {
+            #    puts "$q !!!!!!!!!!!!!!!!!!!!!!!!!! found plats $p"
+            #}
+        }
+        #$DEVREG(server,imagesQueuedDir)
+        #$DEVREG(server,imagesFinishedDir) 
+        #$DEVREG(server,imagesKilledDir)  
+        #$DEVREG(server,imagesRunningDir) 
+    }
+}
+foreach kill $krList {
+puts "$kill"
+}

@@ -1,0 +1,579 @@
+#!/usr/bin/tclsh
+
+proc CheckShowSwitchAfterLogin {i} {
+    global DUT[set i]\_CONNECT
+    Login [set DUT[set i]\_CONNECT]
+    SendACmd "show switch"
+}
+
+
+# ---- MAIN ----
+global curAutoRoot
+global DUTs_info
+
+source ../Lib/mainLib.tcl
+package require Tclx
+
+if {$tcl_platform(platform) == "windows"} {
+  load "expect52.dll"
+} else {
+  load [lindex [glob "/usr/lib/libexpect*so*"] 0]
+}
+
+set curLocation [pwd]
+set curDirList [split [string trim [string trim $curLocation ".."] "/"] "/"]
+set v 0;
+set pathList ""
+set curAutoRoot ""
+set skipCC 0
+foreach cd $curDirList {
+    if {$cd == "main" || $cd == "Lib" || $cd == "Util"} {
+        for {set x 0} {$x<$v} {incr x} {
+            lappend pathList [lindex $curDirList $x]
+        }
+        set curAutoRoot "/[join $pathList "/"]"
+    } else {
+        incr v;
+    }
+}
+
+set LIB_PATH "./../Lib"
+lappend auto_path $LIB_PATH
+puts "DEBUG: Appending $LIB_PATH to autopath:$auto_path"
+
+gen_index "./../Lib"
+
+
+proc print_usage {} {
+   puts "\r"
+   puts {Usage: verifyTestBed.tcl -cfg <config file> [-clean <yes|no>] }
+   puts {   <cfg>: Path of the config file name }
+   puts {   [<clean>]: Do unconfig before running check connection. Default: yes}
+   puts {   [<rescue>]: Go to bootrom and install good image to primary. Default: no}
+   puts {   [<userImagePath>]: Get a user defined image not one from release-manager. Default \"\"}
+   puts {   [<mtc>]: yes/no Set the sysNames to DUT# for manual EDP trunk port setup Default: no }
+   puts {   [<show>]: List license info for cut and paste to cfg file Default: no }
+   puts {   [<setLic>]: Set the licenses on the switches. Default: no}
+   puts {   [<skipCC>]: skip ixia traffic. Default: 0}
+   puts {   [<note>]: Just text}
+   puts {   [<target>]: version location}
+   puts {   [<vv>]: version to verify}
+   puts {   [<quick>]: No state verification}
+   puts {   [<bank>]: Just reboot to a specific bank}
+   puts "\r"
+}
+
+# checking command parameters
+if {$argc<1} {
+      puts "Not enough parameters"
+      print_usage
+      return
+}
+
+parse_args main $argv {
+      cfg "null"
+      clean "no"
+      rescue "no"
+      userImagePath ""
+      TrafficGen "ixia"
+      show "no"
+      setLic "no"
+      skipCC "0"
+      note ""
+      target   "NULL"
+      vv "NULL"
+      quick "no"
+      bank "null"
+      mtc "null"
+}
+
+set cfgFile ""
+set passCount 0
+set failCount 0
+set skipCount 0
+
+if [catch {source "cfg/common.cfg"} rea] {
+      puts "*** WARNING: Unable to source common.cfg:$rea............... ***"
+      puts "*** WARNING: Application level variables may not be defined. ***"
+      exit -1
+}
+
+if {$cfg != "null"} {
+      if {![regexp -nocase "^cfg" $cfg] } {
+      	    set cfgFile [format %s/%s cfg $cfg]
+      	    set cfgFile [string trim $cfgFile];
+      } else {
+          set cfgFile $cfg
+      }
+}
+
+puts "Using config file: ($cfgFile)"
+
+if {[file exists $cfgFile] == 0} {
+      puts "Cannot find config file: $cfgFile\n"
+      puts stderr "Cannot find config file: $cfgFile"
+      return
+}
+
+puts "************** ABOUT TO source $cfgFile *****************"
+
+catch {source $cfgFile } reason
+
+if {[info exists ixiaPath($ixiaCh1)]} {
+   SetIxiaEnv "$ixiaPath($ixiaCh1)"
+}
+
+lappend auto_path [file join $env(HOME) "ixia/lib/mpexpr-1.0"]
+lappend auto_path [file join $env(HOME) "ixia/lib/ixTcl1.0"]
+lappend auto_path [file join $env(HOME) "ixia/lib/dp4.0"]
+
+# mode setup   
+set clean [string tolower $clean]
+switch $clean  {
+       yes     { puts "This is a clean check connection (with unconfig)."}
+       no      { puts "This is a check connection without unconfig" }
+       default  { puts "No Match"}
+}
+      
+if {![file isdirectory Report]} {
+      file mkdir Report
+ }
+if {![file isdirectory Result]} {
+     file mkdir Result
+ }
+if {![file isdirectory Tmp]} {
+      file mkdir Tmp
+}
+if {![file isdirectory Log]} {
+      file mkdir Log
+}
+
+############################################################
+
+set tStartTime [clock seconds]
+set tStartDate [clock format [clock seconds] -format "%Y-%m-%d %I.%M.%S%p"]
+set tStartDateString [clock format [clock seconds] -format "%Y-%m-%d_%I.%M.%S%p"]
+
+set testDuration 0
+set testHour 0
+set testMin 0
+set testSec 0
+set resultDir "NULL"
+
+set fd_res [open_result_file "verifyTestBed"]
+
+################################################
+set test "Verify Test Bed"
+################################################
+result_h1 "$test"
+report_start_test "$test"
+
+set numDUT 1
+set rebList ""
+while { [info exists DUT${numDUT}_CONNECT] } {
+    set connect [set DUT${numDUT}_CONNECT]
+    set DUTs_info(DUT${numDUT},connect) [set DUT${numDUT}_CONNECT]
+    puts "***** DUT${numDUT}_CONNECT=$connect ***** "
+    puts "***** numDUT=$numDUT ***** "
+    set dutCount $numDUT
+    lappend connectList $connect
+    if {$bank != "null" && [regexp -nocase "pr|sec" $bank]} {
+        if {[regexp -nocase "pr" $bank]} {
+            set bank primary
+        } else {
+            set bank secondary
+        }
+        Login $connect
+        SendACmd "use image $bank"
+        lappend rebList "CheckReboot $numDUT -masterCheck 0"
+    }
+    if {[regexp -nocase "y" $mtc]} {
+        Login $connect
+        SendACmd "configure snmp sysName DUT$numDUT"
+        SendACmd "enable edp po all"
+    }
+    incr numDUT 1
+}
+incr numDUT -1
+if {$bank != "null" && [regexp -nocase "pr|sec" $bank]} {
+    MultiTask $rebList
+    if {$quick == "no"} {
+        return;
+    }
+}
+
+if {$clean == "yes"} {
+    while { [info exists DUT${numDUT}_CONNECT] } {
+       set connect [set DUT${numDUT}_CONNECT]
+       set DUTs_info(DUT${numDUT},connect) [set DUT${numDUT}_CONNECT]
+       set script [set DUT${numDUT}_SETUP]
+       puts "***** DUT${numDUT}_CONNECT=$connect ***** "
+       puts "***** numDUT=$numDUT ***** "
+       incr numDUT 1
+       lappend scriptList $script
+       lappend connectList $connect
+    }
+    # RunSetupScript $connectList $scriptList
+    set runSetupRetVal [RunSetupScript $connectList $scriptList]
+    if {$runSetupRetVal==-1} {
+	unset connectList
+	unset scriptList
+	puts stderr "testSkipped"
+	return -1
+    } elseif { $runSetupRetVal=="REGROUTER_FAILED" } {
+	unset connectList
+	unset scriptList
+	puts stderr $returnFlag
+	flush stderr
+	return $runSetupRetVal
+    }
+    unset connectList
+    unset scriptList
+}
+
+#
+if {$quick == no} {
+if {[set rc [get_DUTs_info]] != 0} {
+    result_error "Error $rc while calling get_DUTs_info.";
+    close_result_file;
+    return -2;
+    set returnFlag 
+}
+
+global stacking DUTs_info
+if {![info exists DUTs_info(regBaseImage)]} {
+    set DUTs_info(regBaseImage) 12.3.2.5
+}
+if {[string tolower $rescue] == "yes"} {
+    for {set i 1} {$i <=$numDUT} {incr i 1} {
+        if {![regexp -nocase $stacking $DUTs_info(DUT$i,platform)] && \
+        ($DUTs_info(DUT$i,priImage) != "$DUTs_info(regBaseImage)" || \
+        $DUTs_info(DUT$i,relMaster) != "release-manager")} {
+    
+            global DUT${i}_IP
+            global tftpServerList
+            global connectionTimeout
+            global defaultRouter
+            global switchPort2DefaultRouter
+            global RouterMode
+            source ../Functionaltest/epm/EPM.tcl; # to get SendBootRomCmd 
+            ################################################
+            set subTest "download/Install rescue image"
+            ################################################
+            result_h2 "$subTest"
+            report_start_test "$subTest"
+            
+            Login $DUTs_info(DUT$i,connect)
+            rebootToBootRom $i
+            
+            result_debug "Configuring the ip address and gateway at BootRom prompt"
+            SendBootRomCmd "configip address [set DUT${i}_IP] gateway $defaultRouter"
+            
+            result_debug "Downloading rescue image from tftp server"
+            
+            if {$switchPort2DefaultRouter != "mgmt"} {
+            result_ok "the case only applicable if network is connected via Mgmt port"
+            report_end_test
+            return 0
+            }
+            set ImageForInstall [downloadImageToTftp -version $DUTs_info(regBaseImage) -userImagePath "$userImagePath"]  
+            #--- Downloading image from bootrom prompt
+            set origConnectionTimeout $connectionTimeout
+            set connectionTimeout 1000
+            SendBootRomCmd "download image [lindex $tftpServerList 0] $ImageForInstall" NULL $fd_res
+            set connectionTimeout $origConnectionTimeout
+            
+            #--- Checking the installation
+            report_start_test "Installing rescue image"
+            #if {$RouterMode == "EXOS"} {
+            #    result_ok "download of image is successfull"
+            #    } else {
+            #    result_error "download of image failed"
+            #    }
+            report_end_test
+            
+            #-- CleanUp
+            Login $DUTs_info(DUT$i,connect)
+            
+            #-- Checking all slots are operational
+            CheckOperational
+        }
+    }
+}
+
+set netConFlag 1
+#check connections between DUTs and Ixia
+if {!$skipCC} {
+    if {[info exists ixiaCh1]} {
+        if {![regexp -nocase "no_ixia" $ixiaCh1]} {
+            set returnFlag [SystemSetup]
+        } else {
+            set returnFlag "connectionOkay"
+        }
+    } else {
+        result_error "Can't find ixia information"
+        set returnFlag "connectionBad"
+    }
+    global defaultRouter
+    global tftpServerList
+    global switchPort2DefaultRouter
+    set tftpServer [lindex $tftpServerList 0]
+    set netConFlag 1
+    set numDUT 1
+    result_h2 "Network port validation"
+    report_start_test "Network port validation"
+    while { [info exists DUT${numDUT}_CONNECT] } {
+        set connect [set DUT${numDUT}_CONNECT]
+        set dut_ip [set DUT${numDUT}_IP]
+        set def_blade [set DUT${numDUT}_DefaultBlade]
+        if { $def_blade != 0 } {
+            set port $def_blade:$switchPort2DefaultRouter
+        } else {
+            set port $switchPort2DefaultRouter
+        }
+        result_h2 "Checking Network port for DUT$numDUT"
+        report_start_test "Checking Network port for DUT$numDUT"
+
+        Login $connect
+        SendACmd "conf default del po all"
+        ConfigGatewayNetwork
+        set ret [CheckCLIPing "ping vr [GetVrString] $tftpServer"]
+        exSleep 5
+        UnconfigGatewayNetwork
+        if { $ret == 1 } {
+            result_ok "Network connection for DUT$numDUT is PASS"
+        } else {
+            result_error "Network connection for DUT$numDUT is FAIL"
+            set netConFlag 0
+        }
+        report_end_test
+        incr numDUT 1
+    }
+    report_end_test
+} else {
+    set returnFlag "connectionOkay"
+}
+
+    if {$setLic == "yes"} {
+        set testDUT 1
+        set numDUT 1
+        while { [info exists DUT${numDUT}_CONNECT] } {
+            puts "# Device $DUTs_info(DUT$numDUT,sysType) Serial Number - $DUTs_info(DUT$numDUT,serial) "
+            if {$DUTs_info(DUT$numDUT,serial) == "null"} {incr numDUT 1; continue}
+                set key [exec keygen -p 4 -n $DUTs_info(DUT$numDUT,serial)]
+                set klist [split $key " "]
+                set key [lindex $klist [expr [llength $klist] - 1]]
+                set DUTs_info(DUT$numDUT,mpls_license) "$key"
+                puts "set DUTs_info(DUT$numDUT,mpls_license) \"$key\""
+                set key [exec keygen -p 16 -n $DUTs_info(DUT$numDUT,serial)]
+                set klist [split $key " "]
+                set key [lindex $klist [expr [llength $klist] - 1]]
+                set DUTs_info(DUT$numDUT,bgp) "$key"
+                puts "set DUTs_info(DUT$numDUT,bgp) \"$key\""
+                if {[regexp -nocase "bd-20|bd-12|bd-10" $DUTs_info(DUT$numDUT,sysType)]} {
+                set key [exec keygen -p 8 -n $DUTs_info(DUT$numDUT,serial)]
+                set klist [split $key " "]
+                set key [lindex $klist [expr [llength $klist] - 1]]
+                set DUTs_info(DUT$numDUT,flowvsr_license) "$key"
+                puts "set DUTs_info(DUT$numDUT,flowvsr_license) \"$key\""
+                set key [exec keygen -p 2 -n $DUTs_info(DUT$numDUT,serial)]
+                set klist [split $key " "]
+                set key [lindex $klist [expr [llength $klist] - 1]]
+                set DUTs_info(DUT$numDUT,mef_license) "$key"
+                puts "set DUTs_info(DUT$numDUT,mef_license) \"$key\""
+           }
+           if {[regexp -nocase "x8|670|770" $DUTs_info(DUT$numDUT,sysType)]} {
+               set key [exec keygen -p 12 -n $DUTs_info(DUT$numDUT,serial)]
+               set klist [split $key " "]
+               set key [lindex $klist [expr [llength $klist] - 1]]
+               set DUTs_info(DUT$numDUT,trill_license) "$key"
+               puts "set DUTs_info(DUT$numDUT,trill_license) \"$key\""
+           }
+           if {[regexp -nocase "460|670|770|440|430" $DUTs_info(DUT$numDUT,sysType)]} {
+               set key [exec keygen -p 10 -n $DUTs_info(DUT$numDUT,serial)]
+               set klist [split $key " "]
+               set key [lindex $klist [expr [llength $klist] - 1]]
+               set DUTs_info(DUT$numDUT,avb_license) "$key"
+               puts "set DUTs_info(DUT$numDUT,avb_license) \"$key\""
+           }
+           set key [exec keygen -p 11 -n $DUTs_info(DUT$numDUT,serial)]
+           set klist [split $key " "]
+           set key [lindex $klist [expr [llength $klist] - 1]]a
+           set DUTs_info(DUT$numDUT,openflow_license) "$key"
+           puts "set DUTs_info(DUT$numDUT,openflow_license) \"$key\""
+           set key [exec keygen -p 32 -n $DUTs_info(DUT$numDUT,serial)]
+           set klist [split $key " "]
+           set key [lindex $klist [expr [llength $klist] - 1]]
+           set DUTs_info(DUT$numDUT,ssh_license) "$key"
+           puts "set DUTs_info(DUT$numDUT,ssh_license) \"$key\""
+           set key [exec keygen -d 3 -n $DUTs_info(DUT$numDUT,serial)]
+           set klist [split $key " "]
+           set key [lindex $klist [expr [llength $klist] - 1]]
+           set DUTs_info(DUT$numDUT,advancededge_core) "$key"
+           puts "set DUTs_info(DUT$numDUT,advancededge_core) \"$key\""
+           set key [exec keygen -d 1 -n $DUTs_info(DUT$numDUT,serial)]
+           set klist [split $key " "]
+           set key [lindex $klist [expr [llength $klist] - 1]]
+           set DUTs_info(DUT$numDUT,advancedcore_edge) "$key"
+           puts "set DUTs_info(DUT$numDUT,advancedcore_edge) \"$key\""
+           set key [exec keygen -d 4 -n $DUTs_info(DUT$numDUT,serial)]
+           set klist [split $key " "]
+           set key [lindex $klist [expr [llength $klist] - 1]]
+           set DUTs_info(DUT$numDUT,advancededge_advancedcore) "$key"
+           puts "set DUTs_info(DUT$numDUT,advancededge_advancedcore) \"$key\""
+           set key [exec keygen -d 4 -n $DUTs_info(DUT$numDUT,serial)]
+           set klist [split $key " "]
+           set key [lindex $klist [expr [llength $klist] - 1]]
+           set DUTs_info(DUT$numDUT,core_advancedcore) "$key"
+           puts "set DUTs_info(DUT$numDUT,core_advancedcore) \"$key\""
+           set key [exec keygen -d 2 -n $DUTs_info(DUT$numDUT,serial)]
+           set klist [split $key " "]
+           set key [lindex $klist [expr [llength $klist] - 1]]
+           set DUTs_info(DUT$numDUT,edge_advancededge) "$key"
+           puts "set DUTs_info(DUT$numDUT,edge_advancededge) \"$key\""
+           set key [exec keygen -d 3 -n $DUTs_info(DUT$numDUT,serial)]
+           set klist [split $key " "]
+           set key [lindex $klist [expr [llength $klist] - 1]]
+           set DUTs_info(DUT$numDUT,edge_core) "$key"
+           puts "set DUTs_info(DUT$numDUT,edge_core) \"$key\""
+           incr numDUT 1
+        }
+        set testDUT 1
+        while { [info exists DUT${testDUT}_CONNECT] } {
+            Login $DUTs_info(DUT${testDUT},connect)
+            # ------------------------------------------------
+            # Disable the 30 day trial license
+            # ------------------------------------------------
+            set parameterList ""
+            lappend parameterList "{30 days Trial} exist"
+            set result [CheckKeyValue "show license" $parameterList -reportResults 0]
+            if {$result == "ok"} {
+                EnableDebugMode
+                SendACmd "debug epm clear trial-license"
+                CheckReboot
+            }
+            DisableDebugMode
+
+            # ------------------------------------------------
+            # Restore License to Core if not at Core
+            # For lync L2-Edge
+            # ------------------------------------------------
+            # Set the license keys dynamically. Passing a 1 as second Arg sets
+            set varout [_SetSwitchLicVars $testDUT 1]
+            set parameterList ""
+            if {[regexp $bcmLynx $DUTs_info(DUT$testDUT,platform)]} {
+                lappend parameterList "L2.* exist";
+            } else {
+                lappend parameterList "{core} exist";
+            }
+            if {[CheckKeyValue "show license" $parameterList]!="ok"} {
+                if {1} {
+                    set parameterList ""
+                    lappend parameterList "{Enabled License Level:} 0 1"
+                    lappend parameterList "{Enabled License Level:} 1 1"
+                    set getLicense [GetKeyValue "show license" $parameterList]
+                    if {[lindex [lindex $getLicense 0] 1] != ""} {
+                        set temp [split [lindex $getLicense 0] " "]
+                        set currentLicense [concat [lindex $temp 0][lindex $temp 1]]
+                    } else {
+                        set temp [split [lindex $getLicense 0] " "]
+                        set currentLicense [lindex $temp 0]
+                    }
+                    if {[EnableLicense \
+                        [string tolower $currentLicense] core] == "error"} {
+                        if {![regexp $pioneerPlatform $DUTs_info(DUT$testDUT,platform)]} {
+                            return error
+                        }
+                    }
+                } else {
+                    if {![regexp $pioneerPlatform $DUTs_info(DUT$testDUT,platform)]} {
+                        return error
+                    }
+                }
+            }
+            unset parameterList
+            # ------------------------------------------------
+            # Restore Feature Packs if they are supported on this platform
+            # ------------------------------------------------
+            if {![regexp -nocase "stack" $DUTs_info(DUT${testDUT},sysName)] &&
+                $DUTs_info(DUT${testDUT},serial) != "null"} {
+                set fvarout [_SetFeatureLicenses ${testDUT}]
+            }
+            ;# ------------- End Feature License -----------
+            incr testDUT
+        }
+     } ;# ------------ End of all Licensing -----------
+
+
+report_end_test
+incr numDUT -1
+
+} else {
+    if {[set rc [get_DUTs_info]] != 0} {
+        result_error "Error $rc while calling get_DUTs_info.";
+        close_result_file;
+        return -2;
+    } else {
+        set netConFlag 1
+        for {set i 1} {$i<=$dutCount} {incr i} {
+            Login $DUTs_info(DUT$i,connect)
+            result_debug "\n-----------------------"
+            result_debug "DUT $i $DUTs_info(DUT$i,imageSel)"
+            result_debug "DUT $i $DUTs_info(DUT$i,imageBooted)"
+            result_debug "DUT $i $DUTs_info(DUT$i,version)"
+            result_debug "DUT $i $DUTs_info(DUT$i,priImage)"
+            result_debug "DUT $i $DUTs_info(DUT$i,secImage)"
+            if {$vv != "NULL"} {
+                if {$DUTs_info(DUT$i,priImage) == "$vv" && $target == "primary"} {
+                    report_start_test "DUT$i Primary is $vv";result_ok "";report_end_test;
+                } elseif {$target == "primary"} {
+                    report_start_test "DUT$i BAD Found $DUTs_info(DUT$i,priImage) \
+                                 on primary";result_error "";report_end_test;
+                }
+                if {$DUTs_info(DUT$i,secImage) == "$vv" && $target == "secondary"} {
+                    report_start_test "DUT$i Secondary is $vv";result_ok "";report_end_test;
+                } elseif {$target=="secondary"} {
+                    report_start_test "DUT$i Found $DUTs_info(DUT$i,secImage) on \
+                                 secondary";result_error "";report_end_test;
+                }
+                if {$DUTs_info(DUT$i,imageBooted) == "$target"} {
+                    report_start_test "DUT$i image booted is $target";result_ok "";report_end_test;
+                } else {
+                    report_start_test "DUT$i $DUTs_info(DUT$i,imageBooted) is \
+                                 booted";result_error "";report_end_test;
+                }            
+            }
+        }
+        set returnFlag "connectionOkay"
+    }
+
+}
+
+
+
+if {$fd_res != ""} {
+    catch {flush $fd_res} result
+    if {$result != ""} { result_error "$result" }
+}
+save_test_report "[get_result_dir]/report.exr"
+gen_text_report "[get_result_dir]/report.exr" "stdout" "[file tail [pwd]]" $cfgFile
+close_result_file
+set tEndTime [clock seconds]
+set testDuration [expr $tEndTime-$tStartTime]
+set testSec  [expr $testDuration % 60]
+set testMin  [expr $testDuration / 60]
+set testHour [expr $testMin / 60]
+set testMin  [expr $testMin % 60]
+
+
+result_debug  "\n\n*** Time for verify $cfgFile ( $testHour hours, $testMin minutes, \
+              $testSec seconds )\n\n"
+
+if { $returnFlag == "connectionOkay" &&  $netConFlag==1 } {
+     #result_ok "Check connection - PASS\n\n"
+} else {
+    result_error "Connections between DUTs and Ixia or network connections \
+                 are not detected properly"
+    result_error "Please make sure physical connections match with config setup file"
+}
+  gen_text_report "[get_result_dir]/report.exr" "[get_result_dir]/report.txt" "[file tail [pwd]]" $cfg

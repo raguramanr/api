@@ -1,0 +1,597 @@
+################################################################## 
+# Procedure Name: Platform_IsModular
+#   
+# Description: Determine if platform is modular.
+#
+# Input args:
+#              [-dut <DUT_number>] if "-dut" is omitted, then the
+#              current DUT (whichDutNow) is used.
+#                
+# Output args: 
+#              none
+#
+# Return value:
+#              0 if platform is not modular
+#              1 if platform is modular
+#              ERROR message for invalid DUT number
+#
+# Typical usage: 
+#              Login $DUTs_info(DUT1,connect);
+#              if {[Platform_IsChassis]} {...}
+#              ...
+#              if {[Platform_IsChassis -dut 2] == 1} {...}
+#
+# Category: Utility
+##################################################################
+proc Platform_IsModular {args} {
+    #
+    # Chassis platform names defined in main/cfg/common.cfg.
+    global chassis;
+    global whichDutNow;
+
+    parse_args [ProcName] $args {
+        dut 1
+    }
+
+    if {![IsInteger $dut] || $dut < 0} {
+        return "ERROR: Invalid DUT $dut.";
+    }
+
+    #
+    # If no DUT is specified, use the current one.
+    if {[llength $args] == 0} {
+        set dut $whichDutNow;
+    }
+
+    set rc [regexp -nocase -- $chassis [GetPlatform DUT${dut}]];
+    return $rc;
+};
+
+
+################################################################## 
+# Procedure Name: Platform_IsChasses
+#   
+# Description: Determine if platform is a chassis.
+#
+# Input args:
+#              [-dut <DUT_number>] if "-dut" is omitted, then the
+#              current DUT (whichDutNow) is used.
+#                
+# Output args: 
+#              none
+#
+# Return value:
+#              0 if platform is not a chassis
+#              1 if platform is a chassis
+#              ERROR message for invalid DUT number
+#
+# Typical usage: 
+#              Login $DUTs_info(DUT1,connect);
+#              if {[Platform_IsChassis]} {...}
+#              ...
+#              if {[Platform_IsChassis -dut 2] == 1} {...}
+#
+# Category: Utility
+##################################################################
+proc Platform_IsChassis {args} {
+    #
+    # Chassis platform names defined in main/cfg/common.cfg.
+    global chassis stacking;
+    global whichDutNow;
+
+    parse_args [ProcName] $args {
+        dut 1
+    }
+
+    if {![IsInteger $dut] || $dut < 0} {
+        return "ERROR: Invalid DUT $dut.";
+    }
+
+    #
+    # If no DUT is specified, use the current one.
+    if {[llength $args] == 0} {
+        set dut $whichDutNow;
+    }
+
+    set plat [GetPlatform DUT${dut}];
+    set r1 [regexp -nocase -- $chassis $plat];
+    set r2 [regexp -nocase -- $stacking $plat];
+    set rc [expr $r1 && !($r2)];
+    return $rc;
+};
+
+
+################################################################## 
+# Procedure Name: Platform_IsStack
+#   
+# Description: Determine if platform is a stack.
+#
+# Input args:
+#              [-dut <DUT_number>] if "-dut" is omitted, then the
+#              current DUT (whichDutNow) is used.
+#                
+# Output args: 
+#              none
+#
+# Return value:
+#              0 if platform is not a stack
+#              1 if platform is a stack
+#              ERROR message for invalid DUT number
+#
+# Typical usage: 
+#              Login $DUTs_info(DUT1,connect);
+#              if {[Platform_IsStack]} {...}
+#              ...
+#              if {[Platform_IsStack -dut 2] == 1} {...}
+#
+# Category: Utility
+##################################################################
+proc Platform_IsStack {args} {
+    #
+    # Stacking platform names defined in main/cfg/common.cfg.
+    global stacking;
+    global whichDutNow;
+
+    parse_args [ProcName] $args {
+        dut 1
+    }
+
+    if {![IsInteger $dut] || $dut < 0} {
+        return "ERROR: Invalid DUT $dut.";
+    }
+
+    #
+    # If no DUT is specified, use the current one.
+    if {[llength $args] == 0} {
+        set dut $whichDutNow;
+    }
+
+    set rc [regexp -nocase -- $stacking [GetPlatform DUT${dut}]];
+    return $rc;
+};
+
+
+################################################################## 
+# Procedure Name: Platform_Get_Mgmt_Node_String
+#   
+# Description: Used to determine name of management node for use
+# in checking output of commands like "show switch" or "show slot".
+#
+# Input args:
+#              [-dut <DUT_number>] if "-dut" is omitted, then the
+#              current DUT (whichDutNow) is used.
+#                
+# Output args: 
+#              none
+#
+# Return value:
+#              Platform-dependent, but currently "MM" for Everest
+#              and Pioneer platforms, "Slot" for Stacking, and
+#              "MSM" for all others.
+#
+# Typical usage: 
+#              Login $DUTs_info(DUT1,connect);
+#              set mType [Platform_Get_Mgmt_Node_String];
+#              lappend checkList "${mtype}-A";
+#              CheckKeyValue "show switch" $checkList;
+#              ...
+#              set mType2 [Platform_Get_Mgmt_Node_String -dut 2];
+#
+# Category: Utility
+##################################################################
+proc Platform_Get_Mgmt_Node_String {args} {
+    #
+    # Chassis platform names defined in main/cfg/common.cfg.
+    global chassis everestChassis pioneerChassis stacking;
+    global whichDutNow;
+
+    parse_args [ProcName] $args {
+        dut 1
+    }
+
+    if {![IsInteger $dut] || $dut < 0} {
+        return "ERROR: Invalid DUT $dut.";
+    }
+
+    #
+    # If no DUT is specified, use the current one.
+    if {[llength $args] == 0} {
+        set dut $whichDutNow;
+    }
+
+    set platform [GetPlatform DUT${dut}];
+
+    if {![Platform_IsModular -dut $dut]} {
+        return "ERROR: DUT${dut} platform type, $platform, is not a modular platform.";
+    }
+
+    #
+    # Everest & Pioneer platforms use "MM."
+    if {[regexp -nocase -- $everestChassis|$pioneerChassis $platform] == 1} {
+        return MM
+    }
+
+    #
+    # Stacking uses "Slot."
+    if {[regexp -nocase -- $stacking $platform] == 1} {
+        return Slot;
+    }
+
+    #
+    # All other chassis platforms use "MSM."
+    return MSM;
+};
+
+
+################################################################## 
+# Procedure Name: Platform_NumSlots
+#   
+# Description: Returns the number of slots for modular devices.
+#
+# Input args:
+#               [-dut <DUT_number>]     If "-dut" is omitted, then the
+#                                       current DUT (whichDutNow) is used.
+#                
+# Output args: 
+#               none
+#
+# Return value:
+#               Number of slots supported by the platform.
+#
+# Typical usage:
+#               set numSlots [Platform_NumSlots];
+#               set numSlots2 [Platform_NumSlots -dut 2];
+#
+# Category: Utility
+##################################################################
+proc Platform_NumSlots {args} {
+    global DUTs_info whichDutNow;
+
+    parse_args [ProcName] $args {
+        dut 1
+    }
+
+    if {![IsInteger $dut] || $dut < 0} {
+        return "ERROR: Invalid DUT $dut.";
+    }
+
+    #
+    # If no DUT is specified, use the current one.
+    if {[llength $args] == 0} {
+        set dut $whichDutNow;
+    }
+
+    return $DUTs_info(DUT$dut,numSlots);
+};
+
+
+################################################################## 
+# Procedure Name: Platform_GetBD8KMSMSlotList
+#   
+# Description: Returns a list of slots that can contain MSMs.
+#
+# Input args:
+#               [-dut <DUT_number>]     If "-dut" is omitted, then the
+#                                       current DUT (whichDutNow) is used.
+#                
+# Output args: 
+#               none
+#
+# Return value:
+#               A TCL list containing the slot numbers for the device
+#               that can contain MSMs.
+#
+# Typical usage:
+#               set msmSlotList [Platform_GetBD8KMSMSlotList];
+#
+# Category: Utility
+##################################################################
+proc Platform_GetBD8KMSMSlotList {args} {
+    #
+    # Chassis platform names defined in main/cfg/common.cfg.
+    global bd8kChassis;
+    global whichDutNow;
+
+    parse_args [ProcName] $args {
+        dut 1
+    }
+
+    if {![IsInteger $dut] || $dut < 0} {
+        return "ERROR: Invalid DUT $dut.";
+    }
+
+    #
+    # If no DUT is specified, use the current one.
+    if {[llength $args] == 0} {
+        set dut $whichDutNow;
+    }
+
+    set platform [GetPlatform DUT${dut}];
+
+    if {![regexp -nocase -- $bd8kChassis $platform]} {
+        return "ERROR: Platform_GetBD8KMSMSlotList can't be run on a $platform platform.";
+    }
+
+    set numSlots [Platform_NumSlots -dut $dut];
+    switch $numSlots {
+        6  {
+            # BD-8806 can have MSMs in slots 3 & 4.
+            set msmSlotList [list 3 4];
+        }
+        10 {
+            # BD-8810 can have MSMs in slots 5 & 6.
+            set msmSlotList [list 5 6];
+        }
+        default {
+            return "ERROR: Platform has unknown number of slots $numSlots.";
+        }
+    }
+
+    return $msmSlotList;
+};
+
+
+################################################################## 
+# Procedure Name: Platform_HasMgmtIO
+#   
+# Description: Determines if the specified device supports I/O ports on
+#   the management modules.
+#
+# Input args:
+#               [-dut <DUT_number>]     If "-dut" is omitted, then the
+#                                       current DUT (whichDutNow) is used.
+#                
+# Output args: 
+#               none
+#
+# Return value:
+#               0   If the platform does not support I/O ports on the
+#                   management modules.
+#               1   If the platform does support I/O ports on the
+#                   management modules.
+#
+# Typical usage:
+#               if {[Platform_HasMgmtIO]} {
+#                   puts "Skipping test.";
+#                   return;
+#               }
+#
+# Category: Utility
+##################################################################
+proc Platform_HasMgmtIO {args} {
+    #
+    # Chassis platform names defined in main/cfg/common.cfg.
+    global bd8kChassis everestChassis gnssChassis pioneerChassis stacking;
+    global whichDutNow;
+
+    parse_args [ProcName] $args {
+        dut 1
+    }
+
+    if {![IsInteger $dut] || $dut < 0} {
+        return "ERROR: Invalid DUT $dut.";
+    }
+
+    #
+    # If no DUT is specified, use the current one.
+    if {[llength $args] == 0} {
+        set dut $whichDutNow;
+    }
+
+    set platform [GetPlatform DUT${dut}];
+
+    #
+    # For stackable switches, whether standalone or in a stack, I/O ports
+    # are always on the same "slot" as a management CPU.
+    if {![Platform_IsModular -dut $dut] || [regexp -nocase -- $stacking $platform]} {
+        return 1;
+    }
+
+    #
+    # For Everest (BD-X), Genesis (BD-10K, BD-12K), and Pioneer (BD-20K),
+    # there are no I/O ports on the management modules.
+    if {[regexp -nocase -- $everestChassis|$gnssChassis|$pioneerChassis $platform]} {
+        return 0;
+    }
+
+    #
+    # For BD-8K platforms, need to check to see if there are any MSM-IO
+    # modules present in the system
+    if {[regexp -nocase -- $bd8kChassis $platform]} {
+        set msmSlotList [Platform_GetBD8KMSMSlotList -dut $dut];
+        return [any "slot {expr !\[string equal \[DutSlotType $dut \$slot] NONE]}" $msmSlotList];
+    }
+
+    #
+    # If execution has made it here, then this is an unkown platform.
+    return "ERROR: Unknown platform $platform.";
+};
+
+
+################################################################## 
+# Procedure Name: Platform_IsPortMgmtIO
+#   
+# Description: Determines if the specified I/O port on the specified device
+#   resides on a management module.
+#
+# Input args:
+#               dutPort                 The I/O port, from the DUT's point-
+#                                       of-view, to check.
+#               [-dut <DUT_number>]     If "-dut" is omitted, then the
+#                                       current DUT (whichDutNow) is used.
+#                
+# Output args: 
+#               none
+#
+# Return value:
+#               0   If the specified port does not reside on a
+#                   management module.
+#               1   If the specified port does reside on a
+#                   management module.
+#
+# Typical usage:
+#               set dutPort [MapDUTPortID 1 1];
+#               if {[Platform_IsPortMgmtIO $dutPort -dut 1]} {
+#                   puts "$dutPort is an MSMIO port.";
+#               }
+#
+# Category: Utility
+##################################################################
+proc Platform_IsPortMgmtIO {dutPort args} {
+    #
+    # Chassis platform names defined in main/cfg/common.cfg.
+    global bd8kChassis stacking;
+    global whichDutNow;
+
+    parse_args [ProcName] $args {
+        dut 1
+    }
+
+    if {![IsInteger $dut] || $dut < 0} {
+        return "ERROR: Invalid DUT $dut.";
+    }
+
+    #
+    # If no DUT is specified, use the current one.
+    if {[llength $args] == 0} {
+        set dut $whichDutNow;
+    }
+
+    #
+    # If platform doesn't even support I/O ports on the management
+    # module, then don't bother continuing.
+    if {![Platform_HasMgmtIO -dut $dut]} {
+        return 0;
+    }
+
+    #
+    # For standalone stackable switches, I/O ports are always on the
+    # same "slot" as a management CPU.
+    if {![Platform_IsModular -dut $dut]} {
+        return 1;
+    }
+
+    set platform [GetPlatform DUT${dut}];
+
+    #
+    # For BD-8K platforms, need to check to see if the port resides on a
+    # MSM-IO module.
+    if {[regexp -nocase -- $bd8kChassis $platform]} {
+        set slotToTest [lindex [split $dutPort :] 0];
+        set numSlots [Platform_NumSlots -dut $dut];
+
+        if {![IsInteger $slotToTest] ||
+            $slotToTest < 0 || $slotToTest > $numSlots} {
+            return "ERROR: Invalid slot number, $slotToTest, given.";
+        }
+
+        set msmSlotList [Platform_GetBD8KMSMSlotList -dut $dut];
+        return [any "slot {expr \$slot == $slotToTest}" $msmSlotList];
+    }
+
+    #
+    # For stacks, need to check to see if the port resides on either the
+    # MASTER or BACKUP slot.
+    if {[regexp -nocase -- $stacking $platform]} {
+        #
+        # Stacking slot names defined in test bed configuration file.
+        global DUT${dut}_Stacking_msma_slot DUT${dut}_Stacking_msmb_slot;
+        if {![info exists DUT${dut}_Stacking_msma_slot]} {
+            return "ERROR: MSM-A slot for stacking DUT${dut} not defined!";
+        }
+        if {![info exists DUT${dut}_Stacking_msmb_slot]} {
+            return "ERROR: MSM-B slot for stacking DUT${dut} not defined!";
+        }
+
+        set slotToTest [lindex [split $dutPort :] 0];
+        set numSlots [Platform_NumSlots -dut $dut];
+
+        if {![IsInteger $slotToTest] ||
+            $slotToTest < 0 || $slotToTest > $numSlots} {
+            return "ERROR: Invalid slot number, $slotToTest, given.";
+        }
+
+        return [expr $slotToTest == [set DUT${dut}_Stacking_msma_slot] || \
+                     $slotToTest == [set DUT${dut}_Stacking_msmb_slot]];
+    }
+
+    #
+    # If execution has made it here, then this is an unkown platform.
+    return "ERROR: Unknown platform $platform.";
+};
+################################################################## 
+# Procedure Name: AssignSwDevPlatform
+#   
+# Description: Assign all SysTypes to a sw dev test bed
+#
+# Input args:   -swdevplats x620 Aspen Sonoma
+#               -systypes $bcmx620 $bd8kChassis $bd8kChassis
+#                
+# Output args: 
+#               global set for platform passed in
+#               set x670g2_48 $bcmx620
+#
+#
+# Category: Utility
+##################################################################
+proc DevRegAlias {args} {
+    parse_args DevRegAlias $args {
+        swdevplats "null"
+        systypes "null"
+        iFamily "null"
+    }
+
+    global DEVREG IMAGEFAMILYPLATFORMS  IMAGEFAMILYSYSTYPES IMAGEFAMILIES
+    if {![info exists DEVREG(server,allPlatforms)]} {
+        set DEVREG(server,allPlatforms) ""
+    }
+
+    if {[lsearch $IMAGEFAMILIES $iFamily] < 0} {
+        puts "$iFamily is an illegal image family: Use:\n$IMAGEFAMILIES"
+        exit;
+    }
+
+    foreach swdevplat $swdevplats {
+        global $swdevplat
+
+        # Remove the dependency on Util/runReg.cfg for rest of harness
+        if {[lsearch $DEVREG(server,allPlatforms) $swdevplat] < 0} {
+            lappend DEVREG(server,allPlatforms) $swdevplat
+        }
+        if {$iFamily!="null"} {
+            lappend IMAGEFAMILYPLATFORMS($iFamily) $swdevplat
+            set lowerPlat [string tolower $swdevplat]
+            set DEVREG(platImageType,$lowerPlat) $iFamily
+            if {![info exists IMAGEFAMILYSYSTYPES($iFamily)]} {
+                set IMAGEFAMILYSYSTYPES($iFamily) $systypes
+            } else {
+                append IMAGEFAMILYSYSTYPES($iFamily) "|$systypes"
+            }
+        }
+        set $swdevplat "$systypes"
+    }
+}
+######################################################################
+# Procedure: GetImageFamilyFromSysType
+#
+#
+#
+######################################################################
+proc GetImageFamilyFromSysType {sysType} {
+    global IMAGEFAMILIES IMAGEFAMILYSYSTYPES
+
+    puts "\nFind the image family for sysType $sysType"
+    #Due to multi word sysTypes with VPEX. We need to make sure 
+    #  that VPEX families are in the front of the list and searched
+    #  first of the second VPEX word will match the stackable
+    foreach ifam $IMAGEFAMILIES {
+        puts "searching $ifam"
+        if {[regexp -nocase "$IMAGEFAMILYSYSTYPES($ifam)" "$sysType"]} {
+            puts "$sysType is a $ifam family platform"
+            return $ifam
+        }
+    }
+    return "nosupp"
+}
+
+

@@ -1,0 +1,462 @@
+#!/usr/bin/tclsh
+
+global curAutoRoot
+global MAIN env
+set skipCC 0
+global skipCC
+set MAIN(CCIMAINDEBUG) 0
+set MAIN(initFile) "NULL"
+set MAIN(SWDEVXTERM) ""
+set MAIN(initAdminCheck) 1;# first login check if the console is at a user prompt.
+set TRYFAILSAFE "true"
+#
+# EY-07-17-2012: Catch source command in case of failure.
+if {[catch {source ../Lib/mainLib.tcl} res]} {
+    puts "*** WARNING: Unable to source mainLib.tcl: ***";
+    puts "$res";
+    return -1;
+}
+if {[catch {source ../main/runReg.cfg} res]} {
+    puts "*** WARNING: Unable to source runReg.cfg: ***";
+    puts "$res";
+    return -1;
+}
+
+#
+# EY-07-17-2012: common.cfg is sourced later in the script.
+#source cfg/common.cfg
+
+package require Tclx
+
+
+
+if {$tcl_platform(platform) == "windows"} {
+      load "expect52.dll"
+} else {
+  load [lindex [glob "/usr/lib/libexpect*so*"] 0]
+}
+
+
+set curLocation [pwd]
+set curDirList [split [string trim [string trim $curLocation ".."] "/"] "/"]
+set v 0;
+set pathList ""
+set curAutoRoot ""
+foreach cd $curDirList {
+    if {$cd == "main" || $cd == "Lib" || $cd == "Util"} {
+        for {set x 0} {$x<$v} {incr x} {
+            lappend pathList [lindex $curDirList $x]
+        }
+        set curAutoRoot "/[join $pathList "/"]"
+    } else {
+        incr v;
+    }
+}
+
+set LIB_PATH "./../Lib"
+set auto_path_temp ""
+foreach var $auto_path {
+   set var1 [split $var "/"]
+   if {![regexp -nocase "ixia" $var1]} {
+      lappend auto_path_temp $var
+   }
+}
+
+set auto_path $auto_path_temp
+lappend auto_path $LIB_PATH
+puts "DEBUG: Appending $LIB_PATH to autopath:$auto_path"
+
+gen_index "./../Lib"
+
+set curAutoRoot [_setCurrentAutoDir]
+puts "Current auto Root $curAutoRoot"
+set MAIN(autoRoot) $curAutoRoot;# More portable
+set MAIN(LIB_PATH) $LIB_PATH
+set SYSTEM_LIB_PATH ${curAutoRoot}/SystemTest/Lib
+set MAIN(SYSTEM_LIB_PATH) $SYSTEM_LIB_PATH
+
+proc print_usage {} {
+   puts "\r"
+   puts {Usage: checkConnection.tcl -cfg <config file> [-clean|c <yes|y|no|n|cli>]}
+   puts {                  -power|p <1|0> -verbose|v <yes|y|no|n> -TrafficGen <ixia|stc>}
+   puts {   <cfg>: Path of the config file name }
+   puts {   [<clean|c>]: Unconfig sw, clean up cli, or none prior the checks. <yes|y|no|n|cli|c> Default: yes}
+   puts {   [defxsf|dx]: <1|0> Create default.xsf on the DUTs}
+   puts {   [usePrimary|pri]: <1|0> use ima primary on all duts pre setupScipt. Only works with -clean yes. Def:0}
+   puts {   [interactive|int]: <1|0> Go to auto shell immediately upon failure.}
+   puts {   [poweron|p]: <1|0> Power on just in case the power cycler has the duts off }
+   puts {   [verbose|v]: <yes|y|no|n>  On CC failure, dump all DUT logs,mem,files,processes etc Default: no}
+   puts {   }
+   puts {Typical "./checkConnections.tcl -cfg cfg/p1_x670_ipr.cfg -clean cli"  }
+   puts "\r"
+}
+
+# checking command parameters 
+if {$argc<1} {
+      puts "Not enough parameters"
+      print_usage
+      #
+      # EY-07-17-2012: Return unique error code.
+      return -2;
+}
+global  TrafficGen
+parse_args main $argv {
+      cfg "null"
+      clean "yes"
+      c "null"
+      TrafficGen ""
+      poweron 0
+      p "null"
+      verbose "no"
+      v "null"
+      defxsf 1
+      dx     0
+      interactive 0
+      int         "null"
+      usePrimary 0
+      pri         "null"
+}
+
+
+set cfgFile ""
+set harness "tcl"
+set passCount 0
+set failCount 0
+set skipCount 0
+
+#
+# EY-07-17-2012: Clean-up error messages and return a unique error code.
+puts "PWD [pwd]"
+if [catch {source "cfg/common.cfg"} rea] {
+      puts "*** WARNING: Unable to source common.cfg:                    ***";
+      puts "$rea";
+      puts "*** WARNING: Application level variables may not be defined. ***"
+      return -3;
+}
+
+
+if {$cfg != "null"} {
+      if {![regexp -nocase "^cfg" $cfg] } {
+      	    set cfgFile [format %s/%s cfg $cfg]
+      	    set cfgFile [string trim $cfgFile];
+      } else {
+          set cfgFile $cfg
+      }
+}
+#Handle verbos short values
+if {$v != "null"} {
+    set verbose $v
+}
+set VERBOSE "no"
+switch -nocase -regexp $verbose {
+    y.* {
+        # VERBOSE will be a global used in SystemSetup
+        set VERBOSE yes
+    }
+    n.* {
+        set VERBOSE no
+    } default {
+        set VERBOSE no
+    }
+}
+
+# Handle poweron short values
+if {$p != "null"} {
+    set poweron $p
+}
+# Handle clean short values
+if {$c != "null"} {
+    set clean $c
+}
+# Handle break point auto shell short arg
+if {$int != "null"} {
+    set interactive $int
+}
+# Handle usePrimary short arg
+if {$pri != "null"} {
+    set usePrimary $pri
+}
+switch -nocase -regexp $clean {
+    y.* {
+        set clean yes
+    }
+    n.* {
+        set clean no
+    }
+    c.* {
+        set clean cli
+    } default {
+        set clean yes
+    }
+}
+
+puts "Using config file: ($cfgFile)"
+set sourceFile $cfgFile
+
+#
+# EY-07-17-2012: Clean-up error messages and return a unique error code.
+if {[file exists $cfgFile] == 0} {
+    puts "*** ERROR: Cannot find config file: $cfgFile";
+    return -4;
+}
+
+puts "************** ABOUT TO source $cfgFile *****************"
+
+#
+# EY-07-17-2012: Catch source command in case of failure.
+if {[catch {source $cfgFile } reason]} {
+    puts "*** ERROR occured while trying to source $cfgFile:";
+    puts "$reason";
+    return -5;
+}
+# ------------------------------------------------------------------
+# Register with tracking db and check for conflicts
+# ------------------------------------------------------------------
+set MAIN(TrackInit) [OpenTrackingPort -cfg "[file tail $cfgFile]" -script_name "checkConnections" ]
+
+global configurationFile
+set configurationFile $cfgFile
+set MAIN(cfg) [file tail $cfgFile]
+# Set the xterm title if it is enabled in common.cfg or cfg
+SetTerminalTitle -title "CheckConn $MAIN(cfg)"
+############ Modify by arun ###############
+source ../Lib/mapping.tcl
+
+###########################################
+
+# Open the initFile
+set MAIN(initFile) [GetInitFileName $curAutoRoot $cfg]
+catch {open $MAIN(initFile) "w"} MAIN(ifPipe)
+if {[regexp -nocase "denied" $MAIN(ifPipe)]} {
+    puts "@\n@\nNO INIT FILE WILL BE CREATED. ERROR OPENING FILE\n@\n@"
+    set MAIN(ifPipe) NULL
+}
+ 
+if {[info exists ixiaCh1] && $ixiaCh1 != "NO_IXIA"} {
+    puts "****** the ixia chassis is $ixiaCh1";
+    puts "****** the ixia path is $ixiaPath($ixiaCh1)";
+    set TrafficGen ixia
+} elseif {[info exists SPIRENTCH1]} {
+    puts "****** The Spirent Chassis is $SPIRENTCH1 ******"
+    foreach key [array names env] {
+        puts "$key=$env($key)"
+    }
+puts "\n\n"
+    set TrafficGen stc
+    set ::LABSERVER $stcLabserver($SPIRENTCH1)
+    set env(IXIA_HOME) null
+    lappend auto_path "/auto/ixia_5_70/lib/mpexpr-1.1/"
+    overWriteProcs $LIB_PATH [file join $LIB_PATH spirent]
+    source [file join $LIB_PATH ePTLib ePTUtils.tcl]
+    logcmd lappend auto_path $stcPath($SPIRENTCH1)
+puts "STC PATH $auto_path"
+puts "STC env path: $env(PATH)"
+    stcInit $LABSERVER
+    package require Mpexpr
+    puts "\n\nPackage Require SpirentTestCenter"
+    logcmd package require SpirentTestCenter
+    GenerateDUTPortMapping; # Add here temporarily b/c called in SystemSetup
+    ReservePorts
+}
+
+if {[info exists ixiaPath($ixiaCh1)] && $TrafficGen == "ixia"} {
+    SetIxiaEnv "$ixiaPath($ixiaCh1)"
+    puts "****** The ixia path is $ixiaPath($ixiaCh1)";
+}
+
+if {$tcl_platform(platform) == "windows"} {
+    lappend auto_path "C:/Program Files/Ixia/TclScripts/Lib/ixTcl1.0"
+} else {
+    lappend auto_path [file join $env(HOME) "ixia/lib/mpexpr-1.0"]
+    lappend auto_path [file join $env(HOME) "ixia/lib/ixTcl1.0"]
+    lappend auto_path [file join $env(HOME) "ixia/lib/dp4.0"]
+}
+
+# mode setup   
+set clean [string tolower $clean]
+switch $clean  {
+       yes      { puts "#\nClean checkConnection (with unconfig).\n#"}
+       no       { puts "#\ncheckConnection without unconfig. May fail if switch conflicting cfg.\n#" }
+       cli      { puts "#\ncheckConnection without unconfig. Send CLI to insure no conflicting cfg.\n#" }
+       default  { puts "No Match - default to clean"}
+}
+      
+# Create supporting directories if they don't exist.
+_createSupportDirectories -dirList "Report Result Tmp Tmp2 Log"
+
+############################################################
+
+set tStartTime [clock seconds]
+set tStartDate [clock format [clock seconds] -format "%Y-%m-%d %I.%M.%S%p"]
+set tStartDateString [clock format [clock seconds] -format "%Y-%m-%d_%I.%M.%S%p"]
+
+set testDuration 0
+set testHour 0
+set testMin 0
+set testSec 0
+set resultDir "NULL"
+
+set fd_res [open_result_file "checkConnection"]
+
+if {$poweron} {
+    set hitPower 0
+    for {set i 1} {$i <= 10} {incr i} {
+        if {[info exists POWERCYCLE_DUT($i)]} {
+            set hitPower 1
+            PowerOffDUT $i "on"
+        }
+    }
+    if {$hitPower} {
+        result_debug "Sleep "
+        exSleep 120
+    }
+}
+if {$interactive} {
+    set MAIN(CCIMAINDEBUG) 1
+}
+# --- Initialize the DUTs_info variables ---
+_initDUTs_infoArray;
+set numDUT $MAIN(NODECOUNT);# Legacy may exist elsewhere
+# ----------------------------------------------------------
+# Build setup script from cfg file
+# ----------------------------------------------------------
+foreach dut $MAIN(DUTLIST) {
+    puts "***** DUT${dut}_CONNECT=[set DUT${dut}_CONNECT] ***** "
+    puts "***** DUT=$dut ***** "
+    Login [set DUT${dut}_CONNECT] -masterCheck 0 -CheckOperational 0
+    # -- Turn of log display to avoid expect matches during unc sw
+    SendACmd "disable log display"
+    # -- Force CC to run on primary bank when in clean mode
+    if {$clean == "yes" && $usePrimary} {
+        SendACmd "use image primary"
+    }
+    if {[info exists DEFAULT_XSF_AUTO_CREATE] && $DEFAULT_XSF_AUTO_CREATE} {
+        lappend makeXsfList "CreateDefaultXsf -dut $dut"
+    }
+    set wayToBootPart($dut) "setupScript"
+}
+foreach sBy $MAIN(STDBYLIST) {
+    if {[info exists DEFAULT_XSF_AUTO_CREATE] && $DEFAULT_XSF_AUTO_CREATE} {
+        lappend makeXsfList "CreateDefaultXsf -dut none -standby $sBy"
+    }
+}
+# --- Set any port partitioning CLI ---
+_SetPartitionVars;
+# ----------------------------------------------------------
+# Execute setup script if clean mode is "yes" - the default
+# ----------------------------------------------------------
+if {$clean == "yes"} {
+    if {[info exists DEFAULT_XSF_AUTO_CREATE] && $DEFAULT_XSF_AUTO_CREATE && $defxsf} {
+        result_debug "------------------  Create default.xsf of all DUTs  ------------------"
+        _setShowOutput -screen off -log off -res_fmt on
+        MultiTask $makeXsfList
+        _setShowOutput -screen on -log on -res_fmt on
+    }
+    # RunSetupScript $connectList $scriptList
+    set runSetupRetVal [_multiRunSetupScript]
+    if {$runSetupRetVal==-1} {
+        puts stderr "testSkipped"
+        close_result_file;
+        return -6;
+    } 
+} elseif {$clean == "cli"} {
+    puts "\n#########################################################################"
+    puts "               S T A R T I N G     PARALLEL CLI CLEANUP"
+    puts "#########################################################################"
+    sleep 1
+    set cleancliList ""
+    for {set e 1} {$e<=$MAIN(NODECOUNT)} {incr e} {
+        lappend cleancliList "allCleanup $e"
+    }
+    _setShowOutput -screen off -log off -res_fmt on
+    MultiTask $cleancliList
+    _setShowOutput -screen on -log on -res_fmt on
+    puts "\n#########################################################################"
+    puts "                F I N I S H E D    PARALLEL CLI CLEANUP"
+    puts "#########################################################################"
+    sleep 1
+}
+# ----------------------------------------------------------
+# Gather critical variables from all switches in the test bed
+# ----------------------------------------------------------
+if {[set rc [get_DUTs_info]] != 0} {
+    result_error "Error $rc while calling get_DUTs_info.";
+    close_result_file;
+    return -7;
+}
+# ----------------------------------------------------------
+# Verify all of the test bed connections
+# ----------------------------------------------------------
+#check connections between DUTs and Ixia
+if {$TrafficGen == "ixia"} {
+    if {![regexp -nocase "no_ixia" $ixiaCh1]} {
+        set returnFlag [SystemSetup]
+    } else {
+        set returnFlag "connectionOkay"
+    }
+} elseif {$TrafficGen == "stc"} {
+    set returnFlag [SystemSetup]
+} else {
+    result_error "Can't find Ixia OR Spirent Information"
+    set returnFlag "connectionBad"
+}
+
+# ----------------------------------------------------------
+# Close the temporary file that holds variables for dev
+# ----------------------------------------------------------
+if {([info exists MAIN(ifPipe)]) && ($MAIN(ifPipe) != "NULL")} {
+    close $MAIN(ifPipe)
+}
+if {[VerifyInitFile $MAIN(initFile)]} {
+   regsub -all "Tmp" $MAIN(initFile) "Tmp2" initFile2
+   catch {file copy -force $MAIN(initFile) $initFile2} why
+}
+if {[file exists $MAIN(initFile)]} {
+    file copy $MAIN(initFile) [get_result_dir { $randomIndex }]/initFile.txt
+} 
+if {$fd_res != ""} {
+    catch {flush $fd_res} result
+    if {$result != ""} { result_error "$result" }
+}
+
+set tEndTime [clock seconds]
+set testDuration [expr $tEndTime-$tStartTime]
+set testSec  [expr $testDuration % 60]
+set testMin  [expr $testDuration / 60]
+set testHour [expr $testMin / 60]
+set testMin  [expr $testMin % 60]
+# ----------------------------------------------------------
+# Close all result files and put them in the Report dir
+#   Print time summary
+# ----------------------------------------------------------
+create_report_directory $cfgFile yes "" "" "" "" ; # Creates the report_dir.txt in result
+save_test_report "[get_result_dir]/report.exr"
+gen_text_report "[get_result_dir]/report.exr" "stdout" "[file tail [pwd]]" $cfgFile
+close_result_file
+
+result_debug  "\n\n*** Time for check connections ( $testHour hours, $testMin minutes, \
+              $testSec seconds )\n\n"
+
+# ----------------------------------------------------------
+# Return Execution Status
+# ----------------------------------------------------------
+if { $returnFlag == "connectionOkay"} {
+     result_ok "[file tail $cfg] Check connection - PASS\n\n"
+} else {
+    result_error "[file tail $cfg] Failed Connection Check"
+    result_error "DUTs, Ixia or Mgmt Network"
+    result_error "Verify physical connections match with config setup file"
+    _GetFailingPortIds
+    if {[string trim $MAIN(CCEdpDutResults)] != ""} {
+        result_warning $MAIN(CCEdpDutResults)
+    }
+    if {[string trim $MAIN(CCPortIdResults)] != ""} {
+        result_warning $MAIN(CCPortIdResults)
+    }
+}
+gen_text_report "[get_result_dir]/report.exr" "[get_result_dir]/report.txt" "[file tail [pwd]]" $cfg;
+move_result_directory
+TrackingCleanup;
+# Cleanup xterm title
+SetTerminalTitle -title "[_getRegServerHostname]"
+exit;

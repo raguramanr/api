@@ -1,0 +1,1132 @@
+package require json::write
+package require json
+package require base64 ;# tcllib
+package forget http 1.0
+package require http   ;# tcl
+###############################################################################
+#
+# Function to get json output from a cli command in.
+#
+#
+###############################################################################
+proc json_get {args} {
+    parse_args json_get $args {
+        url  "null"
+        username "admin"
+        password ""
+        ssl "false"
+        cmd "show vlan"
+        method "cli"
+        retval "all"
+    }
+
+    set auth "Basic [base64::encode $username:$password]"
+    puts $auth
+    set headerl [list Authorization $auth]
+    puts $headerl
+    puts $cmd
+    if { $ssl == "true" } {
+        package require tls
+        ::http::register https 443 ::tls::socket
+    }
+    set query "\"jsonrpc\":\"2.0\",\"method\":\"$method\",\"params\":\[\"$cmd\"\],\"id\":\"1\""
+    puts "The JSON Query is $query"
+    set http_mime "application/json"
+    set tok [http::geturl $url -headers $headerl -query \{$query\} -type $http_mime]
+    http::wait $tok
+    puts $tok
+    upvar #0 $tok state
+    set res0 [http::data $tok]
+    set res1 [::http::code $tok]
+    set res2 [::http::error $tok]
+    #puts "The Output is  $res0"
+    #puts "The HTTP Code Received is $res1"
+    #puts "The HTTP Error if any is $res2"
+    http::cleanup $tok
+    if {$retval == "data"} {
+        return $res0
+    } elseif {$retval == "code"} {
+        return $res1
+    } elseif {$retval == "error"} {
+        return $res2
+    } else {
+        return [list $res0 $res1 $res2]
+    }
+}
+
+#############################################################################
+# Procedure Name: CheckJSONKeyValue
+#
+# Similar to checkKeyValue, but makes a JSONRPC request to the mgmt interface
+#   on a switch and checks a parameterList to match expected outputs
+#
+# Example
+#     set parameterList ""
+#     lappend parameterList "{CLIoutput} exist"
+#     lappend parameterList "{show_ports_info_detail port} [lindex $ports 0]  exist"
+#     lappend parameterList "{show_ports_info_detail port} [lindex $ports 2]  exist"
+#     lappend parameterList "{show_ports_info_detail port} [lindex $ports [expr $num_port - 2]] exist"
+#     lappend parameterList "{show_ports_info_detail port} [lindex $ports [expr $num_port - 1]] exist"
+#     lappend parameterList "{status} SUCCESS exist"
+#     CheckJSONKeyValue -cmd $com -parameterList $parameterList -debugjson "false"
+#     unset parameterList
+#############################################################################
+proc CheckJSONKeyValue {args} {
+    parse_args CheckJSONKeyValue $args {
+        cmd ""
+        parameterList ""
+        username  "admin"
+        password  ""
+        ssl       "false"
+        method    "cli"
+        retval    "all"
+        debugjson "false"
+        debugdict  "false"
+    }
+
+    global whichDutNow
+    global DUT${whichDutNow}_IP
+
+    set rVal 1
+    set ip [set DUT${whichDutNow}_IP]
+
+    set output [json_get -url "http://$ip/jsonrpc/" -cmd $cmd -retval "data" -username $username \
+             -password $password -ssl $ssl  -method $method]
+
+    if {$debugjson != "false"} {
+        puts "\n\nJSON Returned Output:\n$output\n\n"
+    }
+
+    set parsed [json::json2dict $output]
+    if {$debugdict != "false"} {
+        puts "\n\nJSON to Dictionary:\n$parsed\n\n"
+    }    
+    if {[catch {dict get $parsed result} psmall]} {
+        puts "Error getting dictionary path - $psmall"
+    } else {
+        foreach para $parameterList {
+            #puts "Test $para"
+            report_start_test "CheckJsonValue $para"
+            set pPass 0
+            foreach ele $psmall {
+                if {![catch {dict keys $ele} why]} {
+                    set keyLen [llength [lindex $para 0]]
+                    switch $keyLen {
+                    4 {
+                        if {[catch {dict get $ele [lindex [lindex $para 0] 0] [lindex [lindex $para 0] 1] [lindex [lindex $para 0] 2] [lindex [lindex $para 0] 3]} outVal]} {
+                            #puts "didn't find dictionary $outVal"
+                        } else {
+                            #puts "Found keys 4"
+                            if {[lindex $para 1] == $outVal || [lindex $para 1] == "exist"} {
+                                #puts "Got plist $portlist"
+                                set pPass 1
+                            }
+                        }
+                    }
+                    3 {
+                        if {[catch {dict get $ele [lindex [lindex $para 0] 0] [lindex [lindex $para 0] 1] [lindex [lindex $para 0] 2]} outVal]} {
+                            #puts "didn't find dictionary $outVal"
+                        } else {
+                            #puts "Found keys 3"
+                            if {[lindex $para 1] == $outVal || [lindex $para 1] == "exist"} {
+                                #puts "Got plist $portlist"
+                                set pPass 1
+                            }
+                        }
+                    }
+                    2 {
+                        if {[catch {dict get $ele [lindex [lindex $para 0] 0] [lindex [lindex $para 0] 1]} outVal]} {
+                            #puts "didn't find dictionary $outVal"
+                        } else {
+                            #puts "Found keys 2 $outVal"
+                            if {[lindex $para 1] == $outVal || [lindex $para 1] == "exist"} {
+                                #puts "Got plist $outVal"
+                                set pPass 1
+                            }
+                        }
+                    }
+                    1 {
+                        if {[catch {dict get $ele [lindex [lindex $para 0] 0]} outVal]} {
+                            #puts "didn't find dictionary $outVal"
+                        } else {
+                            #puts "Found keys 1"
+                            if {[lindex $para 1] == $outVal || [lindex $para 1] == "exist"} {
+                                #puts "Got plist $portlist"
+                                set pPass 1
+                            }
+                        }
+                    }
+                   }
+                }
+            }
+            if {$pPass && [lindex $para 2] == "exist"} {
+                result_ok "Value [lindex $para 1] exists "
+            } elseif {$pPass && [lindex $para 2] == "notExist"} {
+                result_error "[lindex $para 1] exists when notExist expected"
+                set rVal 0
+            } elseif {!$pPass && [lindex $para 2] == "exist"} {
+                result_error "[lindex $para 1] not found when expected"
+                set rVal 0
+            } elseif {!$pPass && [lindex $para 2] == "exist"} {
+                result_ok "[lindex $para 1] not found as expected"
+            } elseif {$pPass && [lindex $para 1] == "exist"} {
+                result_ok "Key [lindex $para 0] exists as expected"
+            } elseif {$pPass && [lindex $para 1] == "notExist"} {
+                result_error "Key [lindex $para 0] exists when notExist expected"
+                set rVal 0
+            } elseif {!$pPass && [lindex $para 1] == "notExist"} {
+                result_ok "Key [lindex $para 0] notExist as expected"
+            } else {
+                result_error "Not sure what happened"
+                set rVal 0
+            }
+            report_end_test
+        }
+    }
+    return $rVal
+}
+##
+##
+##  Below are works in progress
+##
+##
+proc getDictItem {dictVal k v} {
+    puts "check exists $k"
+    if {[dict exist $dictVal $k]} {
+        puts "get value $k"
+        set keyVal [dict get $dictVal $k]
+        puts "keyVal = $keyVal"
+        if {0} {
+            return 1
+        }
+    }
+    return 0
+}
+proc dumpPairs {d} {
+
+    set keyPaths ""
+    set i 0
+    if [catch {dict keys $d} why] {
+        puts "This dictionary is a mess. $why"
+        return;
+    }
+    dict for {k v} $d {
+        set keyPath ""
+        #puts "\nKEY - $k\nVALUE $v"
+        set keyPath [_printJPath $k $v $keyPath 1]
+        if ![catch {dict keys $k} why] {
+            dict for {k1 v1} $k {
+                #puts "\nKEY - $k1\nVALUE $v1"
+                set keyPath [_printJPath $k1 $v1 $keyPath 2]
+                if ![catch {dict keys $k1} why] {
+                    dict for {k2 v2} $k1 {
+                        set keyPath [_printJPath $k2 $v2 $keyPath 3]
+                        #puts "\nKEY - $k2\nVALUE $v2"
+                        if ![catch {dict keys $k2} why] {
+                            dict for {k3 v3} $k2 {
+                                #puts "\nKEY - $k3\nVALUE $v3"
+                                set keyPath [_printJPath $k3 $v3 $keyPath 4]
+                            }
+                        }
+                        if ![catch {dict keys $v2} why] {
+                            dict for {k3 v3} $v2 {
+                                #puts "\nVALDICT - $k3\nVALUE $v3"
+                                set keyPath [_printJPath $k3 $v3 $keyPath 4]
+                            }
+                        }
+                    }
+                }
+                if ![catch {dict keys $v1} why] {
+                    dict for {k2 v2} $v1 {
+                        #puts "\nVALDICT - $k2\nVALUE $v2"
+                        set keyPath [_printJPath $k2 $v2 $keyPath 3]
+                        if ![catch {dict keys $k2} why] {
+                            dict for {k3 v3} $k2 {
+                                set keyPath [_printJPath $k3 $v3 $keyPath 4]
+                                #puts "\nVALKEY - $k3\nVALUE $v3"
+                            }
+                        }
+                        if ![catch {dict keys $v2} why] {
+                            dict for {k3 v3} $v2 {
+                                set keyPath [_printJPath $k3 $v3 $keyPath 4]
+                                #puts "\nVAL2DICT - $k3\nVALUE $v3"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+proc _printJPath {a b keyPath lev} {
+    if {[llength $a] == 1} {
+        lappend keyPath $a
+        if {[llength $b] == 1} {
+            puts "Path - $keyPath VALUE: $b"
+            if {$lev <= 2} {
+                set keyPath ""
+            } elseif {$lev == 3} {
+                set keyPath "[lindex $keyPath 0]"
+            } elseif {$lev == 4} {
+                set keyPath "[lindex $keyPath 0] [lindex $keyPath 1]"
+            } else {
+                set keyPath ""
+            }
+        }
+    }
+    return $keyPath
+}
+#######################################################################
+# Procedure: array_dimnames
+#
+# Utility like array names to return all names from an index in a
+#    multi-dimensional array
+#
+#    set keyList [array_dimnames DUTs_info 1]
+#######################################################################
+proc array_dimnames {array_var dim_index} {
+    upvar 1 $array_var array
+    set result [list]
+    foreach name [lsort -unique -index $dim_index [array names array]] {
+        lappend result [lindex $name $dim_index]
+    }
+    return $result
+}
+#############################################################################
+# Procedure Name: CheckDictValue
+#
+# Similar to checkKeyValue, but makes a JSONRPC request to the mgmt interface
+#   on a switch and checks a parameterList to match expected outputs
+#
+#     set parameterList ""
+#     lappend parameterList "{CLIoutput} exist"
+#     lappend parameterList "{show_ports_info_detail port} [lindex $ports 0]  exist"
+#     lappend parameterList "{show_ports_info_detail port} [lindex $ports 2]  exist"
+#     lappend parameterList "{show_ports_info_detail port} [lindex $ports [expr $num_port - 2]] exist"
+#     lappend parameterList "{show_ports_info_detail port} [lindex $ports [expr $num_port - 1]] exist"
+#     lappend parameterList "{status} SUCCESS exist"
+#     CheckDictValue -cmd $com -parameterList $parameterList -debugjson "false"
+#     unset parameterList
+#
+#     In this more complex example there are many ls_ports_show dictionaries and we
+#       need to find loadShareMaster linkState port all in the same dictionary with
+#       the matching values
+#
+#     set parameterList ""
+#     lappend parameterList "{ls_ports_show {loadShareMaster linkState port}} {$master 1 [MapDUTPortId 1]}  exist"
+#     set res [CheckDictValue -cmd $com -parameterList $parameterList -debugjson "false"]
+#############################################################################
+proc CheckDictValue {args} {
+    parse_args CheckJSONKeyValue $args {
+        cmd           ""
+        parameterList ""
+        comment       "hey"
+        yesorno       "Yes"
+        debugjson     "false"
+        debugdict     "false"
+        time          "null"
+        showfmt       "default"
+        testNo        ""
+    }
+
+    global whichDutNow connectionTimeout MAIN
+    set finished 0;# All parameters passed without iterations
+    set failParameters "";# list of failed parameters. Delete failed results at the beginning of n+1 iteration.
+                          #    It may pass and values will be different on the next iteration
+                          #    Pass arrays will show the initial first pass values.
+    set pOkCounter 0;# Count of parameter entries that have passed.
+    set pCount [llength $parameterList];# Number of parameter entries.
+
+    set majmin [GetVersion DUT${whichDutNow} majmin]
+    if {$majmin<15.6} {
+        result_warning "CheckDictValue is not supported in versions less than 15.6"
+        return
+    }
+
+    #time stuff  -time {s: 0 i: 3 f: 15} change
+    set sTime 0
+    set it 1
+    set expTime 1
+    set ftime 1
+    set tloop 1
+    set retry 0
+    set fine 0
+    if {$time != "null"} {
+        foreach {k v} $time {
+            switch $k {
+                "s:" {
+                    if {$v>0} {
+                        set sTime $v
+                        result_debug "Wait $v seconds before checking $cmd"
+                        exSleep $v
+                    }
+                }
+                "i:" {
+                    set it $v
+                }
+                "d:" {
+                    set expTime $v
+                }
+                "f:" {
+                    set ftime $v
+                }
+            }
+        }
+        if {$sTime == 0 && $it == 1 && $expTime == 1 && $ftime == 1} {
+            puts "There may be something wrong with your time vals.  All still defaults"
+        }
+        if {$it == 0} {
+            puts "Interloop wait of zero is not allowed.  Setting to 5"
+            set ftime 6
+            set it 5
+        }
+        if {$sTime==1} {set sTime 0;#adjust due to users habit of setting 1 and using round top values.}
+        set ttop [expr $ftime - $sTime]
+        if {$ttop<1} {
+            set ttop 1
+        }
+        set tloop [expr int(ceil($ttop/$it))];
+    }
+
+    set cc 0
+    while {$cc < [expr [llength $parameterList] + 5]} {
+        set paramChecked($cc) 0
+        set pRes($cc) ""
+        set fRes($cc) ""
+        incr cc
+    }
+
+    if {[regexp -nocase {^sh[ow]* *por[ts]*} $cmd]&&![regexp -nocase "clean$|no-refresh$" $cmd] && \
+            ![regexp -nocase "info|redun|shar|util|protocol|buffer|debounce|group|link-scan" $cmd]} {
+        if {$majmin>=11.3&&$majmin<21.1} {
+            set cmd "$cmd no-refresh"
+        }
+    } 
+
+    report_start_test "CheckDictValue $cmd"
+
+    for {set q 0} {$q<=$tloop} {incr q} {
+        set rVal 1
+        if {$q>0} {
+            foreach fParmId $failParameters {
+                set fRes($fParmId) "";# This holds the failing info for a parameter on the last loop.  It will
+                                      # be replaced with whatever happens on this loop.
+            }
+        }
+        #result_print "--- Send run script cli2json.py -d $cmd"
+        result_print "--- Send $cmd"
+        set timeout 5
+        set exp_out_buf ""
+        if {$debugjson != "false"} {
+            _setShowOutput -screen on -log on -res_fmt on
+            exp_send "run script cli2json.py -d $cmd\r"
+        } else {
+            _setShowOutput -screen off -log off -res_fmt off
+            exp_send "run script cli2json.py $cmd\r"
+        }
+        expect {
+            "$cmd" {}
+            timeout {
+                result_debug "Timeout waiting for CheckDictValue cli to echo"
+                return;
+            }
+        }
+        set timeout $connectionTimeout
+        expect {
+            -nocase -re "(\\* )?\[a-z0-9()._-]+(:|\\.)\[0-9]+ (#|>) " {
+                # ExtremeWare and ExtremeWare XOS prompt.
+                #
+                # The pattern breaks down as follows:
+                #
+                # (\\* )?        Unsaved config marker
+                # \[a-z0-9._-]+  Platform type or SNMP system name
+                # (:|\\.)        Name and command ID separator
+                # \[0-9]+        Command ID
+                # (#|>)          System or user prompt marker
+                append exp_out_buf $expect_out(buffer)
+                regsub -all "\n\r" $exp_out_buf "\n" exp_out_buf
+                regsub -all "\t" $exp_out_buf " " exp_out_buf
+                #regsub -all -nocase {[ ]+} $exp_out_buf "" exp_out_buf
+            }
+            "\\?" {
+                send "$yesorno\r"
+                exp_continue
+            }
+            timeout {
+                result_debug "Timeout waiting for CheckDictValue cli to match a prompt"
+                report_end_test;
+                return;
+            }
+        }
+
+        set output [string trim $exp_out_buf]
+        _setShowOutput -screen on -log on -res_fmt on
+        if {$debugjson != "false" || ([info exists MAIN(DEBUGJSON)] && $MAIN(DEBUGJSON))} {
+            puts "\n\nReturned Output:\n$output\n\n"
+        }
+
+        #set parsed [json::json2dict $output]
+        if {[catch {json::json2dict $output} parsed]} {
+            #puts "1 Dictionary returned Error: $parsed $output"
+            regsub -all -nocase {^.*\[} $output "\[" output
+            #dict append output Fix Dummy
+            #set k [dict create fee {foo {}}]
+            #dict with k fee {append foo " kak"}
+            #dict with k fee {append foo " poached"}
+            #puts [dict get $k fee foo]
+            #regsub -all -nocase "\}" $output "\},\n\{\"hey\":\"aaa\"\}" output
+            if {[catch {json::json2dict $output} parsed]} {
+                #puts "2 Dictionary returned Error: $parsed $output"
+                report_end_test;
+                return -1
+            }
+        }
+        set vOdd [expr [llength $parsed] % 2]
+        if {$vOdd  != 0} {
+            lappend parsed {dummy}
+        }
+        if {$debugdict != "false"} {
+            puts "\n\nParsed Dictionary:\n$parsed\n\n"
+        }
+        if {[catch {dict get $parsed} psmall]} {
+            puts "Error getting dictionary path - $psmall"
+        } else {
+            _setShowOutput -screen on -log on -res_fmt on
+            foreach ele $psmall {
+                if {![catch {dict get $ele CLIoutput} tolog]} {
+                    if {$showfmt == "default"} {
+                        result_pre $tolog
+                        puts $tolog
+                    }
+                } else {
+                    if {$showfmt != "default"} {
+                        result_pre $ele
+                        puts $ele
+                    }
+                }
+            }
+            set failParameters ""
+            set lock "none"
+            set mylock "none"
+            set outp($mylock) ""
+            set oute($mylock) ""
+            set pc -1;
+            foreach para $parameterList {
+                incr pc
+                #puts "Start parm $pc"
+                if {$paramChecked($pc)} {
+                    #puts "!\n!\n!\nalready matched $pc = $paramChecked($pc) $pRes($pc)\n!\n!\n!";
+                    continue;
+                }
+                set plLen [llength $para];# length of each line in parameterList
+                set typeVal [lindex $para [expr $plLen -1]]
+                set typeLen [llength $typeVal]
+                set rVal 1
+                set outList ""
+                set oopsList ""
+                set lockList "";# every same root element inspected by a parameter will have a lock of index 0
+                set pPass 0
+                set pMiss 0
+                set print "all"
+                # ----------------  types of paramter checks in checkdictvalue
+                # "{rootKey {key1 key2 key3}} {key1value key2value key3value} exist" ;# show output matches key1val
+                #              key2value key3value.. all in same rootKey 
+                # "{rootKey {key1 key2 key3}} {key1value key2value key3value} notExist" ;# show output finds
+                #            no key1val key2value key3value.. that match under the same root
+                # "{rootKey {key1 key2 key3}} {=key1value <key2value >key3value} range" ;# show output finds
+                #       key1 out exact match to key1 para val 
+                #       key2 out less than key2 para val
+                #       key3 out greater than key3 para val
+                set pType [lindex $typeVal 0];# should be exist, notExist, range
+                if {$pType != "exist" && $pType != "notExist" && $pType != "range" && \
+                          $pType != "regexNotExist" && $pType != "regexExist"} {
+                    result_warning "parameterList type must be one of; exist,notExist or range"
+                    continue;
+                }
+                set foList ""
+                set fmList ""
+                set matchAll 0
+                set miss 0
+                set f 0
+                foreach ele $psmall {
+                    set oEPass 0
+                    set oEMiss 0
+                    set notReq 0
+                    #set outList ""
+                    #set oopsList ""
+                    set missedKeyList ""
+                    if {![catch {dict keys $ele} why]} {
+                        set keyLen [llength [lindex $para 0]]
+                        switch $keyLen {
+                        4 {
+                            #   keys portion of the parameterList  llength = 3 being rootKey->nextKey and {keys 1-3} in this case
+                            # parameterList format is "{rootKey nextKey {key1 key2 key3}} {key1Want key2Want key3Want} exist"
+                            set rootKey [lindex [lindex $para 0] 0];# 3 means rootKey->nextKey->keyOfInterest
+                            set nextKey1 [lindex [lindex $para 0] 1];#
+                            set nextKey2 [lindex [lindex $para 0] 2];#
+                            set reqPass [llength [lindex $para 0] 3]];# determine how many must match in same rootKey->nextKey
+                                                            #  ie. key1 key2 key3 must be in the same root-next1-next2 structure
+                            set eList [lindex [lindex $para 0] 3];
+                            set ePath "$rootKey $nextKey1 $nextKey2"
+                        }
+                        3 {
+                            #   keys portion of the parameterList  llength = 3 being rootKey->nextKey and {keys 1-3} in this case
+                            # parameterList format is "{rootKey nextKey {key1 key2 key3}} {key1Want key2Want key3Want} exist"
+                            set rootKey [lindex [lindex $para 0] 0];# 3 means rootKey->nextKey->keyOfInterest
+                            set nextKey1 [lindex [lindex $para 0] 1];#
+                            set reqPass [llength [lindex $para 0] 2]];# determine how many must match in same rootKey->nextKey
+                                                            #  ie. key1 key2 key3 must be in the same root-next1 structure
+                            set eList [lindex [lindex $para 0] 2]
+                            set ePath "$rootKey $nextKey1"
+                        }
+                        2 {
+                            # goh  keys portion of the parameterList  llength = 2 being rootKey and {keys 1-3} in this case      
+                            # parameterList format is "{rootKey {key1 key2 key3}} {key1Want key2Want key3Want} exist"
+                            set rootKey [lindex [lindex $para 0] 0];# 2 means rootKey->keyOfInterest
+                            set reqPass [llength [lindex [lindex $para 0] 1]];# determine how many just match in same rootKey
+                                                             #  ie. key1 key2 key3 must be in the same rootKey structure
+                            set eList [lindex [lindex $para 0] 1]
+                            set ePath "$rootKey"
+                        }
+                        1 {
+                            result_warning "Don't think just a rootKey is supported - [lindex [lindex $para 0] 0]"
+                            set reqPass [llength [lindex [lindex $para 0] 0]]
+                            set eList [lindex [lindex $para 0] 0]
+                            set ePath ""
+                        }
+                        };# End switch
+                        set i 0;# used to index keyValues ie... key1Want, key2Want etc.
+                        set dbg " -"
+                        foreach lastEle $eList {
+                            if {[catch {dict get $ele $ePath $lastEle} outVal]} {
+                                set notReq 1
+                                append dbg " keys $rootKey $lastEle not in ele"
+                            } else {
+                                set kWant1 [lindex [lindex $para 1] $i];# for exist,notExist this is all we need.
+                                if {$i==0} {
+                                    regsub -all "==|=|<|>|<=|>=" $kWant1 "" mylock
+                                    set outp($mylock) ""
+                                    set oute($mylock) ""
+                                    set nrByLock($mylock) 0
+                                    set lock $outVal;# lock for this line
+                                    set outp($lock) ""
+                                    set oute($lock) ""
+                                    if {[lsearch $lockList $lock] < 0} {
+                                        lappend lockList $lock
+                                    }
+                                }
+                                append dbg " \[$mylock\]${i}-(${lock})>$outVal"
+                                if {$pType == "range"} {
+                                    if {[regexp -nocase {^==([a-z0-9_\-\.\:\!]+)} $kWant1 a etVal]} {
+                                        if {$outVal == $etVal} {
+                                            #first key to lock on.. in case of misses
+                                            incr pPass; incr oEPass;
+                                            lappend outList "$rootKey -> $lastEle Found KEY $etVal"
+                                            lappend outp($lock) "$rootKey -> $lastEle Found KEY $etVal"
+                                        } else {
+                                            lappend missedKeyList $outVal
+                                            lappend oopsList "$rootKey -> $lastEle  $etVal KEY_NOT_FOUND - Got ($outVal)"
+                                            lappend oute($lock) "$rootKey -> $lastEle  $etVal KEY_NOT_FOUND - Got ($outVal)"
+                                            incr pMiss; incr oEMiss;
+                                        }
+                                    } elseif {[regexp -nocase {^<([0-9]+)} $kWant1 a ltVal]} {
+                                        if {$outVal < $ltVal} {
+                                            lappend outList "$rootKey -> $lastEle  ($outVal) less than $ltVal"
+                                            lappend outp($lock) "$rootKey -> $lastEle  ($outVal) less than $ltVal"
+                                            incr pPass; incr oEPass;
+                                        } else {
+                                            lappend oopsList "$rootKey -> $lastEle WANTED <$ltVal GOT ($outVal)"
+                                            lappend oute($lock) "$rootKey -> $lastEle WANTED <$ltVal GOT ($outVal)"
+                                            incr pMiss; incr oEMiss;
+                                        }
+                                    } elseif {[regexp -nocase {^<=([0-9]+)} $kWant1 a ltVal]} {
+                                        if {$outVal <= $ltVal} {
+                                            lappend outList "$rootKey -> $lastEle  ($outVal) <= $ltVal"
+                                            lappend outp($lock) "$rootKey -> $lastEle  ($outVal) <= $ltVal"
+                                            incr pPass; incr oEPass;
+                                        } else {
+                                            lappend oopsList "$rootKey -> $lastEle WANTED  <=$ltVal GOT ($outVal)"
+                                            lappend oute($lock) "$rootKey -> $lastEle WANTED  <=$ltVal GOT ($outVal)"
+                                            incr pMiss; incr oEMiss;
+                                        }
+                                    } elseif {[regexp -nocase {^>([0-9]+)} $kWant1 a gtVal]} {
+                                        if {$outVal > $gtVal} {
+                                            lappend outList "$rootKey -> $lastEle  ($outVal) > $gtVal"
+                                            lappend outp($lock) "$rootKey -> $lastEle  ($outVal) > $gtVal"
+                                            incr pPass; incr oEPass;
+                                        } else {
+                                            lappend oopsList "$rootKey -> $lastEle WANTED >$gtVal GOT ($outVal)"
+                                            lappend oute($lock) "$rootKey -> $lastEle WANTED >$gtVal GOT ($outVal)"
+                                            incr pMiss; incr oEMiss;
+                                        }
+                                    } elseif {[regexp -nocase {^>=([0-9]+)} $kWant1 a gteVal]} {
+                                        if {$outVal >= $gteVal} {
+                                            lappend outList "$rootKey -> $lastEle  ($outVal) >= $gteVal"
+                                            lappend outp($lock) "$rootKey -> $lastEle  ($outVal) >= $gteVal"
+                                            incr pPass; incr oEPass;
+                                        } else {
+                                            lappend oopsList "$rootKey -> $lastEle WANTED >=$gteVal GOT ($outVal)"
+                                            lappend oute($lock) "$rootKey -> $lastEle WANTED >=$gteVal GOT ($outVal)"
+                                            incr pMiss; incr oEMiss;
+                                        }
+                                    } elseif {[regexp -nocase {^=(.*)} $kWant1 a etVal]} {
+                                        if {$outVal == $etVal} {
+                                            lappend outList "$rootKey -> $lastEle  GOT ($outVal)"
+                                            lappend outp($lock) "$rootKey -> $lastEle  GOT ($outVal)"
+                                            incr pPass; incr oEPass;
+                                        } else {
+                                            lappend oopsList "$rootKey -> $lastEle WANTED $etVal GOT ($outVal)"
+                                            lappend oute($lock) "$rootKey -> $lastEle WANTED $etVal GOT ($outVal)"
+                                            incr pMiss; incr oEMiss;
+                                        }
+                                    } elseif {[regexp -nocase {([0-9]+)\-([0-9]+)} $kWant1 a bottVal topVal]} {
+                                        if {$outVal >= $bottVal && $outVal <= $topVal} {
+                                            lappend outList "$rootKey -> $lastEle  $bottVal <= ($outVal) <= $topVal"
+                                            lappend outp($lock) "$rootKey -> $lastEle  $bottVal <= ($outVal) <= $topVal"
+                                            incr pPass; incr oEPass;
+                                        } else {
+                                            lappend oopsList "$rootKey -> $lastEle WANTED between $bottVal AND $topVal GOT ($outVal)"
+                                            lappend oute($lock) "$rootKey -> $lastEle WANTED between $bottVal AND $topVal GOT ($outVal)"
+                                            incr pMiss; incr oEMiss;
+                                        }
+                                    } else {
+                                        result_warning "Did not find a valid range delimiter in $kWant1"
+                                    }
+                                } elseif {$pType == "regex"} {
+                                    if {[regexp -nocase "$kWant1" $outVal] || [lindex $para 1] == "exist"} {
+                                        incr pPass; incr oEPass;
+                                        if {[regexp -nocase "$kWant1" $outVal]} {
+                                            lappend outList "$rootKey -> $lastEle  EXISTS ($outVal)"
+                                            lappend outp($lock) "$rootKey -> $lastEle  EXISTS ($outVal)"
+                                        } else {
+                                            lappend outList "$rootKey -> $lastEle EXISTS"
+                                            lappend outp($lock) "$rootKey -> $lastEle EXISTS"
+                                        }
+                                    } else {
+                                        lappend oopsList "$rootKey -> $lastEle Incorrect Value ($outVal) WANTED $kWant1"
+                                        lappend oute($lock) "$rootKey -> $lastEle Incorrect Value ($outVal) WANTED $kWant1"
+                                        incr pMiss; incr oEMiss;
+                                    }
+                                } elseif {[regexp -nocase "notexist" $pType]} {
+                                    if {$kWant1 == $outVal} {
+                                        incr pPass; incr oEPass;
+                                        if {[regexp -nocase "$kWant1" $outVal]} {
+                                            lappend outList "$rootKey -> $lastEle  EXISTS ($outVal)"
+                                            lappend outp($lock) "$rootKey -> $lastEle  EXISTS ($outVal)"
+                                        } else {
+                                            lappend outList "$rootKey -> $lastEle EXISTS"
+                                            lappend outp($lock) "$rootKey -> $lastEle EXISTS"
+                                        }
+                                    } else {
+                                        lappend oopsList "$rootKey -> $lastEle  NOTEXIST ($outVal) NOT $kWant1"
+                                        lappend oute($lock) "$rootKey -> $lastEle  NOTEXIST ($outVal) NOT $kWant1"
+                                        incr pMiss; incr oEMiss;
+                                    }
+                                } else {
+                                    if {$kWant1 == $outVal || [lindex $para 1] == "exist"} {
+                                        incr pPass; incr oEPass;
+                                        if {$kWant1 == $outVal} {
+                                            lappend outList "$rootKey -> $lastEle EXISTS ($outVal)"
+                                            lappend outp($lock) "$rootKey -> $lastEle EXISTS ($outVal)"
+                                        } else {
+                                            lappend outList "$rootKey -> $lastEle EXISTS"
+                                            lappend outp($lock) "$rootKey -> $lastEle EXISTS"
+                                        }
+                                    } else {
+                                        lappend oopsList "$rootKey -> $lastEle Incorrect Value ($outVal) WANTED $kWant1"
+                                        lappend oute($lock) "$rootKey -> $lastEle Incorrect Value ($outVal) WANTED $kWant1"
+                                        incr pMiss; incr oEMiss;
+                                    }
+                                }
+                            }
+                            incr i
+                        }
+                        #puts "----  $para"
+                        #puts "reqPass=$reqPass mlp[llength $outp($mylock)] mle[llength $oute($mylock)] pPass=$pPass pMiss=$pMiss oEPass=$oEPass oEMiss=$oEMiss dbg=$dbg"
+                        if {[llength $outp($mylock)] >= $reqPass} {
+                            set matchAll 1
+                            set miss 0
+                            set pRes($pc) $outp($mylock)
+                            set fRes($pc) $oute($mylock)
+                            set print "key"
+                            #puts "Match all SET pRes $pc"
+                        } elseif {$notReq} {
+                            set notReq 0
+                            incr nrByLock($mylock)
+                            if {[llength $outp($mylock)] > 0 && [expr [llength $outp($mylock)] + [llength $oute($mylock)] + $nrByLock($mylock)] == $reqPass} {
+                                #puts "Hit a key missing from json while locked $nrByLock($mylock) $dbg"
+                                set matchAll [llength $outp($mylock)]
+                                lappend oute($mylock) "$dbg"
+                                set miss [llength $oute($mylock)]
+                                set pRes($pc) $outp($mylock)
+                                set fRes($pc) $oute($mylock)
+                                set print "key"
+                                #puts "Lock hit and key missing matchAll $matchAll miss $miss SET pRes $pc"
+                            }
+                        } elseif {[expr [llength $outp($mylock)] + [llength $oute($mylock)]] == $reqPass} {
+                            set matchAll [llength $outp($mylock)]
+                            set miss [llength $oute($mylock)]
+                            set pRes($pc) $outp($mylock)
+                            set fRes($pc) $oute($mylock)
+                            lappend failParameters $pc
+                            set print "key"
+                            #puts "HIT MYLOCK MATCH PLUS MISS SET pRes $pc"
+                        } elseif {[expr [llength $outp($lock)] + [llength $oute($lock)]] == $reqPass && \
+                                       [regexp -nocase "notexist" $pType]} {
+                            set miss [llength $oute($lock)]
+                            set matchAll [llength $outp($lock)]
+                            set pRes($pc) $oute($lock);#  Reverse the HIT / MISS Messages as pass and fail
+                            set fRes($pc) $outp($lock)
+                            lappend failParameters $pc
+                            set print "key"
+                            #puts "HIT LOCK MATCH PLUS MISS IN NotExist  SET pRes $pc"
+                        } elseif {$oEMiss>0 && [expr $oEPass + $oEMiss] >= $reqPass && \
+                                       [regexp -nocase "notexist" $pType]} {
+                            set miss      $oEMiss
+                            set matchAll  $oEPass
+                            set pRes($pc) $oopsList;#  Reverse the HIT / MISS Messages as pass and fail
+                            set fRes($pc) $outList
+                            lappend failParameters $pc
+                            #puts "HIT oeMiss, but notExist  SET pRes $pc"
+                        } elseif {$oEMiss>0 && [expr $oEPass + $oEMiss] >= $reqPass && \
+                                       [regexp -nocase "range|exist" $pType]} {
+                            set miss $oEMiss
+                            set matchAll $oEPass
+                            set pRes($pc) $outList;# 
+                            set fRes($pc) $oopsList
+                            lappend failParameters $pc
+                            #puts "HIT oEMiss req in  SET pRes pCounter $pc"
+                        } elseif {$oEMiss==0 && $oEPass >= $reqPass && \
+                                       [regexp -nocase "range|exist" $pType]} {
+                            set miss 0
+                            set matchAll $oEPass
+                            set pRes($pc) $outList;#
+                            set fRes($pc) $oopsList;# should be empty
+                            lappend failParameters $pc
+                            #puts "HIT oEMiss req in  SET pRes pCounter $pc"
+                        } elseif {$reqPass == 1 && $pMiss>0} {
+                            incr miss
+                            set print "all"
+                            set fRes($pc) $oopsList
+                            lappend failParameters $pc
+                            #puts "reqPass=1 miss>0 "
+                        } elseif {$reqPass == 1 && $pPass>0} {
+                            incr matchAll
+                            set print "all"
+                            set pRes($pc) $outList
+                            #puts "reqPass=1 pass>0"
+                        } else {
+                            #incr miss
+                            #puts "Miss all"
+                        }
+                    } else {
+                        
+                    }
+                }
+                # Decide if the parameter passes or fails for our purposes.. ie Exist or notExist
+                if {$matchAll>0 && $miss==0 && ([lindex $para 2] == "exist" || [lindex $para 2] == "range" || \
+                       [lindex $para 2] == "regexExist")} {
+                    #puts "$print check end 1"
+                } elseif {$matchAll>0 && $miss == 0 && ([lindex $para 2] == "notExist" || [lindex $para 2] == "regexNotExist")} {
+                    set rVal 0
+                    #puts "$print check end 2"
+                } elseif {($matchAll==0 || $miss>0) && ([lindex $para 2] == "exist" || [lindex $para 2] == "range" || \
+                       [lindex $para 2] == "regexExist")} {
+                    set rVal 0
+                    #puts "$print check end 3"
+                } elseif {($matchAll==0 || $miss>0) && ([lindex $para 2] == "notExist" || [lindex $para 2] == "regexNotExist")} {
+                    #puts "$print check end 4"
+                } elseif {$matchAll>0 && ([lindex $para 1] == "exist" || [lindex $para 1] == "range") || \
+                       [lindex $para 2] == "regexExist")} {
+                    #puts "$print check end 5"
+                } elseif {$matchAll>0 && ([lindex $para 1] == "notExist" || [lindex $para 2] == "regexNotExist")} {
+                    set rVal 0
+                    #puts "$print check end 6"
+                } elseif {($matchAll==0 || $miss>0) && ([lindex $para 1] == "notExist" || [lindex $para 2] == "regexNotExist")} {
+                    #puts "$print check end 7"
+                } else {
+                    set rVal 0
+                    #puts "$print check end 8"
+                }
+                # Store info on a passed parameter
+                if {$rVal} {
+                    incr pOkCounter
+                    set paramChecked($pc) 1;# We have already passed this parameter. Don't check it on future iterations
+                    #puts "Setting $para checked = $paramChecked($pc)"
+                }
+                #If every parameter has passed exit and print result arrays.
+                if {$pOkCounter == $pCount} {
+                    set finished 1
+                }
+                # Time has run out.  All iterations have completed.
+                if {[expr $tloop - $q] == 0} {
+                    set fine 1
+                }
+            }
+        }
+        if {$finished} {
+            # print the save results
+            set i 0
+            foreach para $parameterList {
+                report_start_test $para
+                foreach o $pRes($i) {
+                    result_ok "$o"
+                }
+                foreach f $fRes($i) {
+                    result_error "$f"
+                }
+                report_end_test
+                incr i
+            } 
+            report_end_test
+            return 1
+        } elseif {!$fine} {
+            set retry 1
+            set qp [expr $q + 1]
+            result_debug "Check output \"$cmd\". [expr $sTime + [expr $it * $q]] of [expr $sTime + [expr $it * $tloop]] (Starting $it sec iter. $qp of $tloop)"
+            exSleep $it
+        }
+    }
+    # print the save results
+    set i 0
+    foreach para $parameterList {
+        report_start_test $para
+        foreach o $pRes($i) {
+            result_ok "$o"
+        }
+        foreach f $fRes($i) {
+            result_error "$f"
+        }
+        report_end_test
+        incr i
+    }
+    report_end_test
+    return $rVal
+}
+#############################################################################
+# Procedure Name: GetDictValue
+#
+# Similar to GetKeyValue, but makes a JSONRPC request to the mgmt interface
+#   on a switch and checks a parameterList to match expected outputs
+#
+#
+#     set parameterList ""
+#     lappend parameterList "{vlanProc {name1}}"
+#     set res [GetDictValue -cmd $com -parameterList $parameterList -debugjson "false"]
+#############################################################################
+proc GetDictValue {args} {
+    parse_args GetDictValue $args {
+        cmd           ""
+        parameterList ""
+        comment       "hey"
+        yesorno       "Yes"
+        debugjson     "false"
+        debugdict     "false"
+        time          "null"
+        showfmt       "default"
+        getactioncli  "null"
+        testNo        ""
+    }
+
+    global whichDutNow connectionTimeout
+    set rVal 1
+
+    set majmin [GetVersion DUT${whichDutNow} majmin]
+    if {$majmin<15.6} {
+        result_error "CheckDictValue is not supported in versions less than 15.6"
+        return
+    }
+
+    #time stuff  -time {s: 0 i: 3 f: 15}
+    set it 1
+    set ftime 1
+    set tloop 1
+    set retry 0
+    set fine 0
+    if {$time != "null"} {
+        foreach {k v} $time {
+            switch $k {
+                "s:" {
+                    if {$v>0} {
+                        result_debug "Wait $v seconds before checking $cmd"
+                        exSleep $v
+                    }
+                }
+                "i:" {
+                    set it $v
+                }
+                "f:" {
+                    set ftime $v
+                }
+            }
+        }
+        set tloop [expr int(ceil($ftime/$it))];
+    }
+
+
+    if {[regexp -nocase {^sh[ow]* *por[ts]*} $cmd]&&![regexp -nocase "clean$|no-refresh$" $cmd] && \
+            ![regexp -nocase "info|redun|shar|util|protocol|buffer|debounce|group|link-scan" $cmd]} {
+        if {$majmin>=11.3&&$majmin<21.1} {
+            set cmd "$cmd no-refresh"
+        }
+    }
+
+    report_start_test "GetDictValue <$cmd> $testNo $comment"
+    set fList ""
+    for {set q 0} {$q<$tloop} {incr q} {
+        result_print "--- Send run script cli2json.py -d $cmd"
+        set timeout 5
+        set exp_out_buf ""
+        if {$debugjson != "false"} {
+            _setShowOutput -screen on -log on -res_fmt on
+            exp_send "run script cli2json.py -d $cmd\r"
+        } else {
+            _setShowOutput -screen off -log off -res_fmt off
+            exp_send "run script cli2json.py $cmd\r"
+        }
+        expect {
+            "$cmd" {}
+            timeout {
+                result_debug "Timeout waiting for CheckDictValue cli to echo"
+                return;
+            }
+        }
+        set timeout $connectionTimeout
+        expect {
+            -nocase -re "(\\* )?\[a-z0-9()._-]+(:|\\.)\[0-9]+ (#|>) " {
+                # ExtremeWare and ExtremeWare XOS prompt.
+                #
+                # The pattern breaks down as follows:
+                #
+                # (\\* )?        Unsaved config marker
+                # \[a-z0-9._-]+  Platform type or SNMP system name
+                # (:|\\.)        Name and command ID separator
+                # \[0-9]+        Command ID
+                # (#|>)          System or user prompt marker
+                append exp_out_buf $expect_out(buffer)
+                regsub -all "\n\r" $exp_out_buf "\n" exp_out_buf
+                regsub -all "\t" $exp_out_buf " " exp_out_buf
+            }
+            "\\?" {
+                send "$yesorno\r"
+                exp_continue
+            }
+            timeout {
+                result_debug "Timeout waiting for CheckDictValue cli to match a prompt"
+                return;
+            }
+        }
+
+        set output $exp_out_buf
+        _setShowOutput -screen on -log on -res_fmt on
+        if {$debugjson != "false"} {
+            puts "\n\nReturned Output:\n$output\n\n"
+        }
+
+        set parsed [json::json2dict $output]
+        set vOdd [expr [llength $parsed] % 2]
+        if {$vOdd  != 0} {
+            lappend parsed {dummy}
+        }
+        if {$debugdict != "false"} {
+            puts "\n\nParsed Dictionary:\n$parsed\n\n"
+        }
+        if {[catch {dict get $parsed} psmall]} {
+            puts "Error getting dictionary path - $psmall"
+        } else {
+            _setShowOutput -screen on -log on -res_fmt on
+            foreach ele $psmall {
+                if {![catch {dict get $ele CLIoutput} tolog]} {
+                    if {$showfmt == "default"} {
+                        result_pre $tolog
+                        puts $tolog
+                    }
+                } else {
+                    if {$showfmt != "default"} {
+                        result_pre $ele
+                        puts $ele
+                    }
+                }
+            }
+            foreach para $parameterList {
+                puts "Test $para"
+                set outList ""
+                set matchAll 0
+                foreach ele $psmall {
+                    set pPass 0
+                    if {![catch {dict keys $ele} why]} {
+                        set keyLen [llength [lindex $para 0]]
+                        switch $keyLen {
+                        4 {
+                            set i 0
+                            set reqPass [llength [lindex $para 1]]
+                            foreach lastEle [lindex [lindex $para 0] 3] {
+                                if {[catch {dict get $ele [lindex [lindex $para 0] 0] [lindex [lindex $para 0] 1] [lindex [lindex $para 0] 2] $lastEle} outVal]} {
+                                    #puts "didn't find dictionary $outVal"
+                                } else {
+                                    lappend outList $outVal
+                                }
+                                incr i
+                            }
+                        }
+                        3 {
+                            set i 0
+                            set reqPass [llength [lindex $para 1]]
+                            foreach lastEle [lindex [lindex $para 0] 2] {
+                                if {[catch {dict get $ele [lindex [lindex $para 0] 0] [lindex [lindex $para 0] 1] $lastEle} outVal]} {
+                                    #puts "didn't find dictionary $outVal"
+                                } else {
+                                    #puts "Found keys 3"
+                                    lappend outList $outVal
+                                }
+                                incr i
+                            }
+                        }
+                        2 {
+                            set i 0
+                            set reqPass [llength [lindex $para 1]]
+                            foreach lastEle [lindex [lindex $para 0] 1] {
+                                if {[catch {dict get $ele [lindex [lindex $para 0] 0] $lastEle} outVal]} {
+                                    #puts "didn't find dictionary $outVal"
+                                } else {
+                                    lappend outList $outVal
+                                }
+                                incr i
+                            }
+                        }
+                        1 {
+                            set i 0
+                            set reqPass [llength [lindex $para 1]]
+                            if {[catch {dict get $ele [lindex [lindex $para 0] 0]} outVal]} {
+                                #puts "didn't find dictionary $outVal"
+                            } else {
+                                lappend outList $outVal
+                            }
+                       }
+                       }
+                    }
+                    #if {$pPass >= $reqPass} {
+                    #    set matchAll 1
+                    #    break;
+                    #}
+                }
+                if {[llength $outList] > 0} {
+                    lappend fList $outList
+                }
+            }
+        }
+        #if {$rVal} {
+        #    return 1
+        #} elseif {!$fine} {
+        #    set retry 1
+        #    exSleep $it
+        #}
+    }
+    report_end_test
+    if {[llength $fList] > 0} {
+        puts "GetDictValue returning: $fList"
+        return $fList
+    } else {
+        return ""
+    }
+}

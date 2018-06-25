@@ -1,0 +1,649 @@
+proc egrep_unique {args} {
+    parse_args egrep_unique $args {
+       f         ""
+       find      ""
+       t         ""
+       targetDir ""
+       ext      "tcl"
+       option   ""
+    }
+
+    if {$f != ""} {
+        set find $f
+    }
+    if {$t != ""} {
+        set targetDir $t
+    }
+    set fList ""
+    foreach match [glob  -nocomplain  ${targetDir}/*.$ext]  {
+        if {![catch {exec egrep $option $find $match} matchPhrase] && [lsearch $fList $matchPhrase] < 0} {
+            lappend fList $matchPhrase
+        }
+    }
+    return $fList
+}
+proc egrep_files {args} {
+    parse_args egrep_files $args {
+       f         ""
+       find      ""
+       t         ""
+       targetDir ""
+       ext      "tcl"
+    }
+
+    if {$f != ""} {
+        set find $f
+    }
+    if {$t != ""} {
+        set targetDir $t
+    }
+    set fList ""
+    foreach match [glob  -nocomplain  ${targetDir}/*.$ext]  {
+        if {![catch {exec egrep -l "$find" $match} matchPhrase]} {
+            lappend fList $matchPhrase
+        }
+    }
+    return $fList
+}
+proc egrep_files_count {args} {
+    parse_args egrep_files_count $args {
+       f         ""
+       find      ""
+       t         ""
+       targetDir ""
+       ext      "tcl"
+    }
+
+    if {$f != ""} {
+        set find $f
+    }
+    if {$t != ""} {
+        set targetDir $t
+    }
+    set fList ""
+    foreach match [glob  -nocomplain  ${targetDir}/*.$ext]  {
+        #puts "Sending exec egrep -c \"$find\" $match"
+        if {![catch {exec egrep -c "$find" $match} matchPhrase]} {
+            set fParts [split $match /]
+            set theFile [lindex $fParts [expr [llength $fParts] - 1]]
+            lappend fList "$theFile:$matchPhrase"
+        }
+    }
+    return $fList
+}
+proc get_5node_cfgfiles {path} {
+    return [egrep_files -f DUT3|DUT4|DUT5 -t $path -ext cfg]
+}
+proc get_5node_scripts {path} {
+    return [egrep_files -f "Login.*DUT3|DUT4|DUT5" -t $path -ext tcl]
+}
+
+proc get_node_scripts {path} {
+    return [egrep_files -f DUT1|DUT2 -t $path -ext tcl]
+}
+proc is_5node_cfg {path} {
+    if {![catch {exec egrep -l DUT3|DUT4|DUT5 $path} matchPhrase]} {
+        return $matchPhrase
+    } else {
+        return 0
+    }
+}
+proc is_5node_script {path} {
+    if {![catch {exec egrep -l "Login.*DUT3|DUT4|DUT5" $path} matchPhrase]} {
+        if {[regexp -nocase "\[0-9a-zA-Z]" $matchPhrase]} {
+            return 1
+        } else {
+            return 0
+        }
+    } else {
+        return 0
+    }
+}
+proc is_2node_script {path} {
+    if {![catch {exec egrep -l "Login.*DUT2" $path} matchPhrase]} {
+        if {[regexp -nocase "\[0-9a-zA-Z]" $matchPhrase]} {
+            return 1
+        } else {
+            return 0
+        }
+    } else {
+        return 0
+    }
+}
+
+proc is_10node_script {path} {
+    if {![catch {exec egrep -l DUT6 $path} matchPhrase]} {
+        return $matchPhrase
+    } else {
+        return 0
+    }
+}
+proc get_proc_files {path} {
+    set oFileList ""
+    set pFileList [egrep_files_count -f "^proc|^ +proc" -t $path -ext tcl]
+    foreach pf $pFileList {
+        set pCount [lindex [split $pf :] 1]
+        if {$pCount > 1} {
+            lappend oFileList "[lindex [split $pf :] 0]"
+        }
+    }
+    return $oFileList
+}
+proc get_area {in} {
+    switch -nocase -regexp $in {
+        "bench" {
+            return Benchmarktest
+        }
+        "cli"  {
+            return CLItest
+        }
+        "diag" {
+            return DiagnosticsTest
+        }
+        "epi"  {
+            return EPICenter-test
+        }
+        "func" {
+            return Functionaltest
+        }
+        "scrip" {
+            return ixScriptMate
+        }
+        "perf" {
+            return PerformanceTest
+        }
+        "scal" {
+            return Scalabilitytest
+        }
+        "snmp" {
+            return SnmpFunctionaltest
+        }
+        "stress" {
+            return Stresstest
+        }
+        "syst" {
+            return SystemTest
+        }
+        "xml" {
+            return XML_API
+        }
+        default {
+            return 0
+        }
+    }
+}
+# --------------------------------------------------------------------
+#  proc VerifyTopologyMatchDir
+#  
+#  NODECOUNT is set in main.tcl
+#
+#  args:  in - args  -module   -mod_dir
+#         out - 1 if they case is supported on the bed
+#               0 if the case is not supportted on the bed
+#
+#
+#  typical usage:  
+#
+#   if ![VerifyTopologyMatch -testcase $cTest -module $Module  -mod_dir $testDir] 
+#         # this test case does not match the test bed
+# --------------------------------------------------------------------
+proc VerifyTopologyMatchDir {args} {
+    global MAIN curAutoRoot nodeByFeature
+
+    parse_args VerifyTopologyMatchDir $args {
+       module    "null"
+       mod_dir   "null"
+    }
+
+    if {[info exists nodeByFeature($module)]} {
+        puts "Use topology from database"
+        if {$nodeByFeature($module) == 5} {
+            set tc5node 1; set tc2node 0; set tc1node 0;
+        }
+        if {$nodeByFeature($module) == 2} {
+            set tc5node 0; set tc2node 1; set tc1node 0;
+        }
+        if {$nodeByFeature($module) == 1} {
+            set tc5node 0; set tc2node 0; set tc1node 1;
+        }
+    } else {
+        set tc5node 1
+        set tc2node 1
+        set tc1node 1
+        #Check to see if the case is a 5 node case
+        set dirfull ${curAutoRoot}[string trim $mod_dir "."]/[string trim $module "."]
+        set rtrScripts [get_5node_scripts $dirfull];# Check for DUT3|DUT4|DUT5 in files
+        set c 0
+        foreach s $rtrScripts {
+            set f [file tail $s]
+            if {[regexp "\[0-9]+\.\[0-9]+.*\.tcl|T.*\.tcl" $f]} {
+                incr c
+            }
+        }
+        puts "check NODECOUNT $dirfull $rtrScripts"
+        if {$c > 1} {
+            set tc5node 1; set tc1node 0; set tc2node 0;
+        } else {
+            # undetermined.. just no DUT3,4 or 5 in a numbered tcl file
+            set tc1node 1; set tc2node 1; set tc5node 0;
+        }
+    }
+    switch $MAIN(NODECOUNT) {
+        1 {
+            if {!$tc1node} {
+                puts "\n@@@@ $mod_dir $module is not supported on a 1 Node Test Bed @@@@"
+                return 0
+            } else {
+                return 1
+            }
+        }
+        2 {
+            if {!$tc2node} {
+                puts "\n@@@@ $mod_dir $module is not supported on a 2 Node Test Bed @@@@"
+                return 0
+            } else {
+                return 1
+            }
+        }
+        5 {
+            if {!$tc5node} {
+                puts "\n@@@@ $mod_dir $module is not supported on a 5 Node Test Bed @@@@"
+                return 0
+            } else {
+                return 1
+            }
+        }
+        default {return 1;}
+    }
+    return 1;
+}
+
+
+# --------------------------------------------------------------------
+#  proc VerifyTopologyMatch
+#  
+#  NODECOUNT is set in main.tcl
+#
+#  args:  in - args   -testcase  -module   -mod_dir
+#         out - 1 if they case is supported on the bed
+#               0 if the case is not supportted on the bed
+#
+#
+#  typical usage:  
+#
+#   if ![VerifyTopologyMatch -testcase $cTest -module $Module  -mod_dir $testDir] 
+#         # this test case does not match the test bed
+# --------------------------------------------------------------------
+proc VerifyTopologyMatch {args} {
+    global MAIN curAutoRoot
+
+    parse_args VerifyTopologyMatch $args {
+       testcase  "null"
+       module    "null"
+       mod_dir   "null"
+    }
+
+    set tc2node 0
+    set tc5node 0
+    #Check to see if the case is a 5 node case
+    set tcfull ${curAutoRoot}[string trim $mod_dir "."]/[string trim $module "."]/${testcase}.tcl
+    puts "check NODECOUNT $tcfull"
+    if {[is_5node_script $tcfull] != 0} {
+        set tc5node 1
+    } elseif {[is_2node_script $tcfull] != 0} {
+        set tc2node 1
+    } else {
+        puts "\nDebug - ODD no test bed node count match found"
+    }
+
+    switch $MAIN(NODECOUNT) {
+        1 {
+            if {$tc5node || $tc2node} {
+                puts "\n@@@@ Test Case $testcase is not supported on a 1 Node Test Bed @@@@"
+                return 0
+            } else {
+                return 1
+            }
+        }
+        2 {
+            if {$tc5node} {
+                puts "\n@@@@ Test Case $testcase is not supported on a 2 Node Test Bed @@@@"
+                return 0
+            } else {
+                return 1
+            }
+        }
+        5 {
+            if {$tc2node} {
+                puts "\n@@@@ Test Case $testcase is not supported on a 1 Node Test Bed @@@@"
+                return 0
+            } else {
+                return 1
+            }
+        }
+        default {return 1;}
+    }
+    return 1;
+}
+
+proc make_dyn_tests {module cfg} {
+    set retMod ${module}_2node
+    set tpt 2
+    puts "Mod $module cfg $cfg"
+    set dbug 1
+    set ctString "set tests_to_run_quick(all) \{\n \
+@@TESTS@@\n
+\}\n \
+set tests_to_run_pass(all) \{\n \
+\}\n \
+set tests_to_run_all(all) \{\n \
+\}\n \
+set tests_to_run_debug(all) \{\n \
+\}\n \
+set tests_to_run(null) \{\n \
+   cleanup\n \
+\}\n"
+    #Check cfg path
+    set cList [split $cfg /]
+    if {[lindex $cList 0] == "cfg"} {
+        set cPath $cfg
+    } else {
+        set cPath "cfg/$cfg"
+    }
+    if {![file isfile $cPath]} {
+        puts "Error!! Can not find the cfg file $cPath"
+        return -1
+    } else {
+        if {$dbug} {puts "$cPath EXISTS\nCheck to see if this is a 5node cfg";}
+        set fList ""
+        if {[is_5node_script $cPath] != 0} {
+            puts "This is a 5 node cfg file"
+            set retMod ${module}_5node
+            set tbt 5
+        } else {
+            puts "This is a 2 node cfg file"
+            set retMod ${module}_2node
+            set tbt 2
+        }
+        if {[file isfile ../Dynamic/Tmp/${module}.lst]} {
+            puts "Open ${module}.lst"
+            set fd_in [open "../Dynamic/Tmp/${module}.lst" "r"]
+            while {[gets $fd_in line] != -1} {
+                if {$dbug} {puts "----- Line=|$line|";}
+                set lPieces [split $line /]
+                set area [get_area [lindex $lPieces 0]]
+                set feat [lindex $lPieces 1]
+                if {[lsearch $fList $feat] < 0} {
+                    lappend fList $feat
+                    set usedIEList($feat) ""
+                    set nodeFiles($feat) ""
+                    set nodeSmallFiles($feat) ""
+                    set tFiles($feat) ""
+                    set fCtList($feat) ""
+                    set pLibs($feat) ""
+                    set fArea($feat) "$area"
+                    #puts "SET AREA fArea($feat)  $fArea($feat)"
+                }
+                set tc [lindex $lPieces 2]
+                set cleanTc [string trimright $tc ".tcl"]
+                set fPath "../${area}/${feat}/"
+                if {$tbt == 5} {
+                    set oList [get_5node_scripts $fPath]
+                } else {
+                    set aList [get_node_scripts $fPath]
+                    set bList [get_5node_scripts $fPath]
+                    if {[llength $aList] > 0 && [llength $bList] < 2} {
+                        set oList $aList
+                    } else {
+                        set oList ""
+                    }
+                }
+                if {[llength $oList] > 0} {
+                    set fCtList($feat) [GetCompleteTestsLists \
+                        -sourcefile "${fPath}completetests.lst" \
+                        -platform   "x480-24x" \
+                        -lst        "dev" \
+                        -pId        "null" \
+                        -test       "null" \
+                        -inVersion  "30.1.1.1" \
+                        -inHwList   "null" \
+                        -debugFile  "0" \
+                        -debugSkip  "0" \
+                        -debugSkipCom  "0" \
+                        -debugOut   "0" \
+                        -debugCom   "0" \
+                        -debug      "0"]
+                    if {$dbug} {puts "$cleanTc At [lsearch $fCtList($feat) $cleanTc]";}
+                    #puts "$fCtList($feat)"
+                    set iEList [lsearch -all -regexp $fCtList($feat) {init|end}]
+                    if {$dbug} {puts "Init/End [lsearch -all -regexp $fCtList($feat) {init|end}]";}
+                }
+                if {[llength $oList] > 0 && [file isfile ${fPath}/$tc]} {
+                    #Add any possible lib files to the nodeFiles(feature) arrays
+                    if {[llength $pLibs($feat)] == 0} {
+                        set pp [get_proc_files ${fPath}]
+                        if {[llength $pp] > 0} {
+                            foreach p $pp {
+                                if {$dbug} {puts "Found proc file $p";}
+                                lappend pLibs($feat) $p
+                            }
+                        } else {
+                            lappend pLibs($feat) nope
+                        }
+                    }
+                    if {$dbug} {puts "Appending node ${fPath}/$tc";}
+                    lappend nodeFiles($feat) ${fPath}/$tc
+                    lappend nodeSmallFiles($feat) $tc
+                    lappend tFiles($feat) $cleanTc
+                }
+            }
+            close $fd_in
+        } else {
+            puts "Can't find the lst file ${module}.lst"
+            return -1  
+        }
+        if {[llength $fList] > 0} {
+            set allTC ""
+            puts "We have some features $fList"
+            if [catch {file mkdir ../Dynamic/$retMod} reason] {
+                puts "Could not create ../Dynamic/$retMod"
+            } else {
+                foreach f $fList {
+                    if {$dbug} {puts "Check $f for files - count = [llength $nodeFiles($f)]";}
+                    if {[llength $nodeFiles($f)] > 0} {
+                        foreach s $nodeFiles($f) {
+                            # Move the script specified in the input file
+                            if {[catch {exec cp $s ../Dynamic/$retMod} reason]} {
+                                puts "Could not copy $s to ../Dynamic/$retMod"
+                            }
+                            set fParts [split $s /]
+                            set fs [lindex $fParts [expr [llength $fParts] - 1]]
+                            set cleanFs [string trimright $fs ".tcl"]
+                            # Rename files with feature prepended to support same script name in diff features.
+                            if {[catch {exec mv ../Dynamic/$retMod/$fs ../Dynamic/$retMod/${f}_$fs} reason]} {
+                                puts "Could not mv ../Dynamic/$retMod/$fs to ../Dynamic/$retMod/${f}_$fs"
+                            }
+                            # Open the test case for replacing proc name with feature prepended
+                            set fd_t [open "../Dynamic/$retMod/${f}_$fs" "r"]
+                            set fContent [read $fd_t]
+                            close $fd_t
+                            # Remove the original script so we can write the version with the new proc name
+                            if {[catch {exec rm -f ../Dynamic/$retMod/${f}_$fs} reason]} {
+                                puts "Could not delete ../Dynamic/$retMod/${f}_$fs"
+                            }
+                            # Open the script to write after replacements
+                            set fd_t [open "../Dynamic/$retMod/${f}_$fs" "w"]
+                            if {$dbug} {puts "regsub \"proc $cleanFs\" fContent ${f}_$cleanFs";}
+                            regsub "proc $cleanFs" $fContent "proc ${f}_$cleanFs" fContent
+                            regsub "testNo $cleanFs" $fContent "testNo ${f}_$cleanFs" fContent
+                            puts $fd_t $fContent
+                            close $fd_t
+                        }
+                        set move($f) ""
+                        set j 0
+                        #Walk the completetests to look for init and end files
+                        foreach ctf $fCtList($f) {
+                            if {[regexp init $ctf]} {
+                                set iList [split $ctf .]
+                                set iPos [lsearch $fCtList($f) $ctf]
+                                set initNum [lindex $iList 0]
+                                set iEnd [lsearch $fCtList($f) ${initNum}.end]
+                                if {$iEnd < 0} {
+                                    set iEnd 500
+                                }
+                                set top [llength $tFiles($f)]
+                                set mc 0
+                                foreach myCase $tFiles($f) {
+                                    if {$dbug} {puts "Look for $myCase - ipos $iPos iend $iEnd";}
+                                    if {[lsearch $fCtList($f) $myCase] > $iPos && \
+                                        [lsearch $fCtList($f) $myCase] < $iEnd && \
+                                        [lsearch $allTC ${f}_$ctf] < 0} {
+                                        if {$dbug} {puts "CT add ${f}_$ctf and ${f}_$myCase - fArea($f) $fArea($f)";}
+                                        if {[catch {exec cp ../$fArea($f)/${f}/${ctf}.tcl ../Dynamic/$retMod/${f}_${ctf}.tcl} reason]} {
+                                            puts "Could not copy ../$fArea($f)/${f}/${ctf}.tcl to ../Dynamic/$retMod/${f}_${ctf}.tcl"
+                                        }
+                                        # Change the init proc name - prepend feature
+                                        set fs ${ctf}.tcl
+                                        set cleanFs $ctf
+                                        # Rename files with feature prepended to support same script name in diff features.
+                                        # Open the test case for replacing proc name with feature prepended
+                                        set fd_t [open "../Dynamic/$retMod/${f}_$fs" "r"]
+                                        set fContent [read $fd_t]
+                                        close $fd_t
+                                        # Remove the original script so we can write the version with the new proc name
+                                        if {[catch {exec rm -f ../Dynamic/$retMod/${f}_$fs} reason]} {
+                                            puts "Could not delete ../Dynamic/$retMod/${f}_$fs"
+                                        }
+                                        # Open the script to write after replacements
+                                        set fd_t [open "../Dynamic/$retMod/${f}_$fs" "w"]
+                                        if {$dbug} {puts "regsub \"proc $cleanFs\" fContent ${f}_$cleanFs";}
+                                        regsub "proc $cleanFs" $fContent "proc ${f}_$cleanFs" fContent
+                                        regsub "testNo $cleanFs" $fContent "testNo ${f}_$cleanFs" fContent
+                                        puts $fd_t $fContent
+                                        close $fd_t
+                                        # Add test cases to the new completetest.lst with x.init before it
+                                        lappend allTC ${f}_$ctf
+                                        lappend allTC ${f}_$myCase
+                                        if {$mc == [expr $top - 1] && $iEnd != 500} {
+                                            if {$dbug} {puts "CT add ${f}_${initNum}.end";}
+                                            if {[catch {exec cp ../$fArea($f)/${f}/${initNum}.end.tcl ../Dynamic/$retMod/${f}_${initNum}.end.tcl} reason]} {
+                                                puts "Could not copy ../$fArea($f)/${f}/${initNum}.end.tcl to ../Dynamic/$retMod/${f}_${initNum}.end.tcl"
+                                            }
+                                            # Change the end proc name - prepend feature
+                                            set fs ${initNum}.end.tcl
+                                            set cleanFs ${initNum}.end
+                                            # Rename files with feature prepended to support same script name in diff features.
+                                            # Open the test case for replacing proc name with feature prepended
+                                            set fd_t [open "../Dynamic/$retMod/${f}_$fs" "r"]
+                                            set fContent [read $fd_t]
+                                            close $fd_t
+                                            # Remove the original script so we can write the version with the new proc name
+                                            if {[catch {exec rm -f ../Dynamic/$retMod/${f}_$fs} reason]} {
+                                                puts "Could not delete ../Dynamic/$retMod/${f}_$fs"
+                                            }
+                                            # Open the script to write after replacements
+                                            set fd_t [open "../Dynamic/$retMod/${f}_$fs" "w"]
+                                            if {$dbug} {puts "regsub \"proc $cleanFs\" fContent ${f}_$cleanFs";}
+                                            regsub "proc $cleanFs" $fContent "proc ${f}_$cleanFs" fContent
+                                            regsub "testNo $cleanFs" $fContent "testNo ${f}_$cleanFs" fContent
+                                            puts $fd_t $fContent
+                                            close $fd_t
+                                            # add the end file to the new completelist
+                                            lappend allTC ${f}_${initNum}.end
+                                        }
+                                    } elseif {[lsearch $fCtList($f) $myCase] > $iPos && \
+                                        [lsearch $fCtList($f) $myCase] < $iEnd && \
+                                        [lsearch $allTC ${f}_$ctf] >= 0 && \
+                                        [lsearch $allTC ${f}_$myCase] < 0} {
+                                        if {$dbug} {puts "CT add ${f}_$myCase";}
+                                        lappend allTC ${f}_$myCase
+                                        if {$mc == [expr $top - 1] && $iEnd != 500} {
+                                            if {$dbug} {puts "CT add ${f}_${initNum}.end";}
+                                            if {[catch {exec cp ../$fArea($f)/${f}/${initNum}.end.tcl ../Dynamic/$retMod/${f}_${initNum}.end.tcl} reason]} {
+                                                puts "Could not copy ../$fArea($f)/${f}/${initNum}.end.tcl to ../Dynamic/$retMod/${f}_${initNum}.end.tcl"
+                                            }
+                                            # Change the end proc name - prepend feature
+                                            set fs ${initNum}.end.tcl
+                                            set cleanFs ${initNum}.end
+                                            # Rename files with feature prepended to support same script name in diff features.
+                                            # Open the test case for replacing proc name with feature prepended
+                                            set fd_t [open "../Dynamic/$retMod/${f}_$fs" "r"]
+                                            set fContent [read $fd_t]
+                                            close $fd_t
+                                            # Remove the original script so we can write the version with the new proc name
+                                            if {[catch {exec rm -f ../Dynamic/$retMod/${f}_$fs} reason]} {
+                                                puts "Could not delete ../Dynamic/$retMod/${f}_$fs"
+                                            }
+                                            # Open the script to write after replacements
+                                            set fd_t [open "../Dynamic/$retMod/${f}_$fs" "w"]
+                                            if {$dbug} {puts "regsub \"proc $cleanFs\" fContent ${f}_$cleanFs";}
+                                            regsub "proc $cleanFs" $fContent "proc ${f}_$cleanFs" fContent
+                                            regsub "testNo $cleanFs" $fContent "testNo ${f}_$cleanFs" fContent
+                                            puts $fd_t $fContent
+                                            close $fd_t
+                                            # add the end file to the new completelist
+                                            lappend allTC ${f}_${initNum}.end
+                                        }
+                                    } elseif {$mc == $top && $iEnd != 500} {
+                                        if {$dbug} {puts "CT add ${f}_${initNum}.end";}
+                                        if {[catch {exec cp ../$fArea($f)/${f}/${initNum}.end.tcl ../Dynamic/$retMod/${f}_${initNum}.end.tcl} reason]} {
+                                            puts "Could not copy ../$fArea($f)/${f}/${initNum}.end.tcl to ../Dynamic/$retMod/${f}_${initNum}.end.tcl"
+                                        }
+                                        # Change the end proc name - prepend feature
+                                        set fs ${initNum}.end.tcl
+                                        set cleanFs ${initNum}.end
+                                        # Rename files with feature prepended to support same script name in diff features.
+                                        # Open the test case for replacing proc name with feature prepended
+                                        set fd_t [open "../Dynamic/$retMod/${f}_$fs" "r"]
+                                        set fContent [read $fd_t]
+                                        close $fd_t
+                                        # Remove the original script so we can write the version with the new proc name
+                                        if {[catch {exec rm -f ../Dynamic/$retMod/${f}_$fs} reason]} {
+                                            puts "Could not delete ../Dynamic/$retMod/${f}_$fs"
+                                        }
+                                        # Open the script to write after replacements
+                                        set fd_t [open "../Dynamic/$retMod/${f}_$fs" "w"]
+                                        if {$dbug} {puts "regsub \"proc $cleanFs\" fContent ${f}_$cleanFs";}
+                                        regsub "proc $cleanFs" $fContent "proc ${f}_$cleanFs" fContent
+                                        regsub "testNo $cleanFs" $fContent "testNo ${f}_$cleanFs" fContent
+                                        puts $fd_t $fContent
+                                        close $fd_t
+                                        # add the end file to the new completelist 
+                                        lappend allTC ${f}_${initNum}.end
+                                    }
+                                    incr mc
+                                }
+                            } elseif {[lsearch $allTC ${f}_$ctf] >= 0 || [lsearch $tFiles($f) $ctf] < 0} {
+                                if {$dbug} {puts "Hit cont first [lsearch $allTC $ctf] sec [lsearch $tFiles($f) $ctf] files $tFiles($f)";}
+                                continue
+                            } else {
+                                if {$dbug} {puts "CT add else ${f}_$ctf";}
+                                lappend allTC ${f}_$ctf
+                            }
+                        }
+                        #lappend allTC [join $tFiles($f) \n]
+                        # Copy any possible proc files to the dynamic module directory
+                        foreach pf $pLibs($f) {
+                            # Move the possible lib file
+                            if {[lsearch $tFiles($f) $pf] < 0} {
+                                if {$dbug} {puts "MOVING possible lib $pf";}
+                                if {[catch {exec cp ../$fArea($f)/${f}/$pf ../Dynamic/$retMod/$pf} reason]} {
+                                    puts "Could not copy ../$fArea($f)/${f}/$pf to ../Dynamic/$retMod/$pf"
+                                }
+                            }
+                        }
+                    }
+                }
+                set fd_ct [open "../Dynamic/$retMod/completetests.lst" "w"]
+                set theTests [join $allTC "\n"]
+                regsub {@@TESTS@@} $ctString $theTests ctString
+                puts $fd_ct $ctString
+                close $fd_ct                
+            }
+        } else {
+            puts "No files found"
+            return -1
+        } 
+        return $retMod
+    }
+}

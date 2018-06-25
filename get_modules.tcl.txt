@@ -1,0 +1,162 @@
+#!/usr/bin/tclsh
+
+package require Tclx
+set DEBUGON 0
+set DEBUGONREGRESSIONAREAS 0
+set DEBUGONDIRFEATURES 0
+set DEBUGONRUNREG 0
+# ----------------------------------------------------------
+# Start MAIN
+# ----------------------------------------------------------
+proc print_usage {} {
+    puts "\r"
+    puts {Usage: get_modules.tcl -release <release> -svntag}
+    puts {      [<release>]: "12.6.1"}
+    puts {      [<svntag>]: "EXOS_12.5.3"}
+    puts {               "EXOS_Automation"}
+    puts {               "SWDev_12.5.2"}
+    puts {         (Typical Usage:) }
+    puts {      (./get_modules.tcl -release 12.6.1 -svntag EXOS_12.6.1 }
+    puts "\r"
+}
+
+global DBNAME1
+global DBHANDLE1
+global DEBUGON
+global SKIPAREALIST
+global SKIPFEATUREDIRSLIST
+global EXISTINGFEATURENAMESByAreaLists
+global EXISTINGFEATUREDIRSByName
+global EXISTINGFEATUREDIRSByAreaLists
+global EXISTINGFEATUREOTPSModule
+global EXISTINGINVBYAREADIRTC
+global SUBTYPESBYAREAFEATUREDIR
+global ACTIVEBYAREAFEATUREDIR
+global ENDRELEASEBYAREAFEATUREDIR
+global DBTypesByAutoDirs
+global INRELEASE
+global INSVNTAG
+global FILEDIR
+global ISIO
+
+set FILEDIR [pwd]
+set DBNAME2 autoweb_db_7 ;# Automation code repository target for these scripts
+set DBUSERNAME2 regression_user ;# 
+set DBPASSWORD2 extreme ;# 
+set DBIPADDRESS2 10.69.6.211 ;# Automation code repository target for these scripts
+set DBHANDLE2 ""
+set AREAMAPARRAY "" 
+set SKIPAREALIST {Autoweb Benchmarktest Doc EPICenter EPICenter-test Lib iTest main Tools users Util PerformanceTest XML_API cli-ew CLItest Stresstest Scalabilitytest}
+set SKIPFEATUREDIRSLIST(functionaltest) {ACL_24e3 ARM cleanup CLI DF EXOS_MPLS IPv6_LPM ipx mpls-ldp \
+         MPLS-TLS NAT newmpls PXM QOS-ISQ QOS-PRI utils WAN-MLP WAN-PHY WAN-PPP}
+set SKIPFEATUREDIRSLIST(performancetest) {NAT}
+set SKIPFEATUREDIRSLIST(xml-api) {Lib}
+set SKIPFEATUREDIRSLIST(cli-ew) {"dvmrp" "flow" "ipx" "nat" "slb" "wan-common" "wan-e1" "wan-t1" "wan-t3"}
+# -------- MAP DB Feature Types to auto tree directories ----------
+set AutoAreasByDBTypes(benchmark) Benchmarktest
+set AutoAreasByDBTypes(cli) cli-ew
+set AutoAreasByDBTypes(diagnostics) DiagnosticsTest
+set AutoAreasByDBTypes(epicenter) EPICenter-test
+set AutoAreasByDBTypes(functional) Functionaltest
+set AutoAreasByDBTypes(ixscriptmate) ixScriptMate
+set AutoAreasByDBTypes(performance) PerformanceTest
+set AutoAreasByDBTypes(scalability) Scalabilitytest
+set AutoAreasByDBTypes(snmp) SnmpFunctionaltest
+set AutoAreasByDBTypes(stress) Stresstest
+set AutoAreasByDBTypes(systems) SystemTest
+set AutoAreasByDBTypes(xml) XML_API
+set AutoAreasByDBTypes(fit) FeatureInteraction
+
+set DBTypesByAutoArea(Benchmarktest) benchmark
+set DBTypesByAutoArea(CLItest) cli
+set DBTypesByAutoArea(cli-ew) cli
+set DBTypesByAutoArea(uploadanddownload) cli
+set DBTypesByAutoArea(DiagnosticsTest) diagnostics
+set DBTypesByAutoArea(EPICenter) epicenter
+set DBTypesByAutoArea(EPICenter-test) epicenter 
+set DBTypesByAutoArea(Functionaltest) functional
+set DBTypesByAutoArea(ixScriptMate) ixscriptmate
+set DBTypesByAutoArea(PerformanceTest) performance
+set DBTypesByAutoArea(Scalabilitytest) scalability
+set DBTypesByAutoArea(SnmpFunctionaltest) snmp
+set DBTypesByAutoArea(Stresstest) stress
+set DBTypesByAutoArea(SystemTest) systems
+set DBTypesByAutoArea(XML_API) xml
+set DBTypesByAutoArea(FeatureInteraction) fit
+# -----------------------------------------------------------------
+set counter 1
+
+    # checking command parameters
+    if {$argc<2} {
+        puts "Not enough parameters"
+        print_usage
+        exit
+    }
+
+set LIB_PATH "../Lib"
+lappend auto_path $LIB_PATH
+
+source ../Lib/parse_args.tcl
+source ../Lib/mainLib.tcl
+source ../Lib/mysqlLib.tcl
+source ../Lib/mgmt_reporting.tcl
+##################################################################################
+#  Parse Args
+##################################################################################
+parse_args gather_testcase_info $argv {
+    release     "NULL"
+    svntag      "NULL"
+    io          "no"
+}
+gen_index "../Lib"
+##################################################################################
+#  Source the config files
+##################################################################################
+set sourceFile ""
+if [catch {source "../main/cfg/common.cfg"} rea] {
+    puts "*** WARNING: Unable to source common.cfg:$rea............... ***"
+    puts "*** WARNING: Application level variables may not be defined. ***"
+    exit -1
+}
+#if [catch {source "../Util/runReg.cfg"} rea] {
+#    puts "*** WARNING: Unable to source queuing system runReg.cfg:$rea..... ***"
+#    puts "*** WARNING: Application level variables may not be defined. ***"
+#    exit -1
+#}
+
+if {$release == "NULL"} {
+    puts "*** ERROR:  You must pass in a release  12.5.1 or 12.6.1 or 12.6.3 etc ***"
+    exit -1
+}
+set INRELEASE $release
+
+if {$svntag == "NULL"} {
+    puts "*** ERROR:  You must pass in an svntag  EXOS_12.5.1 or EXOS_Automation etc ***"
+    exit -1
+}
+set INSVNTAG $svntag
+set ISIO $io
+############################################################
+set auto_path [linsert $auto_path 0 . ]
+
+gen_index .
+
+# ----------------------------------------------------------
+#  Connect to the databases
+# ----------------------------------------------------------
+set dbconnectstatus [_conn_to_db2 -host $DBIPADDRESS2 \
+                                 -db $DBNAME2 \
+                                 -user $DBUSERNAME2 \
+                                 -password $DBPASSWORD2 \
+                                 -status  "" \
+                                 -handler $DBHANDLE2]
+set DBHANDLE2 [lindex $dbconnectstatus 0]
+set connectStatus [lindex $dbconnectstatus 1]
+puts "\n\n=== Connected to $DBIPADDRESS2 $DBNAME2 Handle $DBHANDLE2 Status $connectStatus ==="
+############################################################
+cd /${svntag}/automation/
+# ==========================================================
+# Get All Feature Info from autoweb_db
+# ==========================================================
+_GetAllFeatureInfoByAreaFromDb;
+_CreateBranchModList
